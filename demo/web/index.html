@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PGArbor in the browser</title>
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  textarea { width: 100%; height: 9rem; font: 14px/1.4 ui-monospace, monospace; box-sizing: border-box; }
+  button { margin: .5rem 0; padding: .4rem 1rem; }
+  table { border-collapse: collapse; margin: .5rem 0; }
+  th, td { border: 1px solid #8886; padding: .2rem .6rem; text-align: left; }
+  th { background: #8882; }
+  .null { color: #888; font-style: italic; }
+  .tag { color: #080; } .err { color: #b00; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>PGArbor <small id="ver"></small></h1>
+<p>In-memory PGArbor compiled to WebAssembly. Everything runs locally in this tab; reload to reset. Ctrl+Enter runs.</p>
+<textarea id="sql" spellcheck="false">CREATE TABLE t(id int PRIMARY KEY, name text);
+INSERT INTO t VALUES (1, 'alpha'), (2, NULL);
+SELECT * FROM t ORDER BY id;</textarea><br>
+<button id="run" disabled>Run</button>
+<div id="out"></div>
+<script type="module">
+import init, { exec, version } from './pkg/pgarbor_wasm.js';
+const out = document.getElementById('out'), sql = document.getElementById('sql'), run = document.getElementById('run');
+function el(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
+function render(doc) {
+  out.replaceChildren();
+  if (!doc.ok) {
+    const e = doc.error;
+    out.append(el('div', `ERROR ${e.sqlstate}: ${e.message}` + (e.detail ? `\nDETAIL: ${e.detail}` : '') + (e.hint ? `\nHINT: ${e.hint}` : ''), 'err'));
+    return;
+  }
+  for (const r of doc.results) {
+    if (r.columns.length) {
+      const t = el('table'), head = el('tr');
+      for (const c of r.columns) head.append(el('th', c.name));
+      t.append(head);
+      for (const row of r.rows) {
+        const tr = el('tr');
+        for (const v of row) tr.append(v === null ? el('td', 'NULL', 'null') : el('td', v));
+        t.append(tr);
+      }
+      out.append(t);
+    }
+    out.append(el('div', r.tag + (r.columns.length ? ` (${r.rows.length} rows)` : ''), 'tag'));
+  }
+}
+const go = () => render(JSON.parse(exec(sql.value)));
+await init();
+document.getElementById('ver').textContent = 'PG ' + version();
+run.disabled = false;
+run.addEventListener('click', go);
+if (new URLSearchParams(location.search).has('run')) go();
+sql.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) go(); });
+</script>
+</body>
+</html>
