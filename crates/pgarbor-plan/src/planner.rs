@@ -360,7 +360,22 @@ fn plan_subquery_scan(st: &mut PlannerState, lp: &LogicalPlan, scan: &LogicalSca
     node.vars = outs;
     node.ordering = ordering;
     node.est = est;
-    Ok(node)
+
+    // Quals pushed onto the sub-query scan (outer WHERE on its columns) apply on top of the projection.
+    let quals = subplan::process_sublinks_in(st, scan.quals.clone())?;
+    let predicate = match simplify::make_and(quals) {
+        Some(p) => p,
+        None => return Ok(node),
+    };
+    let rows = node.est.rows * cost::selectivity(&predicate)?;
+    let f_est = cost::cost_node("filter", rows, node.est.width, &[node.est])?;
+    let (vars, ordering, out, level) = (node.vars.clone(), node.ordering.clone(), node.out.clone(), node.level);
+    let mut filtered = st.new_node(NodeKind::Filter(Box::new(FilterNode { input: node, predicate })), out);
+    filtered.level = level;
+    filtered.vars = vars;
+    filtered.ordering = ordering;
+    filtered.est = f_est;
+    Ok(filtered)
 }
 
 /// Residual filter (module docs, `Filter`).

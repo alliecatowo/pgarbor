@@ -85,3 +85,26 @@ fn show_and_txn_control_take_no_snapshot_and_rollback_discards() {
     let out = s.simple_query("BEGIN; INSERT INTO t VALUES (3); ROLLBACK").expect("multi-statement block");
     assert_eq!(out.last().unwrap().result.tag(), "ROLLBACK");
 }
+
+fn count_rows(s: &mut pgarbor::Session, sql: &str) -> usize {
+    match &s.simple_query(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"))[0].result {
+        StatementResult::Rows { rows, .. } => rows.len(),
+        other => panic!("expected rows: {other:?}"),
+    }
+}
+
+#[test]
+fn update_delete_information_schema_and_subquery_filter() {
+    let db = Database::in_memory().expect("create");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    s.simple_query("CREATE TABLE t(a int primary key, b text); INSERT INTO t VALUES (1,'x'),(2,'y')").expect("setup");
+    assert_eq!(s.simple_query("UPDATE t SET b = b || '!' WHERE a = 1").expect("update")[0].result.tag(), "UPDATE 1");
+    assert_eq!(count_rows(&mut s, "SELECT 1 FROM t WHERE b = 'x!'"), 1);
+    assert_eq!(s.simple_query("DELETE FROM t WHERE a = 2").expect("delete")[0].result.tag(), "DELETE 1");
+    assert_eq!(count_rows(&mut s, "SELECT 1 FROM t"), 1);
+    // information_schema columns are builtin domains (sql_identifier) and the WHERE must filter.
+    assert_eq!(count_rows(&mut s, "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"), 1);
+    // A WHERE over a FROM-subquery (what views expand to) must not be dropped.
+    assert_eq!(count_rows(&mut s, "SELECT * FROM (SELECT a+1 AS b FROM t) q WHERE b = 99"), 0);
+    assert_eq!(count_rows(&mut s, "SELECT * FROM (SELECT a+1 AS b FROM t) q WHERE b = 2"), 1);
+}
