@@ -1,0 +1,62 @@
+# Extended protocol (Parse/Describe/Bind/Execute) + error reporting + failed transaction block.
+id: errors.unique-violation-extended
+title: Unique violation through prepared statements, then 25P02 in the aborted transaction
+family: errors
+tier: core
+feature_ids: [extended-protocol, prepared-statements, constraints, errors, transactions]
+required_capabilities: [create-table, insert, select, extended-protocol, transactions]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY; errcodes 23505, 25P02"
+sessions: [a]
+setup: |
+  CREATE TABLE u (k text PRIMARY KEY, v int8);
+steps:
+  - parse:
+      name: ins
+      sql: |
+        INSERT INTO u (k, v) VALUES ($1, $2)
+      param_types: [25, 20]
+    expect: ok
+  - describe:
+      statement: ins
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["alpha", "1"]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["beta", null]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["alpha", "2"]
+    expect: error
+    sqlstate: "23505"
+  - exec_params:
+      sql: |
+        SELECT k, v, v IS NULL AS v_null FROM u WHERE k = $1
+      params: ["beta"]
+      param_types: [25]
+    expect: rows
+  - sql: |
+      BEGIN
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["alpha", "3"]
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT k, v FROM u ORDER BY k
+    expect: rows
+  - close:
+      statement: ins

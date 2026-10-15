@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pgarbor.dev/contracts/oracle/case.schema.json",
+  "title": "PGArbor differential test case (pgarbor-case/1)",
+  "description": "One YAML file under tests/cases/<family>/<name>.yaml. Expected outputs are NEVER part of a case: they are recorded from the pinned PostgreSQL 18.6 oracle into tests/expected/<family>/<id>.json. The optional 'expect'/'sqlstate'/'expect_blocked' fields state the author's INTENT and are checked against the recording (disagreement => INVALID_CASE). Hand validator: harness/pgarbor_harness/cases/validate.py must accept exactly what this schema accepts plus the semantic rules listed in its docstring.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "family", "feature_ids", "steps"],
+  "properties": {
+    "format": {"const": "pgarbor-case/1", "description": "Optional; defaults to pgarbor-case/1."},
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)+$",
+      "maxLength": 160,
+      "description": "Globally unique. First dot-segment equals 'family'. File must be tests/cases/<family>/<id minus family prefix>.yaml or any name under the family dir; uniqueness is by id."
+    },
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "family": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$"},
+    "feature_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/slug"}},
+    "required_capabilities": {
+      "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/slug"},
+      "description": "Target capabilities (see harness capabilities manifest). A target lacking any => BLOCKED(capability:<name>)."
+    },
+    "tier": {"enum": ["slice", "core", "extended"], "default": "core"},
+    "provenance": {
+      "type": "object", "additionalProperties": false, "required": ["source"],
+      "properties": {
+        "source": {"enum": ["hand", "pg-docs", "pg-regress", "pg-source", "generated", "minimized", "research"]},
+        "ref": {"type": "string"},
+        "license": {"type": "string"}
+      }
+    },
+    "seed": {"type": "integer", "minimum": 0},
+    "sessions": {
+      "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/session_name"},
+      "default": ["a"]
+    },
+    "setup": {
+      "type": "string",
+      "description": "SQL run as ONE simple-Query message in a dedicated autocommit session named 'setup' before any step. Results are recorded and compared like a step (setup[0])."
+    },
+    "steps": {"type": "array", "minItems": 1, "maxItems": 500, "items": {"$ref": "#/$defs/step"}},
+    "quarantine": {
+      "type": "object", "additionalProperties": false, "required": ["reason"],
+      "properties": {"reason": {"type": "string", "minLength": 1}, "since": {"type": "string"}},
+      "description": "Quarantined cases are never executed and are reported INVALID_CASE(reason=quarantined)."
+    },
+    "notes": {"type": "string"}
+  },
+  "$defs": {
+    "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*$", "maxLength": 80},
+    "session_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,15}$", "not": {"const": "setup"}},
+    "value": {
+      "description": "A bind parameter: string (text format literal or, for binary format, lowercase hex of the binary representation) or null (SQL NULL).",
+      "type": ["string", "null"]
+    },
+    "format": {"enum": ["text", "binary"]},
+    "common": {
+      "type": "object",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "expect": {"enum": ["any", "ok", "rows", "error", "notice"], "default": "any"},
+        "sqlstate": {"type": "string", "pattern": "^[0-9A-Z]{5}$"},
+        "order": {"enum": ["auto", "ordered", "multiset"], "default": "auto"},
+        "compare_message": {"type": "boolean", "default": true},
+        "normalize": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}},
+        "comment": {"type": "string"}
+      }
+    },
+    "step": {
+      "type": "object",
+      "oneOf": [
+        {"$ref": "#/$defs/sql_step"},
+        {"$ref": "#/$defs/parse_step"},
+        {"$ref": "#/$defs/describe_step"},
+        {"$ref": "#/$defs/execute_step"},
+        {"$ref": "#/$defs/exec_params_step"},
+        {"$ref": "#/$defs/close_step"},
+        {"$ref": "#/$defs/wait_step"},
+        {"$ref": "#/$defs/reconnect_step"},
+        {"$ref": "#/$defs/restart_step"}
+      ]
+    },
+    "sql_step": {
+      "type": "object", "additionalProperties": false, "required": ["sql"],
+      "description": "Simple Query protocol ('Q'): may contain several ';'-separated statements; one StatementResult per statement.",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "sql": {"type": "string"},
+        "async": {"type": "boolean", "default": false},
+        "expect_blocked": {"type": "boolean"},
+        "expect": {"$ref": "#/$defs/common/properties/expect"},
+        "sqlstate": {"$ref": "#/$defs/common/properties/sqlstate"},
+        "order": {"$ref": "#/$defs/common/properties/order"},
+        "compare_message": {"$ref": "#/$defs/common/properties/compare_message"},
+        "normalize": {"$ref": "#/$defs/common/properties/normalize"},
+        "comment": {"type": "string"}
+      }
+    },
+    "parse_step": {
+      "type": "object", "additionalProperties": false, "required": ["parse"],
+      "description": "Extended protocol Parse (+Sync, via PQprepare).",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "parse": {
+          "type": "object", "additionalProperties": false, "required": ["sql"],
+          "properties": {
+            "name": {"type": "string", "default": ""},
+            "sql": {"type": "string"},
+            "param_types": {"type": "array", "items": {"type": "integer", "minimum": 0}}
+          }
+        },
+        "expect": {"$ref": "#/$defs/common/properties/expect"},
+        "sqlstate": {"$ref": "#/$defs/common/properties/sqlstate"},
+        "compare_message": {"$ref": "#/$defs/common/properties/compare_message"},
+        "comment": {"type": "string"}
+      }
+    },
+    "describe_step": {
+      "type": "object", "additionalProperties": false, "required": ["describe"],
+      "description": "Describe a prepared statement (PQdescribePrepared): ParameterDescription + RowDescription|NoData.",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "describe": {
+          "type": "object", "additionalProperties": false, "required": ["statement"],
+          "properties": {"statement": {"type": "string"}}
+        },
+        "expect": {"$ref": "#/$defs/common/properties/expect"},
+        "sqlstate": {"$ref": "#/$defs/common/properties/sqlstate"},
+        "compare_message": {"$ref": "#/$defs/common/properties/compare_message"},
+        "comment": {"type": "string"}
+      }
+    },
+    "execute_step": {
+      "type": "object", "additionalProperties": false, "required": ["execute"],
+      "description": "Bind + Describe(portal) + Execute + Sync of a named prepared statement (PQexecPrepared).",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "execute": {
+          "type": "object", "additionalProperties": false, "required": ["statement"],
+          "properties": {
+            "statement": {"type": "string"},
+            "params": {"type": "array", "items": {"$ref": "#/$defs/value"}},
+            "param_formats": {"type": "array", "items": {"$ref": "#/$defs/format"}},
+            "result_format": {"$ref": "#/$defs/format"}
+          }
+        },
+        "async": {"type": "boolean", "default": false},
+        "expect_blocked": {"type": "boolean"},
+        "expect": {"$ref": "#/$defs/common/properties/expect"},
+        "sqlstate": {"$ref": "#/$defs/common/properties/sqlstate"},
+        "order": {"$ref": "#/$defs/common/properties/order"},
+        "compare_message": {"$ref": "#/$defs/common/properties/compare_message"},
+        "normalize": {"$ref": "#/$defs/common/properties/normalize"},
+        "comment": {"type": "string"}
+      }
+    },
+    "exec_params_step": {
+      "type": "object", "additionalProperties": false, "required": ["exec_params"],
+      "description": "Unnamed-statement extended query: Parse('')+Bind+Describe+Execute+Sync (PQexecParams). This is what sqlx/node-postgres/Prisma send.",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "exec_params": {
+          "type": "object", "additionalProperties": false, "required": ["sql"],
+          "properties": {
+            "sql": {"type": "string"},
+            "params": {"type": "array", "items": {"$ref": "#/$defs/value"}},
+            "param_types": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+            "param_formats": {"type": "array", "items": {"$ref": "#/$defs/format"}},
+            "result_format": {"$ref": "#/$defs/format"}
+          }
+        },
+        "async": {"type": "boolean", "default": false},
+        "expect_blocked": {"type": "boolean"},
+        "expect": {"$ref": "#/$defs/common/properties/expect"},
+        "sqlstate": {"$ref": "#/$defs/common/properties/sqlstate"},
+        "order": {"$ref": "#/$defs/common/properties/order"},
+        "compare_message": {"$ref": "#/$defs/common/properties/compare_message"},
+        "normalize": {"$ref": "#/$defs/common/properties/normalize"},
+        "comment": {"type": "string"}
+      }
+    },
+    "close_step": {
+      "type": "object", "additionalProperties": false, "required": ["close"],
+      "description": "Close a prepared statement (PQclosePrepared).",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "close": {
+          "type": "object", "additionalProperties": false, "required": ["statement"],
+          "properties": {"statement": {"type": "string"}}
+        },
+        "comment": {"type": "string"}
+      }
+    },
+    "wait_step": {
+      "type": "object", "additionalProperties": false, "required": ["wait", "session"],
+      "description": "Wait for the pending async step of 'session'; its results are recorded on THIS step.",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "wait": {"const": true},
+        "expect": {"$ref": "#/$defs/common/properties/expect"},
+        "sqlstate": {"$ref": "#/$defs/common/properties/sqlstate"},
+        "order": {"$ref": "#/$defs/common/properties/order"},
+        "compare_message": {"$ref": "#/$defs/common/properties/compare_message"},
+        "normalize": {"$ref": "#/$defs/common/properties/normalize"},
+        "comment": {"type": "string"}
+      }
+    },
+    "reconnect_step": {
+      "type": "object", "additionalProperties": false, "required": ["reconnect"],
+      "description": "Close the session's connection (Terminate) and open a new one.",
+      "properties": {
+        "session": {"$ref": "#/$defs/session_name"},
+        "reconnect": {"const": true},
+        "comment": {"type": "string"}
+      }
+    },
+    "restart_step": {
+      "type": "object", "additionalProperties": false, "required": ["restart"],
+      "description": "Cleanly stop and restart the server (PGArbor: close and reopen the .pga). All sessions are reconnected. Requires capability 'server-restart'; the oracle runs such cases on a dedicated (non-pooled) path.",
+      "properties": {
+        "restart": {"enum": ["clean", "kill"]},
+        "comment": {"type": "string"}
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+# A multi-statement simple Query runs as one implicit transaction: the failing statement stops
+# the script and the earlier successful inserts in the same string are rolled back.
+id: errors.multi-statement-atomic
+title: Multi-statement query rolls back earlier inserts when a later statement fails
+family: errors
+tier: core
+feature_ids: [errors, insert, primary-key, transactions, multi-statement]
+required_capabilities: [create-table, insert, select, transactions, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/errors.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 'a'); INSERT INTO t VALUES (2, 'b'); INSERT INTO t VALUES (1, 'c'); INSERT INTO t VALUES (3, 'd')
+    expect: error
+    sqlstate: "23505"
+    comment: statement 4 never runs
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect no rows, since the implicit transaction rolled back

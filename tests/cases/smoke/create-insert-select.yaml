@@ -1,0 +1,36 @@
+# North-star vertical slice: CREATE TABLE -> INSERT -> SELECT -> COMMIT -> reconnect -> SELECT.
+id: smoke.create-insert-select
+title: Create a table, insert rows, read them back ordered and unordered, survive reconnect
+family: smoke
+tier: slice
+feature_ids: [create-table, insert, select, transactions]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: hand
+  ref: "RFC 001 north-star demo; PG18 docs sql-createtable.html, sql-insert.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE t (id int4 PRIMARY KEY, name text, score numeric(6,2))
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2, 'two', 2.5), (1, 'one', NULL), (3, '', 3)
+    expect: ok
+  - sql: |
+      SELECT id, name, score FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name, score FROM t
+    expect: rows
+    order: multiset
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (4, 'four', 4.444) RETURNING id, score;
+      SELECT count(*) FROM t;
+      COMMIT
+    expect: ok
+  - reconnect: true
+  - sql: |
+      SELECT id, name IS NULL AS name_null, name = '' AS name_empty, score FROM t ORDER BY id
+    expect: rows

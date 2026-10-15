@@ -1,0 +1,1514 @@
+{
+  "crate": "harness",
+  "contract_version": "v1",
+  "leases": [
+    {
+      "lease_id": "HAR-01",
+      "task_ids": [
+        "ORACLE-01",
+        "ORACLE-12"
+      ],
+      "files": [
+        "harness/pgarbor_harness/oracle/container.py",
+        "harness/tests/test_har_01.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Pinned PG18.6 container lifecycle via podman CLI (ensure/status/drift/restart/exec_psql).",
+      "spec": "Implement every NotImplementedError body per the module docstring. All podman calls go through self.runner (injectable) with argv lists, never shell strings. status(): parse `podman container inspect <name>` JSON (a list with one object); missing container -> exit code non-zero + 'no such container' in stderr. drift(): compare ImageDigest with config.PG_IMAGE_DIGEST, published host port, and that every spec.mounts container path appears in Mounts[].Destination. ensure(): follow the state machine in the docstring exactly; never touch a container named 'pgarbor-oracle'. wait_ready(): two consecutive successful `pg_isready` + `psql -c 'select 1'` probes 1 s apart. Tests (harness/tests/test_har_01.py, pytest, NO podman): a FakeRunner recording argv and returning canned CompletedProcess objects; assert ContainerSpec.run_argv() exact list, ensure() issues run when missing, start when stopped, raises OracleError on drift without recreate.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/oracle/pool.py",
+        "harness/oracle/dump_reference.sh",
+        "harness/pgarbor_harness/oracle/container.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "ContainerSpec().run_argv() starts with ['podman','run','-d','--name','pgarbor-harness-pg18','-p','127.0.0.1:54319:5432'] and contains the image digest exactly once",
+        "ensure() never invokes podman with the name 'pgarbor-oracle'",
+        "drift() reports a digest mismatch when inspect returns another ImageDigest",
+        "with podman available, ensure() yields an endpoint where SHOW server_version = '18.6 (Debian 18.6-1.pgdg13+2)'"
+      ]
+    },
+    {
+      "lease_id": "HAR-02",
+      "task_ids": [
+        "ORACLE-12"
+      ],
+      "files": [
+        "harness/pgarbor_harness/oracle/pool.py",
+        "harness/tests/test_har_02.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Pooled single oracle instance with per-case CREATE DATABASE ... TEMPLATE isolation and global-object hygiene.",
+      "spec": "Implement OraclePool per the module docstring. psycopg is imported lazily inside methods (`import psycopg`), admin connection with autocommit=True. Quote database names with double quotes (names are generated, [a-z0-9_] only; assert that). start(): drop stale databases matching config.CASE_DB_PREFIX except config.CASE_TEMPLATE_DB using `SELECT datname FROM pg_database WHERE datname LIKE 'pgarbor\\_case\\_%'` then DROP DATABASE ... WITH (FORCE). acquire(): semaphore first, then CREATE DATABASE; on failure release the semaphore before raising. Endpoint gucs = tuple(sorted(config.DIFFERENTIAL_SESSION_GUCS.items())). Tests: unit-test case_db_name determinism and the semaphore bound with a fake admin_execute (monkeypatch); mark live tests @pytest.mark.oracle.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/oracle/container.py",
+        "harness/pgarbor_harness/oracle/fingerprint.py",
+        "harness/pgarbor_harness/oracle/pool.py"
+      ],
+      "depends_on_leases": [
+        "HAR-01",
+        "HAR-03"
+      ],
+      "acceptance": [
+        "case_db_name('smoke.x',1,123) is stable across runs and equals 'pgarbor_case_123_' + 10 hex chars",
+        "start() never drops a case database whose embedded pid is a live process",
+        "acquire() blocks when max_parallel databases are outstanding (fake admin)",
+        "release() always releases the semaphore even when DROP DATABASE raises",
+        "live: 8 concurrent acquire/release cycles leave no pgarbor_case_* databases except the template"
+      ]
+    },
+    {
+      "lease_id": "HAR-03",
+      "task_ids": [
+        "ORACLE-01",
+        "ORACLE-11"
+      ],
+      "files": [
+        "harness/pgarbor_harness/oracle/fingerprint.py",
+        "harness/tests/test_har_03.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Oracle fingerprint document, sha, and drift verification.",
+      "spec": "Implement collect/verify/verify_live exactly per docstring. Settings are read with `SELECT name, setting FROM pg_settings WHERE name = ANY(%s)` — note pg_settings names are case-sensitive as listed in pg_settings (e.g. 'TimeZone', 'DateStyle'); for names not in pg_settings use current_setting(name). builtin_counts via count(*) of pg_type/pg_proc/pg_operator/pg_cast. verify(): one violation string per mismatch, format 'path: expected X, got Y'. Tests: verify() on a hand-built good document returns [], on documents with a wrong digest / TimeZone / locale returns the exact strings.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/oracle/container.py",
+        "contracts/reference/pg18/pg_settings.csv",
+        "contracts/reference/pg18/VERSION",
+        "harness/pgarbor_harness/oracle/fingerprint.py"
+      ],
+      "depends_on_leases": [
+        "HAR-01"
+      ],
+      "acceptance": [
+        "fingerprint_sha256(doc) is stable under dict key reordering",
+        "verify(doc) == [] for a document built from the live pinned oracle",
+        "verify reports 'image_digest: expected sha256:7493..., got ...' on digest drift"
+      ]
+    },
+    {
+      "lease_id": "HAR-04",
+      "task_ids": [
+        "ORACLE-02"
+      ],
+      "files": [
+        "harness/pgarbor_harness/oracle/recorder.py",
+        "harness/tests/test_har_04.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Trusted reference recorder: run twice, determinism + intent checks, canonical expected files.",
+      "spec": "Implement per module docstring. Use runner.executor.execute_case with runner.targets.PostgresTarget(pool), endpoint_label='reference'. Normalize with compare.normalize.apply_case_normalizers BEFORE comparing the two recordings and before writing. The write uses model.ExpectedFile(...).save(path); compare bytes with model.canonical_json for UNCHANGED/WOULD_CHANGE. Gate: record_corpus raises PermissionError unless env PGARBOR_ORACLE_REVIEW=1 or dry_run (dry run writes under a tempfile.TemporaryDirectory and reports). Tests: check_intent on hand-built transcripts for each expect kind (ok/rows/error+sqlstate/notice/expect_blocked) incl. async+wait pairing.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/cases/model.py",
+        "harness/pgarbor_harness/runner/executor.py",
+        "harness/pgarbor_harness/runner/targets.py",
+        "harness/pgarbor_harness/compare/normalize.py",
+        "harness/pgarbor_harness/oracle/pool.py",
+        "harness/pgarbor_harness/oracle/fingerprint.py",
+        "harness/pgarbor_harness/oracle/recorder.py"
+      ],
+      "depends_on_leases": [
+        "HAR-02",
+        "HAR-03",
+        "HAR-10",
+        "HAR-11",
+        "HAR-12"
+      ],
+      "acceptance": [
+        "check_intent flags 'expect: error sqlstate 23505' when the recorded result is a command",
+        "record_case writes nothing when the two recordings differ",
+        "record_corpus without PGARBOR_ORACLE_REVIEW=1 and without dry_run raises PermissionError",
+        "live: recording tests/cases/** twice yields byte-identical expected files"
+      ]
+    },
+    {
+      "lease_id": "HAR-05",
+      "task_ids": [
+        "ORACLE-11"
+      ],
+      "files": [
+        "harness/pgarbor_harness/oracle/manifest.py",
+        "harness/tests/test_har_05.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Trusted oracle manifest: hash protected/verifier/cases/expected trees; freeze and check.",
+      "spec": "Implement with hashing.tree_sha256 (do not invent another hash). check(): for each tree compare file maps -> TreeChange(added/removed/modified) sorted by (tree, path). freeze() gated by PGARBOR_ORACLE_REVIEW=1. Lazy-import regress.manifest/isolation.spec_parser only inside compute(); catch any Exception from them and record null. Tests with a tmp repo layout (tmp_path) containing a few files.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/hashing.py",
+        "harness/pgarbor_harness/regress/manifest.py",
+        "harness/pgarbor_harness/isolation/spec_parser.py",
+        "harness/pgarbor_harness/oracle/manifest.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "check() after freeze() on an unchanged tree returns ok=True with no changes",
+        "modifying tests/expected/x.json yields a TreeChange(tree='expected', change='modified')",
+        "freeze() raises PermissionError without PGARBOR_ORACLE_REVIEW=1"
+      ]
+    },
+    {
+      "lease_id": "HAR-06",
+      "task_ids": [
+        "ORACLE-03"
+      ],
+      "files": [
+        "harness/pgarbor_harness/cases/validate.py",
+        "harness/tests/test_har_06.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Hand-written JSON-Schema-subset validator + semantic case rules (no jsonschema dependency).",
+      "spec": "Implement schema_errors as a recursive interpreter over the keyword list in the docstring; resolve $ref with JSON pointers into the root schema (unescape ~1 and ~0). JSON Schema 'pattern' uses re.search. 'type' integer must reject bool (isinstance(x,bool)). Implement semantic_errors exactly per the bullet list; walk steps once tracking per-session pending async step and prepared statement names. Tests: the three example cases in tests/cases validate clean; at least one failing example per semantic rule; the schema file itself only uses supported keywords (walk it and assert).",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "contracts/oracle/case.schema.json",
+        "harness/pgarbor_harness/cases/model.py",
+        "harness/pgarbor_harness/compare/normalize.py",
+        "tests/cases/README.md",
+        "tests/cases/smoke/create-insert-select.yaml",
+        "tests/cases/txn/read-committed-blocking-update.yaml",
+        "tests/cases/errors/unique-violation-extended.yaml",
+        "harness/pgarbor_harness/cases/validate.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "validate() returns [] for all three example cases",
+        "a step with both 'sql' and 'parse' keys is rejected (oneOf)",
+        "a 'wait' without a pending async step is rejected with a $.steps[i] path",
+        "an 'execute' referencing an unknown statement name is rejected",
+        "a document with an unknown top-level key is rejected (additionalProperties false)"
+      ]
+    },
+    {
+      "lease_id": "HAR-07",
+      "task_ids": [
+        "ORACLE-03"
+      ],
+      "files": [
+        "harness/pgarbor_harness/cases/loader.py",
+        "harness/tests/test_har_07.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Corpus discovery, strict YAML loading, validation, id uniqueness and filters.",
+      "spec": "Implement per docstring. Duplicate-key-rejecting loader: class StrictLoader(yaml.SafeLoader) with construct_mapping override checking keys (call self.flatten_mapping(node) first; for each key_node construct the key and raise yaml.constructor.ConstructorError on repeats); register via StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, ...). Use yaml.load(text, Loader=StrictLoader). Case.from_dict(doc, path=rel, sha256=hashing.case_sha256(raw)). Tests: duplicate key file -> InvalidCase; duplicate ids across files -> both invalid; select() filters.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/cases/validate.py",
+        "harness/pgarbor_harness/cases/model.py",
+        "harness/pgarbor_harness/hashing.py",
+        "harness/pgarbor_harness/cases/loader.py"
+      ],
+      "depends_on_leases": [
+        "HAR-06"
+      ],
+      "acceptance": [
+        "load_corpus on tests/cases returns 3 cases and 0 invalid",
+        "a YAML file with a repeated mapping key is reported invalid, not silently last-wins",
+        "two files declaring the same id are both reported invalid"
+      ]
+    },
+    {
+      "lease_id": "HAR-08",
+      "task_ids": [
+        "ORACLE-04",
+        "ORACLE-10"
+      ],
+      "files": [
+        "harness/pgarbor_harness/sqltext.py",
+        "harness/tests/test_har_08.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "PostgreSQL-lexical statement splitter, comment stripper, top-level ORDER BY detection, first keyword, message templates.",
+      "spec": "Write one small hand-rolled scanner (index loop over the string) shared by all functions, honoring: '...' with '' escapes, E'..' backslash escapes (E or e prefix immediately before the quote), \"...\" identifiers, $tag$..$tag$ dollar quotes (tag rule in docstring; '$' followed by digit is a parameter), -- comments, nested /* */ comments, parentheses depth, and BEGIN ATOMIC ... END nesting (psqlscan.l: count BEGIN/CASE vs END tokens only after seeing CREATE [OR REPLACE] FUNCTION/PROCEDURE ... BEGIN ATOMIC). Doctests in the docstrings must pass (run them in the test file with doctest.testmod). Read ~/develop/reference/postgres-18/src/fe_utils/psqlscan.l for the dollar-quote and BEGIN ATOMIC rules (reference only).",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "~/develop/reference/postgres-18/src/fe_utils/psqlscan.l",
+        "~/develop/reference/postgres-18/src/backend/parser/scan.l",
+        "harness/pgarbor_harness/sqltext.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "split_statements(\"select 1; select ';' ; $$a;b$$;\") == three statements",
+        "split_statements handles nested block comments and E'\\\\'' strings",
+        "has_top_level_order_by is False for window ORDER BY and True after UNION",
+        "message_template('relation \"foo\" does not exist') == 'relation \"?\" does not exist'",
+        "module doctests pass"
+      ]
+    },
+    {
+      "lease_id": "HAR-09",
+      "task_ids": [
+        "ORACLE-02",
+        "ORACLE-03",
+        "ORACLE-08"
+      ],
+      "files": [
+        "harness/pgarbor_harness/runner/session.py",
+        "harness/tests/test_har_09.py"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Exact libpq session driver over psycopg.pq (non-blocking, notices, COPY, cancel, timeouts).",
+      "spec": "Implement Session per docstring using ONLY psycopg.pq low-level API (lazy import). After `uv sync` (central), verify method names against .venv/lib/python3*/site-packages/psycopg/pq/abc.py; if a listed method differs, use the real one and note it in your submission assumptions. Set conn.nonblocking = 1 and drive every wait through select() with a deadline; call flush() until it returns 0 after each send_*. Notice handler: a closure appending model.Notice built from res.error_field(...) to self._notice_buffer; on step start move buffered notices into the step's list. Map pq.TransactionStatus to I/T/E/A/U. Values: text format decode('utf-8'); binary keep bytes. Parameters: None -> None; text -> str.encode(); binary -> bytes.fromhex(). Tests: pure unit tests of the PGresult->StatementResult conversion with a fake result object implementing the attributes; live tests (@pytest.mark.oracle) for multi-statement simple query, COPY TO STDOUT, prepare/describe/execute, async start/poll/finish of a pg_sleep(0.3).",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/runner/targets.py",
+        "docs/rfcs/PGARBOR_RFC_002_AUTONOMOUS_VERIFICATION.md",
+        "harness/pgarbor_harness/runner/session.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "run_simple('select 1; select null::text, \\'\\'::text') yields 2 'rows' results with values [['1']] and [[None, '']]",
+        "an ErrorResponse yields kind 'error' with sqlstate, message, position as sent by the server",
+        "COPY (select 1) TO STDOUT yields one copy_out result with rows [['1\\n']] and command_tag 'COPY 1'",
+        "a step exceeding step_timeout_s returns timed_out=True within step_timeout_s + 3 s and the session reconnects on next use",
+        "RAISE NOTICE inside DO yields a Notice with severity NOTICE and sqlstate 00000"
+      ]
+    },
+    {
+      "lease_id": "HAR-10",
+      "task_ids": [
+        "ORACLE-03"
+      ],
+      "files": [
+        "harness/pgarbor_harness/runner/executor.py",
+        "harness/tests/test_har_10.py"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Multi-session case executor: interleaving, async/blocked detection, restart, crash/hang handling.",
+      "spec": "Implement execute_case per the numbered algorithm. Keep the per-step loop small: dispatch by step.kind to helper functions. Measure blocked_observed with Session.poll_done(config.BLOCK_SETTLE_S). Never raise out of execute_case for target misbehavior: everything becomes observation fields; only programming errors become harness_error. Ensure target.release runs in finally and sessions are closed before release. Tests: a FakeTarget + FakeSession (monkeypatch runner.session.Session) driving all step kinds incl. async/wait, timeout stop, connection_lost with is_alive False stop vs True continue.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/runner/session.py",
+        "harness/pgarbor_harness/runner/targets.py",
+        "harness/pgarbor_harness/cases/model.py",
+        "harness/pgarbor_harness/runner/executor.py"
+      ],
+      "depends_on_leases": [
+        "HAR-09",
+        "HAR-11"
+      ],
+      "acceptance": [
+        "each case step produces exactly one StepObservation with index == step index unless execution stopped early",
+        "async step observation has txn_status 'A' and results [], and its results appear on the wait step",
+        "after a timed_out step no further steps are executed",
+        "live: txn.read-committed-blocking-update on PG records blocked_observed True on step 3"
+      ]
+    },
+    {
+      "lease_id": "HAR-11",
+      "task_ids": [
+        "ORACLE-12"
+      ],
+      "files": [
+        "harness/pgarbor_harness/runner/targets.py",
+        "harness/tests/test_har_11.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Target adapters: PostgresTarget (pool), PgarborTarget (process per case), DsnTarget.",
+      "spec": "Implement per docstring; PgarborTarget uses subprocess.Popen(argv, stdout=log, stderr=log, start_new_session=True); format argv templates with str.format(binary=..., file=..., host=..., port=..., branch=...). Readiness: loop until deadline: socket.create_connection((host,port),0.2) then a psycopg connect+`select 1` (lazy import); if proc.poll() is not None -> TargetStartError with log tail. Ports: socket bind to ('127.0.0.1',0). See contracts/amendments/harness-02-cli-serve-contract.md for the CLI contract (defaults). Tests: fake binary = a tiny Python script written to tmp_path that listens on the port and answers nothing -> verify start/stop/kill logic without PG wire; PostgresTarget delegation with a fake pool.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/oracle/pool.py",
+        "contracts/amendments/harness-02-cli-serve-contract.md",
+        "harness/pgarbor_harness/runner/targets.py"
+      ],
+      "depends_on_leases": [
+        "HAR-02"
+      ],
+      "acceptance": [
+        "has_capabilities(PostgresTarget, ['jsonb']) == []",
+        "PgarborTarget(missing_capabilities={'server-restart'}) makes a restart case BLOCKED via has_capabilities",
+        "release() kills the server process group within 6 s even if it ignores SIGTERM",
+        "provision() raises TargetStartError containing the stderr tail when the binary exits immediately"
+      ]
+    },
+    {
+      "lease_id": "HAR-12",
+      "task_ids": [
+        "ORACLE-04"
+      ],
+      "files": [
+        "harness/pgarbor_harness/compare/normalize.py",
+        "harness/tests/test_har_12.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "The registry of documented, idempotent normalizers (user_oids default; opt-in timestamps/uuids/pids/xids/lsns/explain_numbers).",
+      "spec": "Implement each private function and apply_case_normalizers per docstring. user_oids must be bijective per transcript and idempotent (skip already-canonical values). Only touch exactly the fields documented. Tests: idempotence (apply twice == once) for every normalizer on a fixture transcript; user_oids maps the same OID to the same canonical value across setup and steps and two different OIDs to different values; OIDs < 16384 untouched.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/cases/model.py",
+        "harness/pgarbor_harness/compare/normalize.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "apply twice == apply once for every registry entry",
+        "a column table_oid 16385 and an oid-typed value '16385' map to 1000000001 and 'U1' respectively in the same transcript",
+        "type_oid 23 is never modified"
+      ]
+    },
+    {
+      "lease_id": "HAR-13",
+      "task_ids": [
+        "ORACLE-04"
+      ],
+      "files": [
+        "harness/pgarbor_harness/compare/typed.py",
+        "harness/tests/test_har_13.py"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Exact typed transcript comparison (columns, OIDs, tags, SQLSTATE, rows ordered/multiset, notices, txn status).",
+      "spec": "Implement exactly the comparison table in the docstring; the comparator is part of the verifier, so prefer strictness: anything listed is compared exactly. Use copy.deepcopy before normalizing. Multiset: collections.Counter over tuple rows (bytes and str are distinct hashable values). Sort key for reporting rows: tuple((0,b'') if v is None else (1,v) if isinstance(v,bytes) else (2,v) for v in row). Diffs must be emitted in transcript order. Tests: one test per DIFF_KINDS entry producing it, plus: NULL vs '' detected; duplicates preserved in multiset; ORDER BY query reordered -> row_order; query without ORDER BY reordered -> no diff.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/compare/normalize.py",
+        "harness/pgarbor_harness/sqltext.py",
+        "harness/pgarbor_harness/cases/model.py",
+        "harness/pgarbor_harness/compare/typed.py"
+      ],
+      "depends_on_leases": [
+        "HAR-08",
+        "HAR-12"
+      ],
+      "acceptance": [
+        "identical transcripts -> []",
+        "every name in DIFF_KINDS is produced by at least one unit test",
+        "reversed rows of 'select a from t' (no ORDER BY) -> [] ; of 'select a from t order by a' -> row_order",
+        "rows [['1'],['1']] vs [['1']] -> row_multiset (or row_count in ordered mode)"
+      ]
+    },
+    {
+      "lease_id": "HAR-14",
+      "task_ids": [
+        "ORACLE-04",
+        "ORACLE-13"
+      ],
+      "files": [
+        "harness/pgarbor_harness/compare/classify.py",
+        "harness/tests/test_har_14.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Outcome classification with override precedence and cluster signature.",
+      "spec": "Implement exactly the rule list. locate() parses paths with a regex ^(setup|steps)\\[(\\d+)\\](?:\\.results\\[(\\d+)\\])?. signature values are always str. Fill signature['unimplemented_lease'] from the target error DETAIL 'pgarbor-unimplemented: <ID>' (see crates/pgarbor-common/src/error.rs PgError::unimplemented). Tests: one test per rule including 0A000 -> UNSUPPORTED, reference error/target success -> UNEXPECTED_ACCEPTANCE, XX000 -> CRASH, XX001 -> CORRUPTION, timed_out -> HANG, and 'diffs non-empty never PASS'.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/compare/typed.py",
+        "harness/pgarbor_harness/sqltext.py",
+        "harness/pgarbor_harness/cases/model.py",
+        "harness/pgarbor_harness/compare/classify.py"
+      ],
+      "depends_on_leases": [
+        "HAR-08",
+        "HAR-13"
+      ],
+      "acceptance": [
+        "classify with empty diffs and clean transcripts -> PASS",
+        "first divergence target 0A000 vs reference rows -> UNSUPPORTED",
+        "harness_error on any step -> HARNESS_ERROR regardless of diffs",
+        "CORRUPTION outranks CRASH outranks HANG"
+      ]
+    },
+    {
+      "lease_id": "HAR-15",
+      "task_ids": [
+        "ORACLE-05"
+      ],
+      "files": [
+        "harness/pgarbor_harness/regress/manifest.py",
+        "harness/tests/test_har_15.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Official regress suite manifest: schedule groups, sql/expected variants, resultmap, static analysis.",
+      "spec": "Implement per docstring reading ~/develop/reference/postgres-18/src/test/regress/{parallel_schedule,resultmap,sql,expected}. Expected candidates: base file first, then _0.._9 existing, in numeric order. Tests: parse_schedule on an inline sample; live-on-disk test (skip if the PG source tree is absent) asserting test_setup is group 0 and every scheduled test has a sql file.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "~/develop/reference/postgres-18/src/test/regress/parallel_schedule",
+        "~/develop/reference/postgres-18/src/test/regress/pg_regress.c",
+        "~/develop/reference/postgres-18/src/test/regress/resultmap",
+        "harness/pgarbor_harness/regress/manifest.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "load() on the PG18 tree yields groups[0] == ['test_setup'] and no errors",
+        "char has expected candidates char.out, char_1.out, char_2.out in that order",
+        "test_setup.uses_regresslib is True"
+      ]
+    },
+    {
+      "lease_id": "HAR-16",
+      "task_ids": [
+        "ORACLE-05"
+      ],
+      "files": [
+        "harness/pgarbor_harness/regress/psql.py",
+        "harness/tests/test_har_16.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Run psql from the pinned image exactly like pg_regress (env, flags, merged output inside the container).",
+      "spec": "Implement psql_argv exactly per the argv block in the docstring, env sorted by key; run_psql writes stdin from the sql file bytes; default runner uses subprocess.run(argv, input=..., capture_output=True, timeout=...) and on TimeoutExpired runs `podman kill <name>`. Tests: exact argv list for a sample call; fake runner timeout path.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/oracle/container.py",
+        "~/develop/reference/postgres-18/src/test/regress/pg_regress_main.c",
+        "~/develop/reference/postgres-18/src/test/regress/pg_regress.c",
+        "harness/pgarbor_harness/regress/psql.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "psql_argv contains '-X','-a','-q','-v','HIDE_TABLEAM=on','-v','HIDE_TOAST_COMPRESSION=on' in that order after the image",
+        "env includes PGTZ=America/Los_Angeles and PGDATESTYLE=Postgres, MDY",
+        "live: running sql/boolean.sql against the oracle produces output identical to expected/boolean.out"
+      ]
+    },
+    {
+      "lease_id": "HAR-17",
+      "task_ids": [
+        "ORACLE-05"
+      ],
+      "files": [
+        "harness/pgarbor_harness/regress/runner.py",
+        "harness/tests/test_har_17.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "pg_regress-like schedule runner with official + differential verdicts and PG baseline recording.",
+      "spec": "Implement per docstring using regress.psql and regress.outdiff. Groups run with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_parallel, len(group))). Write regression.diffs/regression.out/summary.json. record_baseline gated by PGARBOR_ORACLE_REVIEW=1. Tests: with fake psql/outdiff functions (monkeypatch) verify verdict rules, test_setup always first with --only, BLOCKED(target_down) after crash.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/regress/manifest.py",
+        "harness/pgarbor_harness/regress/psql.py",
+        "harness/pgarbor_harness/regress/outdiff.py",
+        "harness/pgarbor_harness/regress/runner.py"
+      ],
+      "depends_on_leases": [
+        "HAR-15",
+        "HAR-16",
+        "HAR-18"
+      ],
+      "acceptance": [
+        "official identical -> PASS in both families",
+        "baseline identical but official differs and oracle official status FAIL -> official BLOCKED(oracle_env), differential PASS",
+        "after a CRASH with target_alive False and no restart_target, remaining tests are BLOCKED(target_down)"
+      ]
+    },
+    {
+      "lease_id": "HAR-18",
+      "task_ids": [
+        "ORACLE-05"
+      ],
+      "files": [
+        "harness/pgarbor_harness/regress/outdiff.py",
+        "harness/tests/test_har_18.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "pg_regress-exact expected-output comparison with best-variant selection and unified diff.",
+      "spec": "Implement per docstring with difflib.unified_diff(n=3, fromfile=str(expected), tofile=str(results), lineterm='') over expected.splitlines(keepends=True) and results.splitlines(keepends=True). Changed line count = lines starting with '+' or '-' excluding the '---'/'+++' headers. Tests: CRLF-only difference is identical; picks the closest of two candidates; tie -> earliest.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "~/develop/reference/postgres-18/src/test/regress/pg_regress.c",
+        "harness/pgarbor_harness/regress/outdiff.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "files differing only by \\r\\n vs \\n are identical",
+        "trailing-whitespace differences are NOT identical",
+        "best candidate is the one with the fewest +/- lines"
+      ]
+    },
+    {
+      "lease_id": "HAR-19",
+      "task_ids": [
+        "ORACLE-06"
+      ],
+      "files": [
+        "harness/pgarbor_harness/isolation/spec_parser.py",
+        "harness/tests/test_har_19.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Isolation spec tokenizer/parser, permutation generation, schedule + manifest.",
+      "spec": "Hand-written tokenizer: identifiers, quoted identifiers, '{...}' sql blocks (no nested braces), '(' ')' ',' '*', integers, '#' comments; keywords setup/teardown/session/step/permutation/notices. Strip sql blocks like specscanner.l (leading whitespace and trailing whitespace). Tests: parse every spec in ~/develop/reference/postgres-18/src/test/isolation/specs without error (skip if absent); deadlock-simple parses to 2 sessions/6 steps/1 permutation; all_permutations of 2 sessions x 2 steps yields 6 interleavings.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "~/develop/reference/postgres-18/src/test/isolation/specparse.y",
+        "~/develop/reference/postgres-18/src/test/isolation/specscanner.l",
+        "~/develop/reference/postgres-18/src/test/isolation/README",
+        "~/develop/reference/postgres-18/src/test/isolation/isolationtester.c",
+        "harness/pgarbor_harness/isolation/spec_parser.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "all 124 PG18 specs parse without SpecSyntaxError",
+        "marker 'notices 1' parses to Marker(kind='notices', step=..., count=1)",
+        "all_permutations count for sessions with a and b steps equals C(a+b, a)"
+      ]
+    },
+    {
+      "lease_id": "HAR-20",
+      "task_ids": [
+        "ORACLE-06"
+      ],
+      "files": [
+        "harness/pgarbor_harness/isolation/tester.py",
+        "harness/tests/test_har_20.py"
+      ],
+      "model_tier": "sonnet",
+      "summary": "isolationtester-compatible execution and output formatting; heuristic wait detection never scores PASS.",
+      "spec": "Port the control flow of isolationtester.c run_permutation/try_complete_step (reference reading, original Python implementation) on top of runner.session.Session async API. print_result_set must reproduce libpq PQprint(header, align, fieldSep '|') exactly — read src/interfaces/libpq/fe-print.c PQprint/do_field/do_header: numeric columns (all chars in '0123456789+-.eE ' heuristic of fe-print.c) right-aligned, others left; header centered; '(1 row)'/'(N rows)' footer then blank line. Tests: print_result_set on fixtures matching snippets from expected/read-write-unique.out; heuristic mode classification rules.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/isolation/spec_parser.py",
+        "harness/pgarbor_harness/runner/session.py",
+        "harness/pgarbor_harness/regress/outdiff.py",
+        "~/develop/reference/postgres-18/src/test/isolation/isolationtester.c",
+        "~/develop/reference/postgres-18/src/interfaces/libpq/fe-print.c",
+        "harness/pgarbor_harness/isolation/tester.py"
+      ],
+      "depends_on_leases": [
+        "HAR-09",
+        "HAR-18",
+        "HAR-19"
+      ],
+      "acceptance": [
+        "print_result_set of one int4 column 'i' with value '42' renders ' i\\n--\\n42\\n(1 row)\\n\\n'",
+        "live: deadlock-simple and read-write-unique on the PG oracle match expected output exactly (PASS)",
+        "on a target without pg_isolation_test_session_is_blocked identical output yields BLOCKED(heuristic_wait_detection), never PASS"
+      ]
+    },
+    {
+      "lease_id": "HAR-21",
+      "task_ids": [
+        "ORACLE-07"
+      ],
+      "files": [
+        "harness/pgarbor_harness/sqllogictest/parser.py",
+        "harness/tests/test_har_21.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "sqllogictest parser/writer in the PGArbor dialect.",
+      "spec": "Implement parse/render_values/write per docstring. hash: hashlib.md5(''.join(v+'\\n' for v in values).encode()).hexdigest(). Tests: round trip of a sample file with statement ok/error, query with rowsort/valuesort, hash-threshold, skipif/onlyif, halt.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/sqllogictest/parser.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "parse(write(records)) == records for the sample",
+        "values above hash-threshold render as '<n> values hashing to <md5>'",
+        "NULL renders as 'NULL' and '' as '(empty)'"
+      ]
+    },
+    {
+      "lease_id": "HAR-22",
+      "task_ids": [
+        "ORACLE-07"
+      ],
+      "files": [
+        "harness/pgarbor_harness/sqllogictest/runner.py",
+        "harness/tests/test_har_22.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Record slt results from PG; run recorded slt files against targets.",
+      "spec": "Implement with runner.session.Session.run_simple per record. Results' values come from text format. Gate record() by PGARBOR_ORACLE_REVIEW=1. Tests: fake Session returning canned StepOutput; classification rules.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/sqllogictest/parser.py",
+        "harness/pgarbor_harness/runner/session.py",
+        "harness/pgarbor_harness/runner/targets.py",
+        "harness/pgarbor_harness/sqllogictest/runner.py"
+      ],
+      "depends_on_leases": [
+        "HAR-09",
+        "HAR-21"
+      ],
+      "acceptance": [
+        "a target 0A000 where PG succeeded -> UNSUPPORTED",
+        "skipped records make an otherwise passing file BLOCKED(skipped_records)",
+        "record() refuses without PGARBOR_ORACLE_REVIEW=1"
+      ]
+    },
+    {
+      "lease_id": "HAR-23",
+      "task_ids": [
+        "ORACLE-08"
+      ],
+      "files": [
+        "harness/pgarbor_harness/wire_transcripts/messages.py",
+        "harness/tests/test_har_23.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "PG v3 protocol message codec (frontend/backend, startup phase, SSL answer).",
+      "spec": "Implement with struct ('!i', '!h', NUL-terminated strings decoded UTF-8 with surrogateescape so encode() round-trips). Tests: encode(decode(raw)) == raw for one hand-built sample of EVERY message type listed; StreamDecoder handles messages split across arbitrary chunk boundaries (feed byte by byte).",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "https://www.postgresql.org/docs/18/protocol-message-formats.html",
+        "~/develop/reference/postgres-18/src/include/libpq/protocol.h",
+        "harness/pgarbor_harness/wire_transcripts/messages.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "round-trip for every listed message type",
+        "feeding a captured startup+query exchange one byte at a time yields the same messages as feeding it whole",
+        "unknown type byte decodes to type 'Unknown' without raising"
+      ]
+    },
+    {
+      "lease_id": "HAR-24",
+      "task_ids": [
+        "ORACLE-08"
+      ],
+      "files": [
+        "harness/pgarbor_harness/wire_transcripts/proxy.py",
+        "harness/tests/test_har_24.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Recording TCP proxy (threads) producing JSONL wire transcripts with secrets redacted.",
+      "spec": "Implement per docstring with socket + threading; use select or blocking recv in per-direction threads; shut down with socket.shutdown + close. Tests: proxy between a fake client and a fake echo-like server speaking a canned exchange on localhost; JSONL lines decode; PasswordMessage redacted.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/wire_transcripts/messages.py",
+        "harness/pgarbor_harness/wire_transcripts/proxy.py"
+      ],
+      "depends_on_leases": [
+        "HAR-23"
+      ],
+      "acceptance": [
+        "first line is the header with format pgarbor-wire-transcript/1",
+        "PasswordMessage content never appears in the file",
+        "stop() returns within 5 s with open client connections"
+      ]
+    },
+    {
+      "lease_id": "HAR-25",
+      "task_ids": [
+        "ORACLE-08"
+      ],
+      "files": [
+        "harness/pgarbor_harness/wire_transcripts/replay.py",
+        "harness/tests/test_har_25.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Replay recorded client transcripts against a target and compare normalized backend messages.",
+      "spec": "Implement per docstring. Tests: replay a transcript against a fake server that returns the recorded backend messages (PASS), one with a changed CommandComplete tag (MISMATCH at that index), and one with different BackendKeyData (still PASS).",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/wire_transcripts/messages.py",
+        "harness/pgarbor_harness/compare/normalize.py",
+        "harness/pgarbor_harness/wire_transcripts/replay.py"
+      ],
+      "depends_on_leases": [
+        "HAR-23"
+      ],
+      "acceptance": [
+        "BackendKeyData pid/secret differences do not fail",
+        "ParameterStatus order differences do not fail but value differences do",
+        "a reset connection before the recorded end -> CRASH"
+      ]
+    },
+    {
+      "lease_id": "HAR-26",
+      "task_ids": [
+        "ORACLE-10"
+      ],
+      "files": [
+        "harness/pgarbor_harness/minimize/ddmin.py",
+        "harness/tests/test_har_26.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "ddmin minimizer over setup statements, steps (structural groups) and statements.",
+      "spec": "Implement classic ddmin (Zeller 2002) with n starting at 2, complement-first, memoized; final 1-minimality pass. Tests: synthetic predicate 'contains units 3 and 7' over 20 units -> [3,7]; budget exhaustion returns complete=False; case grouping keeps async+wait and parse+execute together.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/sqltext.py",
+        "harness/pgarbor_harness/cases/validate.py",
+        "harness/pgarbor_harness/compare/classify.py",
+        "harness/pgarbor_harness/minimize/ddmin.py"
+      ],
+      "depends_on_leases": [
+        "HAR-08"
+      ],
+      "acceptance": [
+        "ddmin(range(20), lambda u: 3 in u and 7 in u) returns [3, 7]",
+        "no candidate passed to same_failure fails cases.validate",
+        "each candidate is executed at most once (memoization)"
+      ]
+    },
+    {
+      "lease_id": "HAR-27",
+      "task_ids": [
+        "ORACLE-13"
+      ],
+      "files": [
+        "harness/pgarbor_harness/selftest/mutants.py",
+        "harness/tests/test_har_27.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Observation mutants (broken engine) and comparator mutants (broken verifier).",
+      "spec": "Implement each mutant as a pure function on a deep copy; return None when not applicable. Comparator mutants wrap compare.typed.compare_transcripts by pre-mutating inputs (e.g. ignore_type_oids sets all type_oids to 0 on both sides before comparing) — never edit compare.typed. Tests: every mutant applied to a suitable fixture produces the intended structural change.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/compare/typed.py",
+        "harness/pgarbor_harness/compare/classify.py",
+        "harness/pgarbor_harness/selftest/mutants.py"
+      ],
+      "depends_on_leases": [
+        "HAR-13",
+        "HAR-14"
+      ],
+      "acceptance": [
+        "observation_mutants() has exactly the keys of EXPECTED_OUTCOME",
+        "comparator_mutant('ignore_nulls') reports no diff for null_to_empty"
+      ]
+    },
+    {
+      "lease_id": "HAR-28",
+      "task_ids": [
+        "ORACLE-13"
+      ],
+      "files": [
+        "harness/pgarbor_harness/selftest/run.py",
+        "harness/tests/test_har_28.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Offline + live verifier self-tests (PG-vs-PG PASS; all mutants detected; kill relations hold).",
+      "spec": "Implement per docstring. builtin_fixtures must make every observation mutant applicable at least once (include: an ordered rows result with >=2 distinct rows, a multiset result with a duplicate row, a NULL and an '' value, a typmod'd column (numeric(6,2) typmod 393222), an error with sqlstate, an INSERT command tag, a notice, a step with txn_status T). Tests: run_offline() is ok; removing the duplicate-row fixture makes the selftest report 'mutant never applicable'.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/selftest/mutants.py",
+        "harness/pgarbor_harness/compare/typed.py",
+        "harness/pgarbor_harness/compare/classify.py",
+        "harness/pgarbor_harness/cases/validate.py",
+        "harness/pgarbor_harness/selftest/run.py"
+      ],
+      "depends_on_leases": [
+        "HAR-27",
+        "HAR-06"
+      ],
+      "acceptance": [
+        "run_offline().ok is True with the builtin fixtures",
+        "a deliberately broken comparator (always returns []) makes run_offline().ok False",
+        "live: PG-vs-PG on tests/cases is all PASS"
+      ]
+    },
+    {
+      "lease_id": "HAR-29",
+      "task_ids": [
+        "ORACLE-01",
+        "ORACLE-02",
+        "ORACLE-05"
+      ],
+      "files": [
+        "harness/pgarbor_harness/cli.py",
+        "harness/tests/test_har_29.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "python -m pgarbor_harness command line.",
+      "spec": "argparse with subparsers exactly as listed; each handler a small function calling the library; --json prints model.canonical_json of the result. Never catch exceptions broadly except at main() top level (print traceback to stderr, exit 4). Tests: build_parser parses every listed command line; 'cases validate' on tests/cases exits 0.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/runner/differential.py",
+        "harness/pgarbor_harness/oracle/recorder.py",
+        "harness/pgarbor_harness/selftest/run.py",
+        "harness/pgarbor_harness/cli.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "`python -m pgarbor_harness cases validate` exits 0 on the example corpus",
+        "`python -m pgarbor_harness selftest` exits 0 offline",
+        "unknown subcommand exits 2"
+      ]
+    },
+    {
+      "lease_id": "HAR-30",
+      "task_ids": [
+        "ORACLE-02",
+        "ORACLE-04"
+      ],
+      "files": [
+        "harness/pgarbor_harness/runner/differential.py",
+        "harness/tests/test_har_30.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Differential driver: corpus x target -> CaseResults with BLOCKED/INVALID handling, reruns and FLAKY.",
+      "spec": "Implement per numbered docstring steps with concurrent.futures.ThreadPoolExecutor; results.jsonl append under a threading.Lock. Tests with a fake Target and fake executor (monkeypatch runner.executor.execute_case) covering: reference_missing, reference_stale, capability, PASS, flaky rerun, exception -> HARNESS_ERROR.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/runner/executor.py",
+        "harness/pgarbor_harness/runner/targets.py",
+        "harness/pgarbor_harness/compare/typed.py",
+        "harness/pgarbor_harness/compare/classify.py",
+        "harness/pgarbor_harness/cases/loader.py",
+        "harness/pgarbor_harness/runner/differential.py"
+      ],
+      "depends_on_leases": [
+        "HAR-07",
+        "HAR-10",
+        "HAR-11",
+        "HAR-13",
+        "HAR-14"
+      ],
+      "acceptance": [
+        "missing expected file -> BLOCKED(reference_missing), never executed",
+        "case sha mismatch -> BLOCKED(reference_stale)",
+        "two differing target runs of a failing case -> FLAKY with attempts 2",
+        "results list sorted by case_id regardless of completion order"
+      ]
+    },
+    {
+      "lease_id": "HAR-31",
+      "task_ids": [
+        "ORACLE-09"
+      ],
+      "files": [
+        "harness/pgarbor_harness/generate/seeds.py",
+        "harness/tests/test_har_31.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Deterministic seed-corpus generators from contracts/reference/pg18 CSVs.",
+      "spec": "Implement generators with csv.DictReader on contracts/reference/pg18/*.csv; sort everything; random.Random(seed). Each produced dict must pass cases.validate.validate. Tests: same seed -> identical output (canonical_json equality); different seed -> different literal pairs; all generated cases validate.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "contracts/reference/pg18/pg_operator.csv",
+        "contracts/reference/pg18/pg_cast.csv",
+        "contracts/reference/pg18/pg_type.csv",
+        "harness/pgarbor_harness/cases/validate.py",
+        "harness/pgarbor_harness/generate/seeds.py"
+      ],
+      "depends_on_leases": [
+        "HAR-06"
+      ],
+      "acceptance": [
+        "gen_operators(1, ref) == gen_operators(1, ref)",
+        "every generated case validates",
+        "ids are unique and match ^gen-[a-z-]+\\."
+      ]
+    },
+    {
+      "lease_id": "FAC-01",
+      "task_ids": [
+        "SWARM-01",
+        "SWARM-02"
+      ],
+      "files": [
+        "harness/pgarbor_factory/dag.py",
+        "harness/tests/test_fac_01.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "DAG extensions: load, integration waves, speculative/integration readiness, fanout, repair merge.",
+      "spec": "Do NOT modify find_cycle/validate_graph/validate_leases/main (frozen behavior used by harness/factory/dag.py shim and harness/factory/test_dag.py). Implement only the new functions. Tests: waves on a small graph; speculative_ready ignores integration deps; fanout counts transitive dependents; on contracts/dag/task_graph.v1.json waves cover all 209 tasks.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "contracts/dag/task_graph.v1.json",
+        "harness/factory/test_dag.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/dag.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "integration_waves(task_graph.v1) partitions all 209 ids",
+        "harness/factory/test_dag.py still passes unchanged",
+        "merge_repair_nodes rejects a ticket id that already exists"
+      ]
+    },
+    {
+      "lease_id": "FAC-02",
+      "task_ids": [
+        "SWARM-03"
+      ],
+      "files": [
+        "harness/pgarbor_factory/leases.py",
+        "harness/tests/test_fac_02.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Lease catalog load/validate (incl. stub-marker coverage) and the locked lease ledger state machine.",
+      "spec": "Implement per docstring; reuse dag.validate_leases for the base checks and inventory.scan_markers for coverage; all ledger writes through records.locked_json. Tests: tmp_path ledgers: grant/renew/release/expire/transition legality; validate_catalog flags overlap, protected __init__.py, and a marker whose id differs from the owning lease.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/dag.py",
+        "harness/pgarbor_factory/inventory.py",
+        "contracts/leases/harness.json",
+        "harness/pgarbor_factory/leases.py"
+      ],
+      "depends_on_leases": [
+        "FAC-03"
+      ],
+      "acceptance": [
+        "validate_catalog on the real contracts/leases/*.json returns [] at the frozen contract SHA",
+        "illegal transition SPEC_READY -> VERIFIED raises LeaseError",
+        "expire_stale moves expired SPECULATING leases back to SPEC_READY with note 'expired'"
+      ]
+    },
+    {
+      "lease_id": "FAC-03",
+      "task_ids": [
+        "SWARM-07",
+        "SWARM-13"
+      ],
+      "files": [
+        "harness/pgarbor_factory/inventory.py",
+        "harness/tests/test_fac_03.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "UNIMPLEMENTED stub-marker inventory across Rust and Python plus forbidden placeholder detection.",
+      "spec": "Implement with the exact regexes in the docstring (re.DOTALL not needed; use re.finditer over whole text and compute line = text.count('\\n', 0, m.start()) + 1). Tests: sample Rust and Python sources with markers spanning two lines; forbidden todo!( outside cfg(test) flagged, inside not.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/inventory.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "inventory(repo) total equals the number of PgError::unimplemented( + NotImplementedError(\"ID: occurrences",
+        "markers are sorted by (file, line)",
+        "a bare `raise NotImplementedError` without lease id is reported as forbidden"
+      ]
+    },
+    {
+      "lease_id": "FAC-04",
+      "task_ids": [
+        "SWARM-04"
+      ],
+      "files": [
+        "harness/pgarbor_factory/worktrees.py",
+        "harness/tests/test_fac_04.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Per-lease git worktrees under .claude/worktrees with reuse.",
+      "spec": "Implement with gitutil.git; parse porcelain blocks ('worktree <path>', 'HEAD <sha>', 'branch refs/heads/<b>'). Tests in a tmp git repo (git init, commit): allocate twice returns the same path; remove keeps the branch.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/gitutil.py",
+        "harness/pgarbor_factory/worktrees.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "allocate() creates <repo>/.claude/worktrees/lease-har-01 on branch lease/HAR-01",
+        "a second allocate() for the same lease reuses the worktree",
+        "no path outside <repo>/.claude/worktrees is ever created"
+      ]
+    },
+    {
+      "lease_id": "FAC-05",
+      "task_ids": [
+        "SWARM-06"
+      ],
+      "files": [
+        "harness/pgarbor_factory/submissions.py",
+        "harness/tests/test_fac_05.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Submission intake: record worker claims and move the lease to PATCH_SUBMITTED.",
+      "spec": "Implement per docstring with gitutil + leases.transition. Tests in a tmp git repo with a ledger in SPECULATING state.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/leases.py",
+        "harness/pgarbor_factory/gitutil.py",
+        "harness/pgarbor_factory/submissions.py"
+      ],
+      "depends_on_leases": [
+        "FAC-02"
+      ],
+      "acceptance": [
+        "submit() writes runs/submissions/<ID>.json with files_changed equal to git diff names",
+        "a resubmission archives the previous file",
+        "submit() on a lease not SPECULATING raises"
+      ]
+    },
+    {
+      "lease_id": "FAC-06",
+      "task_ids": [
+        "SWARM-08"
+      ],
+      "files": [
+        "harness/pgarbor_factory/assemble.py",
+        "harness/tests/test_fac_06.py"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Deterministic epoch assembly with path-permission enforcement and conflict attribution.",
+      "spec": "Implement per docstring. Use `git apply --index --3way` with the diff piped via input_text; on failure `git reset --hard` + `git clean -fd` in the assembly worktree to drop partial state. Fixed commit env as specified. Tests in a tmp repo: two disjoint leases assemble deterministically (same epoch SHA twice); a patch touching contracts/x is rejected protected_path; touching an unleased file rejected; conflicting patches -> second rejected 'conflict' naming the first.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/leases.py",
+        "harness/pgarbor_factory/worktrees.py",
+        "harness/pgarbor_factory/review.py",
+        "harness/pgarbor_factory/gitutil.py",
+        "harness/pgarbor_factory/assemble.py"
+      ],
+      "depends_on_leases": [
+        "FAC-02",
+        "FAC-04",
+        "FAC-17"
+      ],
+      "acceptance": [
+        "assembling the same submissions twice yields the same epoch SHA",
+        "a patch touching tests/expected/** is rejected protected_path",
+        "a Rust lease touching harness/** is rejected verifier_path",
+        "rejected patches leave no changes in the assembly worktree"
+      ]
+    },
+    {
+      "lease_id": "FAC-07",
+      "task_ids": [
+        "SWARM-14"
+      ],
+      "files": [
+        "harness/pgarbor_factory/guard.py",
+        "harness/tests/test_fac_07.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Verifier-mutation guard: manifest check, review records, denominator shrink, quarantine, selftest.",
+      "spec": "Implement per docstring using pgarbor_harness.oracle.manifest.check and selftest.run.run_offline. Ancestor check: `git merge-base --is-ancestor <sha> HEAD` exit code. Tests: tmp repo with frozen manifest; unreviewed change -> violation; reviewed change -> ok; case count decrease -> denominator_shrank.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/oracle/manifest.py",
+        "harness/pgarbor_harness/selftest/run.py",
+        "harness/pgarbor_factory/evidence.py",
+        "harness/pgarbor_factory/gitutil.py",
+        "harness/pgarbor_factory/guard.py"
+      ],
+      "depends_on_leases": [
+        "FAC-10"
+      ],
+      "acceptance": [
+        "an edit to tests/expected/** without a review record makes ok False",
+        "the same edit with a covering review record makes ok True",
+        "there is no parameter or env var that bypasses a violation"
+      ]
+    },
+    {
+      "lease_id": "FAC-08",
+      "task_ids": [
+        "SWARM-08",
+        "SWARM-11"
+      ],
+      "files": [
+        "harness/pgarbor_factory/build.py",
+        "harness/tests/test_fac_08.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Central cargo build/test with JSON diagnostics parsing and compile-error clustering.",
+      "spec": "Implement per docstring. Test parse_cargo_messages/cluster_errors with canned cargo JSON lines (write 3-4 realistic compiler-message objects: E0308 mismatched types in two files of different leases, E0425 unresolved name, a warning).",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/leases.py",
+        "harness/pgarbor_factory/build.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "two E0425 errors 'cannot find value `x` in this scope' / '`y`' cluster together",
+        "warnings never appear in clusters",
+        "build-finished success=false -> BuildReport.ok False"
+      ]
+    },
+    {
+      "lease_id": "FAC-09",
+      "task_ids": [
+        "SWARM-10",
+        "SWARM-13"
+      ],
+      "files": [
+        "harness/pgarbor_factory/campaign.py",
+        "harness/tests/test_fac_09.py"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Full evidence campaign orchestration across families with precondition skips and evidence/report/repair outputs.",
+      "spec": "Implement per the numbered phases; each phase in its own try/except that records family status HARNESS_ERROR with the exception text instead of aborting. Tests with every phase function monkeypatched: build failure -> SQL families SKIPPED_PRECONDITION with UNRUN counts; guard refusal -> exit 3 and nothing else runs.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/guard.py",
+        "harness/pgarbor_factory/build.py",
+        "harness/pgarbor_factory/evidence.py",
+        "harness/pgarbor_factory/report.py",
+        "harness/pgarbor_factory/cluster.py",
+        "harness/pgarbor_factory/repair.py",
+        "harness/pgarbor_factory/halt.py",
+        "harness/pgarbor_harness/runner/differential.py",
+        "harness/pgarbor_harness/regress/runner.py",
+        "harness/pgarbor_harness/isolation/tester.py",
+        "harness/pgarbor_harness/wire_transcripts/replay.py",
+        "harness/pgarbor_factory/campaign.py"
+      ],
+      "depends_on_leases": [
+        "FAC-07",
+        "FAC-08",
+        "FAC-10",
+        "FAC-11",
+        "FAC-12",
+        "FAC-13",
+        "FAC-14"
+      ],
+      "acceptance": [
+        "guard not ok -> exit code 3 and no build is invoked",
+        "build failure -> differential family status SKIPPED_PRECONDITION and its cataloged cases counted UNRUN",
+        "evidence.json exists and validates via records.EvidencePack.from_json after a run"
+      ]
+    },
+    {
+      "lease_id": "FAC-10",
+      "task_ids": [
+        "SWARM-13"
+      ],
+      "files": [
+        "harness/pgarbor_factory/evidence.py",
+        "harness/tests/test_fac_10.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Evidence pack builder, immutable save, evidence ledger.",
+      "spec": "Implement per docstring. Tests: build_pack in a tmp repo with fake families; save twice -> FileExistsError; ledger line appended.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_harness/hashing.py",
+        "harness/pgarbor_factory/gitutil.py",
+        "harness/pgarbor_factory/evidence.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "runnable == total - BLOCKED - INVALID_CASE - UNRUN for every family",
+        "save_pack refuses to overwrite",
+        "pack JSON round-trips through EvidencePack.from_json"
+      ]
+    },
+    {
+      "lease_id": "FAC-11",
+      "task_ids": [
+        "SWARM-11"
+      ],
+      "files": [
+        "harness/pgarbor_factory/cluster.py",
+        "harness/tests/test_fac_11.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Root-cause failure clustering keyed by outcome/sqlstate/template/diff kind with lease extraction.",
+      "spec": "Implement per docstring; deterministic ordering. Tests: 5 UNSUPPORTED items with the same signature unimplemented_lease cluster into 1 with that lease; CRASH items never merge with MISMATCH.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_harness/sqltext.py",
+        "harness/pgarbor_factory/build.py",
+        "harness/pgarbor_factory/cluster.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "items with the same sqlstate+template cluster together",
+        "critical clusters sort first",
+        "an UNSUPPORTED item whose signature unimplemented_lease is 'STO-03' clusters under that lease (detail 'pgarbor-unimplemented: STO-03')"
+      ]
+    },
+    {
+      "lease_id": "FAC-12",
+      "task_ids": [
+        "SWARM-12"
+      ],
+      "files": [
+        "harness/pgarbor_factory/repair.py",
+        "harness/tests/test_fac_12.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Next-epoch repair tickets with RFC 003 §7 scoring, critical storage first, DAG-valid output.",
+      "spec": "Implement per docstring; reuse score(). Tests: critical storage ticket ordered before a higher-scoring MISMATCH ticket; write_repair_dag output passes dag.validate_graph.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/cluster.py",
+        "harness/pgarbor_factory/dag.py",
+        "harness/pgarbor_harness/compare/typed.py",
+        "harness/pgarbor_factory/repair.py"
+      ],
+      "depends_on_leases": [
+        "FAC-01",
+        "FAC-11"
+      ],
+      "acceptance": [
+        "a CORRUPTION cluster on crates/pgarbor-storage files is ticket #1",
+        "repair_dag.json validates with dag.validate_graph",
+        "one ticket per cluster"
+      ]
+    },
+    {
+      "lease_id": "FAC-13",
+      "task_ids": [
+        "SWARM-13"
+      ],
+      "files": [
+        "harness/pgarbor_factory/report.py",
+        "harness/tests/test_fac_13.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Markdown + JSON run reports with three denominators and stop-the-line banner.",
+      "spec": "Implement per docstring section order. Tests: render_markdown on a fixture pack includes every COUNT_KEYS column, the banner when critical > 0, and no single 'X% passed' figure.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/report.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "UNSUPPORTED/BLOCKED/UNRUN are never added to PASS in any table",
+        "STOP THE LINE banner present iff corruption or crash > 0",
+        "report.json lists families in evidence order"
+      ]
+    },
+    {
+      "lease_id": "FAC-14",
+      "task_ids": [
+        "SWARM-15"
+      ],
+      "files": [
+        "harness/pgarbor_factory/halt.py",
+        "harness/tests/test_fac_14.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Campaign halt rules: stop-the-line, budget, milestone, no-progress escalation.",
+      "spec": "Implement per docstring precedence. Tests: one per action plus precedence (corruption + budget exhausted -> STOP_THE_LINE).",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/halt.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "three campaigns with equal PASS and the same cluster keys -> NO_PROGRESS with escalate populated",
+        "a family with BLOCKED items is never MILESTONE_REACHED",
+        "STOP_THE_LINE outranks every other action"
+      ]
+    },
+    {
+      "lease_id": "FAC-15",
+      "task_ids": [
+        "SWARM-02",
+        "SWARM-10"
+      ],
+      "files": [
+        "harness/pgarbor_factory/scheduler.py",
+        "harness/tests/test_fac_15.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Wave dispatch planning (contract-ready, disjoint, tier caps, priorities) and LPT verification sharding.",
+      "spec": "Implement per docstring. Tests: caps respected; repair order first; plan_shards balances [5,4,3,3,3] into 2 shards of 9 and 9.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/dag.py",
+        "harness/pgarbor_factory/leases.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/scheduler.py"
+      ],
+      "depends_on_leases": [
+        "FAC-01",
+        "FAC-02"
+      ],
+      "acceptance": [
+        "never grants more than max_authors concurrent leases",
+        "integration dependencies never block a grant",
+        "plan_shards is deterministic"
+      ]
+    },
+    {
+      "lease_id": "FAC-16",
+      "task_ids": [
+        "SWARM-05"
+      ],
+      "files": [
+        "harness/pgarbor_factory/packager.py",
+        "harness/tests/test_fac_16.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Bounded per-lease context packet (rules, files, spec, reads, contract).",
+      "spec": "Implement per docstring; deterministic; signature extraction via line regexes. Tests: packet for HAR-01 contains its file content and contract doc; size bound degrades reads to signatures.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/leases.py",
+        "harness/pgarbor_factory/records.py",
+        "harness/pgarbor_factory/packager.py"
+      ],
+      "depends_on_leases": [
+        "FAC-02"
+      ],
+      "acceptance": [
+        "packet sections appear in the documented order",
+        "packet length <= max_chars",
+        "the Rules section names every protected path"
+      ]
+    },
+    {
+      "lease_id": "FAC-17",
+      "task_ids": [
+        "SWARM-07"
+      ],
+      "files": [
+        "harness/pgarbor_factory/review.py",
+        "harness/tests/test_fac_17.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Static contract review of a lease patch (contract items, signatures, placeholders, fake success, test weakening).",
+      "spec": "Implement per docstring using `git show <sha>:<path>` for base/head file texts. Tests: fixtures for each reject rule.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/gitutil.py",
+        "harness/pgarbor_factory/inventory.py",
+        "harness/pgarbor_factory/review.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "changing a `// CONTRACT` item signature is a reject finding",
+        "replacing a stub body with only Ok(()) is fake_success",
+        "adding #[ignore] is test_weakening"
+      ]
+    },
+    {
+      "lease_id": "FAC-18",
+      "task_ids": [
+        "SWARM-09"
+      ],
+      "files": [
+        "harness/pgarbor_factory/amendments.py",
+        "harness/tests/test_fac_18.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "Amendment scanning, drift-to-amendment conversion, lease suspension.",
+      "spec": "Implement per docstring. Tests: parse the two existing harness amendments; drift cluster with 3 leases -> one Amendment listing them.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/build.py",
+        "harness/pgarbor_factory/leases.py",
+        "contracts/amendments/harness-01-dag-owned-path-globs.md",
+        "harness/pgarbor_factory/amendments.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "scan() parses Status/Crate/Affects/Leases headers of contracts/amendments/*.md",
+        "suspended_leases excludes RATIFIED/APPLIED amendments",
+        "open_amendment refuses without PGARBOR_ARCHITECT=1 or PGARBOR_ORACLE_REVIEW=1"
+      ]
+    },
+    {
+      "lease_id": "FAC-19",
+      "task_ids": [
+        "SWARM-01"
+      ],
+      "files": [
+        "harness/pgarbor_factory/cli.py",
+        "harness/tests/test_fac_19.py"
+      ],
+      "model_tier": "haiku",
+      "summary": "python -m pgarbor_factory command line.",
+      "spec": "argparse subcommands exactly as listed; exit codes as documented. Tests: parser accepts every documented invocation; `dag validate` exits 0 on the real graph.",
+      "reads": [
+        "contracts/crates/harness.md",
+        "harness/pgarbor_harness/config.py",
+        "harness/pgarbor_harness/model.py",
+        "harness/pgarbor_factory/campaign.py",
+        "harness/pgarbor_factory/leases.py",
+        "harness/pgarbor_factory/assemble.py",
+        "harness/pgarbor_factory/cli.py"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "`python -m pgarbor_factory dag validate` exits 0 on contracts/dag/task_graph.v1.json",
+        "`guard check` exits 3 when the guard reports violations",
+        "usage errors exit 2"
+      ]
+    }
+  ]
+}

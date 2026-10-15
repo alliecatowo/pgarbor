@@ -1,0 +1,324 @@
+{
+  "crate": "pgarbor-fault",
+  "contract_version": "v1",
+  "leases": [
+    {
+      "lease_id": "FLT-01",
+      "task_ids": [
+        "STORE-10",
+        "STORE-18"
+      ],
+      "files": [
+        "crates/pgarbor-fault/src/controller.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Deterministic per-op fault decisions.",
+      "spec": "Implement FaultController::decide exactly per the 6-step order in its doc comment, drawing randomness from st.rng only when the relevant permille > 0. ShortWrite(n) with n = rng.below(len) (len 0 -> Proceed). Record OpRecord when plan.record_log. Tests: crash_at_op 3 crashes exactly at the 4th mutating op and every later op returns Crash; reads do not advance the mutating index; scheduled Enospc on a Write -> Fail(28), on SyncData -> Fail(5); same seed -> identical decision sequence.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/src/plan.rs",
+        "crates/pgarbor-fault/src/rng.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-fault/src/controller.rs"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "identical plans yield identical decision sequences for identical op streams",
+        "after a Crash decision every subsequent decide returns Crash",
+        "only mutating ops advance the crash-point index"
+      ]
+    },
+    {
+      "lease_id": "FLT-02",
+      "task_ids": [
+        "STORE-10",
+        "STORE-11"
+      ],
+      "files": [
+        "crates/pgarbor-fault/src/disk.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Power-loss image construction and fsyncgate semantics for one file.",
+      "spec": "Implement FileState::fsync_fail and FileState::crash_image per docs. Sector tearing: split a write [off, off+len) at absolute multiples of sector_size into chunks; choose a random subset that is neither empty nor all chunks when there are >= 2 chunks (single chunk: keep or drop whole with 50%); apply the chosen chunks to the image (zero-extend as needed). SetLen in Random mode: kept with probability keep_permille + tear_permille, else dropped. fsync_fail: for each pending op: r=rng.below(4): 0,1 -> apply fully to durable; 2 -> tear; 3 -> drop; then pending.clear() (current unchanged). Tests: KeepUnsynced == current, DropUnsynced == durable, Random with keep=1000 == current, tear never produces bytes that were neither old nor new at any offset, fsync_fail then sync() makes current durable again only for later writes (dropped parts stay lost in durable until rewritten).",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/src/plan.rs",
+        "crates/pgarbor-fault/src/rng.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-fault/src/disk.rs"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "every byte of a crash image equals either the durable byte or the byte of some pending write covering it (or zero beyond old length)",
+        "DropUnsynced images equal the last synced state exactly"
+      ]
+    },
+    {
+      "lease_id": "FLT-03",
+      "task_ids": [
+        "STORE-10",
+        "STORE-18"
+      ],
+      "files": [
+        "crates/pgarbor-fault/src/file.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "FaultFile: FileIo implementation driven by the controller.",
+      "spec": "Implement the eight FileIo methods per the module docs: check read-only (PermissionDenied, before decide) for write/set_len; ctl.decide(kind, &self.path, offset, len) mapping Err(pg) -> io::Error::other(pg); apply the Decision; capacity check (closure) BEFORE locking state, only when the op grows the file. Locks: emulate exactly like pgarbor_storage::io::mem::MemFile::try_lock using FileState.shared_locks/exclusive_lock and self.held (lock conversion and restore on failure). FsyncFail: state.fsync_fail(plan.sector_size, &mut ctl.crash_rng()) then Err(EIO). Tests: write/read roundtrip; ShortWrite returns Ok(n) and only n bytes visible; Fail(28) leaves file unchanged; locks exclusive vs shared across two handles on the same state.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/src/plan.rs",
+        "crates/pgarbor-fault/src/rng.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-fault/src/file.rs",
+        "crates/pgarbor-fault/src/controller.rs",
+        "crates/pgarbor-fault/src/disk.rs",
+        "crates/pgarbor-storage/src/io/mem.rs"
+      ],
+      "depends_on_leases": [
+        "FLT-01",
+        "FLT-02"
+      ],
+      "acceptance": [
+        "write_all_at over a FaultFile with a ShortWrite decision followed by Proceed completes the write",
+        "ENOSPC errors carry raw_os_error 28 so PgError::io maps them to 53100"
+      ]
+    },
+    {
+      "lease_id": "FLT-04",
+      "task_ids": [
+        "STORE-10",
+        "STORE-16"
+      ],
+      "files": [
+        "crates/pgarbor-fault/src/vfs.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "FaultVfs namespace with non-durable directory operations and crash images.",
+      "spec": "Implement crash_image, live_image, used_bytes and the Vfs methods per module docs. OpKinds: open existing -> Open, CreateNew/CreateTruncate -> Create, exists -> Exists, rename -> Rename, remove_file -> Remove, sync_dir -> SyncDir; decide before acting, Crash/Fail -> error with no effect. Files created via open get a fresh id, Arc<Mutex<FileState::default()>>, a live name and DirOp::Create. sync_dir(dir): ops whose path parent (crate::io::parent_dir semantics: pgarbor_storage::io::parent_dir) equals dir are applied to `durable` in order and removed. crash_image: copy durable map, apply the surviving prefix of pending dir ops (by CrashMode), then for each name produce FileState::crash_image(mode, sector_size, &mut rng) with rng = ctl.crash_rng(). Capacity closure: Arc::new(move |grow| plan.disk_capacity.map_or(true, |cap| used + grow <= cap)) computed via a clone of the namespace Arc (lock ns, sum file lengths; do not hold any file lock while locking ns elsewhere). Tests: created-but-unsynced file vanishes under DropUnsynced; rename without sync_dir reverts under DropUnsynced; after sync_dir it persists; handles survive rename/remove; from_image(live_image()) round-trips.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/src/plan.rs",
+        "crates/pgarbor-fault/src/rng.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-fault/src/vfs.rs",
+        "crates/pgarbor-fault/src/file.rs",
+        "crates/pgarbor-fault/src/disk.rs",
+        "crates/pgarbor-fault/src/controller.rs"
+      ],
+      "depends_on_leases": [
+        "FLT-01",
+        "FLT-02",
+        "FLT-03"
+      ],
+      "acceptance": [
+        "a name created/renamed without sync_dir may be absent after DropUnsynced crash; after sync_dir it is present",
+        "crash_image is a pure function of (namespace state, plan seed) \u2014 repeated calls with fresh controllers of equal plans are equal"
+      ]
+    },
+    {
+      "lease_id": "FLT-05",
+      "task_ids": [
+        "STORE-11",
+        "STORE-14"
+      ],
+      "files": [
+        "crates/pgarbor-fault/src/model.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Reference model checks and container state reader.",
+      "spec": "Implement RefModel::check_recovered, diff_summary, read_state per docs. read_state: let snap = c.snapshot(); let dir = snap.directory(); iterate dir.scan_prefix(prefix) (KvRead), decode 8-byte LE PageId (wrong length -> PgError::corruption), name = String::from_utf8_lossy(&key[prefix.len()..]); tree = snap.tree(root)?; collect tree.scan(Unbounded, Unbounded) into TreeState. Tests: check_recovered acked/inflight/violation cases; seq regression is a violation; diff_summary formats as documented.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/src/plan.rs",
+        "crates/pgarbor-fault/src/rng.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-fault/src/model.rs",
+        "crates/pgarbor-storage/src/container/snapshot.rs",
+        "crates/pgarbor-common/src/kv.rs"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "check_recovered accepts exactly the acked or inflight states",
+        "read_state of a container written by the Executor equals the model's acked state"
+      ]
+    },
+    {
+      "lease_id": "FLT-06",
+      "task_ids": [
+        "STORE-10",
+        "STORE-13"
+      ],
+      "files": [
+        "crates/pgarbor-fault/src/workload.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Workload generator and executor.",
+      "spec": "Implement generate, Executor::create, step, run per docs. generate: DetRng::new(spec.seed); simulate root existence; op choice by cumulative permille thresholds in the order delete, commit, abort, create_root, drop_root, compact, reopen, else put; Compact/Reopen only when no txn is open (otherwise emit Commit instead); CreateRoot only below max_roots (else Put); DropRoot never drops the last root (else Put); value lengths as documented. Executor::step Commit path: begin_write; for each buffered op resolve roots from the txn directory each time (ops can reference roots created earlier in the same txn); new root pointer written with w.put(dir, ROOT_PREFIX+name, &root.0.to_le_bytes()); DropRoot -> w.delete(dir, key); w.set_directory_root(dir); w.commit(). Error classification: if (self.crashed_probe)() -> Crashed(err); commit errors -> CommitFailed{poisoned: c.is_poisoned()} and model.commit_failed(poisoned); else Failed. run: stop on Crashed or poisoned; fill RunSummary.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/src/plan.rs",
+        "crates/pgarbor-fault/src/rng.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-fault/src/workload.rs",
+        "crates/pgarbor-fault/src/model.rs",
+        "crates/pgarbor-storage/src/container/write.rs",
+        "crates/pgarbor-storage/src/container/handle.rs",
+        "crates/pgarbor-storage/src/roots.rs"
+      ],
+      "depends_on_leases": [
+        "FLT-05"
+      ],
+      "acceptance": [
+        "generate is a pure function of the spec",
+        "without faults, after run() the container state equals model.acked and every commit was acknowledged"
+      ]
+    },
+    {
+      "lease_id": "FLT-07",
+      "task_ids": [
+        "STORE-10",
+        "STORE-11",
+        "STORE-16",
+        "STORE-18"
+      ],
+      "files": [
+        "crates/pgarbor-fault/src/scheduler.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Crash scheduler: scenario runner, crash matrix and seeded exploration.",
+      "spec": "Implement count_mutating_ops, run_scenario, crash_matrix, explore per docs. run_scenario: vfs = FaultVfs::new(plan.clone()); probe = { let ctl = vfs.controller().clone(); Arc::new(move || ctl.crashed()) }; Executor::create(Arc::new(vfs.clone()), \"/db/test.pga\".into(), &spec.create_options(), probe); run(generate(spec)); then vfs.controller().trigger_crash() (always pull the plug at the end); image = vfs.crash_image(); vfs2 = FaultVfs::from_image(&image, FaultPlan::none(seed)); Container::open_with(Arc::new(vfs2.clone()), path, &spec.open_options()) -> recovery_error on Err; (state, seq) = model::read_state(&c, ROOT_PREFIX); verdict = exec.model.check_recovered(&state, seq); doctor = c.verify(&PrefixU64Roots::new(ROOT_PREFIX), VerifyLevel::Full) -> doctor_errors = messages of Error issues; post-check: begin_write, put a marker into a new root, commit, drop, reopen, read_state contains it. Crash inside creation: if Executor::create did NOT return Ok, accept NotFound (58P01), any XX001 open error, or a clean open of an empty database; if Executor::create returned Ok, open MUST succeed (commit 1 was promised durable). Use spec.open_options() for every open (keeps the tiny spill threshold). Build repro with repro_line. crash_matrix/explore aggregate.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/src/plan.rs",
+        "crates/pgarbor-fault/src/rng.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-fault/src/scheduler.rs",
+        "crates/pgarbor-fault/src/workload.rs",
+        "crates/pgarbor-fault/src/model.rs",
+        "crates/pgarbor-fault/src/vfs.rs",
+        "crates/pgarbor-storage/src/doctor/verify.rs",
+        "crates/pgarbor-storage/src/roots.rs"
+      ],
+      "depends_on_leases": [
+        "FLT-04",
+        "FLT-05",
+        "FLT-06"
+      ],
+      "acceptance": [
+        "run_scenario never panics; all failures are reported with a repro line",
+        "a correct storage engine passes crash_matrix(WorkloadSpec::small(s), default, 1) for any s"
+      ]
+    },
+    {
+      "lease_id": "FLT-08",
+      "task_ids": [
+        "STORE-10",
+        "STORE-11"
+      ],
+      "files": [
+        "crates/pgarbor-fault/tests/flt-08.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Crash-matrix integration tests.",
+      "spec": "Write the tests enumerated in the file header using the crate's public API. Assertions print report.repro. Heavy variants #[ignore]. Torn-superblock and small-sector tests MUST set FaultPlan.sector_size = 16: at 512 the 92 meaningful superblock bytes and 32-byte page headers never tear, so the CRC fallback path would go untested.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "crates/pgarbor-fault/tests/flt-08.rs",
+        "crates/pgarbor-fault/src/lib.rs",
+        "crates/pgarbor-fault/src/scheduler.rs"
+      ],
+      "depends_on_leases": [
+        "FLT-07"
+      ],
+      "acceptance": [
+        "tests exist for every item in the file header and compile",
+        "the crash matrix covers every mutating op of WorkloadSpec::small",
+        "torn_superblock_falls_back observes a BadChecksum slot in at least one recovery report"
+      ]
+    },
+    {
+      "lease_id": "FLT-09",
+      "task_ids": [
+        "STORE-18"
+      ],
+      "files": [
+        "crates/pgarbor-fault/tests/flt-09.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Write-failure / no-false-acknowledgment / poisoning integration tests.",
+      "spec": "Write the tests enumerated in the file header with FaultVfs + Container directly (FaultPlan::fault_at with mutating-op indexes found by first running with record_log = true and locating the op of interest in controller.log()). Assert SQLSTATEs via err.sqlstate.code().",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/tests/flt-09.rs",
+        "crates/pgarbor-fault/src/lib.rs",
+        "crates/pgarbor-storage/src/container/write.rs"
+      ],
+      "depends_on_leases": [
+        "FLT-04",
+        "FLT-05",
+        "FLT-07"
+      ],
+      "acceptance": [
+        "no test observes Ok(CommitSeq) from a commit whose data or superblock write/sync failed",
+        "poisoned containers refuse begin_write with 58030"
+      ]
+    },
+    {
+      "lease_id": "FLT-10",
+      "task_ids": [
+        "STORE-12",
+        "STORE-16",
+        "STORE-17"
+      ],
+      "files": [
+        "crates/pgarbor-fault/tests/flt-10.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Interrupted compaction/export and lock integration tests.",
+      "spec": "Write the tests enumerated in the file header. To crash inside the compaction window: run the workload once with record_log to find the mutating-op index range of the Compact step (count ops before and after the step), then crash at each index in that range on fresh runs.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-fault.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-fault/tests/flt-10.rs",
+        "crates/pgarbor-fault/src/lib.rs",
+        "crates/pgarbor-storage/src/gc/compact.rs",
+        "crates/pgarbor-storage/src/export.rs"
+      ],
+      "depends_on_leases": [
+        "FLT-04",
+        "FLT-06",
+        "FLT-07"
+      ],
+      "acceptance": [
+        "every crash point inside compaction recovers to the pre- or post-compaction logical state",
+        "an interrupted export never leaves a partially valid destination file"
+      ]
+    }
+  ]
+}

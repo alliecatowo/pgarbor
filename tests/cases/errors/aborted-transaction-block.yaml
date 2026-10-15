@@ -1,0 +1,42 @@
+# An error inside an explicit transaction aborts the block: further statements fail with 25P02
+# until ROLLBACK, and the earlier insert in the block is discarded.
+id: errors.aborted-transaction-block
+title: Failed statement aborts the transaction block (25P02) until ROLLBACK discards its work
+family: errors
+tier: core
+feature_ids: [errors, transactions, insert, primary-key, constraints]
+required_capabilities: [create-table, insert, select, transactions, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/errors.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT id FROM t
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      INSERT INTO t VALUES (3)
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the pre-transaction row 1 remains

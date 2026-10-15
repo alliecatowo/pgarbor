@@ -1,0 +1,46 @@
+# Two sessions under READ COMMITTED: uncommitted writes invisible, row lock blocks a concurrent
+# UPDATE, the waiter re-evaluates against the committed row after the holder commits.
+id: txn.read-committed-blocking-update
+title: READ COMMITTED visibility and row-lock wait with re-evaluation
+family: txn
+tier: core
+feature_ids: [transactions, read-committed, row-locks, update]
+required_capabilities: [create-table, insert, update, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE acct SET balance = balance + 10 WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    comment: b must not see a's uncommitted update
+  - session: b
+    sql: |
+      UPDATE acct SET balance = balance * 2 WHERE id = 1 RETURNING balance
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    comment: re-evaluated against the committed row, so 220
+  - session: b
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows

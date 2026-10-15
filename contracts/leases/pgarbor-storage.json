@@ -1,0 +1,705 @@
+{
+  "crate": "pgarbor-storage",
+  "contract_version": "v1",
+  "leases": [
+    {
+      "lease_id": "STO-01",
+      "task_ids": [
+        "STORE-01",
+        "STORE-02"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/format/superblock.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Superblock encode/decode and dual-slot selection.",
+      "spec": "Implement Superblock::encode, Superblock::decode, choose_slot exactly per the byte table and rule lists in the file docs. Little-endian everywhere; crc32c via crate `crc32c::crc32c(&bytes[0..88])` stored at 88..92. encode returns a 4096-byte Vec (zero padded). decode takes >= 92 bytes (else PgError::internal) and returns SlotStatus following the 7-step check order exactly (first failure wins). choose_slot: implement rules 1-4 in order using crate::error helpers with the exact message strings given. Never panic on any input (use slice get / try_into with explicit errors). Unit tests (in the file's tests module): roundtrip; Empty for all-zero; BadMagic; BadChecksum when any byte in 0..92 flipped; UnsupportedVersion(2) with recomputed crc; UnsupportedFeatures for bit 40; Invalid for page_size 1000, commit_seq 0, directory_root > page_count; choose_slot for (Valid4,Valid5)->slot1, (Valid5,Empty)->slot0, (BadChecksum,Valid3)->slot1, (Empty,Empty)->not a database, (BadChecksum,BadChecksum)->corrupt, (Valid,UnsupportedVersion)->error, identity mismatch->error, equal seq identical->slot0, equal seq different->error.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/format/consts.rs"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "encode(sb) then decode yields Valid(sb) for any field values satisfying the invariants",
+        "flipping any single byte in [0,92) of a valid slot yields a non-Valid status",
+        "choose_slot picks the higher commit_seq and fails closed on unsupported version/features"
+      ]
+    },
+    {
+      "lease_id": "STO-02",
+      "task_ids": [
+        "STORE-04"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/format/page.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Page header parse, page encode/decode with crc32c verification.",
+      "spec": "Implement PageHeader::parse, encode_page, decode_page per the layout table. Use the provided page_checksum (header bytes 24..28 treated as zero, then payload[..payload_len]). encode_page: page_size bytes, magic PAGE_MAGIC LE at 0, kind byte, flags 0, reserved 0, page_id, commit_seq, crc, payload_len, payload, zero padding. decode_page: follow the 8-step validation order exactly, with the given crate::error helpers and reason strings; all-zero check first (cheap: bytes.iter().all(|b| *b==0)). Never index past bounds: compute payload_len and check against capacity before slicing. Tests: roundtrip each PageKind; detect flipped header byte (outside crc field), flipped payload byte, wrong expected id, unknown kind (recompute crc), zero page; flipping a padding byte after payload still decodes.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/format/consts.rs"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "decode_page(encode_page(p)) == p for all kinds and payload sizes 0..=capacity",
+        "any single-bit flip in header (except padding) or payload is detected as XX001",
+        "misdirected page (header id != expected) is rejected"
+      ]
+    },
+    {
+      "lease_id": "STO-03",
+      "task_ids": [
+        "STORE-03"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/pager/cache.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Sharded CLOCK page cache.",
+      "spec": "Implement get/insert/clear/stats using the given Shard/Slot structs exactly as described in the module docs (16 shards by id % 16, per-shard capacity fixed in new(), CLOCK with referenced bits, capacity 0 disables caching). Lock poisoning: use lock().unwrap_or_else(|e| e.into_inner()). Counters Relaxed atomics. Tests: hit/miss counting; capacity bound never exceeded per shard; a re-referenced page survives one eviction sweep while an unreferenced one is evicted; concurrent get/insert from 8 threads with no panics (std::thread::scope).",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-storage/src/format/page.rs"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "resident pages never exceed sum of per-shard capacities",
+        "get after insert returns the same Arc (ptr_eq) until evicted",
+        "capacity 0 never stores anything"
+      ]
+    },
+    {
+      "lease_id": "STO-04",
+      "task_ids": [
+        "STORE-03"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/pager/pager.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "File-backed pager: verified reads via cache, coalesced writes, slot I/O, sync.",
+      "spec": "Implement every stubbed method as documented. read_page: NONE -> error::invalid_page(id, \"null page reference\"); cache.get; else read exactly page_size bytes at format::consts::page_offset with FileIo::read_exact_at (UnexpectedEof -> invalid_page(id, \"page lies beyond end of file\"); other -> error::read_failed(path,e)); decode_page; wrap in Arc; cache.insert (propagate its error). Count reads/bytes. write_pages: validate each buffer length == page_size (PgError::internal otherwise), sort by id, coalesce consecutive ids into buffers <= 1 MiB, write_all_at at page_offset of the run's first id, error::write_failed on failure, count writes/bytes. read_slot: 4096-byte buffer, read_at loop until EOF, remainder zero. write_slot: length 4096 else internal; write_all_at(slot_offset). sync_data/sync_all with error::fsync_failed and count_sync. file_len -> error::read_failed; set_len -> error::truncate_failed. stats: load counters + cache.stats(). Tests with MemFile: write 3 pages, read them back verified; corrupt one byte -> XX001; read beyond EOF -> XX001 'page lies beyond end of file'; read_slot on empty file -> 4096 zeros.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/mem.rs",
+        "crates/pgarbor-storage/src/format/consts.rs",
+        "crates/pgarbor-storage/src/format/page.rs",
+        "crates/pgarbor-storage/src/pager/cache.rs"
+      ],
+      "depends_on_leases": [
+        "STO-02",
+        "STO-03"
+      ],
+      "acceptance": [
+        "pages written with write_pages are read back identically through read_page",
+        "ENOSPC from the FileIo surfaces as SQLSTATE 53100 with hint 'Check free disk space.'",
+        "consecutive page ids are written with a single write_all_at call (observable via a counting FileIo in tests)"
+      ]
+    },
+    {
+      "lease_id": "STO-05",
+      "task_ids": [
+        "STORE-05"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/btree/node.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Leaf/internal node codecs and validated span parsing.",
+      "spec": "Implement leaf_spans, internal_spans, LeafNode::encode, InternalNode::encode exactly per the payload layouts in the module docs (LE u16/u32/u64). encode writes header, then the slot array, then cells back-to-back in entry order; slot[i] = offset of cell i; the returned payload length must equal encoded_len() (header + SLOT_LEN per entry + cell bytes); debug_assert it. Errors listed in the docs (internal for overflow/invalid input). Parsing must never panic on arbitrary bytes: every read uses checked bounds (payload.get(a..b)) and returns error::invalid_page(id, reason) with the reason strings given. Check keys strictly ascending by comparing each key with the previous. Tests: roundtrips; the documented example payload; random byte payloads (DetRng-free: use a simple LCG in the test) never panic; size_rules_hold already exists.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/format/consts.rs",
+        "crates/pgarbor-storage/src/format/page.rs",
+        "crates/pgarbor-storage/src/pager/source.rs"
+      ],
+      "depends_on_leases": [],
+      "acceptance": [
+        "LeafNode::decode(encode(n)) == n and InternalNode likewise for all valid nodes",
+        "arbitrary bytes passed to leaf_spans/internal_spans never panic",
+        "encoded payload length == encoded_len()"
+      ]
+    },
+    {
+      "lease_id": "STO-06",
+      "task_ids": [
+        "STORE-05"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/btree/overflow.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Overflow chain write/read/walk/release/copy.",
+      "spec": "Implement per module docs. write_overflow: n = pages_for(len); allocate n ids first via sink.alloc_page(); then for k in 0..n write page k with payload = next id (ids[k+1] or 0) as u64 LE + chunk k. read_overflow/chain_pages: iterate at most pages_for(len) pages, validating kind, chunk sizes and termination exactly as documented (error::invalid_page with the given reasons). release_overflow: chain_pages then sink.release_page each. copy_overflow: read the chain from src and write_overflow into dst. Tests using a simple in-memory PageSink test double defined in the test module (HashMap<u64, PageRef>): roundtrip lengths 1, chunk-1, chunk, chunk+1, 5*chunk+7; truncated chain and over-long chain detected.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/pager/source.rs",
+        "crates/pgarbor-storage/src/format/page.rs",
+        "crates/pgarbor-storage/src/btree/node.rs"
+      ],
+      "depends_on_leases": [
+        "STO-05"
+      ],
+      "acceptance": [
+        "read_overflow(write_overflow(v)) == v for all lengths >= 1",
+        "a chain whose next pointer forms a cycle terminates with XX001"
+      ]
+    },
+    {
+      "lease_id": "STO-07",
+      "task_ids": [
+        "STORE-06"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/btree/read.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Point lookup and lazy ordered range iterator.",
+      "spec": "Implement get, RangeIter::new, RangeIter::advance as documented. Use internal_spans/leaf_spans + span_key/span_value on page.payload (Frames keep the PageRef + spans; build keys by slicing page.payload with the span offsets). Expected-level tracking: root level from the root page; each child must have level parent-1, leaves 0, otherwise error::invalid_page(child, \"expected level <x>, found <y>\"). Depth guard 64. Upper bound check on each yielded key: Included(u) stop when key > u; Excluded(u) stop when key >= u. Lower bound positioning: Included(k) -> leaf position = search(k) Ok(i)|Err(i) -> i; Excluded(k) -> Ok(i) -> i+1, Err(i) -> i. Empty/inverted range yields nothing. Tests with a hand-built tree via a test PageSink: 2-level tree, scans with all bound combinations, get hits/misses, overflow value materialized.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/btree/overflow.rs",
+        "crates/pgarbor-storage/src/pager/source.rs",
+        "crates/pgarbor-storage/src/container/snapshot.rs"
+      ],
+      "depends_on_leases": [
+        "STO-05",
+        "STO-06"
+      ],
+      "acceptance": [
+        "scan(lower, upper) over any tree equals BTreeMap::range semantics without panicking on inverted ranges",
+        "iterator memory is O(height): at most one PageRef per level is held",
+        "get returns overflow values byte-identical"
+      ]
+    },
+    {
+      "lease_id": "STO-08",
+      "task_ids": [
+        "STORE-07"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/btree/insert.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Copy-on-write insert with byte-balanced splits and append heuristic.",
+      "spec": "Implement put exactly per the algorithm in the doc comment. Use LeafNode/InternalNode owned decode (via decode_node on src pages read through sink.read_page), write_node for cow writes, write_overflow for big values, release_overflow when replacing an overflow value. Recursion returns (new_id, Option<(sep, right_id)>, replaced). Key rule: when the child id did not change and there is no split, do not rewrite the parent. Split index search: compute prefix sums of entry encoded_len; for s in 1..n pick minimal |left-right| with both <= capacity (header included); ties -> smaller s. Append split when rightmost && insertion index == old len. Tests (test PageSink double that tracks private/shared): 10k random inserts then full scan sorted & equal to BTreeMap; ascending inserts produce near-full leaves; replacing values; max-size key accepted, max+1 rejected with 54000; CoW: pages of a 'committed' root (marked shared in the double) are never written.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/btree/overflow.rs",
+        "crates/pgarbor-storage/src/btree/read.rs",
+        "crates/pgarbor-storage/src/pager/source.rs",
+        "~/develop/reference/postgres-18/src/backend/access/nbtree/nbtsplitloc.c (split heuristics, reference only)"
+      ],
+      "depends_on_leases": [
+        "STO-05",
+        "STO-06",
+        "STO-07"
+      ],
+      "acceptance": [
+        "after any sequence of puts, an in-order scan equals a BTreeMap model",
+        "no page id reachable from the input root is ever passed to write_page unless is_private(id)",
+        "every non-root node respects capacity after a split; root growth increases level by exactly 1"
+      ]
+    },
+    {
+      "lease_id": "STO-09",
+      "task_ids": [
+        "STORE-08"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/btree/delete.rs"
+      ],
+      "model_tier": "opus",
+      "summary": "Copy-on-write delete with merge/redistribute and root collapse; range delete.",
+      "spec": "Implement delete and delete_range per the doc comments. Rebalancing: underflow when encoded_len < underflow_threshold or entry count 0 for non-root; prefer left sibling. Merge when combined (for internal: + separator cell) fits capacity; else redistribute by bytes (leaf: move entries across, new separator = first key of right; internal: rotate through parent). Release absorbed pages with sink.release_page and overflow chains with release_overflow. Root collapse: internal root with 0 separators -> its child (release old root); empty leaf root -> NONE. Absent key: zero writes. delete_range: batches of 1024 keys via RangeIter (needs &dyn PageSource: `let src: &dyn PageSource = &*sink;` trait upcasting) collected into a Vec before deleting. Tests: random insert/delete interleavings vs BTreeMap (with a doctor-like invariant checker in the test: ordering, separator bounds, uniform depth, no empty non-root node); delete all -> NONE; delete_range over a middle prefix.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/btree/overflow.rs",
+        "crates/pgarbor-storage/src/btree/read.rs",
+        "crates/pgarbor-storage/src/btree/insert.rs",
+        "crates/pgarbor-storage/src/pager/source.rs"
+      ],
+      "depends_on_leases": [
+        "STO-05",
+        "STO-06",
+        "STO-07",
+        "STO-08"
+      ],
+      "acceptance": [
+        "after any interleaving of puts and deletes, scan equals the BTreeMap model and all structural invariants hold",
+        "deleting every key yields PageId::NONE",
+        "deleting an absent key performs no page writes"
+      ]
+    },
+    {
+      "lease_id": "STO-10",
+      "task_ids": [
+        "STORE-07"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/btree/bulk.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Batch apply (overlay commit path) and streaming bottom-up bulk build.",
+      "spec": "apply_batch: if root.is_none() && !batch.has_deletes() -> build_from_sorted over batch.iter() mapped to Ok((k.to_vec(), v.to_vec())); else iterate batch.iter(): Some -> put, None -> delete, threading the root. build_from_sorted: per-level builders as described (fill to BULK_FILL_PERCENT of node_capacity, at least one entry per node, write-one-behind to rebalance the last two nodes of a level by bytes when the last is under underflow_threshold); leaves first, then internal levels where each child contributes (first_key_of_child, child_id); separators are the child's first key. Strictly ascending check with the exact internal error message. Tests: build 0, 1, 1000, 100k items and compare scans; built trees pass the same invariant checker; apply_batch with mixed ops equals model.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/btree/insert.rs",
+        "crates/pgarbor-storage/src/btree/delete.rs",
+        "crates/pgarbor-storage/src/btree/overflow.rs",
+        "crates/pgarbor-storage/src/batch.rs"
+      ],
+      "depends_on_leases": [
+        "STO-05",
+        "STO-06",
+        "STO-08",
+        "STO-09"
+      ],
+      "acceptance": [
+        "build_from_sorted(items) scans back identical items",
+        "leaves of a bulk-built tree are >= 50% full except possibly a single-leaf tree",
+        "apply_batch result equals applying the ops one by one"
+      ]
+    },
+    {
+      "lease_id": "STO-11",
+      "task_ids": [
+        "STORE-01",
+        "STORE-02",
+        "STORE-11",
+        "STORE-12"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/container/recovery.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "File initialization and open-time recovery (slot choice, tail truncation, temp cleanup, locking).",
+      "spec": "Implement read_slots, initialize, recover exactly per the numbered steps. Lock contention detection: io::ErrorKind::WouldBlock -> error::locked(path). Use crate::io::{parent_dir, sibling_path}. Respect SyncMode::Off by skipping every sync. initialize must remove the partially created file on any failure after step 2 (best effort, ignore removal errors). Truncation and temp-file removal only for writable opens. Never panic on short or garbage files. Tests over MemVfs: initialize then recover -> commit_seq 1, chosen slot 0; recover on random bytes -> XX001 'is not a PGArbor database'; second exclusive open -> 55006; garbage tail truncated and reported; stale .compact-tmp removed; truncated file with Strict -> XX001 'is truncated', with FallbackToOlderSlot uses the older slot.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/io/file_io.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-storage/src/io/mem.rs",
+        "crates/pgarbor-storage/src/format/superblock.rs",
+        "crates/pgarbor-storage/src/format/consts.rs",
+        "crates/pgarbor-storage/src/container/options.rs"
+      ],
+      "depends_on_leases": [
+        "STO-01"
+      ],
+      "acceptance": [
+        "a freshly initialized file is exactly 8192 bytes with slot 0 valid (commit 1) and slot 1 zero",
+        "recover never adopts a superblock whose committed length exceeds the file length under Strict",
+        "read-only recover changes no bytes"
+      ]
+    },
+    {
+      "lease_id": "STO-12",
+      "task_ids": [
+        "STORE-09",
+        "STORE-10",
+        "STORE-18"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/container/write.rs"
+      ],
+      "model_tier": "opus",
+      "summary": "WriteTxn page ownership (dirty map, spill, reuse) and the durable commit protocol with poisoning.",
+      "spec": "Implement read_page, alloc_page, write_page, release_page, spill, commit exactly per the module-level protocol (steps 0-8) and per-method docs. Poison rules are part of the contract: page-write failure (step 2) does NOT poison; any sync failure or any superblock write failure DOES poison via inner.poison(format!(...)) and returns the original error. Use encode_page(page_size, &page) with page.commit_seq == self.commit_seq. Publish with inner.publish(ContainerState{pager: self.pager.clone(), sb: new_sb, slot: 1 - self.base_slot}) and increment self.guard.commits. Respect inner.syncing() (SyncMode::Off skips syncs). After publish insert committed dirty pages into self.pager.cache() ignoring errors. Spilled pages: read back with pager.read_page_uncached and check commit_seq == self.commit_seq. Tests (MemVfs container): commit then snapshot sees data; drop without commit publishes nothing; empty commit returns base seq with zero writes (counting FileIo wrapper); spill threshold 1 byte still yields correct data; failing FileIo (test double returning ENOSPC on write) -> commit Err 53100, not poisoned, next commit succeeds; failing sync -> poisoned, begin_write errors.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/container/handle.rs",
+        "crates/pgarbor-storage/src/container/snapshot.rs",
+        "crates/pgarbor-storage/src/pager/pager.rs",
+        "crates/pgarbor-storage/src/pager/source.rs",
+        "crates/pgarbor-storage/src/format/page.rs",
+        "crates/pgarbor-storage/src/format/superblock.rs",
+        "~/develop/reference/postgres-18/src/backend/storage/file/fd.c (data_sync_elevel / fsync PANIC rationale)"
+      ],
+      "depends_on_leases": [
+        "STO-01",
+        "STO-02",
+        "STO-04",
+        "STO-13"
+      ],
+      "acceptance": [
+        "commit returns Ok only after both sync_data calls succeed (SyncMode::Full)",
+        "no page id <= base.page_count is ever written by a write txn",
+        "after a sync or superblock-write failure the container is poisoned and refuses begin_write with SQLSTATE 58030",
+        "a commit failing at page-write time leaves the container writable and the published state unchanged"
+      ]
+    },
+    {
+      "lease_id": "STO-13",
+      "task_ids": [
+        "STORE-12",
+        "STORE-13"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/container/handle.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Container create/open orchestration and open-time verification.",
+      "spec": "Implement create_with and open_with per their docs: call recovery::initialize / recovery::recover, build Pager::new(file, path, page_size, cache_pages), build ContainerInner {vfs, path, read_only, sync, cache_pages, spill_threshold, state: RwLock(ContainerState{pager: Arc, sb, slot}), writer: Mutex::default(), poison: Mutex(None), pins: PinTable::new(), recovery: report}. VerifyLevel::Roots: if directory_root != NONE, Snapshot::new(pager.clone(), sb, None) then read_page + btree::node::decode_node. VerifyLevel::Full: doctor::verify::verify_tree(&snap, directory_root, \"directory\", &mut ReachSet::new(page_count), &mut issues) and fail with the first Error issue as XX001 'database file \"<path>\" failed verification: <msg>'. Tests: create then open (MemVfs) round trip; Container is Send+Sync (static assertion fn assert_send_sync<T: Send+Sync>()); open read-only then begin_write -> 25006.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/container/recovery.rs",
+        "crates/pgarbor-storage/src/container/options.rs",
+        "crates/pgarbor-storage/src/container/write.rs",
+        "crates/pgarbor-storage/src/container/snapshot.rs",
+        "crates/pgarbor-storage/src/pager/pager.rs",
+        "crates/pgarbor-storage/src/doctor/verify.rs"
+      ],
+      "depends_on_leases": [
+        "STO-04",
+        "STO-11"
+      ],
+      "acceptance": [
+        "create_with on an existing path fails with SQLSTATE 58P02 and leaves the existing file unchanged",
+        "open_with of a locked file fails with 55006",
+        "a container opened read-only refuses writes with 25006"
+      ]
+    },
+    {
+      "lease_id": "STO-14",
+      "task_ids": [
+        "STORE-14"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/gc/trace.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Live-root collection, tree page walk, reachability trace with per-root exclusive accounting.",
+      "spec": "collect_roots: push directory NamedRoot when non-NONE, then RangeIter over the directory (Unbounded) calling resolver.roots(k, v, &mut out). visit_tree: explicit stack (no recursion) of (PageId, depth); read page; call visit; if true descend: internal -> children in order (internal_spans), leaf -> for each Overflow value visit chain pages (chain_pages) in cell order (visit each chain page; if visit returns false on the first chain page skip the rest of that chain). trace: as documented; owner array Vec<u32> with u32::MAX = none, u32::MAX-1 = shared. Out-of-range ids -> error::page_out_of_range. Tests: two roots sharing a subtree -> shared pages not exclusive; totals equal; overflow pages counted as overflow kind.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/btree/overflow.rs",
+        "crates/pgarbor-storage/src/btree/read.rs",
+        "crates/pgarbor-storage/src/roots.rs"
+      ],
+      "depends_on_leases": [
+        "STO-05",
+        "STO-06",
+        "STO-07"
+      ],
+      "acceptance": [
+        "reachable count equals the number of distinct pages over all roots",
+        "exclusive_pages of a root never exceeds its pages and sums with shared pages to the total"
+      ]
+    },
+    {
+      "lease_id": "STO-15",
+      "task_ids": [
+        "STORE-16",
+        "STORE-17"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/gc/copy.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Sharing-preserving structural tree copy and directory copy with root remapping.",
+      "spec": "Implement copy_tree (post-order recursion over decode_node; memo on node ids and on overflow first-page ids; leaves re-encoded with remapped Overflow{first}; internal nodes re-encoded with remapped children; dst.write_new for every page; pages_copied += 1 per page incl. overflow pages (copy_overflow returns first id; count chain length via pages_for)). copy_directory: collect directory entries via RangeIter over src first (Vec), then for each entry resolver.remap(k, &v, &mut |r| self.copy_tree(src, dst, r)) \u2014 collect into Vec<(k, v')>, then build_from_sorted(dst, &mut vec.into_iter().map(Ok)). Tests: copying two roots that share a subtree writes the shared pages once (pages_copied check); copied tree scans equal the source.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/btree/overflow.rs",
+        "crates/pgarbor-storage/src/btree/bulk.rs",
+        "crates/pgarbor-storage/src/btree/read.rs",
+        "crates/pgarbor-storage/src/roots.rs",
+        "crates/pgarbor-storage/src/pager/source.rs"
+      ],
+      "depends_on_leases": [
+        "STO-05",
+        "STO-06",
+        "STO-07",
+        "STO-10"
+      ],
+      "acceptance": [
+        "copy of N roots sharing pages writes each distinct source page exactly once",
+        "logical contents of every copied root equal the source"
+      ]
+    },
+    {
+      "lease_id": "STO-16",
+      "task_ids": [
+        "STORE-17"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/export.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "ExportBuilder: streaming export into a new container via temp file + atomic rename.",
+      "spec": "Implement the stubbed methods per docs. create_internal: validate page size (22023 'invalid page size <n>'), dest existence check (vfs.exists) -> error::open_failed(dest, &io::Error::from(io::ErrorKind::AlreadyExists)) when !overwrite, remove stale tmp (ignore NotFound), open CreateTruncate, try_lock Exclusive (WouldBlock -> error::locked), set_len(PAGES_OFFSET), sb = Superblock::new_empty(page_size, db_uuid or random_db_uuid(), created or now_unix_ms()) with commit_seq = opts.commit_seq. Sink: pending BTreeMap of Arc<Page>; flush when pending_bytes > buffer_bytes, writing encode_page bytes at page_offset with write_all_at (coalescing optional). copy_tree/copy_directory: mem::take the copier, call it with (src, self), restore. finish_in_place / finish exactly per docs; mark finished = true before returning Ok so Drop does not delete the renamed file. SyncMode::Off skips syncs. Tests (MemVfs): export a tree of 10k keys + overflow values, open the export with Container::open_with and compare; dest exists -> 58P02; abort removes the temp file; Drop without finish removes the temp file.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/gc/copy.rs",
+        "crates/pgarbor-storage/src/format/superblock.rs",
+        "crates/pgarbor-storage/src/format/page.rs",
+        "crates/pgarbor-storage/src/io/vfs.rs",
+        "crates/pgarbor-storage/src/container/recovery.rs",
+        "crates/pgarbor-storage/src/container/snapshot.rs"
+      ],
+      "depends_on_leases": [
+        "STO-01",
+        "STO-02",
+        "STO-15",
+        "STO-10",
+        "STO-08"
+      ],
+      "acceptance": [
+        "an exported file opens as a valid container whose directory root and trees equal what was built",
+        "a crash before finish never leaves a valid file at dest",
+        "export runs concurrently with commits on the source (it only reads a Snapshot)"
+      ]
+    },
+    {
+      "lease_id": "STO-17",
+      "task_ids": [
+        "STORE-15",
+        "STORE-16"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/gc/compact.rs"
+      ],
+      "model_tier": "opus",
+      "summary": "Online (reader-concurrent) compaction to a temp file with atomic rename and state swap.",
+      "spec": "Implement compact exactly per the 9-step protocol in the module docs, including which failures poison and which do not, temp-file cleanup on failure, the lock-carrying rename (ExportBuilder's temp handle becomes the container's file), publishing a new Pager (fresh cache) with slot 0, and the CompactReport fields (old/new lens via pager.file_len, page counts, remapped_extra_roots in order, roots via collect_roots on Snapshot::new(new_pager, new_sb, None)). Hold the writer MutexGuard for the whole function. Tests (MemVfs): compaction after 100 overwrite commits shrinks the file and preserves all PrefixU64Roots trees; commit_seq + 1; a Snapshot taken before still reads; a new write txn after compaction works; reopen works; temp file absent afterwards.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/export.rs",
+        "crates/pgarbor-storage/src/gc/copy.rs",
+        "crates/pgarbor-storage/src/gc/trace.rs",
+        "crates/pgarbor-storage/src/container/handle.rs",
+        "crates/pgarbor-storage/src/container/snapshot.rs",
+        "crates/pgarbor-storage/src/container/recovery.rs",
+        "crates/pgarbor-storage/src/roots.rs"
+      ],
+      "depends_on_leases": [
+        "STO-13",
+        "STO-15",
+        "STO-16",
+        "STO-14"
+      ],
+      "acceptance": [
+        "after compaction every resolver root has identical logical contents",
+        "the database path always names a complete, valid container (old or new) at every crash point",
+        "old snapshots remain readable after the swap",
+        "commit_seq increases by exactly 1"
+      ]
+    },
+    {
+      "lease_id": "STO-18",
+      "task_ids": [
+        "STORE-19"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/doctor/verify.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Structural verification producing DoctorReport issues (never failing on corruption).",
+      "spec": "Implement verify_tree, verify_snapshot, verify_container, verify_file per docs. Corruption errors from reads/parsing become Issue::error with err.message (+ detail) and verification continues with the next sibling; non-XX001 errors abort with Err. Key bounds: carry (lo: Option<Vec<u8>>, hi: Option<Vec<u8>>) down the recursion (explicit stack). Level None/Roots/Full semantics exactly as documented; garbage scan at Full uses ReachSet::iter_unmarked and pager.read_page_uncached, recording Info issues only. verify_file opens via vfs (ReadOnly) to read slots before attempting Container::open_with. Tests: healthy container -> is_ok(); flip a byte in a reachable leaf on a MemVfs file -> Error issue naming that page; flip a byte in an unreachable page -> only Info; JSON output parses.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/doctor/report.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/btree/overflow.rs",
+        "crates/pgarbor-storage/src/gc/trace.rs",
+        "crates/pgarbor-storage/src/container/recovery.rs",
+        "crates/pgarbor-storage/src/container/handle.rs"
+      ],
+      "depends_on_leases": [
+        "STO-05",
+        "STO-06",
+        "STO-14",
+        "STO-13"
+      ],
+      "acceptance": [
+        "a container produced only by the public API verifies with zero Error issues at VerifyLevel::Full",
+        "a single corrupted reachable page is reported as an Error issue with its page id",
+        "garbage (unreachable) pages are never reported as Error"
+      ]
+    },
+    {
+      "lease_id": "STO-19",
+      "task_ids": [
+        "STORE-15",
+        "STORE-19"
+      ],
+      "files": [
+        "crates/pgarbor-storage/src/doctor/space.rs"
+      ],
+      "model_tier": "haiku",
+      "summary": "Space accounting report and page inspection.",
+      "spec": "Implement space_report and inspect_page per docs (saturating arithmetic; superblock_bytes = PAGES_OFFSET; reclaimable_bytes = file_bytes.saturating_sub(PAGES_OFFSET + reachable_pages * page_size)). inspect_page must never fail on a damaged page (only on out-of-range id or I/O). Hex: lowercase two digits per byte of at most the first 64 key bytes. Tests: known layout numbers (see example), after overwrites garbage_pages > 0, inspect of a corrupted page returns Ok with error Some(..).",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-common/src/error.rs",
+        "crates/pgarbor-common/src/ids.rs",
+        "crates/pgarbor-storage/src/error.rs",
+        "crates/pgarbor-storage/src/doctor/report.rs",
+        "crates/pgarbor-storage/src/gc/trace.rs",
+        "crates/pgarbor-storage/src/btree/node.rs",
+        "crates/pgarbor-storage/src/format/page.rs",
+        "crates/pgarbor-storage/src/pager/pager.rs"
+      ],
+      "depends_on_leases": [
+        "STO-14",
+        "STO-04"
+      ],
+      "acceptance": [
+        "reachable_pages + garbage_pages == page_count",
+        "inspect_page returns Ok for any id in 1..=page_count even if the page is corrupt"
+      ]
+    },
+    {
+      "lease_id": "STO-20",
+      "task_ids": [
+        "STORE-05",
+        "STORE-06",
+        "STORE-07",
+        "STORE-08"
+      ],
+      "files": [
+        "crates/pgarbor-storage/tests/sto-20.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Model-based property tests of the CoW B+tree (integration test file).",
+      "spec": "Write the tests enumerated in the file header using only the crate's public API (Container over MemVfs, WriteTxn, Snapshot/TreeSnapshot, KvRead, PrefixU64Roots, VerifyLevel). Use proptest 1.12 (`proptest!` macro, `prop::collection::vec`). No unwrap on fallible storage calls without a message: use `.expect(\"context\")` (tests may panic). Keep default case counts small (64) and add #[ignore] heavier variants.",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-storage/tests/sto-20.rs",
+        "crates/pgarbor-storage/src/lib.rs",
+        "crates/pgarbor-storage/src/container/write.rs",
+        "crates/pgarbor-storage/src/container/snapshot.rs"
+      ],
+      "depends_on_leases": [
+        "STO-08",
+        "STO-09",
+        "STO-10",
+        "STO-12",
+        "STO-13",
+        "STO-18",
+        "STO-19"
+      ],
+      "acceptance": [
+        "all listed tests exist and compile against the frozen API",
+        "tests fail if any B+tree operation diverges from BTreeMap"
+      ]
+    },
+    {
+      "lease_id": "STO-21",
+      "task_ids": [
+        "STORE-01",
+        "STORE-10",
+        "STORE-11",
+        "STORE-12",
+        "STORE-16",
+        "STORE-17",
+        "STORE-19"
+      ],
+      "files": [
+        "crates/pgarbor-storage/tests/sto-21.rs"
+      ],
+      "model_tier": "sonnet",
+      "summary": "Container lifecycle integration tests (north-star storage slice).",
+      "spec": "Write the tests enumerated in the file header with tempfile::tempdir() for real files and MemVfs otherwise. Use only the public API. For the concurrency test use std::thread::scope with Container clones; readers assert monotonically non-decreasing commit_seq and that a snapshot's contents equal the writer's state at that commit (writer records expected state per CommitSeq in a Mutex<BTreeMap>).",
+      "reads": [
+        "contracts/ARCHITECTURE.md",
+        "contracts/crates/pgarbor-storage.md",
+        "crates/pgarbor-storage/tests/sto-21.rs",
+        "crates/pgarbor-storage/src/lib.rs"
+      ],
+      "depends_on_leases": [
+        "STO-11",
+        "STO-12",
+        "STO-13",
+        "STO-16",
+        "STO-17",
+        "STO-18",
+        "STO-19"
+      ],
+      "acceptance": [
+        "all listed tests exist and compile against the frozen API",
+        "the north-star storage slice (create, commit, reopen, branch, mutate, compact, export) is exercised end to end"
+      ]
+    }
+  ]
+}

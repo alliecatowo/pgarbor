@@ -1,0 +1,47 @@
+# ALTER TABLE RENAME errors: duplicate relation names (42P07), duplicate column names (42701),
+# and missing relations or columns (42P01 / 42703).
+id: errors.rename-conflicts
+title: Rename conflicts and missing targets for ALTER TABLE RENAME (table and column)
+family: errors
+tier: core
+feature_ids: [errors, alter-table, rename]
+required_capabilities: [create-table, select, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/errors.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (name text, salary int4);
+  CREATE TABLE stud_emp (name text);
+steps:
+  - sql: |
+      ALTER TABLE stud_emp RENAME TO emp
+    expect: error
+    sqlstate: "42P07"
+    comment: conflict with an existing relation
+  - sql: |
+      ALTER TABLE stud_emp RENAME TO stud_emp
+    expect: error
+    sqlstate: "42P07"
+    comment: renaming a relation to its own name is a conflict
+  - sql: |
+      ALTER TABLE nonesuch RENAME TO newnonesuch
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER TABLE nonesuchrel RENAME COLUMN nonesuchatt TO newnonesuchatt
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER TABLE emp RENAME COLUMN nonesuchatt TO newnonesuchatt
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER TABLE emp RENAME COLUMN salary TO name
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      SELECT name, salary FROM emp ORDER BY name
+    expect: rows
+    order: ordered
+    comment: no partial rename took effect

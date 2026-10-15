@@ -1,0 +1,31 @@
+# FOR UPDATE is rejected with GROUP BY or grouping sets (0A000), while plain FOR UPDATE still works.
+id: errors.group-by-for-update
+title: FOR UPDATE with GROUP BY or GROUPING SETS is rejected with 0A000
+family: errors
+tier: extended
+feature_ids: [errors, group-by, row-locks, grouping-sets]
+required_capabilities: [create-table, insert, select, group-by, row-locks]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/errors.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (k text, v int4);
+  INSERT INTO t VALUES ('a', 1), ('a', 2), ('b', 3);
+steps:
+  - sql: |
+      SELECT NULL FROM t GROUP BY k FOR UPDATE
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      SELECT NULL FROM t GROUP BY GROUPING SETS (()) FOR UPDATE
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      SELECT k, count(*) AS n FROM t GROUP BY k ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k, v FROM t WHERE k = 'b' FOR UPDATE
+    expect: rows
+    order: multiset
