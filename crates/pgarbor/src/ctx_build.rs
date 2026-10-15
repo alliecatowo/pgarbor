@@ -102,10 +102,17 @@ impl Session {
 
         // Utility / transaction-control statements take no snapshot (PG leaves FirstSnapshotSet
         // alone, so `SET TRANSACTION` stays legal): reuse the last env instead of reading the catalog.
-        if let (Some(txn), Some(env)) = (self.txn.as_ref(), self.env.as_ref()) {
-            if !txn.has_snapshot() {
+        if self.txn.as_ref().is_some_and(|t| !t.has_snapshot()) {
+            if let Some(env) = &self.env {
                 return Ok(env.clone());
             }
+            // First statement of a fresh or reopened session: no cached env yet. Build one from a
+            // short read-only look at the branch head (no transaction snapshot is taken).
+            let (_, snap) = crate::bootstrap::read_catalog(&self.db, &self.branch_name())?;
+            let sp = guc_derive::search_path(&self.guc)?;
+            let env = CatalogEnv::new(snap, &sp, self.user_oid)?.with_session(self.session_user_oid, self.database_oid);
+            self.env = Some(env.clone());
+            return Ok(env);
         }
 
         // Step 2: bootstrap a branch created before its catalog existed, then read the snapshot

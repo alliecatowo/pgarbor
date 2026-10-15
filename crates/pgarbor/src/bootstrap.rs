@@ -239,7 +239,7 @@ fn fatal_err(code: SqlState, message: String) -> PgError {
 /// Resolve `branch` and return its id with the catalog snapshot of its head. A branch whose catalog is
 /// not bootstrapped is bootstrapped first when the engine is writable; read-only engines fail with
 /// XX001 `database is not initialized`.
-fn read_catalog(db: &Database, branch: &str) -> Result<(BranchId, CatalogSnapshot)> {
+pub(crate) fn read_catalog(db: &Database, branch: &str) -> Result<(BranchId, CatalogSnapshot)> {
     let engine = &db.inner.engine;
     let rec = engine.branches().get(&BranchRef::name(branch))?;
     let id = rec.id;

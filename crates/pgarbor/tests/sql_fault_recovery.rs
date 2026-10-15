@@ -120,3 +120,24 @@ fn sql_enospc_and_fsync_failure_never_acknowledge_failed_commit() {
         assert_recovered(&vfs.crash_image().unwrap(), false, &format!("seed={SEED} cut={cut} fault={kind:?}"));
     }
 }
+
+#[test]
+fn snapshot_free_statement_works_as_first_statement_of_fresh_and_reopened_database() {
+    let vfs = FaultVfs::new(FaultPlan::none(SEED));
+    let db = Database::create(PATH, options(&vfs)).unwrap();
+    let mut s = session(&db, "main");
+    execute(&mut s, "BEGIN");
+    execute(&mut s, "CREATE TABLE t(id int primary key)");
+    execute(&mut s, "INSERT INTO t VALUES (1)");
+    execute(&mut s, "COMMIT");
+    drop(s);
+    db.close().unwrap();
+    let image = vfs.live_image().unwrap();
+    let vfs = FaultVfs::from_image(&image, FaultPlan::none(SEED));
+    let db = Database::open(PATH, options(&vfs)).unwrap();
+    let mut s = session(&db, "main");
+    execute(&mut s, "BEGIN");
+    execute(&mut s, "INSERT INTO t VALUES (2)");
+    execute(&mut s, "COMMIT");
+    assert_eq!(ids(&mut s), expected_ids(&[1, 2]));
+}
