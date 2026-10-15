@@ -154,3 +154,29 @@ fn identity_sequence_name_option() {
         "42601"
     );
 }
+
+#[test]
+fn information_schema_columns_is_served_by_its_producer() {
+    let db = Database::in_memory().expect("create");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    // Virtual system views are served by their producers, not by re-parsing the stored definition
+    // (whose `a.*` function arguments are whole-row references).
+    assert!(count_rows(&mut s, "SELECT table_name FROM information_schema.columns") > 0);
+    match &s
+        .simple_query(
+            "SELECT table_name, column_name, data_type, ordinal_position FROM information_schema.columns \
+             WHERE table_schema = 'pg_catalog' AND table_name = 'pg_class' ORDER BY ordinal_position LIMIT 2",
+        )
+        .expect("pg_class columns")[0]
+        .result
+    {
+        StatementResult::Rows { rows, .. } => assert_eq!(
+            rows,
+            &vec![
+                vec![Datum::Text("pg_class".into()), Datum::Text("oid".into()), Datum::Text("oid".into()), Datum::Int4(1)],
+                vec![Datum::Text("pg_class".into()), Datum::Text("relname".into()), Datum::Text("name".into()), Datum::Int4(2)],
+            ]
+        ),
+        other => panic!("expected rows: {other:?}"),
+    }
+}

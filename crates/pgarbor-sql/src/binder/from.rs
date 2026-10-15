@@ -356,7 +356,9 @@ fn bind_named_table(b: &mut Binder, name: &ObjectName, alias: Option<&TableAlias
 
     let env: &CatalogEnv = b.env;
     let rel = env.resolve_relation(qn.schema.as_deref(), &qn.name).map_err(|e| at(e, pos))?;
-    if rel.kind == RelKind::View {
+    // Virtual system views (oid < FIRST_NORMAL_OID) are served by their vrel producer; their stored
+    // definition is for pg_get_viewdef only (vrel/mod.rs).
+    if rel.kind == RelKind::View && !rel.is_virtual() {
         return expand_view(b, rel, alias_name, alias, pos);
     }
     if rel.kind == RelKind::CompositeType {
@@ -613,6 +615,17 @@ mod tests {
             },
             _ => panic!("expected a query"),
         }
+    }
+
+    /// Virtual system views (`information_schema.columns`) bind through their producer; their stored
+    /// definition (which uses `a.*` function arguments) is never expanded.
+    #[test]
+    fn virtual_system_view_binds_without_expansion() {
+        let (_kv, env) = testing::bootstrapped().expect("bootstrap");
+        let rel = env.resolve_relation(Some("information_schema"), "columns").expect("columns view");
+        assert!(rel.is_virtual());
+        let raw = crate::parser::parse("SELECT table_name FROM information_schema.columns").expect("parse");
+        crate::binder::bind(&raw[0], &ctx_for(&env)).expect("binds");
     }
 
     fn ctx_for(env: &CatalogEnv) -> BindContext<'_> {
