@@ -211,13 +211,15 @@ fi
 # --- summary ---------------------------------------------------------------------------------
 say "Summary"
 printf '   %s\n' "${SUMMARY[@]}"
-cat <<'NOTE'
-
-   Notes:
-   - Codex: `codex login` is interactive and is NOT run here. Run it yourself if you need it.
-   - Harness: it is wired to the podman CLI. In a cloud session use the dsn target instead, e.g.
-     --target dsn --dsn postgres://postgres:oracle@127.0.0.1:54319/postgres (unverified here).
-   - The oracle does not survive into a new session: rerun this script (or the SessionStart hook).
-NOTE
+# Optional env vars: report NAMES that are unset, never values. Set them in the cloud environment settings.
+say "Optional environment variables (unset ones)"
+UNSET=()
+for v in DATABASE_URL PGARBOR_ORACLE PGARBOR_ORACLE_HOST PGARBOR_ORACLE_PORT PGARBOR_ORACLE_USER \
+         PGARBOR_ORACLE_PASSWORD PGARBOR_ORACLE_DB PGARBOR_ORACLE_REVIEW PGARBOR_REAL_BINARY \
+         PGARBOR_PG_SOURCE GH_TOKEN GITHUB_TOKEN; do
+  [ -n "${!v:-}" ] || UNSET+=("$v")
+done
+printf '   unset: %s\n' "${UNSET[*]:-(none)}"
+printf '   (see docs/CLOUD.md, "Environment variables and secrets")\n'
 if [ "$REQUIRED_FAILED" = 1 ] && [ "${STRICT:-0}" = 1 ]; then exit 1; fi
 exit 0
