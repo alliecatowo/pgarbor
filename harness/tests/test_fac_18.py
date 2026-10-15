@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,6 +49,17 @@ def _amendment_text(status: str, crate: str, leases: str, title: str = "T") -> s
     )
 
 
+VALID_STATUSES = {"PROPOSED", "ACCEPTED", "DEFERRED", "REJECTED", "RATIFIED", "APPLIED"}
+
+
+def _file_status(rel: str) -> str:
+    """The status word as written in the amendment file itself (status is live repo state)."""
+    text = (REPO / rel).read_text(encoding="utf-8")
+    m = re.search(r"^Status:\s*([A-Za-z]+)", text, flags=re.MULTILINE)
+    assert m is not None, f"no Status line in {rel}"
+    return m.group(1).upper()
+
+
 def test_expand_leases_ranges_and_annotations() -> None:
     assert am._expand_leases("HAR-01..HAR-03, FAC-09 (campaign); pgarbor-cli leases") == [
         "HAR-01", "HAR-02", "HAR-03", "FAC-09",
@@ -58,7 +70,8 @@ def test_scan_parses_existing_harness_amendments() -> None:
     by_path = {a.path: a for a in am.scan(REPO)}
 
     h1 = by_path["contracts/amendments/harness-01-dag-owned-path-globs.md"]
-    assert h1.status == "PROPOSED"
+    assert h1.status in VALID_STATUSES
+    assert h1.status == _file_status(h1.path)
     assert h1.crate == "harness"
     assert h1.affects == ["contracts/dag/task_graph.v1.json"]
     assert len(h1.leases) == 31 + 19
@@ -66,7 +79,8 @@ def test_scan_parses_existing_harness_amendments() -> None:
     assert "FAC-01" in h1.leases and "FAC-19" in h1.leases
 
     h2 = by_path["contracts/amendments/harness-02-cli-serve-contract.md"]
-    assert h2.status == "PROPOSED"
+    assert h2.status in VALID_STATUSES
+    assert h2.status == _file_status(h2.path)
     assert h2.crate == "harness"
     assert h2.affects == ["pgarbor-cli"]
     assert h2.leases == ["HAR-11", "FAC-09"]
@@ -76,9 +90,27 @@ def test_scan_parses_existing_harness_amendments() -> None:
 def test_scan_reads_status_written_after_title() -> None:
     storage = [a for a in am.scan(REPO) if "pgarbor-storage-01" in a.path]
     assert len(storage) == 1
-    assert storage[0].status == "PROPOSED"
+    assert storage[0].status in VALID_STATUSES
+    assert storage[0].status == _file_status(storage[0].path)
     assert storage[0].crate == "pgarbor-storage"
     assert storage[0].leases == []
+
+
+def test_scan_reads_status_after_title_fixture(tmp_path: Path) -> None:
+    """Status written as prose after the title is parsed, independent of repo state."""
+    d = tmp_path / "contracts" / "amendments"
+    _write(
+        d / "pgarbor-storage-01-fixture.md",
+        "# Amendment request pgarbor-storage-01: fixture\n\n"
+        "Status: DEFERRED (2026-10-15, fixture). Previously proposed.\n"
+        "Crate: pgarbor-storage\n"
+        "Affects: pgarbor-storage\n"
+        "Leases: \n\n## Problem\n\nx\n",
+    )
+    found = [a for a in am.scan(tmp_path) if a.path.endswith("pgarbor-storage-01-fixture.md")]
+    assert len(found) == 1
+    assert found[0].status == "DEFERRED"
+    assert found[0].crate == "pgarbor-storage"
 
 
 def test_suspended_excludes_ratified_and_applied(tmp_path: Path) -> None:
