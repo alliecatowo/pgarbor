@@ -27,10 +27,78 @@ impl VirtualRelation for UnsupportedRelation {
     fn oid(&self) -> Oid {
         self.0
     }
-    #[allow(unused_variables)]
-    fn scan(&self, ctx: &ScanContext, req: &ScanRequest) -> Result<Vec<Row>> {
-        Err(PgError::unimplemented("CAT-37", "unsupported system relation"))
+    fn scan(&self, _ctx: &ScanContext, _req: &ScanRequest) -> Result<Vec<Row>> {
+        match unsupported_entry(self.0) {
+            Some((_, name, reason)) => Err(PgError::unimplemented("CAT-37", format!("system relation {name}: {reason}"))),
+            // Every relation in UNSUPPORTED_RELATIONS has a reason (unit test below); this is a generator bug.
+            None => Err(PgError::internal(format!("unsupported system relation with OID {} has no recorded reason", self.0))),
+        }
     }
 }
 
+/// The `UNSUPPORTED_REASONS` entry for `oid`, if any.
+fn unsupported_entry(oid: Oid) -> Option<(Oid, &'static str, &'static str)> {
+    UNSUPPORTED_REASONS.iter().find(|(o, _, _)| *o == oid).copied()
+}
+
 include!("unsupported_list.inc");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builtin;
+    use crate::session::NullSessionInfo;
+    use crate::testing;
+    use pgarbor_common::SqlState;
+    use pgarbor_types::IoConfig;
+
+    #[test]
+    fn every_unsupported_reason_is_registered_in_lookup() {
+        assert!(!UNSUPPORTED_REASONS.is_empty());
+        for (oid, qualified, reason) in UNSUPPORTED_REASONS {
+            let rel = super::super::lookup(*oid)
+                .unwrap_or_else(|| panic!("UNSUPPORTED_REASONS entry {qualified} (OID {oid}) is not registered in vrel::lookup"));
+            assert_eq!(rel.oid(), *oid);
+            assert!(!reason.is_empty(), "empty reason for {qualified}");
+            // the listed name must match the catalog's own name and namespace
+            let sys = builtin::system_rel(*oid).unwrap_or_else(|| panic!("{qualified} has no SYSTEM_RELS entry"));
+            let (schema, short) = qualified.split_once('.').unwrap_or_else(|| panic!("{qualified} is not qualified"));
+            assert_eq!(sys.name, short, "name mismatch for OID {oid}");
+            let ns = if schema == "information_schema" { 13293 } else { 11 };
+            assert_eq!(sys.namespace, ns, "namespace mismatch for {qualified}");
+        }
+    }
+
+    #[test]
+    fn unsupported_relations_and_reasons_match() {
+        assert_eq!(UNSUPPORTED_RELATIONS.len(), UNSUPPORTED_REASONS.len());
+        for r in UNSUPPORTED_RELATIONS {
+            assert!(unsupported_entry(r.0).is_some(), "OID {} has no reason", r.0);
+        }
+    }
+
+    #[test]
+    fn scan_fails_with_0a000_naming_relation_and_reason() {
+        let (_kv, env) = testing::bootstrapped().expect("bootstrap");
+        let io = IoConfig::default();
+        let session = NullSessionInfo;
+        let ctx = ScanContext { env: &env, session: &session, io_config: &io };
+        let rel = UnsupportedRelation(relid::PG_STAT_BGWRITER);
+        let err = rel.scan(&ctx, &ScanRequest::all()).expect_err("pg_stat_bgwriter must not scan");
+        assert_eq!(err.sqlstate, SqlState::FEATURE_NOT_SUPPORTED);
+        assert!(err.message.contains("pg_catalog.pg_stat_bgwriter"), "message: {}", err.message);
+        assert!(err.message.contains("server-wide statistics are not collected"), "message: {}", err.message);
+        assert!(err.is_unimplemented());
+    }
+
+    #[test]
+    fn scan_through_registry_is_0a000() {
+        let (_kv, env) = testing::bootstrapped().expect("bootstrap");
+        let io = IoConfig::default();
+        let session = NullSessionInfo;
+        let ctx = ScanContext { env: &env, session: &session, io_config: &io };
+        let err = super::super::scan(&ctx, relid::PG_CONFIG, &ScanRequest::all()).expect_err("pg_config must not scan");
+        assert_eq!(err.sqlstate, SqlState::FEATURE_NOT_SUPPORTED);
+        assert!(err.message.contains("pg_catalog.pg_config"), "message: {}", err.message);
+    }
+}

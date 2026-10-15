@@ -229,16 +229,116 @@ pub fn oid_seed(kv: &dyn KvRead) -> Result<Oid> {
 
 /// KV-counter allocation (module docs; the body behind `impl OidSource for MemKv`). `in_use` reports OIDs already taken in the working catalog.
 // CONTRACT
-#[allow(unused_variables)]
 pub fn allocate_oid(kv: &mut dyn KvWrite, in_use: &dyn Fn(Oid) -> bool) -> Result<Oid> {
-    Err(PgError::unimplemented("CAT-01", "catalog OID allocation"))
+    let key = keys::next_oid_key();
+    let start = match kv.get(&key)? {
+        Some(b) if b.len() == 4 => u32::from_be_bytes([b[0], b[1], b[2], b[3]]),
+        Some(_) => return Err(PgError::corruption("invalid next OID counter value")),
+        None => oid_seed(&*kv)?,
+    };
+    // OID 0 and the reserved range below FIRST_NORMAL_OID are never handed out.
+    let mut cur = start.max(FIRST_NORMAL_OID);
+    // Every OID in [FIRST_NORMAL_OID, u32::MAX] is tried at most once per call.
+    let candidates: u64 = u64::from(Oid::MAX - FIRST_NORMAL_OID) + 1;
+    let mut tried: u64 = 0;
+    loop {
+        let cand = cur;
+        cur = if cand == Oid::MAX { FIRST_NORMAL_OID } else { cand + 1 };
+        if !in_use(cand) {
+            kv.put(&key, &cur.to_be_bytes())?;
+            return Ok(cand);
+        }
+        tried += 1;
+        if tried >= candidates {
+            return Err(PgError::new(pgarbor_common::SqlState::PROGRAM_LIMIT_EXCEEDED, "out of OIDs"));
+        }
+    }
 }
 
 /// Initialize an empty branch catalog (see module docs). Returns false if already bootstrapped.
 // CONTRACT
-#[allow(unused_variables)]
 pub fn bootstrap(kv: &mut dyn KvWrite) -> Result<bool> {
-    Err(PgError::unimplemented("CAT-01", "catalog bootstrap"))
+    use crate::model::common::acl_mode::{CREATE, USAGE};
+    use crate::model::common::AclItem;
+
+    if kv.get(&keys::bootstrap_key())?.is_some() {
+        return Ok(false);
+    }
+
+    // public schema: owner pg_database_owner (6171); acl {pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}.
+    codec::put_object(
+        kv,
+        &CatalogObject::Namespace(Namespace {
+            oid: 2200,
+            name: "public".to_string(),
+            owner: 6171,
+            acl: Some(vec![
+                AclItem { grantee: 6171, grantor: 6171, privileges: USAGE | CREATE, grant_options: 0 },
+                AclItem { grantee: 0, grantor: 6171, privileges: USAGE, grant_options: 0 },
+            ]),
+        }),
+    )?;
+
+    // Bootstrap superuser: every attribute set, unlimited connections, no password.
+    codec::put_object(
+        kv,
+        &CatalogObject::Role(Role {
+            oid: 10,
+            name: "postgres".to_string(),
+            superuser: true,
+            inherit: true,
+            create_role: true,
+            create_db: true,
+            can_login: true,
+            replication: true,
+            bypass_rls: true,
+            conn_limit: -1,
+            password: None,
+            valid_until: None,
+            config: Vec::new(),
+        }),
+    )?;
+
+    // Database postgres (OID 5), taken from the generated builtin row.
+    let db = crate::builtin::DATABASES
+        .iter()
+        .find(|d| d.oid == 5)
+        .ok_or_else(|| PgError::internal("builtin database postgres (oid 5) is missing"))?;
+    codec::put_object(
+        kv,
+        &CatalogObject::Database(Database {
+            oid: db.oid,
+            name: db.name.to_string(),
+            owner: db.owner,
+            encoding: db.encoding,
+            locale_provider: db.locale_provider,
+            is_template: db.is_template,
+            allow_conn: db.allow_conn,
+            conn_limit: db.conn_limit,
+            collate: db.collate.to_string(),
+            ctype: db.ctype.to_string(),
+            locale: db.locale.map(str::to_string),
+            acl: None,
+            config: Vec::new(),
+        }),
+    )?;
+
+    // Descriptions PG ships: pg_description for the schema, pg_shdescription for the database.
+    codec::put_description(
+        kv,
+        &DescriptionKey { objoid: 2200, classoid: 2615, objsubid: 0 },
+        "standard public schema",
+    )?;
+    codec::put_description(
+        kv,
+        &DescriptionKey { objoid: 5, classoid: 1262, objsubid: 0 },
+        "default administrative connection database",
+    )?;
+
+    kv.put(&keys::next_oid_key(), &FIRST_NORMAL_OID.to_be_bytes())?;
+    kv.put(&keys::version_key(), &CatalogVersion { counter: 1, stamp: 0 }.encode())?;
+    kv.put(&keys::bootstrap_key(), &1u32.to_be_bytes())?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -261,5 +361,105 @@ mod oid_tests {
     fn seed_of_empty_catalog() {
         let kv = MemKv::default();
         assert_eq!(oid_seed(&kv).unwrap(), FIRST_NORMAL_OID);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::common::acl_mode::{CREATE, USAGE};
+    use crate::model::common::AclItem;
+    use crate::snapshot::CatalogSnapshot;
+    use pgarbor_common::MemKv;
+
+    #[test]
+    fn bootstrap_writes_once() {
+        let mut kv = MemKv::default();
+        assert!(!is_bootstrapped(&kv).unwrap());
+        assert!(bootstrap(&mut kv).unwrap());
+        assert!(is_bootstrapped(&kv).unwrap());
+        let before = kv.map.clone();
+        assert!(!bootstrap(&mut kv).unwrap());
+        assert_eq!(kv.map, before);
+    }
+
+    #[test]
+    fn bootstrap_snapshot_contents() {
+        let mut kv = MemKv::default();
+        bootstrap(&mut kv).unwrap();
+        let snap = CatalogSnapshot::load(&kv).unwrap();
+
+        let ns = snap.namespace(2200).expect("public schema");
+        assert_eq!(ns.name, "public");
+        assert_eq!(ns.owner, 6171);
+        let acl = ns.acl.as_ref().expect("public acl");
+        assert_eq!(
+            acl,
+            &vec![
+                AclItem { grantee: 6171, grantor: 6171, privileges: USAGE | CREATE, grant_options: 0 },
+                AclItem { grantee: 0, grantor: 6171, privileges: USAGE, grant_options: 0 },
+            ]
+        );
+
+        let role = snap.role(10).expect("postgres role");
+        assert_eq!(role.name, "postgres");
+        assert!(role.superuser && role.inherit && role.create_role && role.create_db);
+        assert!(role.can_login && role.replication && role.bypass_rls);
+        assert_eq!(role.conn_limit, -1);
+        assert!(role.password.is_none());
+
+        let db = snap.database(5).expect("postgres database");
+        assert_eq!(db.name, "postgres");
+        assert_eq!(db.owner, 10);
+        assert_eq!(db.encoding, 6);
+        assert_eq!(db.locale_provider, b'b');
+        assert!(!db.is_template && db.allow_conn);
+        assert_eq!(db.conn_limit, -1);
+        assert_eq!(db.collate, "C.UTF-8");
+        assert_eq!(db.ctype, "C.UTF-8");
+        assert_eq!(db.locale.as_deref(), Some("C.UTF-8"));
+        assert!(db.acl.is_none());
+
+        assert_eq!(
+            snap.description(&DescriptionKey { objoid: 2200, classoid: 2615, objsubid: 0 }),
+            Some("standard public schema")
+        );
+        assert_eq!(
+            snap.description(&DescriptionKey { objoid: 5, classoid: 1262, objsubid: 0 }),
+            Some("default administrative connection database")
+        );
+        assert_eq!(snap.version(), CatalogVersion { counter: 1, stamp: 0 });
+        assert_eq!(read_version(&kv).unwrap(), CatalogVersion { counter: 1, stamp: 0 });
+    }
+
+    #[test]
+    fn allocate_on_empty_and_skip_in_use() {
+        let mut kv = MemKv::default();
+        assert_eq!(allocate_oid(&mut kv, &|_| false).unwrap(), 16384);
+        assert_eq!(allocate_oid(&mut kv, &|_| false).unwrap(), 16385);
+        assert_eq!(allocate_oid(&mut kv, &|o| o == 16386 || o == 16387).unwrap(), 16388);
+        assert_eq!(kv.next_oid().unwrap(), 16389);
+    }
+
+    #[test]
+    fn allocate_wraps_at_max() {
+        let mut kv = MemKv::default();
+        kv.put(&keys::next_oid_key(), &u32::MAX.to_be_bytes()).unwrap();
+        assert_eq!(allocate_oid(&mut kv, &|_| false).unwrap(), u32::MAX);
+        assert_eq!(allocate_oid(&mut kv, &|_| false).unwrap(), 16384);
+    }
+
+    #[test]
+    fn allocate_never_returns_reserved_oids() {
+        let mut kv = MemKv::default();
+        kv.put(&keys::next_oid_key(), &0u32.to_be_bytes()).unwrap();
+        assert_eq!(allocate_oid(&mut kv, &|_| false).unwrap(), FIRST_NORMAL_OID);
+    }
+
+    #[test]
+    fn version_roundtrip() {
+        let v = CatalogVersion { counter: 7, stamp: 0xdead_beef };
+        assert_eq!(CatalogVersion::decode(&v.encode()).unwrap(), v);
+        assert!(CatalogVersion::decode(&[0u8; 15]).is_err());
     }
 }
