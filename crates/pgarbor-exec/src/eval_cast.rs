@@ -231,6 +231,7 @@ fn domain_name(ex: &Executor, domain: Oid) -> Result<String> {
         .snapshot()
         .type_obj(domain)
         .map(|t| t.name.clone())
+        .or_else(|| pgarbor_types::catalog_data::builtin_type(domain).map(|t| t.name.to_string()))
         .ok_or_else(|| PgError::internal(format!("domain type {domain} does not exist")))
 }
 
@@ -255,12 +256,17 @@ fn build_domain_rt(se: &SessionEnv, domain: Oid) -> Result<DomainRt> {
         if levels.len() >= MAX_DOMAIN_DEPTH {
             return Err(PgError::internal(format!("domain {domain} nests too deeply")));
         }
-        let obj = snap
-            .type_obj(cur)
-            .ok_or_else(|| PgError::internal(format!("domain type {cur} does not exist")))?;
-        let (base, not_null) = match &obj.def {
-            TypeDef::Domain { base, not_null, .. } => (*base, *not_null),
-            TypeDef::Enum { .. } => return Err(PgError::internal(format!("type {cur} is not a domain"))),
+        let (base, not_null) = match snap.type_obj(cur) {
+            Some(obj) => match &obj.def {
+                TypeDef::Domain { base, not_null, .. } => (*base, *not_null),
+                TypeDef::Enum { .. } => return Err(PgError::internal(format!("type {cur} is not a domain"))),
+            },
+            // Builtin information_schema domains (sql_identifier, character_data, ...) live in the
+            // static type table, not in the user-type catalog; they carry no enforced NOT NULL.
+            None => match pgarbor_types::catalog_data::builtin_type(cur) {
+                Some(t) if t.typtype == b'd' => (TypeId::new(t.basetype, t.typmod), false),
+                _ => return Err(PgError::internal(format!("domain type {cur} does not exist"))),
+            },
         };
         levels.push((cur, base, not_null));
         let base_is_domain = snap.type_obj(base.oid).map_or(false, |t| t.is_domain());
@@ -430,6 +436,19 @@ mod tests {
             assert!(matches!(v, Datum::Int4(3)));
             let n = coerce_assignment(ex, Datum::Null, TypeId::INT4, TypeId::INT8)?;
             assert!(matches!(n, Datum::Null));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn builtin_information_schema_domain_resolves() {
+        run(|ex| {
+            // information_schema.sql_identifier (13312), a builtin domain over `name`.
+            assert_eq!(domain_name(ex, 13312)?, "sql_identifier");
+            let rt = domain_rt(ex, 13312)?;
+            assert!(!rt.not_null && rt.checks.is_empty());
+            assert!(domain_rt(ex, 999_999).is_err());
             Ok(())
         })
         .unwrap();
