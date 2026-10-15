@@ -1,0 +1,2058 @@
+{
+ "crate": "pgarbor-types",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "TYP-49",
+   "task_ids": [
+    "TYPE-04",
+    "TYPE-11"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Datum ordering/equality/hashing and PG hash functions.",
+   "spec": "Implement every function per module docs. Port src/common/hashfn.c (hash_bytes, hash_bytes_uint32, *_extended) exactly for pg_hash_*. hash_datum must be consistent with not_distinct for every type (normalize numeric trailing zeros, float -0/NaN, bpchar trailing spaces, interval span). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later. GATED: tests that exercise TYP-34 (jsonb ordering) and TYP-41 (enum ordering) must be marked #[ignore = \"needs <lease>\"] until that lease lands; call its frozen API normally.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-types/src/json/ops.rs",
+    "crates/pgarbor-types/src/enum_type.rs",
+    "crates/pgarbor-types/src/text/io.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "cmp NaN > Infinity float8",
+    "cmp -0.0 == 0.0",
+    "numeric 1.0 == 1.00 and same hash",
+    "bpchar 'a ' == 'a'",
+    "interval '1 mon' == '30 days' and same hash",
+    "oid 4294967295 > 1",
+    "NULL sorts last, cmp_sort nulls_first works with desc",
+    "pg_hash_uint32(1) as i32 == -1905060026",
+    "pg_hash_bytes(b\"abc\") as i32 == -785388649",
+    "pg_hash_uint32_extended(1,0) as i64 == -3670598878359251130",
+    "json -> 42883 could not identify an ordering operator for type json"
+   ]
+  },
+  {
+   "lease_id": "TYP-04",
+   "task_ids": [
+    "TYPE-01",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/int.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] int2/int4/int8 text and binary I/O.",
+   "spec": "Implement parse_int2/4/8 (port pg_strtoint16/32/64_safe from src/backend/utils/numutils.c incl. 0x/0o/0b prefixes and underscores), input/output/recv/send per module docs. Messages use the ORIGINAL input string. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/io.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "'0x1A'::int4=26",
+    "'1_000'::int4=1000",
+    "' 12 '::int4=12",
+    "'-0b101'::int2=-5",
+    "'1__0'::int4 -> 22P02",
+    "'99999999999'::int4 -> 22003 value \"99999999999\" is out of range for type integer",
+    "'-2147483648'::int4 ok",
+    "send Int4(42) = [0,0,0,42]",
+    "recv 3 bytes for int4 -> 22P03"
+   ]
+  },
+  {
+   "lease_id": "TYP-13",
+   "task_ids": [
+    "TYPE-01",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/io.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] text/varchar/bpchar/name/\"char\" I/O and length rules.",
+   "spec": "Implement apply_char_typmod, truncate_name and the io family functions per module docs (varchar.c bpchar_input/varchar_input/bpchar/varchar, name.c namein, char.c charin/charout). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/typmod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "varchar(3) input 'abcd' -> 22001 value too long for type character varying(3)",
+    "varchar(3) input 'abc   ' -> 'abc'",
+    "bpchar(4) input 'ab' -> 'ab  '",
+    "explicit apply_char_typmod('abcd',7,false,true)='abc'",
+    "name truncation to 63 bytes at char boundary",
+    "\"char\" output of 200 = '\\310'",
+    "\"char\" input '\\101' -> 65",
+    "text input containing NUL -> 22021",
+    "recv invalid UTF-8 -> 22021"
+   ]
+  },
+  {
+   "lease_id": "TYP-03",
+   "task_ids": [
+    "TYPE-01",
+    "TYPE-04"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/bool.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] bool I/O and boolean functions.",
+   "spec": "Implement parse_bool, input/output/recv/send and the Bool-module procs per module docs (src/backend/utils/adt/bool.c parse_bool_with_len). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-49"
+   ],
+   "acceptance": [
+    "' Yes ' -> true",
+    "'of' -> false",
+    "'o' -> 22P02 invalid input syntax for type boolean: \"o\"",
+    "output true = 't'",
+    "booltext(true) = 'true'",
+    "recv [0x02] -> true; recv [] -> 22P03"
+   ]
+  },
+  {
+   "lease_id": "TYP-09",
+   "task_ids": [
+    "TYPE-05",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/io.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] numeric text/binary I/O and typmod enforcement.",
+   "spec": "Implement parse_numeric, format_numeric, format_numeric_sci, apply_typmod, to_binary, from_binary and the io family functions per module docs (numeric.c set_var_from_str/get_str_from_var/numeric_send/numeric_recv/apply_typmod). Use bigdecimal::BigDecimal::new(BigInt, scale) and Numeric::from_decimal; never produce a negative scale; rounding uses RoundingMode::HalfUp. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-types/src/typmod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "parse '1.50' -> prints '1.50'",
+    "parse '1e3' -> '1000'",
+    "parse '1.50e1' -> '15.0'",
+    "parse ' -0.0 ' -> '0.0'",
+    "parse 'x' -> 22P02 invalid input syntax for type numeric: \"x\"",
+    "parse 'NaN','-Infinity','inf'",
+    "apply_typmod(123.456, numeric(4,2)) -> 22003 numeric field overflow + DETAIL A field with precision 4, scale 2 must round to an absolute value less than 10^2.",
+    "apply_typmod(Inf, numeric(3,1)) -> DETAIL A field with precision 3, scale 1 cannot hold an infinite value.",
+    "apply_typmod(1.005, numeric(5,2)) -> 1.01",
+    "to_binary(1.50) = [0,2, 0,0, 0,0, 0,2, 0,1, 0x13,0x88]",
+    "binary roundtrip for 0, -12345.6789, NaN, Inf"
+   ]
+  },
+  {
+   "lease_id": "TYP-06",
+   "task_ids": [
+    "TYPE-01",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/float.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] float4/float8 I/O with PG shortest round-trip output.",
+   "spec": "Implement parse_float4/8, format_float4/8, input/output/recv/send per module docs. Shortest digits: take Rust's `format!(\"{:e}\", v)` (shortest round-trip mantissa + exponent) and reformat: fixed notation when -4 <= exp < 15 (float8) / < 6 (float4), else d.ddde+XX with at least two exponent digits. extra_float_digits <= 0: emulate C %.{15+n}g / %.{6+n}g (implement %g formatting: precision P significant digits, scientific when exp < -4 or exp >= P, trailing zeros stripped). Input: implement strtod-compatible parsing by validating the syntax yourself, then `str::parse::<f64>()` (Rust parse is correctly rounded); detect overflow (finite text -> inf) and underflow (nonzero text -> 0). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/io.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "format_float8(1e15,1)='1e+15'",
+    "format_float8(1e14,1)='100000000000000'",
+    "format_float8(123456789012345678.0,1)='1.2345678901234568e+17'",
+    "format_float8(1e-5,1)='1e-05'",
+    "format_float4(1e6,1)='1e+06'",
+    "format_float4(123456.0,1)='123456'",
+    "format_float8(-0.0,1)='-0'",
+    "format_float8(NaN)='NaN'",
+    "format_float8(0.1f32 as f64,1)='0.10000000149011612'",
+    "parse_float8('1e400') -> 22003 \"1e400\" is out of range for type double precision",
+    "parse_float8('abc') -> 22P02 invalid input syntax for type double precision: \"abc\"",
+    "parse_float8('1e-320') ok subnormal",
+    "parse_float8(' -Infinity ') = -inf"
+   ]
+  },
+  {
+   "lease_id": "TYP-50",
+   "task_ids": [
+    "TYPE-11"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/keycodec.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Memcomparable index key encoding (on-disk format v1).",
+   "spec": "Implement encode_key/encode_value byte-exactly per module docs. Property test (proptest is a dev-dependency) for every supported type: sign(memcmp(enc(a),enc(b))) == compare::cmp_sort(a,b) for asc/desc and both NULL placements, and enc(a)==enc(b) iff cmp == Equal. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/compare.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-types/src/json/ops.rs",
+    "crates/pgarbor-types/src/enum_type.rs",
+    "crates/pgarbor-common/src/kv.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-49"
+   ],
+   "acceptance": [
+    "Int4(-1) asc encodes as [0x80,0x7f,0xff,0xff,0xff]",
+    "NULL asc = [0xFF], NULL nulls_first = [0x00]",
+    "numeric 1.0 and 1.00 encode identically",
+    "text 'a' < 'a\\0' < 'ab' in bytes",
+    "desc reverses order of non-null values",
+    "proptest order-preservation for ints, floats, numeric, text, timestamps, intervals, arrays"
+   ]
+  },
+  {
+   "lease_id": "TYP-51",
+   "task_ids": [
+    "TYPE-01"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/tuple.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Self-describing versioned row encoding (on-disk format v1).",
+   "spec": "Implement encode_row/decode_row/decode_columns/encode_value byte-exactly per module docs. Never panic on malformed input (fuzz with proptest: arbitrary bytes must return Ok or XX001). Canonical roundtrip proptest over generated Datums. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-types/src/json/mod.rs",
+    "crates/pgarbor-types/src/array/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "encode_row([Int4(1)]) = [1,1,4,1,0,0,0]",
+    "roundtrip of every Datum variant incl. nested arrays/records/jsonb",
+    "version byte 2 -> XX001 unsupported tuple format version 2",
+    "truncated input -> XX001",
+    "decode_columns skips unwanted columns"
+   ]
+  },
+  {
+   "lease_id": "TYP-15",
+   "task_ids": [
+    "TYPE-13"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/format.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] format(), quote_ident/literal/nullable, concat(_ws), to_hex/oct/bin.",
+   "spec": "Implement quote_identifier, quote_literal and the TextFormat procs per module docs (varlena.c text_format, ruleutils.c quote_identifier with the keyword list from contracts/reference/pg18/pg_keywords.csv (catcode != 'U' requires quoting) embedded as a sorted const array). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "contracts/reference/pg18/pg_keywords.csv"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "quote_ident('select')='\"select\"'",
+    "quote_ident('abc')='abc'",
+    "quote_ident('Abc')='\"Abc\"'",
+    "quote_literal(E'a''b\\\\c')=\"E'a''b\\\\\\\\c'\"",
+    "format('%2$s %1$s %s','a','b')='b a b'",
+    "format('%z',1) -> 22023 unrecognized format() type specifier \"z\" + HINT",
+    "format('%s %s','a') -> 22023 too few arguments for format()",
+    "concat('a',NULL,1)='a1'",
+    "concat_ws(',','a',NULL,'b')='a,b'",
+    "to_hex(-1)='ffffffff'"
+   ]
+  },
+  {
+   "lease_id": "TYP-21",
+   "task_ids": [
+    "TYPE-06"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/calendar.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Julian-day and broken-down time conversions.",
+   "spec": "Implement every CONTRACT fn per module docs, porting timestamp2tm/tm2timestamp/dt2time/time2t/interval2itm/itm2interval and the ISO week helpers from timestamp.c/date.c. date2j/j2date/j2day/is_leap/days_in_month are already implemented (do not change them). Use checked arithmetic; overflow -> datetime::out_of_range(\"timestamp\")/(\"interval\"). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "tm2timestamp(2000-01-01 00:00:00, None)=0",
+    "timestamp2tm(0) = 2000-01-01 Saturday (wday 6)",
+    "tm2timestamp(294277-01-01) -> 22008 timestamp out of range",
+    "date2isoweek(2024,12,30)=1",
+    "date2isoyear(2024,12,30)=2025",
+    "interval2itm(1 year 2 mons 3 days 04:05:06.7) -> year 1 mon 2 mday 3 hour 4 min 5 sec 6 usec 700000"
+   ]
+  },
+  {
+   "lease_id": "TYP-24",
+   "task_ids": [
+    "TYPE-06"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/encode.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Datetime/interval text encoders for all DateStyles and IntervalStyles.",
+   "spec": "Port EncodeDateOnly, EncodeTimeOnly, EncodeDateTime, EncodeInterval, EncodeTimezone, AppendSeconds from datetime.c per the module docs fixtures. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "ISO date '0044-03-15 BC'",
+    "ISO timestamptz '2024-02-29 07:31:02.5+00'",
+    "timetz '00:00:00+05:30:15'",
+    "Postgres style 'Thu Feb 29 13:01:02.5 2024 UTC'",
+    "SQL DMY '29/02/2024 13:01:02.5'",
+    "German '29.02.2024'",
+    "interval postgres '-1 days -02:00:00'",
+    "interval '-1 mons +2 days'",
+    "sql_standard '+1-2 +3 +4:05:06.7'",
+    "iso_8601 'P1Y2M3DT4H5M6.7S' and 'PT0S'",
+    "postgres_verbose '@ 1 day 2 hours ago'"
+   ]
+  },
+  {
+   "lease_id": "TYP-25",
+   "task_ids": [
+    "TYPE-06"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/tz.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] TimeZone setting, zone names/abbreviations, offsets.",
+   "spec": "Implement per module docs. Embed the PG Default abbreviation set (src/timezone/tznames/Default) as a sorted const table (abbrev, secs_east, is_dst) and a const list of IANA zone names (src/timezone/data or tzdata zone1970.tab + backward) used ONLY to distinguish 'unsupported IANA zone' (0A000 via PgError::unimplemented(\"TYP-25\", ..) / DtErr::UnsupportedTimezone) from 'unknown zone' (22023). POSIX sign rules for GUC strings per docs. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "contracts/amendments/pgarbor-types-04-timezone-data.md"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "parse_timezone_setting('UTC')=Utc",
+    "parse_timezone_setting('+05:30') -> Fixed{name:'+05:30', secs_east:-19800}",
+    "parse_timezone_setting('UTC+3') -> secs_east -10800",
+    "fixed_offset_setting(-28800).name = '<-08>+08'",
+    "lookup_zone('pst') -> Fixed{-28800}",
+    "lookup_zone('america/new_york') -> UnsupportedTimezone",
+    "lookup_zone('mars/base') -> BadTimezone('mars/base')",
+    "parse_numeric_offset('+05:30')=19800",
+    "parse_numeric_offset('+16:00') -> TzDispOverflow"
+   ]
+  },
+  {
+   "lease_id": "TYP-22",
+   "task_ids": [
+    "TYPE-06"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/lexer.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] ParseDateTime tokenizer.",
+   "spec": "Port ParseDateTime from src/backend/utils/adt/datetime.c exactly (field kinds, lower-casing, MAXDATEFIELDS=25, punctuation handling). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "'2024-02-29 13:01:02.5+02' -> [Date,Time,Tz]",
+    "'1999-01-08 04:05:06 -8:00' -> [Date,Time('04:05:06'),Tz('-8:00')]",
+    "'January 8, 1999' -> [String('january'),Number('8'),Number('1999')]",
+    "'-infinity' -> [Special]",
+    "26 fields -> BadFormat"
+   ]
+  },
+  {
+   "lease_id": "TYP-23",
+   "task_ids": [
+    "TYPE-06"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/decode.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] DecodeDateTime / DecodeTimeOnly.",
+   "spec": "Port DecodeDateTime, DecodeTimeOnly, DecodeDate, DecodeTime, DecodeNumber, DecodeNumberField, DecodeSpecial (keyword table datetktbl), ValidateDate from datetime.c per module docs. Zones via tz::lookup_zone / tz::parse_numeric_offset; 'now'/'today'/... use ctx.now (None -> PgError::unimplemented(\"TYP-23\", ...)). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/datetime/lexer.rs",
+    "crates/pgarbor-types/src/datetime/tz.rs",
+    "crates/pgarbor-types/src/datetime/calendar.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-21",
+    "TYP-22",
+    "TYP-25"
+   ],
+   "acceptance": [
+    "'2020-13-01' date -> MdFieldOverflow",
+    "'25:00' time -> FieldOverflow",
+    "'x' -> BadFormat",
+    "'01/02/2024' MDY -> Jan 2; DMY -> Feb 1",
+    "'2024-02-29T13:01:02Z' -> tz Some(0)",
+    "'0044-03-15 BC' -> year -43",
+    "'12:00 pm' -> hour 12, '12:00 am' -> hour 0",
+    "'2020-01-01 00:00 Mars/Base' -> BadTimezone(\"mars/base\")",
+    "'epoch' -> Epoch"
+   ]
+  },
+  {
+   "lease_id": "TYP-28",
+   "task_ids": [
+    "TYPE-06",
+    "TYPE-14",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/timestamp.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] timestamp/timestamptz I/O and operators.",
+   "spec": "Implement adjust_timestamp_precision, timestamp_add_interval, io family functions and every Timestamp proc per module docs (timestamp.c). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later. GATED: tests that exercise TYP-29 (interval arithmetic used by timestamp +/- interval and timestamp_mi justification) must be marked #[ignore = \"needs <lease>\"] until that lease lands; call its frozen API normally.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/datetime/decode.rs",
+    "crates/pgarbor-types/src/datetime/encode.rs",
+    "crates/pgarbor-types/src/datetime/calendar.rs",
+    "crates/pgarbor-types/src/datetime/tz.rs",
+    "crates/pgarbor-types/src/datetime/interval.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-21",
+    "TYP-23",
+    "TYP-24",
+    "TYP-25"
+   ],
+   "acceptance": [
+    "'2024-02-29 13:01:02.5+05:30'::timestamptz -> '2024-02-29 07:31:02.5+00'",
+    "'2020-01-01 00:00:00.123456789' -> .123457",
+    "timestamp(2) of .125 -> .13",
+    "'294277-01-01' -> 22008 timestamp out of range: \"294277-01-01\"",
+    "timestamp_mi('2024-01-01','2023-01-01') = '365 days'",
+    "'2024-01-31' + '1 month' = '2024-02-29 00:00:00'",
+    "timestamp_mi with infinity -> 22008 cannot subtract infinite timestamps",
+    "send/recv roundtrip"
+   ]
+  },
+  {
+   "lease_id": "TYP-02",
+   "task_ids": [
+    "TYPE-03"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/typmod.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Typmod in/out and length/precision coercion.",
+   "spec": "Implement typmod_in, typmod_out, enforce_typmod, and lookup for the Typmod procs (varchar, bpchar, numeric, time_scale, timetz_scale, timestamp_scale, timestamptz_scale, interval_scale) per module docs; reuse numeric_typmod/char_typmod_length helpers already in the file. enforce_typmod delegates to text::io::apply_char_typmod, numeric::io::apply_typmod, datetime::time::adjust_time_precision, datetime::timestamp::adjust_timestamp_precision, datetime::interval::apply_interval_typmod. Warnings are returned as PgError with Severity::Warning and SqlState::WARNING. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later. GATED: tests that exercise TYP-27 (time/timetz precision) and TYP-29 (interval typmod) must be marked #[ignore = \"needs <lease>\"] until that lease lands; call its frozen API normally.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/text/io.rs",
+    "crates/pgarbor-types/src/numeric/io.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-09",
+    "TYP-13",
+    "TYP-28"
+   ],
+   "acceptance": [
+    "typmod_in(VARCHAR,[0]) -> 22023 length for type varchar must be at least 1",
+    "typmod_in(NUMERIC,[1001]) -> 22023 NUMERIC precision 1001 must be between 1 and 1000",
+    "typmod_in(TIMESTAMPTZ,[7]) -> (6, [WARNING TIMESTAMP(7) WITH TIME ZONE precision reduced to maximum allowed, 6])",
+    "typmod_in(NUMERIC,[1,2,3]) -> 22023 invalid NUMERIC type modifier",
+    "typmod_out(NUMERIC, numeric_typmod(10,2)) = '(10,2)'",
+    "enforce_typmod varchar(3) 'abcd' explicit -> 'abc'; assignment -> 22001 value too long for type character varying(3)"
+   ]
+  },
+  {
+   "lease_id": "TYP-01",
+   "task_ids": [
+    "TYPE-02"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/names.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] SQL type-name resolution and PG format_type.",
+   "spec": "Implement resolve_type_name, parse_type_string, format_type exactly per the module docs (alias table, float(p) rules, char default length 1, quoted \"char\", interval ranges, array suffix, schema qualification). parse_type_string must tokenize SQL type syntax incl. multi-word names, typmod parens, [] suffixes, quoted identifiers and schema.name. format_type: port format_type_extended from src/backend/utils/adt/format_type.c (special names for bit/bool/bpchar/float4/float8/int2/int4/int8/numeric/interval/time/timetz/timestamp/timestamptz/varchar/varbit, `\"char\"`, arrays as elem + `[]`, typmod via typmod::typmod_out, `-` for oid 0, `???` for unknown oid). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/typmod.rs",
+    "crates/pgarbor-types/src/registry.rs",
+    "crates/pgarbor-types/src/oids.rs",
+    "crates/pgarbor-types/src/text/format.rs",
+    "contracts/reference/pg18/pg_type.csv"
+   ],
+   "depends_on_leases": [
+    "TYP-02",
+    "TYP-15"
+   ],
+   "acceptance": [
+    "format_type(1043,14)='character varying(10)'",
+    "format_type(1700,(10<<16|2)+4)='numeric(10,2)'",
+    "format_type(1184,3)='timestamp(3) with time zone'",
+    "format_type(1007,-1)='integer[]'",
+    "format_type(1042,5)='character(1)'",
+    "format_type(1042,-1)='bpchar'",
+    "format_type(0,-1)='-'",
+    "resolve 'character varying'[10] -> (1043,14)",
+    "resolve 'char' no mods -> (1042,5)",
+    "resolve quoted 'char' -> 18",
+    "resolve float [25] -> 701",
+    "resolve 'nosuchtype' -> 42704 type \"nosuchtype\" does not exist",
+    "resolve text [5] -> 42601 type modifier is not allowed for type \"text\""
+   ]
+  },
+  {
+   "lease_id": "TYP-52",
+   "task_ids": [
+    "TYPE-03"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/cast/lookup.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] find_coercion_pathway and cast planning.",
+   "spec": "Implement find_cast, plan_cast, is_binary_coercible per module docs (parse_coerce.c find_coercion_pathway, find_typmod_coercion_function, IsBinaryCoercible). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/cast/mod.rs",
+    "crates/pgarbor-types/src/registry.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "crates/pgarbor-types/src/typmod.rs",
+    "contracts/reference/pg18/pg_cast.csv"
+   ],
+   "depends_on_leases": [
+    "TYP-01"
+   ],
+   "acceptance": [
+    "find_cast(int4,int8,Implicit)=Func(481)",
+    "find_cast(int8,int4,Implicit)=None, Assignment=Func(480)",
+    "find_cast(varchar,text,Implicit)=Relabel",
+    "find_cast(int4,text,Assignment)=ViaIo, Implicit=None",
+    "find_cast(text,int4,Explicit)=ViaIo",
+    "find_cast(int4[],int8[],Implicit)=ArrayCoerce(Func)",
+    "plan_cast(int4 -> interval, Explicit) -> 42846 cannot cast type integer to interval",
+    "plan_cast(text -> varchar(3)) includes Typmod step"
+   ]
+  },
+  {
+   "lease_id": "TYP-53",
+   "task_ids": [
+    "TYPE-03"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/cast/apply.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Cast execution.",
+   "spec": "Implement apply_cast per module docs (cast_datum already composes plan+apply). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/cast/lookup.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/typmod.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-52",
+    "TYP-02"
+   ],
+   "acceptance": [
+    "apply int4->int8 on 5 = Int8(5)",
+    "'abc' text->int4 -> 22P02 invalid input syntax for type integer: \"abc\"",
+    "NULL -> NULL",
+    "int4[]->text[] elementwise",
+    "explicit text->varchar(3) truncates"
+   ]
+  },
+  {
+   "lease_id": "TYP-57",
+   "task_ids": [
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/polymorphic.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Polymorphic argument/result type resolution.",
+   "spec": "Implement per module docs (parse_coerce.c check_generic_type_consistency / enforce_generic_type_consistency, both polymorphic families). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later. GATED: tests that exercise TYP-54 (anycompatible family uses resolve::coerce::select_common_type) must be marked #[ignore = \"needs <lease>\"] until that lease lands; call its frozen API normally.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/registry.rs",
+    "crates/pgarbor-types/src/resolve/coerce.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "array_append(int4[], int4) -> ret int4[]",
+    "array_append(int4[], numeric) anycompatible -> numeric[]",
+    "anyelement (int4, text) inconsistent -> false",
+    "(unknown, unknown) anyelement -> text",
+    "anynonarray rejects int4[]"
+   ]
+  },
+  {
+   "lease_id": "TYP-54",
+   "task_ids": [
+    "TYPE-03"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/coerce.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] can_coerce_type and select_common_type.",
+   "spec": "Implement per module docs, porting parse_coerce.c can_coerce_type/select_common_type/select_common_typmod/coerce_to_common_type checks. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/cast/lookup.rs",
+    "crates/pgarbor-types/src/registry.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "crates/pgarbor-types/src/resolve/polymorphic.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-52",
+    "TYP-57",
+    "TYP-01"
+   ],
+   "acceptance": [
+    "UNION int4,numeric -> numeric",
+    "COALESCE int4,float4 -> float4",
+    "CASE int4,int8 -> int8",
+    "ARRAY int4,numeric -> numeric",
+    "all unknown -> text",
+    "UNION int4,text -> 42804 UNION types integer and text cannot be matched",
+    "CASE text,int4 -> 42804 CASE types text and integer cannot be matched"
+   ]
+  },
+  {
+   "lease_id": "TYP-55",
+   "task_ids": [
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/func.rs"
+   ],
+   "model_tier": "opus",
+   "summary": "[north-star] Function overload resolution (func_get_detail / func_select_candidate).",
+   "spec": "Implement per module docs, porting parse_func.c and namespace.c FuncnameGetCandidates behavior (variadic expansion, defaults, named args). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/resolve/coerce.rs",
+    "crates/pgarbor-types/src/resolve/polymorphic.rs",
+    "crates/pgarbor-types/src/registry.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "contracts/reference/pg18/pg_proc.csv"
+   ],
+   "depends_on_leases": [
+    "TYP-54",
+    "TYP-57",
+    "TYP-01"
+   ],
+   "acceptance": [
+    "abs(unknown) -> float8 overload",
+    "round(unknown) -> float8",
+    "length(int4) -> 42883 function length(integer) does not exist + HINT",
+    "array_cat(int4[],text[]) -> 42883",
+    "concat(1,'a') resolves VARIADIC \"any\"",
+    "make_interval(days => 3) named arg + defaults",
+    "upper(unknown) -> text",
+    "foo(int4) -> 42883 function foo(integer) does not exist"
+   ]
+  },
+  {
+   "lease_id": "TYP-56",
+   "task_ids": [
+    "TYPE-03",
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/oper.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Operator resolution.",
+   "spec": "Implement builtin_operator_candidates and resolve_operator per module docs (parse_oper.c). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/resolve/func.rs",
+    "crates/pgarbor-types/src/resolve/coerce.rs",
+    "contracts/reference/pg18/pg_operator.csv"
+   ],
+   "depends_on_leases": [
+    "TYP-55",
+    "TYP-54"
+   ],
+   "acceptance": [
+    "int4 + int4 -> oid 551 proc int4pl",
+    "unknown + int4 -> int4 + int4",
+    "timestamptz - unknown -> timestamptz - timestamptz",
+    "unknown + unknown -> 42725 operator is not unique: unknown + unknown + HINT",
+    "int4 + text -> 42883 operator does not exist: integer + text + HINT",
+    "- unknown -> 42725 operator is not unique: - unknown",
+    "numeric + int4 -> numeric + numeric"
+   ]
+  },
+  {
+   "lease_id": "TYP-05",
+   "task_ids": [
+    "TYPE-14"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/int_ops.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Integer arithmetic, comparison, bitwise, casts, gcd/lcm.",
+   "spec": "Implement every IntOps proc per module docs (int.c/int8.c). Use checked_* arithmetic and map overflow to the result type's message. Comparisons return Datum::Bool; btint*cmp return Int4 -1/0/1. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-49"
+   ],
+   "acceptance": [
+    "int4pl(2147483647,1) -> 22003 integer out of range",
+    "int4div(1,0) -> 22012 division by zero",
+    "int4div(-2147483648,-1) -> 22003",
+    "int4mod(-2147483648,-1)=0",
+    "int4mod(-7,3)=-1",
+    "int4shl(1,33)=2",
+    "int48mul -> Int8 result",
+    "i4toi2(40000) -> 22003 smallint out of range",
+    "int4gcd(12,18)=6",
+    "int4abs(-2147483648) -> 22003"
+   ]
+  },
+  {
+   "lease_id": "TYP-14",
+   "task_ids": [
+    "TYPE-13"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/funcs.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] String functions and character-type comparison operators.",
+   "spec": "Implement every Text-module proc per module docs (varlena.c, oracle_compat.c, formatting.c str_tolower/str_toupper/str_initcap with simple case mapping, char.c, name.c). Character counts/positions are in chars (not bytes). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/text/io.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-13",
+    "TYP-49"
+   ],
+   "acceptance": [
+    "substr('abc',0,2)='a'",
+    "substr('abc',1,-1) -> 22011 negative substring length not allowed",
+    "split_part('a,b,c',',',-1)='c'",
+    "split_part(..,0) -> 22023 field position must not be zero",
+    "left('abcd',-1)='abc'",
+    "lpad('hi',5,'xy')='xyxhi'",
+    "lpad('hello',2)='he'",
+    "initcap('hELLO wORLD-foo bar_baz')='Hello World-Foo Bar_Baz'",
+    "upper('straße')='STRAßE'",
+    "chr(0) -> 54000 null character not permitted",
+    "bpchareq('ab  ','ab')=true",
+    "bpcharlen('ab  ')=2",
+    "i4tochar(200) -> 22003 \"char\" out of range"
+   ]
+  },
+  {
+   "lease_id": "TYP-10",
+   "task_ids": [
+    "TYPE-05"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/arith.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] numeric arithmetic with PG scale rules.",
+   "spec": "Implement every function per module docs. Port select_div_scale using base-10000 weights computed from the BigDecimal (weight = floor((number_of_integer_digits-1)/4) for |x| >= 1, negative weights for fractions; first = leading NBASE group value). Division: compute with extra digits (rscale + 4) using BigInt integer division on scaled operands then round HalfUp to rscale (PG div_var rounds exactly). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "div(1,3)='0.33333333333333333333'",
+    "div(-1.5,7)='-0.21428571428571428571'",
+    "div(1e20,7)='14285714285714285714'",
+    "div(100,0.03)='3333.3333333333333333'",
+    "div(5.0,2)='2.5000000000000000'",
+    "div(1,0) -> 22012 division by zero",
+    "modulo(10.5,3)=1.5",
+    "div_trunc(10.5,3)=3",
+    "round(1234.5678,-2)=1200",
+    "round(2.5,0)=3",
+    "round(-2.5,0)=-3",
+    "add(Inf,NegInf)=NaN",
+    "mul(Inf,0)=NaN",
+    "add(0.1,0.2)='0.3'"
+   ]
+  },
+  {
+   "lease_id": "TYP-12",
+   "task_ids": [
+    "TYPE-05",
+    "TYPE-14"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/funcs.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] numeric SQL functions, comparisons and int/float conversions.",
+   "spec": "Implement the conversion functions and every Numeric-module proc per module docs, delegating arithmetic to numeric::arith and numeric::transcendental. hash_numeric must hash equal values identically (strip trailing zeros) — use compare::pg_hash_bytes of PG's NBASE digit representation if you can port hash_numeric exactly, otherwise document the divergence. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later. GATED: tests that exercise TYP-11 (sqrt/exp/ln/log/power procs) must be marked #[ignore = \"needs <lease>\"] until that lease lands; call its frozen API normally.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-types/src/numeric/arith.rs",
+    "crates/pgarbor-types/src/numeric/transcendental.rs",
+    "crates/pgarbor-types/src/numeric/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-09",
+    "TYP-10"
+   ],
+   "acceptance": [
+    "to_i32(2.5)=3",
+    "to_i32(-2.5)=-3",
+    "to_i32(NaN) -> 0A000 cannot convert NaN to integer",
+    "to_i64(Inf) -> 0A000 cannot convert infinity to bigint",
+    "from_f64(0.1)='0.1'",
+    "from_f64(1.0/3.0)='0.333333333333333'",
+    "from_f32(1.1)='1.1'",
+    "scale(1.50)=2",
+    "trim_scale(1.500)=1.5",
+    "factorial(20)=2432902008176640000",
+    "factorial(-1) -> 22003 factorial of a negative number is undefined",
+    "width_bucket(5.35,0.024,10.06,5)=3"
+   ]
+  },
+  {
+   "lease_id": "TYP-07",
+   "task_ids": [
+    "TYPE-14"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/float_ops.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Float arithmetic, casts and math functions.",
+   "spec": "Implement every FloatOps proc per module docs (float.c, float.h check_float8_val). float->int casts use f64::round_ties_even. Trig degree variants: port sind/cosd exactness tricks from float.c (dsind etc. return exact values at multiples of 30/45/90 degrees). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "float8mul(1e308,10) -> 22003 value out of range: overflow",
+    "float8mul(1e-300,1e-300) -> 22003 value out of range: underflow",
+    "float8div(0,0) -> 22012",
+    "float8div(NaN,0)=NaN",
+    "dtoi4(2.5)=2",
+    "dtoi4(-2.5)=-2",
+    "dtoi4(NaN) -> 22003 integer out of range",
+    "dsqrt(-1) -> 2201F cannot take square root of a negative number",
+    "dpow(0,-1) -> 2201F zero raised to a negative power is undefined",
+    "float8gt(NaN, inf)=true",
+    "dround(-0.5) = -0.0"
+   ]
+  },
+  {
+   "lease_id": "TYP-37",
+   "task_ids": [
+    "TYPE-09",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/array/io.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Array text and binary I/O.",
+   "spec": "Port array_in (ReadArrayDimensions/ReadArrayStr/ReadArrayToken state machine), array_out quoting, array_recv/array_send per module docs. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/array/mod.rs",
+    "crates/pgarbor-types/src/registry.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "'{1,2}'::int[]",
+    "'[2:3]={5,6}' roundtrip",
+    "'{{1,2},{3,4}}' roundtrip",
+    "'{\"a b\",NULL,\"null\",\"\"}'::text[] roundtrip",
+    "array['a,b','{x}','\\\\','\"'] output '{\"a,b\",\"{x}\",\"\\\\\\\\\",\"\\\\\"\"}'",
+    "'{1,{2}}' -> 22P02 malformed array literal + DETAIL Multidimensional arrays must have sub-arrays with matching dimensions.",
+    "'{1,2' -> DETAIL Unexpected end of input.",
+    "'x' -> DETAIL Array value must start with \"{\" or dimension information.",
+    "'{{}}' -> empty",
+    "binary roundtrip with NULLs"
+   ]
+  },
+  {
+   "lease_id": "TYP-08",
+   "task_ids": [
+    "TYPE-02",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/oid_types.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "oid/xid/cid/xid8/pg_lsn/reg*/int2vector/oidvector I/O and functions.",
+   "spec": "Implement parse_oid, input/output/recv/send for every family member and the OidTypes procs per module docs (oid.c, xid.c, regproc.c, pg_lsn.c, int.c int2vectorin). reg* input/output go through ctx.env.reg_lookup/reg_name; regtype through names::parse_type_string/format_type. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "crates/pgarbor-types/src/array/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-01",
+    "TYP-37"
+   ],
+   "acceptance": [
+    "'-1'::oid = 4294967295",
+    "'4294967296'::oid -> 22003 value \"4294967296\" is out of range for type oid",
+    "'x'::oid -> 22P02 invalid input syntax for type oid: \"x\"",
+    "regclass output of 0 = '-'",
+    "regclass input 'nosuch' with BuiltinTypeEnv -> 42P01 relation \"nosuch\" does not exist",
+    "regtype output of 23 = 'integer'",
+    "'1 2'::int2vector output '1 2'",
+    "pg_lsn '0/16B6C50' roundtrip"
+   ]
+  },
+  {
+   "lease_id": "TYP-11",
+   "task_ids": [
+    "TYPE-05"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/transcendental.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "numeric sqrt/exp/ln/log/power digit-exact with PG.",
+   "spec": "Implement per module docs; port the rscale selection code of numeric_sqrt/numeric_exp/numeric_ln/numeric_log/numeric_power and compute with guard digits (at least rscale+8) using Newton (sqrt), argument reduction + Taylor series (exp, ln as in exp_var/ln_var), power via power_var/power_var_int. Results must match the oracle fixtures digit for digit. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-types/src/numeric/arith.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-10"
+   ],
+   "acceptance": [
+    "sqrt(2)='1.414213562373095'",
+    "sqrt(1e-20)='0.0000000001000000000000000'",
+    "exp(1)='2.7182818284590452'",
+    "exp(100)='26881171418161354484126255515800135873611119'",
+    "ln(10)='2.3025850929940457'",
+    "ln(1e400)='921.03403719761827'",
+    "power(2,0.5)='1.4142135623730950'",
+    "power(10,20)='100000000000000000000'",
+    "power(2,-3)='0.1250000000000000'",
+    "ln(0) -> 2201E cannot take logarithm of zero",
+    "sqrt(-1) -> 2201F"
+   ]
+  },
+  {
+   "lease_id": "TYP-16",
+   "task_ids": [
+    "TYPE-13"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/like.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "LIKE/ILIKE matching, like_escape, similar_to_escape, prefix extraction.",
+   "spec": "Implement per module docs (like_match.c MatchText iterative algorithm with '%' backtracking; regexp.c similar_escape_internal ported exactly). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "like('abc','a%')=true",
+    "like('a_c','a\\\\_c')=true",
+    "like('x','a\\\\')=false",
+    "like('ab\\\\','ab\\\\') -> 22025 LIKE pattern must not end with escape character",
+    "ilike('ABC','a%')=true",
+    "similar_to_escape('a%b_')='^(?:a.*b.)$'",
+    "similar_to_escape('a#\"b#\"c','#')='^(?:a){1,1}?(b){1,1}(?:c)$'",
+    "like_escape('x','ab') -> 22025 invalid escape string + HINT",
+    "like_fixed_prefix('abc%')=('abc',false)"
+   ]
+  },
+  {
+   "lease_id": "TYP-17",
+   "task_ids": [
+    "TYPE-13"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/regex.rs"
+   ],
+   "model_tier": "opus",
+   "summary": "PostgreSQL ARE regex engine and regexp_* functions.",
+   "spec": "Write a self-contained backtracking regex engine implementing PG ARE semantics (see module docs and src/backend/regex/re_syntax.n / docs 9.7.3): parse to an AST, compile to a backtracking matcher over chars with captures, backrefs, lookahead/lookbehind, bracket expressions with [:classes:], escapes, quantifiers incl. {m,n} and non-greedy, anchors, flags (i,n,x,q,b,e...). Implement PG's whole-RE greediness rule (leftmost-longest when the RE is greedy). Bound backtracking with a generous step budget so matching never hangs. Error SQLSTATEs/texts must mirror src/backend/utils/adt/regexp.c exactly: compile errors are 2201B `invalid regular expression: <regerror text>`, execution failures are 2201B `regular expression failed: <regerror text>`; use the budget-exceeded case only on the execution path and confirm its text against the oracle. Then implement all Regex-module procs incl. regexp_replace replacement syntax and the SRFs. See amendment pgarbor-types-01. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/text/like.rs",
+    "contracts/amendments/pgarbor-types-01-regex-engine.md"
+   ],
+   "depends_on_leases": [
+    "TYP-16"
+   ],
+   "acceptance": [
+    "'abc' ~ '(' -> 2201B invalid regular expression: parentheses () not balanced",
+    "regexp_replace('foo bar','o','0','z') -> 22023 invalid regular expression option: \"z\"",
+    "regexp_replace('foo','o','0','g')='f00'",
+    "regexp_match('foobarbequebaz','(bar)(beque)')='{bar,beque}'",
+    "regexp_matches('foobarbequebazilbarfbonk','(b[^b]+)(b[^b]+)','g') yields 2 rows",
+    "'abc' ~* 'B'=true",
+    "substring('foobar' from 'o.b')='oob'",
+    "regexp_split_to_array('hello world','\\\\s+')='{hello,world}'",
+    "(\\\\w)\\\\1 matches 'aa'",
+    "'xy' ~ '^(?=x)'=true"
+   ]
+  },
+  {
+   "lease_id": "TYP-18",
+   "task_ids": [
+    "TYPE-07",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/bytea.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "bytea I/O and bytea functions.",
+   "spec": "Implement parse_bytea, format_bytea, the io family functions and every Bytea proc per module docs (varlena.c, encode.c: hex/base64/escape exactly incl. base64 line wrapping at 76 chars). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "'\\\\xZZ' -> 22023 invalid hexadecimal digit: \"Z\"",
+    "'\\\\x0' -> 22023 invalid hexadecimal data: odd number of digits",
+    "'café' -> \\\\x636166c3a9",
+    "E'a\\\\\\\\b' (backslash then b) -> 22P02 invalid input syntax for type bytea",
+    "hex output '\\\\x0102'",
+    "escape output of [0,92,65] = '\\\\000\\\\\\\\A'",
+    "encode('\\\\x00ff','base64')='AP8='",
+    "get_byte out of range -> 2202E"
+   ]
+  },
+  {
+   "lease_id": "TYP-19",
+   "task_ids": [
+    "TYPE-07",
+    "TYPE-13"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/crypto.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "MD5, SHA-2 family, CRC-32/CRC-32C in pure Rust.",
+   "spec": "Implement md5 (RFC 1321), sha224/256/384/512 (FIPS 180-4), CRC-32 (IEEE reflected) and CRC-32C (Castagnoli reflected) plus the Crypto procs per module docs. No dependencies. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "md5('')='d41d8cd98f00b204e9800998ecf8427e'",
+    "md5('abc')='900150983cd24fb0d6963f7d28e17f72'",
+    "sha256('abc')=ba7816bf...15ad",
+    "sha512('abc') FIPS vector",
+    "sha224(''), sha384('') vectors",
+    "crc32('The quick brown fox jumps over the lazy dog')=1095738169 (int8)",
+    "crc32c('123456789')=0xE3069283"
+   ]
+  },
+  {
+   "lease_id": "TYP-20",
+   "task_ids": [
+    "TYPE-07",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/uuid.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "uuid I/O, comparison and generation (v4, v7).",
+   "spec": "Implement parse_uuid, the io family and every Uuid proc per module docs (uuid.c). format_uuid already exists. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "'{A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11}' parses",
+    "'a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11' parses",
+    "'a0eebc999c0b4ef8bb6d6bb9bd380a1' -> 22P02 invalid input syntax for type uuid: \"...\"",
+    "gen_random_uuid has version nibble 4 and variant 10xx",
+    "uuid_extract_version(uuidv7())=7",
+    "recv of 15 bytes -> 22P03"
+   ]
+  },
+  {
+   "lease_id": "TYP-26",
+   "task_ids": [
+    "TYPE-06",
+    "TYPE-14",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/date.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "date I/O and date operators.",
+   "spec": "Implement date_to_timestamp, io family functions and every Date proc per module docs (date.c). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/datetime/decode.rs",
+    "crates/pgarbor-types/src/datetime/encode.rs",
+    "crates/pgarbor-types/src/datetime/calendar.rs",
+    "crates/pgarbor-types/src/datetime/timestamp.rs",
+    "crates/pgarbor-types/src/datetime/tz.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-21",
+    "TYP-23",
+    "TYP-24",
+    "TYP-25",
+    "TYP-28"
+   ],
+   "acceptance": [
+    "'2024-02-29' roundtrip",
+    "'5874898-01-01' -> 22008 date out of range: \"5874898-01-01\"",
+    "'infinity' output 'infinity'",
+    "date_pli('2024-02-29',1)='2024-03-01'",
+    "date_mi('2024-03-01','2024-02-01')=29",
+    "date_mi with infinity -> 22008 cannot subtract infinite dates",
+    "make_date(2024,2,30) -> 22008 date field value out of range: 2024-02-30",
+    "send date '2000-01-02' = [0,0,0,1]"
+   ]
+  },
+  {
+   "lease_id": "TYP-27",
+   "task_ids": [
+    "TYPE-06",
+    "TYPE-14",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/time.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "time/timetz I/O and operators.",
+   "spec": "Implement adjust_time_precision, io family functions and every Time proc per module docs (date.c time_*/timetz_*). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/datetime/decode.rs",
+    "crates/pgarbor-types/src/datetime/encode.rs",
+    "crates/pgarbor-types/src/datetime/calendar.rs",
+    "crates/pgarbor-types/src/datetime/tz.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-21",
+    "TYP-23",
+    "TYP-24",
+    "TYP-25"
+   ],
+   "acceptance": [
+    "'12:00:00.123456'::time(2) -> '12:00:00.12'",
+    "'24:00:00' accepted",
+    "'25:00' -> 22008 date/time field value out of range: \"25:00\"",
+    "timetz '12:34:56.789+05:30' stored zone -19800 and prints back",
+    "timetz send = i64 µs + i32 zone (west)",
+    "time_mi_time('12:00','11:30') = 00:30:00",
+    "time_pl_interval wraps at 24h"
+   ]
+  },
+  {
+   "lease_id": "TYP-29",
+   "task_ids": [
+    "TYPE-06",
+    "TYPE-14",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/interval.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "interval I/O (all input syntaxes), typmod, arithmetic.",
+   "spec": "Implement per module docs, porting DecodeInterval, DecodeISO8601Interval, AdjustIntervalForTypmod, interval_mul/div (with PG's fractional cascade and rint rounding), justify_*, infinite-interval rules from timestamp.c/datetime.c. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/datetime/lexer.rs",
+    "crates/pgarbor-types/src/datetime/encode.rs",
+    "crates/pgarbor-types/src/datetime/calendar.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-21",
+    "TYP-22",
+    "TYP-24"
+   ],
+   "acceptance": [
+    "'1.5 years' -> 1 year 6 mons",
+    "'1 day ago' -> -1 days",
+    "'P1Y2M3DT4H5M6.7S' parses",
+    "'1-2 3 4:05:06' -> 1 year 2 mons 3 days 04:05:06",
+    "'x' -> 22007 invalid input syntax for type interval: \"x\"",
+    "mul('1 day',1.5)='1 day 12:00:00'",
+    "div('1 mon',3)='10 days'",
+    "div('1 year',7)='1 mon 21 days 10:17:08.5344'",
+    "justify_interval('1 mon -1 day')='29 days'",
+    "'1 day 02:03:04.5678' second(2) -> '1 day 02:03:04.57'",
+    "send order micros,days,months"
+   ]
+  },
+  {
+   "lease_id": "TYP-30",
+   "task_ids": [
+    "TYPE-14"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/funcs.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "extract/date_part/date_trunc/date_bin/age/make_*/now/AT TIME ZONE/overlaps.",
+   "spec": "Implement every DatetimeFuncs proc per module docs (timestamp.c, date.c). extract returns numeric with PG's per-unit scale (epoch/second with 6 decimals for timestamps, etc. — port timestamp_part_common/NonFiniteTimestampTzPart). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/datetime/calendar.rs",
+    "crates/pgarbor-types/src/datetime/tz.rs",
+    "crates/pgarbor-types/src/datetime/timestamp.rs",
+    "crates/pgarbor-types/src/datetime/interval.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-21",
+    "TYP-25",
+    "TYP-28",
+    "TYP-29",
+    "TYP-09"
+   ],
+   "acceptance": [
+    "extract(epoch from timestamptz '2024-01-01')='1704067200.000000'",
+    "extract(second from time '1:2:3.5')='3.500000'",
+    "date_part('dow','2024-02-29')=4",
+    "extract(julian from date '2024-01-01')='2460311'",
+    "extract(foo from date) -> 22023 unit \"foo\" not recognized for type date",
+    "date_trunc('month','2024-02-29 13:01')='2024-02-01 00:00:00'",
+    "age('2024-02-29','2023-03-31')='10 mons 29 days'",
+    "date_bin('15 minutes','2024-02-29 13:07','2000-01-01')='2024-02-29 13:00:00'",
+    "timestamptz '2024-02-29 12:00+00' at time zone '+05' = '2024-02-29 07:00:00'",
+    "to_timestamp(-1e20) -> 22008 timestamp out of range: \"-1e+20\""
+   ]
+  },
+  {
+   "lease_id": "TYP-31",
+   "task_ids": [
+    "TYPE-13",
+    "TYPE-14"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/formatting.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "to_char / to_date / to_timestamp(text,text) / to_number.",
+   "spec": "Port formatting.c (DCH and NUM processors) per module docs; C locale only (English month/day names). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/datetime/calendar.rs",
+    "crates/pgarbor-types/src/numeric/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-21",
+    "TYP-09"
+   ],
+   "acceptance": [
+    "to_char(timestamp '2002-04-20 17:31:12.66','HH12:MI:SS')='05:31:12'",
+    "to_char(125.8::real,'999D99')=' 125.80'",
+    "to_char(-0.1,'FM9.99')='-.1'",
+    "to_char(485,'RN')='        CDLXXXV'",
+    "to_date('05 Dec 2000','DD Mon YYYY')='2000-12-05'",
+    "to_number('12,454.8-','99G999D9S')=-12454.8"
+   ]
+  },
+  {
+   "lease_id": "TYP-32",
+   "task_ids": [
+    "TYPE-08"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/parse.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "JSON lexer/parser with PG error details.",
+   "spec": "Implement validate_json, parse_jsonb, parse_json_value per module docs (port jsonapi.c lexing rules and json_errdetail texts). escape_json already exists. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/json/mod.rs",
+    "crates/pgarbor-types/src/numeric/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-09"
+   ],
+   "acceptance": [
+    "'{a' -> 22P02 invalid input syntax for type json + DETAIL Token \"a\" is invalid.",
+    "'{\"a\":}' -> DETAIL Expected JSON value, but found \"}\".",
+    "'[1,2' -> DETAIL The input string ended unexpectedly.",
+    "'01' -> Token \"01\" is invalid.",
+    "'\"\\\\x\"' -> Escape sequence \"\\\\x\" is invalid.",
+    "'\"\\\\ud83d\"' -> Unicode low surrogate must follow a high surrogate.",
+    "jsonb '\"\\\\u0000\"' -> 22P05 unsupported Unicode escape sequence",
+    "parse_jsonb('{\"a\":1,\"a\":2}') = {a:2}"
+   ]
+  },
+  {
+   "lease_id": "TYP-33",
+   "task_ids": [
+    "TYPE-08",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/io.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "json/jsonb text+binary I/O and jsonb text formatting.",
+   "spec": "Implement format_jsonb, format_jsonb_pretty and the io family functions per module docs (jsonb.c JsonbToCStringWorker). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/json/mod.rs",
+    "crates/pgarbor-types/src/json/parse.rs",
+    "crates/pgarbor-types/src/numeric/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-32",
+    "TYP-09"
+   ],
+   "acceptance": [
+    "jsonb '{\"b\":1,\"aa\":[1,2.50,{\"c\":null}],\"a\":true, \"b\":2}' -> '{\"a\": true, \"b\": 2, \"aa\": [1, 2.50, {\"c\": null}]}'",
+    "jsonb '1e3' -> '1000'",
+    "json output verbatim '[1,  2]'",
+    "jsonb send starts with 0x01",
+    "jsonb_pretty('{\"a\":[1,{\"b\":2}]}') matches PG 4-space layout"
+   ]
+  },
+  {
+   "lease_id": "TYP-34",
+   "task_ids": [
+    "TYPE-08"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/ops.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "json/jsonb operators, containment, jsonb ordering.",
+   "spec": "Implement compare_jsonb, jsonb_contains and every JsonOps proc per module docs (jsonfuncs.c, jsonb_op.c, jsonb_util.c). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/json/mod.rs",
+    "crates/pgarbor-types/src/json/parse.rs",
+    "crates/pgarbor-types/src/json/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-32",
+    "TYP-33"
+   ],
+   "acceptance": [
+    "'[1,2,3]'::jsonb -> -1 = 3",
+    "'{\"a\":[1,2]}'::jsonb #>> '{a,0}' = '1'",
+    "'{\"a\":1,\"b\":2}'::jsonb - 'a' = {\"b\": 2}",
+    "'[1]'::jsonb || '2' = [1, 2]",
+    "'{\"a\":{\"b\":1}}'::jsonb #- '{a,b}' = {\"a\": {}}",
+    "'[]' < 'null' true",
+    "'[1,2]' > '[3]'",
+    "'{\"b\":1}' > '{\"aa\":1}'",
+    "@> scalar in array: '[1,2]' @> '1' true"
+   ]
+  },
+  {
+   "lease_id": "TYP-35",
+   "task_ids": [
+    "TYPE-08"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/build.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "to_json(b), json(b)_build_*, json_object, row/array_to_json, jsonb_set/insert/strip_nulls/pretty/typeof, jsonb casts.",
+   "spec": "Implement datum_to_jsonb, datum_to_json_text and every JsonBuild proc per module docs (json.c datum_to_json_internal, jsonb.c, jsonfuncs.c setPath/insert semantics). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/json/mod.rs",
+    "crates/pgarbor-types/src/json/io.rs",
+    "crates/pgarbor-types/src/json/parse.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/datetime/encode.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-33",
+    "TYP-24"
+   ],
+   "acceptance": [
+    "to_jsonb(1.50::numeric)=1.50",
+    "to_json(row(1,'a'))='{\"f1\":1,\"f2\":\"a\"}'",
+    "json_build_object('a',1,'b',null)='{\"a\" : 1, \"b\" : null}'",
+    "to_jsonb('NaN'::float8)='\"NaN\"'",
+    "to_jsonb(timestamptz '2024-01-01 00:00+00')='\"2024-01-01T00:00:00+00:00\"'",
+    "jsonb_set('{\"a\":1}','{b}','2')={\"a\": 1, \"b\": 2}",
+    "jsonb_insert('[1,2]','{0}','0')=[0, 1, 2]",
+    "'\"x\"'::jsonb::int -> 22023 cannot cast jsonb string to type integer",
+    "json_build_object('a') -> 22023 + HINT"
+   ]
+  },
+  {
+   "lease_id": "TYP-36",
+   "task_ids": [
+    "TYPE-08"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/srf.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "json(b)_each/array_elements/object_keys and populate/to_record functions.",
+   "spec": "Implement every JsonSrf proc per module docs (jsonfuncs.c). SRFs return Box<dyn Iterator> owning their data (collect into a Vec then into_iter is acceptable). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/json/mod.rs",
+    "crates/pgarbor-types/src/json/parse.rs",
+    "crates/pgarbor-types/src/json/io.rs",
+    "crates/pgarbor-types/src/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-32",
+    "TYP-33"
+   ],
+   "acceptance": [
+    "jsonb_each('{\"a\":1,\"b\":[2]}') -> Record[a,1], Record[b,[2]]",
+    "jsonb_each('[1]') -> 22023 cannot call jsonb_each on a non-object",
+    "json_each('1') -> 22023 cannot deconstruct a scalar",
+    "jsonb_array_elements_text('[\"a\",null]') -> 'a', NULL",
+    "json_object_keys('{\"a\":1,\"a\":2}') -> a, a"
+   ]
+  },
+  {
+   "lease_id": "TYP-39",
+   "task_ids": [
+    "TYPE-09"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/array/subscript.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Array subscripting, slices, assignment, ARRAY[] construction.",
+   "spec": "Implement fetch, assign, construct per module docs (arraysubs.c, arrayfuncs.c array_get_element/array_get_slice/array_set_element/array_set_slice). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/array/mod.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "fetch([1,2,3],[5]) = NULL",
+    "fetch 2-D [2][1] = 3",
+    "slice [2:3] = {2,3}",
+    "2-D slice [1:1][1:2] = {{1,2}}",
+    "assign into 1-D beyond end fills NULLs",
+    "construct([[1,2],[3]]) -> 2202E multidimensional arrays must have array expressions with matching dimensions"
+   ]
+  },
+  {
+   "lease_id": "TYP-38",
+   "task_ids": [
+    "TYPE-09"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/array/funcs.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Array functions, comparison, containment, unnest.",
+   "spec": "Implement every ArrayFuncs proc per module docs (arrayfuncs.c, array_userfuncs.c, varlena.c text_to_array/array_to_text). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/array/mod.rs",
+    "crates/pgarbor-types/src/array/subscript.rs",
+    "crates/pgarbor-types/src/compare.rs",
+    "crates/pgarbor-types/src/io.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-49",
+    "TYP-39"
+   ],
+   "acceptance": [
+    "array_append('{1}',2)='{1,2}'",
+    "array_length('{{1,2},{3,4}}',2)=2",
+    "array_dims('[2:3]={5,6}')='[2:3]'",
+    "array_position('{a,b}','b')=2",
+    "array_remove('{1,2,1}',1)='{2}'",
+    "array_to_string('{1,NULL,3}',',','*')='1,*,3'",
+    "string_to_array('a,b,,c',',')='{a,b,\"\",c}'",
+    "array[1,2] < array[1,2,0]",
+    "array[1,null] = array[1,null] is true",
+    "'{a}' @> '{a,a}' true",
+    "unnest('{{1,2},{3,4}}') yields 4 rows"
+   ]
+  },
+  {
+   "lease_id": "TYP-40",
+   "task_ids": [
+    "TYPE-01",
+    "TYPE-15"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/record.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Record/composite I/O and row comparison.",
+   "spec": "Implement output_record, the io family functions and every Record proc per module docs (rowtypes.c). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/compare.rs",
+    "crates/pgarbor-types/src/tuple.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-49",
+    "TYP-51"
+   ],
+   "acceptance": [
+    "output_record(row(1,'a b',NULL)) = '(1,\"a b\",)'",
+    "output of field 'a\"b' = '\"a\"\"b\"'",
+    "'(1)' -> 22P02 malformed record literal: \"(1)\" + DETAIL Too few columns.",
+    "'(1,2) x' -> DETAIL Junk after right parenthesis.",
+    "record input for anonymous record -> 0A000 input of anonymous composite types is not implemented",
+    "record_lt with NULL fields sorts NULL last"
+   ]
+  },
+  {
+   "lease_id": "TYP-41",
+   "task_ids": [
+    "TYPE-10"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/enum_type.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Enum I/O, ordering and enum support functions.",
+   "spec": "Implement cmp_labels, label_sort_order, io family functions and every Enum proc per module docs (enum.c). Use ctx.env.enum_labels; error message type name via names::format_type. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/names.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-01"
+   ],
+   "acceptance": [
+    "'meh'::mood -> 22P02 invalid input value for enum mood: \"meh\"",
+    "ordering by sort_order not label text",
+    "enum_range(null::mood)='{sad,ok,happy}'",
+    "enum_range('ok',null)='{ok,happy}'",
+    "enum_first(null::mood)='sad'"
+   ]
+  },
+  {
+   "lease_id": "TYP-42",
+   "task_ids": [
+    "TYPE-01"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/extra_types.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Remaining type families that fit the frozen Datum (money, aclitem, refcursor, pseudo outputs); everything else stays 0A000.",
+   "spec": "Optional/low priority. Route `money` (Datum::Int8 cents, lc_monetary C: output '$1,234.56', negative '-$1.00', input accepts '$1,234.56', '1234.56', '-$1'), `aclitem`/`refcursor` (Datum::Text verbatim), `anyarray_out` (= array output when the Datum is an Array) by checking the type's typinput/typoutput name inside input/output/recv/send before falling back to the existing 0A000 errors. Do NOT invent Datum mappings for inet/bit/geometric/range types (amendment pgarbor-types-03). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "contracts/amendments/pgarbor-types-03-datum-variants.md"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "'point(1,2)' input -> 0A000 with detail pgarbor-unimplemented: TYP-42",
+    "money '$1,234.56' roundtrip",
+    "aclitem text passes through"
+   ]
+  },
+  {
+   "lease_id": "TYP-43",
+   "task_ids": [
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/system_funcs.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_typeof, format_type, version, encodings, sizes, to_regtype, information_schema helpers.",
+   "spec": "Implement every System proc per module docs (match SQL-language helpers by proc.oid). Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "contracts/reference/pg18/catalog_view_defs.csv"
+   ],
+   "depends_on_leases": [
+    "TYP-01"
+   ],
+   "acceptance": [
+    "pg_typeof(1) -> regtype 23",
+    "format_type(1043,14)='character varying(10)'",
+    "version() starts with 'PostgreSQL 18.6 (PGArbor'",
+    "pg_size_pretty(10240)='10 kB'",
+    "pg_size_bytes('1 MB')=1048576",
+    "getdatabaseencoding()='UTF8'",
+    "_pg_char_max_length(1043,14)=10",
+    "_pg_numeric_precision(23,-1)=32",
+    "_pg_numeric_precision_radix(1700,-1)=10",
+    "to_regtype('nosuch') = NULL"
+   ]
+  },
+  {
+   "lease_id": "TYP-44",
+   "task_ids": [
+    "TYPE-14"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/func/series.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "generate_series for int4/int8/numeric/timestamp(tz).",
+   "spec": "Implement every Series proc as lazy iterators per module docs. Implement `lookup(proc)` as a `match proc.prosrc { \"name\" => Some(FuncImpl::Scalar(fname)), ... _ => None }` (SQL-language builtins have empty prosrc: match `proc.oid` instead) over EVERY proc whose generated row says `module: ImplModule::<X>` (grep crates/pgarbor-types/src/catalog_data/procs.rs); each implementation is a private `fn(&[Datum], &FuncCtx) -> Result<Datum>` (SRFs: `fn(&[Datum], &FuncCtx) -> Result<SetIter>` + FuncImpl::Set). Arguments arrive non-NULL for strict procs (the dispatcher handles strictness); return type variants per the datum.rs mapping table. Keep `unsupported()` for procs you cannot implement (it must stay the only unimplemented call site for them). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/numeric/arith.rs",
+    "crates/pgarbor-types/src/datetime/timestamp.rs",
+    "crates/pgarbor-types/src/datetime/funcs.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-10",
+    "TYP-28"
+   ],
+   "acceptance": [
+    "generate_series(1,3) -> 1,2,3",
+    "generate_series(3,1) -> empty",
+    "generate_series(1,10,0) -> 22023 step size cannot equal zero",
+    "generate_series(2147483646,2147483647) -> 2 rows no error",
+    "generate_series(1.5,3) numeric -> 1.5, 2.5",
+    "generate_series('NaN'::numeric,1) -> 22023 start value cannot be NaN",
+    "timestamp series by '1 day' inclusive"
+   ]
+  },
+  {
+   "lease_id": "TYP-45",
+   "task_ids": [
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/basic.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "count/sum/avg/min/max/bool/bit/any_value aggregates.",
+   "spec": "Implement make() returning per-aggregate AggState structs per module docs; dispatch on agg.name and spec.arg_types[0].oid. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/agg/mod.rs",
+    "crates/pgarbor-types/src/numeric/arith.rs",
+    "crates/pgarbor-types/src/compare.rs",
+    "crates/pgarbor-types/src/datetime/interval.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-10",
+    "TYP-49",
+    "TYP-29"
+   ],
+   "acceptance": [
+    "sum(int4 1,2,4)=7 (Int8)",
+    "sum(2147483647 x3)=6442450941",
+    "sum(int8 max x2)=18446744073709551614 numeric",
+    "avg(1,2,4)='2.3333333333333333'",
+    "avg(float4 1,2,4)=2.3333333333333335 (Float8)",
+    "count over zero rows = 0, sum = NULL",
+    "max(text) codepoint order",
+    "avg(interval secs 1,2,4)='00:00:02.333333'",
+    "bit_and(1,2,4)=0, bit_or=7"
+   ]
+  },
+  {
+   "lease_id": "TYP-46",
+   "task_ids": [
+    "TYPE-08",
+    "TYPE-09",
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/collect.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "string_agg/array_agg/json(b)_agg/json(b)_object_agg.",
+   "spec": "Implement make() and states per module docs, using json::build for value conversion. Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/agg/mod.rs",
+    "crates/pgarbor-types/src/json/build.rs",
+    "crates/pgarbor-types/src/json/parse.rs",
+    "crates/pgarbor-types/src/array/mod.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-35"
+   ],
+   "acceptance": [
+    "array_agg(NULL int) = '{NULL}'",
+    "json_agg(NULL) = '[null]'",
+    "string_agg skips NULLs; all NULL -> NULL",
+    "json_object_agg -> '{ \"a\" : 1, \"a\" : 2 }' keeps dups",
+    "jsonb_object_agg(NULL key) -> 22023 field name must not be null",
+    "array_agg of arrays builds 2-D"
+   ]
+  },
+  {
+   "lease_id": "TYP-47",
+   "task_ids": [
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/stats.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Variance/stddev/covariance/correlation/regression aggregates.",
+   "spec": "Implement make() and states per module docs (numeric variants exact via BigDecimal, float variants via Youngs-Cramer as float.c). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/agg/mod.rs",
+    "crates/pgarbor-types/src/numeric/arith.rs",
+    "crates/pgarbor-types/src/numeric/transcendental.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-10",
+    "TYP-11"
+   ],
+   "acceptance": [
+    "stddev(1,2,4)='1.5275252316519467'",
+    "variance(1,2,4)='2.3333333333333333'",
+    "stddev_pop(float8 1,2,4)=1.247219128924647",
+    "corr(x,2x)=1",
+    "regr_slope(2x,x)=2",
+    "var_samp of one row = NULL"
+   ]
+  },
+  {
+   "lease_id": "TYP-48",
+   "task_ids": [
+    "TYPE-12"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/ordered_set.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "percentile_cont/disc, mode, hypothetical-set aggregates.",
+   "spec": "Implement make() and states per module docs (orderedsetaggs.c). Write unit tests in a #[cfg(test)] mod at the bottom of the file (construct contexts with registry::builtin_env(), IoConfig::default(), context::TestSession::default()); tests are compiled/run centrally later.",
+   "reads": [
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/agg/mod.rs",
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "depends_on_leases": [
+    "TYP-49"
+   ],
+   "acceptance": [
+    "percentile_cont(0.5) of 1,2,4 = 2",
+    "percentile_disc(0.5) of 1,2,4 = 2",
+    "mode() of 1,2,2,3 = 2",
+    "percentile_cont(1.5) -> 22003 percentile value 1.5 is not between 0 and 1"
+   ]
+  }
+ ]
+}
