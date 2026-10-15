@@ -87,7 +87,8 @@ const results = await pipeline(
   (l) => agent(args.impl_codex ? viaCodex(args.impl_codex, true, workerPrompt(l).replace(/FINISH:[\s\S]*$/, 'FINISH: do not run git; the wrapper commits. End with a summary of what is implemented, still unimplemented, assumptions, contract problems.'), l.files, `${EPOCH} ${l.lease_id}`) : workerPrompt(l), { label: `impl:${l.lease_id}`, phase: 'Implement', model: 'haiku', isolation: 'worktree', schema: SUBMISSION }),
   async (sub, l) => {
     // review only when a codex reviewer is configured (args.review_agent, e.g. 'codex-sol-review'); haiku never reviews
-    if (!args.review_codex || !sub || !sub.sha) return { lease: l, sub, review: null }
+    if (true || !args.review_codex || !sub || !sub.sha)  // review disabled by owner: compiler + PG18 diff are the reviewers
+     return { lease: l, sub, review: null }
     const review = await agent(viaCodex(args.review_codex, false, reviewPrompt(l, sub)), { label: `review:${l.lease_id}`, phase: 'Review', model: 'haiku', schema: REVIEW })
     return { lease: l, sub, review }
   },
