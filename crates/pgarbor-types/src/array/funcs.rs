@@ -670,9 +670,11 @@ fn array_prepend_fn(args: &[Datum], ctx: &FuncCtx) -> Result<Datum> {
         0 => out.dims = vec![(1, 1)],
         1 => {
             let (len, lb) = out.dims[0];
-            let new_lb = lb.checked_sub(1).ok_or_else(int_out_of_range)?;
+            // PG keeps the existing lower bound on prepend (`[2:3]` -> `[2:4]`);
+            // the checked_sub mirrors PG's "integer out of range" at INT_MIN.
+            lb.checked_sub(1).ok_or_else(int_out_of_range)?;
             let new_len = len.checked_add(1).ok_or_else(int_out_of_range)?;
-            out.dims[0] = (new_len, new_lb);
+            out.dims[0] = (new_len, lb);
         }
         _ => return Err(one_dim_err()),
     }

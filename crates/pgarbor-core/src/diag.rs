@@ -5,7 +5,7 @@
 //! Column semantics follow PG18 (`contracts/reference/pg18/catalog_attributes.csv` lists the exact
 //! columns): fields we cannot know are None (rendered NULL).
 use crate::engine::Engine;
-use crate::session::SessionShared;
+use crate::session::{BackendState, SessionShared};
 use crate::types::SessionId;
 use pgarbor_common::{Result, TxnId};
 
@@ -115,7 +115,9 @@ pub fn activity_rows(engine: &Engine, branch_filter: Option<pgarbor_common::Bran
             state_change_ms: Some(a.state_change_ms),
             wait_event_type: a.wait.map(|w| w.event_type.to_string()),
             wait_event: a.wait.map(|w| w.event.to_string()),
-            state: Some(a.state.as_pg_str().to_string()),
+            // A backend blocked on a lock is always executing a statement (PG reports `active`
+            // for any waiting backend), so a wait overrides the idle/in-transaction state.
+            state: Some(if a.wait.is_some() { BackendState::Active } else { a.state }.as_pg_str().to_string()),
             backend_xid: a.backend_xid.map(|x| x.0),
             backend_xmin: None,
             query_id: None,

@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EDITOR
+  READER
+}
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model User {
+  id        String    @id @default(uuid()) @db.Uuid
+  email     String    @unique @db.VarChar(255)
+  name      String
+  role      Role      @default(READER)
+  active    Boolean   @default(true)
+  karma     BigInt    @default(0)
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+  posts     Post[]
+  comments  Comment[]
+  profile   Profile?
+}
+
+model Profile {
+  id       Int     @id @default(autoincrement())
+  userId   String  @unique @db.Uuid
+  bio      String?
+  settings Json    @default("{}")
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Post {
+  id          Int        @id @default(autoincrement())
+  title       String     @db.VarChar(200)
+  body        String?
+  status      PostStatus @default(DRAFT)
+  views       Int        @default(0)
+  rating      Decimal    @default(0) @db.Decimal(6, 2)
+  labels      String[]
+  meta        Json?
+  authorId    String     @db.Uuid
+  publishedAt DateTime?  @db.Timestamptz(6)
+  createdAt   DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime   @updatedAt @db.Timestamptz(6)
+  subtitle    String?
+  author      User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments    Comment[]
+  tags        PostTag[]
+
+  @@index([authorId, status])
+}
+
+model Comment {
+  id       BigInt @id @default(autoincrement())
+  postId   Int
+  authorId String @db.Uuid
+  body     String
+  post     Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+}
+
+model Tag {
+  id    Int       @id @default(autoincrement())
+  name  String    @unique
+  posts PostTag[]
+}
+
+model PostTag {
+  postId Int
+  tagId  Int
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag    Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+}
