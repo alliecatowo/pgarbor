@@ -100,6 +100,14 @@ impl Session {
             };
         }
 
+        // Utility / transaction-control statements take no snapshot (PG leaves FirstSnapshotSet
+        // alone, so `SET TRANSACTION` stays legal): reuse the last env instead of reading the catalog.
+        if let (Some(txn), Some(env)) = (self.txn.as_ref(), self.env.as_ref()) {
+            if !txn.has_snapshot() {
+                return Ok(env.clone());
+            }
+        }
+
         // Step 2: bootstrap a branch created before its catalog existed, then read the snapshot
         // through the statement's transaction view.
         self.ensure_bootstrapped()?;

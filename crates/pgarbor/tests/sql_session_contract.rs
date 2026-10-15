@@ -65,3 +65,23 @@ fn unique_nulls_and_mixed_integer_join() {
     assert!(matches!(&out[0].result, StatementResult::Rows { rows, .. } if rows == &vec![vec![Datum::Int4(1)]]));
     assert_eq!(s.simple_query("SET CONSTRAINTS ALL DEFERRED").unwrap_err().sqlstate.code(), "0A000");
 }
+
+#[test]
+fn show_and_txn_control_take_no_snapshot_and_rollback_discards() {
+    let db = Database::in_memory().expect("create");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    s.simple_query("SELECT 1").expect("warm up");
+    let out = s.simple_query("SHOW server_version").expect("SHOW needs no snapshot");
+    assert_eq!(out[0].result.tag(), "SHOW");
+    s.simple_query("CREATE TABLE t(a int primary key)").expect("create");
+    s.simple_query("INSERT INTO t VALUES (1)").expect("insert");
+    assert_eq!(s.simple_query("BEGIN").expect("begin")[0].result.tag(), "BEGIN");
+    s.simple_query("INSERT INTO t VALUES (2)").expect("insert in block");
+    assert_eq!(s.simple_query("ROLLBACK").expect("rollback")[0].result.tag(), "ROLLBACK");
+    match &s.simple_query("SELECT count(*) FROM t").expect("count")[0].result {
+        StatementResult::Rows { rows, .. } => assert_eq!(rows, &vec![vec![Datum::Int8(1)]]),
+        other => panic!("expected rows: {other:?}"),
+    }
+    let out = s.simple_query("BEGIN; INSERT INTO t VALUES (3); ROLLBACK").expect("multi-statement block");
+    assert_eq!(out.last().unwrap().result.tag(), "ROLLBACK");
+}
