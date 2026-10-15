@@ -53,3 +53,24 @@ DATABASE and cross-database shared-catalog overlays remain deferred. Forced
 branch administration requests termination and wakes waiters; it does not wait
 five seconds for connection threads to exit. Generation checks protect stale
 transaction writes after reset/delete.
+
+## Measured SQL compatibility and verification limits
+
+The 2026-10-15 embedded corpus campaign accounts for 5,837 selected cases: 1,992
+PASS (34.13%), 2,320 MISMATCH, 1,163 UNSUPPORTED, 102 internal-error CRASH
+classifications, 58 UNEXPECTED_ACCEPTANCE, 10 bridge HARNESS_ERROR, 152 BLOCKED
+and 40 quarantined INVALID_CASE. Two initial 10-second timeouts completed within
+60 seconds (one PASS, one MISMATCH); no process abort or confirmed hang was
+observed. Raw outcomes, rechecks and per-family denominators are retained in
+runs/review/embedded-final-01 and codex-differential-by-family.csv.
+
+Deferred constraints and row-security activation/access fail closed with 0A000.
+CLI COPY FROM complete script blocks work via a memory channel. Conservative
+ordinary-table dump/import works; unsupported object inventory is refused. Full
+wire COPY and pg_dump compatibility are not implemented.
+
+Live listeners, independent psql/ORM clients and native upstream suites cannot
+be validated inside the current socket-restricted sandbox. Three scripted raw-byte
+connection tests cover the real wire/session path without a socket. See
+runs/review/codex-final-01.md for exact test counts, environment failures and the
+remaining verifier-normalization limitations.
