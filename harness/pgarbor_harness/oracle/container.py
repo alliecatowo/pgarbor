@@ -1,6 +1,8 @@
 """ORACLE-01 / ORACLE-12: lifecycle of the ONE pinned PostgreSQL 18.6 container the harness owns.
 
-Lease HAR-01. Uses the ``podman`` CLI via ``subprocess`` (no Python podman bindings).
+Lease HAR-01. Uses the ``podman`` or ``docker`` CLI (``config.container_runtime()``) via
+``subprocess`` (no Python container bindings). The examples below show podman; docker takes
+the same flags.
 
 Container contract
 ------------------
@@ -34,7 +36,7 @@ Container contract
   (pg_isready can succeed while the docker-entrypoint temporary server is still up during
   first init; therefore require two consecutive successes 1 s apart).
 
-Errors are raised as ``OracleError`` with the podman stderr attached. Callers classify
+Errors are raised as ``OracleError`` with the podman/docker stderr attached. Callers classify
 oracle failures as HARNESS_ERROR, never as target failures.
 """
 
@@ -60,17 +62,25 @@ PERF_SERVER_FLAGS: tuple[tuple[str, str], ...] = (
 
 DATA_VOLUME = f"{config.HARNESS_CONTAINER_NAME}-data"
 
-#: The architects' developer container. The harness never passes this name to podman.
+#: The architects' developer container. The harness never passes this name to podman or docker.
 FORBIDDEN_CONTAINER_NAME = "pgarbor-oracle"
 
-#: podman stderr fragments meaning "no such container" / "no such volume".
+#: podman/docker stderr fragments meaning "no such container" / "no such volume".
 _NO_SUCH_CONTAINER: tuple[str, ...] = ("no such container", "no container with name or id")
 _NO_SUCH_VOLUME: tuple[str, ...] = ("no such volume", "no volume with name")
 
 
 class OracleError(RuntimeError):
-    """Oracle infrastructure failure (podman missing, wrong digest, not ready, ...)."""
+    """Oracle infrastructure failure (container runtime missing, wrong digest, not ready, ...)."""
 
+
+
+def runtime() -> str:
+    """``config.container_runtime()`` ('podman' or 'docker'), raised as OracleError when absent."""
+    try:
+        return config.container_runtime()
+    except RuntimeError as e:
+        raise OracleError(str(e)) from e
 
 #: Signature of the command runner (injectable for tests): argv -> CompletedProcess.
 #: The optional ``input_text`` keyword carries stdin and is passed only by ``exec_psql``.
@@ -97,8 +107,8 @@ class ContainerSpec:
     data_volume: str = DATA_VOLUME
 
     def run_argv(self) -> list[str]:
-        """Exact ``podman run`` argv per the module docstring (implemented: frozen)."""
-        argv = ["podman", "run", "-d", "--name", self.name,
+        """Exact ``podman run`` (or docker run) argv per the module docstring (implemented: frozen)."""
+        argv = [runtime(), "run", "-d", "--name", self.name,
                 "-p", f"127.0.0.1:{self.host_port}:5432",
                 "-e", f"POSTGRES_PASSWORD={config.PG_SUPERUSER_PASSWORD}",
                 "-e", "POSTGRES_HOST_AUTH_METHOD=trust",
@@ -139,20 +149,20 @@ class OracleContainer:
     # -- private plumbing ----------------------------------------------------------------
 
     def _run(self, argv: Sequence[str], input_text: Optional[str] = None) -> "subprocess.CompletedProcess[str]":
-        """Every podman call goes through here: argv list only, and the developer container
+        """Every podman/docker call goes through here: argv list only, and the developer container
         name is refused before the runner is ever invoked."""
         argv = list(argv)
         f = FORBIDDEN_CONTAINER_NAME
         for tok in argv:
             if tok == f or tok.startswith(f + ":") or tok.endswith("=" + f):
-                raise OracleError(f"refusing to run podman against {f!r}: that container belongs "
+                raise OracleError(f"refusing to run the container runtime against {f!r}: that container belongs "
                                   "to the architects and is never managed by the harness")
         try:
             if input_text is None:
                 return self.runner(argv)
             return self.runner(argv, input_text=input_text)
         except OSError as e:
-            raise OracleError(f"cannot run {argv[0]!r} (is podman installed?): {e}") from e
+            raise OracleError(f"cannot run {argv[0]!r} (is podman or docker installed?): {e}") from e
 
     @staticmethod
     def _require_ok(proc: "subprocess.CompletedProcess[str]", what: str) -> "subprocess.CompletedProcess[str]":
@@ -167,8 +177,8 @@ class OracleContainer:
 
     def _create(self) -> None:
         """Pull the pinned image if it is absent locally, then ``podman run`` the spec."""
-        if self._run(["podman", "image", "exists", self.spec.image]).returncode != 0:
-            self._require_ok(self._run(["podman", "pull", self.spec.image]), "podman pull")
+        if self._run([runtime(), "image", "exists", self.spec.image]).returncode != 0:
+            self._require_ok(self._run([runtime(), "pull", self.spec.image]), "podman pull")
         self._require_ok(self._run(self.spec.run_argv()), "podman run")
 
     def _probe(self) -> bool:
@@ -176,10 +186,10 @@ class OracleContainer:
         container. During the docker-entrypoint temporary server TCP is not listening, so the
         probe fails until the real server is up."""
         name, user = self.spec.name, config.PG_SUPERUSER
-        ready = self._run(["podman", "exec", name, "pg_isready", "-U", user, "-h", "127.0.0.1"])
+        ready = self._run([runtime(), "exec", name, "pg_isready", "-U", user, "-h", "127.0.0.1"])
         if ready.returncode != 0:
             return False
-        q = self._run(["podman", "exec", name, "psql", "-h", "127.0.0.1", "-U", user,
+        q = self._run([runtime(), "exec", name, "psql", "-h", "127.0.0.1", "-U", user,
                        "-X", "-At", "-v", "ON_ERROR_STOP=1", "-c", "select 1", "-d", "postgres"])
         return q.returncode == 0 and q.stdout.strip() == "1"
 
@@ -195,7 +205,7 @@ class OracleContainer:
         Read ``.State.Running``, ``.ImageDigest`` (compare to config.PG_IMAGE_DIGEST),
         ``.HostConfig.PortBindings["5432/tcp"][0].HostPort``, ``.Mounts[*].Destination``.
         """
-        proc = self._run(["podman", "container", "inspect", self.spec.name])
+        proc = self._run([runtime(), "container", "inspect", self.spec.name])
         if proc.returncode != 0:
             if self._stderr_has(proc, _NO_SUCH_CONTAINER):
                 return ContainerStatus(exists=False, running=False)
@@ -268,13 +278,13 @@ class OracleContainer:
                         "(pass recreate_on_drift=True to recreate it; the data volume is kept)")
                 # The data volume is not removed; initdb args only apply on first init, so the
                 # caller must verify the fingerprint after recreation (oracle.fingerprint).
-                self._require_ok(self._run(["podman", "rm", "-f", name]),
+                self._require_ok(self._run([runtime(), "rm", "-f", name]),
                                  f"podman rm -f {name} (drift recreate)")
                 st = ContainerStatus(exists=False, running=False)
         if not st.exists:
             self._create()
         elif not st.running:
-            self._require_ok(self._run(["podman", "start", name]), "podman start")
+            self._require_ok(self._run([runtime(), "start", name]), "podman start")
         self.wait_ready()
         return self.endpoint("postgres")
 
@@ -297,7 +307,7 @@ class OracleContainer:
 
     def stop(self) -> None:
         """``podman stop -t 10 <name>``; no error if not running."""
-        proc = self._run(["podman", "stop", "-t", "10", self.spec.name])
+        proc = self._run([runtime(), "stop", "-t", "10", self.spec.name])
         if proc.returncode == 0 or self._stderr_has(proc, _NO_SUCH_CONTAINER) \
                 or self._stderr_has(proc, ("is not running",)):
             return
@@ -311,19 +321,19 @@ class OracleContainer:
             raise OracleError(f"unknown restart mode {mode!r} (expected 'clean' or 'kill')")
         name = self.spec.name
         if mode == "clean":
-            self._require_ok(self._run(["podman", "restart", "-t", "10", name]), "podman restart")
+            self._require_ok(self._run([runtime(), "restart", "-t", "10", name]), "podman restart")
         else:
-            self._require_ok(self._run(["podman", "kill", "-s", "KILL", name]), "podman kill")
-            self._require_ok(self._run(["podman", "start", name]), "podman start")
+            self._require_ok(self._run([runtime(), "kill", "-s", "KILL", name]), "podman kill")
+            self._require_ok(self._run([runtime(), "start", name]), "podman start")
         self.wait_ready()
 
     def remove(self, keep_volume: bool = True) -> None:
         """``podman rm -f <name>``; also ``podman volume rm`` unless keep_volume."""
-        proc = self._run(["podman", "rm", "-f", self.spec.name])
+        proc = self._run([runtime(), "rm", "-f", self.spec.name])
         if proc.returncode != 0 and not self._stderr_has(proc, _NO_SUCH_CONTAINER):
             self._require_ok(proc, "podman rm -f")
         if not keep_volume:
-            vproc = self._run(["podman", "volume", "rm", self.spec.data_volume])
+            vproc = self._run([runtime(), "volume", "rm", self.spec.data_volume])
             if vproc.returncode != 0 and not self._stderr_has(vproc, _NO_SUCH_VOLUME):
                 self._require_ok(vproc, "podman volume rm")
 
@@ -331,7 +341,7 @@ class OracleContainer:
         """Run ``podman exec -i <name> psql -U postgres -X -v ON_ERROR_STOP=1 [-At] -d db``
         with ``sql`` on stdin; return stdout. Non-zero exit -> OracleError(stderr).
         Used only for administration/fingerprinting, never for case execution."""
-        argv = ["podman", "exec", "-i", self.spec.name, "psql", "-U", config.PG_SUPERUSER,
+        argv = [runtime(), "exec", "-i", self.spec.name, "psql", "-U", config.PG_SUPERUSER,
                 "-X", "-v", "ON_ERROR_STOP=1"]
         if tuples_only:
             argv.append("-At")
@@ -345,7 +355,7 @@ class OracleContainer:
     def logs_tail(self, lines: int = 40) -> str:
         """``podman logs --tail N <name>`` stdout+stderr (best effort, never raises)."""
         try:
-            proc = self._run(["podman", "logs", "--tail", str(lines), self.spec.name])
+            proc = self._run([runtime(), "logs", "--tail", str(lines), self.spec.name])
             return ((proc.stdout or "") + (proc.stderr or "")).rstrip("\n")
         except Exception as e:  # best effort by contract: diagnostics must not mask the error
             return f"<podman logs unavailable: {e}>"

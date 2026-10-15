@@ -18,6 +18,15 @@ SRC = Path("/srv/regress")
 OUT = Path("/srv/out")
 
 
+@pytest.fixture(autouse=True)
+def _pin_podman(monkeypatch: pytest.MonkeyPatch):
+    """Argv assertions are written for podman; pin the runtime so they are deterministic."""
+    monkeypatch.setenv("PGARBOR_CONTAINER_RUNTIME", "podman")
+    config.container_runtime.cache_clear()
+    yield
+    config.container_runtime.cache_clear()
+
+
 def _argv(test: str = "boolean", db: str = "regression") -> list[str]:
     return psql.psql_argv(test, "127.0.0.1", 54319, db, SRC, OUT)
 

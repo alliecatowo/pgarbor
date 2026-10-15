@@ -10,7 +10,9 @@ Source of truth: ``contracts/ARCHITECTURE.md`` section 0 rule 6.
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 # ---------------------------------------------------------------------------------------------
@@ -96,6 +98,35 @@ REGRESS_DB_SETTINGS: tuple[str, ...] = (
     "ALTER DATABASE \"{db}\" SET bytea_output TO 'hex'",
     "ALTER DATABASE \"{db}\" SET timezone_abbreviations TO 'Default'",
 )
+
+# ---------------------------------------------------------------------------------------------
+# Container runtime. Selectable: podman or docker (same flags for everything the harness uses).
+# ---------------------------------------------------------------------------------------------
+
+#: Candidate runtimes, in auto-detection order.
+CONTAINER_RUNTIMES: tuple[str, ...] = ("podman", "docker")
+
+
+@lru_cache(maxsize=1)
+def container_runtime() -> str:
+    """Return the container CLI the harness shells out to: ``podman`` or ``docker``.
+
+    Order: ``$PGARBOR_CONTAINER_RUNTIME`` if set; otherwise the first of CONTAINER_RUNTIMES
+    found on PATH (``shutil.which``). Raises RuntimeError if neither is available. The result
+    is cached for the process; tests that change the environment must call
+    ``container_runtime.cache_clear()``.
+    """
+    forced = os.environ.get("PGARBOR_CONTAINER_RUNTIME")
+    if forced:
+        return forced
+    for name in CONTAINER_RUNTIMES:
+        if shutil.which(name):
+            return name
+    raise RuntimeError(
+        "no container runtime found on PATH (looked for podman, docker); install one or set "
+        "PGARBOR_CONTAINER_RUNTIME"
+    )
+
 
 # ---------------------------------------------------------------------------------------------
 # Timeouts (seconds). CONTRACT

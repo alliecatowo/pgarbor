@@ -45,6 +45,15 @@ class FakeClock:
         self.now += seconds
 
 
+@pytest.fixture(autouse=True)
+def _pin_podman(monkeypatch: pytest.MonkeyPatch):
+    """Argv assertions are written for podman; pin the runtime so they are deterministic."""
+    monkeypatch.setenv("PGARBOR_CONTAINER_RUNTIME", "podman")
+    config.container_runtime.cache_clear()
+    yield
+    config.container_runtime.cache_clear()
+
+
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
     c = FakeClock()
@@ -417,3 +426,25 @@ def test_exec_psql_failure_carries_stderr() -> None:
 
 def test_logs_tail_never_raises() -> None:
     assert "unavailable" in OracleContainer(runner=ExplodingRunner()).logs_tail()
+
+
+def test_container_runtime_selection_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Env override wins; otherwise podman, then docker, from PATH; neither is an error."""
+    found: set[str] = set()
+    monkeypatch.setattr(config.shutil, "which", lambda name: f"/usr/bin/{name}" if name in found else None)
+
+    def pick() -> str:
+        config.container_runtime.cache_clear()
+        return config.container_runtime()
+
+    monkeypatch.setenv("PGARBOR_CONTAINER_RUNTIME", "docker")
+    assert pick() == "docker"  # explicit override ignores PATH
+    monkeypatch.delenv("PGARBOR_CONTAINER_RUNTIME")
+    found.clear()
+    with pytest.raises(RuntimeError, match="no container runtime"):
+        pick()
+    found.add("docker")
+    assert pick() == "docker"
+    found.add("podman")
+    assert pick() == "podman"  # podman preferred when both exist
+    config.container_runtime.cache_clear()

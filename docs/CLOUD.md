@@ -28,7 +28,7 @@ Options: `BUILD=1` also builds the workspace (slow), `STRICT=1` fails the setup 
 
 - The PG18.6 oracle is not kept across sessions. The script is idempotent, so rerun it (or use the hook below) each session.
 - The container path needs `docker` (preinstalled) and Docker Hub access. Not confirmed here: that `dockerd` starts without help on a fresh VM, and the PG18 image in the VM. The PGDG apt fallback needs apt.postgresql.org on a Custom allowlist.
-- The harness shells out to `podman`. In the cloud, use the `dsn` target (see the notes the script prints) or alias podman to docker. Unverified.
+- The harness shells out to a container CLI: `podman`, or `docker` when podman is not on PATH (auto-detected; override with `PGARBOR_CONTAINER_RUNTIME`). In the cloud, docker is preinstalled, so the harness picks it up. Unverified.
 - Harness `PG_SERVER_VERSION` expects the Debian build string, so a non-Debian 18.6 build will fail the fingerprint check. The script prints the version it got.
 - Timeouts: commands 2 min by default, up to 10 min. SessionStart hooks 600 s. [Time limits](https://code.claude.com/docs/en/cloud-environments#time-limits)
 - Codex is not available in the cloud environment.
@@ -49,6 +49,7 @@ Names and purpose only. Never put values in the repo or in this file. Set values
 | `PGARBOR_ORACLE_DB` | Optional | Oracle database for harness test helpers (default `postgres`). | Cloud environment settings |
 | `PGARBOR_ORACLE_REVIEW` | Optional, record-only | Must be `1` to write `tests/expected/**` or regress baselines. Leave unset except for a deliberate, reviewed re-record. | Set per command, never in environment settings |
 | `PGARBOR_REAL_BINARY` | Optional | Absolute path to a pgarbor binary for `test_real_pgarbor_target.py`. | Cloud environment settings |
+| `PGARBOR_CONTAINER_RUNTIME` | Optional | Container CLI the harness shells out to: `podman` or `docker`. Unset, the harness uses the first of podman or docker found on PATH. | Cloud environment settings, or per command |
 | `PGARBOR_PG_SOURCE` | Optional | PostgreSQL source reference path (default `~/develop/reference/postgres-18`). | Cloud environment settings, or leave to the script default |
 | `PGARBOR_DB` | Optional | Default database file for the `pgarbor` CLI. | Cloud environment settings |
 | `PGARBOR_REPO` | Optional | Repo root override for the harness and factory (otherwise discovered). | Cloud environment settings |
