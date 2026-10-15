@@ -1,0 +1,40 @@
+# Sorted and hash-aggregated DISTINCT must return the same set; plans are not compared, only results.
+id: select-distinct.distinct-group-equivalence
+title: DISTINCT via sort and via hash aggregation produce identical sets
+family: select-distinct
+tier: extended
+feature_ids: [distinct, planner-settings, create-table-as, set-operations, generate-series]
+required_capabilities: [guc, create-table-as, set-operations, generate-series]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/select_distinct.sql
+sessions: [a]
+steps:
+  - sql: |
+      SET enable_hashagg = off
+    expect: ok
+  - sql: |
+      CREATE TABLE distinct_group_1 AS SELECT DISTINCT g % 100 AS v FROM generate_series(0, 9999) g
+    expect: ok
+  - sql: |
+      SET enable_hashagg = on
+    expect: ok
+  - sql: |
+      SET enable_sort = off
+    expect: ok
+  - sql: |
+      CREATE TABLE distinct_hash_1 AS SELECT DISTINCT g % 100 AS v FROM generate_series(0, 9999) g
+    expect: ok
+  - sql: |
+      SET enable_sort = on
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM distinct_hash_1
+    expect: rows
+    order: multiset
+    comment: expect 100
+  - sql: |
+      (SELECT v FROM distinct_hash_1 EXCEPT SELECT v FROM distinct_group_1) UNION ALL (SELECT v FROM distinct_group_1 EXCEPT SELECT v FROM distinct_hash_1)
+    expect: rows
+    order: multiset
+    comment: symmetric difference is empty

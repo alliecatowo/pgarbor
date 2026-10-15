@@ -1,0 +1,38 @@
+# User-defined ordered-set aggregate built on the built-in ordered-set support functions,
+# called with WITHIN GROUP.
+id: create-aggregate.ordered-set-custom-percentile
+title: "User-defined ordered-set aggregate with WITHIN GROUP: discrete percentile, empty input, out-of-range fraction"
+family: create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, ordered-set-aggregates, within-group]
+required_capabilities: [create-table, insert, select, aggregates, ordered-set-aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (my_percentile_disc)"
+  license: PostgreSQL
+setup: |
+  CREATE AGGREGATE my_pd (float8 ORDER BY anyelement) (
+    stype = internal,
+    sfunc = ordered_set_transition,
+    finalfunc = percentile_disc_final,
+    finalfunc_extra = true,
+    finalfunc_modify = read_write
+  );
+  CREATE TABLE os (x int4);
+  INSERT INTO os VALUES (5), (1), (4), (2), (3);
+steps:
+  - sql: |
+      SELECT my_pd(0.5) WITHIN GROUP (ORDER BY x) FROM os
+    expect: rows
+    comment: discrete median of 1..5
+  - sql: |
+      SELECT my_pd(0) WITHIN GROUP (ORDER BY x), my_pd(1) WITHIN GROUP (ORDER BY x) FROM os
+    expect: rows
+  - sql: |
+      SELECT my_pd(0.5) WITHIN GROUP (ORDER BY x) FROM os WHERE false
+    expect: rows
+    comment: percentile of empty input is NULL
+  - sql: |
+      SELECT my_pd(1.5) WITHIN GROUP (ORDER BY x) FROM os
+    expect: error
+    comment: fraction outside [0,1] is rejected by the final function

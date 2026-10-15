@@ -1,0 +1,24 @@
+# A type used by a table column cannot be dropped under RESTRICT; the column keeps its value.
+id: dependency.drop-type-in-use
+title: DROP TYPE refused while a table column uses it
+family: dependency
+tier: extended
+feature_ids: [create-type, enum-types, drop-type, dependencies]
+required_capabilities: [create-table, insert, select, enum-types, drop-type]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/dependency.sql (deptest_enum, deptest_range)"
+sessions: [a]
+setup: |
+  CREATE TYPE deptest_enum AS ENUM ('red', 'green');
+  CREATE TABLE colors (id int4, c deptest_enum);
+  INSERT INTO colors VALUES (1, 'red'), (2, NULL);
+steps:
+  - sql: |
+      DROP TYPE deptest_enum
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT id, c IS NULL AS c_null, c::text AS c_text FROM colors ORDER BY id
+    expect: rows
+    order: ordered

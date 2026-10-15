@@ -1,0 +1,43 @@
+# Integer type boundaries: int2/int4/int8 min and max accepted, one past either end rejected, integer overflow in arithmetic, division by zero.
+id: slice-ddl.integer-ranges
+title: int2, int4 and int8 accept their bounds and reject values one past them
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, select, int2, int4, int8, errors]
+required_capabilities: [create-table, insert, select, int2, int4, int8, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-numeric.html#DATATYPE-INT"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ints (a int2, b int4, c int8)
+    expect: ok
+  - sql: |
+      INSERT INTO ints VALUES (32767, 2147483647, 9223372036854775807), (-32768, -2147483648, -9223372036854775808)
+    expect: ok
+  - sql: |
+      INSERT INTO ints VALUES (32768, 0, 0)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      INSERT INTO ints VALUES (0, 2147483648, 0)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      INSERT INTO ints VALUES (0, 0, 9223372036854775808)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT a, b, c FROM ints ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 2147483647::int4 + 1
+    expect: error
+    sqlstate: "22003"
+    comment: integer out of range
+  - sql: |
+      SELECT 1 / 0
+    expect: error
+    sqlstate: "22012"

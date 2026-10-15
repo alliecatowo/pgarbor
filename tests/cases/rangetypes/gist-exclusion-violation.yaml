@@ -1,0 +1,47 @@
+# Exclusion constraint built from range types over a GiST index: equality on singleton int ranges
+# combined with && on a second range. Overlapping rows in the same room are rejected with 23P01,
+# touching half-open ranges are accepted. Adapted from rangetypes.sql lines 403-426, using int4range
+# for the time column so the case does not depend on timestamp input.
+id: rangetypes.gist-exclusion-violation
+title: Range exclusion constraint over GiST rejects overlapping bookings with SQLSTATE 23P01
+family: rangetypes
+tier: extended
+feature_ids: [range-types, gist-index, exclusion-constraints, constraints]
+required_capabilities: [range-types, create-table, create-index, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangetypes.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE test_range_excl (
+    room int4range,
+    speaker int4range,
+    during int4range,
+    EXCLUDE USING gist (room WITH =, during WITH &&),
+    EXCLUDE USING gist (speaker WITH =, during WITH &&)
+  );
+steps:
+  - sql: |
+      INSERT INTO test_range_excl VALUES (int4range(123, 123, '[]'), int4range(1, 1, '[]'), int4range(100, 110))
+    expect: ok
+  - sql: |
+      INSERT INTO test_range_excl VALUES (int4range(123, 123, '[]'), int4range(2, 2, '[]'), int4range(110, 120))
+    expect: ok
+    comment: touching half-open range in the same room does not overlap
+  - sql: |
+      INSERT INTO test_range_excl VALUES (int4range(123, 123, '[]'), int4range(3, 3, '[]'), int4range(105, 115))
+    expect: error
+    sqlstate: "23P01"
+    comment: same room, overlapping time
+  - sql: |
+      INSERT INTO test_range_excl VALUES (int4range(124, 124, '[]'), int4range(1, 1, '[]'), int4range(105, 115))
+    expect: error
+    sqlstate: "23P01"
+    comment: same speaker, overlapping time
+  - sql: |
+      INSERT INTO test_range_excl VALUES (int4range(124, 124, '[]'), int4range(3, 3, '[]'), int4range(105, 115))
+    expect: ok
+  - sql: |
+      SELECT room, speaker, during FROM test_range_excl ORDER BY room, speaker, during
+    expect: rows
+    order: ordered

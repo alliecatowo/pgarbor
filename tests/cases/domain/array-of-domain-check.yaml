@@ -1,0 +1,38 @@
+# A column of type domain[] enforces the domain CHECK on every element on INSERT and on
+# element UPDATE. Adapted from domain.sql "Test arrays over domains".
+id: domain.array-of-domain-check
+title: Domain CHECK applies to array elements on INSERT and element UPDATE
+family: domain
+tier: core
+feature_ids: [domains, create-domain, arrays, check-constraint, update]
+required_capabilities: [create-table, insert, update, select, arrays, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS int CHECK (VALUE > 0);
+  CREATE TABLE pitable (f1 posint[]);
+steps:
+  - sql: |
+      INSERT INTO pitable VALUES (ARRAY[42])
+    expect: ok
+  - sql: |
+      INSERT INTO pitable VALUES (ARRAY[-1])
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO pitable VALUES ('{0}')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      UPDATE pitable SET f1[1] = f1[1] + 1
+    expect: ok
+  - sql: |
+      UPDATE pitable SET f1[1] = 0
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT f1 FROM pitable
+    expect: rows
+    order: multiset

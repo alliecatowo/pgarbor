@@ -1,0 +1,24 @@
+# Some ORMs read columns from pg_catalog directly (pg_class joined to pg_attribute), not information_schema.
+id: orm-drizzle.pg-class-pg-attribute-columns
+title: pg_class joined to pg_attribute returns user columns in attnum order, skipping dropped columns
+family: orm-drizzle
+tier: core
+feature_ids: [catalog-introspection, create-table, alter-table]
+required_capabilities: [create-table, alter-table, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 catalog-pg-class.html, catalog-pg-attribute.html"
+sessions: [a]
+setup: |
+  CREATE TABLE widgets (id int4 NOT NULL, label varchar(40), weight float8, tags text[]);
+  ALTER TABLE widgets DROP COLUMN weight;
+  ALTER TABLE widgets ADD COLUMN active boolean NOT NULL DEFAULT true;
+steps:
+  - sql: |
+      SELECT a.attnum, a.attname, format_type(a.atttypid, a.atttypmod) AS data_type, a.attnotnull FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'widgets' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c.relkind, c.relnatts FROM pg_catalog.pg_class c WHERE c.relname = 'widgets'
+    expect: rows
+    order: multiset

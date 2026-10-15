@@ -1,0 +1,52 @@
+# Read-only and write-only descriptors reject the opposite operation; unknown descriptors are rejected.
+id: largeobject.descriptor-mode-errors
+title: Descriptor mode enforcement for loread and lowrite and invalid descriptor numbers
+family: largeobject
+tier: core
+feature_ids: [large-objects, errors, lo-open, lo-read, lo-write, transactions]
+required_capabilities: [large-objects, create-table, insert, update, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (loid oid, fd integer);
+  INSERT INTO st (loid) SELECT lo_create(47);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'40000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT lowrite(fd, 'x') FROM st
+    expect: error
+    sqlstate: "55000"
+    comment: descriptor opened INV_READ only
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'20000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT loread(fd, 4) FROM st
+    expect: error
+    sqlstate: "55000"
+    comment: descriptor opened INV_WRITE only
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT lowrite(999, 'x')
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT loread(-1, 4)
+    expect: error
+    sqlstate: "42704"

@@ -1,0 +1,31 @@
+# NULL timetz values: IS NULL, comparisons yield NULL, default NULL ordering is last, aggregates skip NULLs.
+id: timetz.null-semantics
+title: "timetz NULL handling in filters, ordering and aggregates"
+family: timetz
+tier: core
+feature_ids: [timetz, nulls, aggregates, order-by]
+required_capabilities: [create-table, insert, select, order-by, aggregates]
+provenance:
+  source: hand
+  ref: "PG18 functions-comparison.html; sql-select.html#SQL-ORDERBY"
+setup: |
+  CREATE TABLE tz_null (id int4, f1 timetz);
+  INSERT INTO tz_null VALUES (1, '01:00+00'), (2, NULL), (3, '12:00-07'), (4, NULL);
+steps:
+  - sql: |
+      SELECT id, f1 IS NULL AS is_null FROM tz_null ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM tz_null WHERE f1 < '23:00+00' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows with NULL f1 drop out of the comparison filter
+  - sql: |
+      SELECT id, f1 FROM tz_null ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: default ORDER BY puts NULLs last in ascending order
+  - sql: |
+      SELECT count(f1) AS non_null, count(*) AS total, min(f1) AS lo, max(f1) AS hi FROM tz_null
+    expect: rows

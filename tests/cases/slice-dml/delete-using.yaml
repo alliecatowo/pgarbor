@@ -1,0 +1,25 @@
+# DELETE ... USING: a NULL join key never matches, so that row survives.
+id: slice-dml.delete-using
+title: DELETE USING a join table, RETURNING, NULL join key survives
+family: slice-dml
+tier: core
+feature_ids: [delete, delete-using, returning, null-handling]
+required_capabilities: [create-table, insert, delete, select, returning]
+provenance:
+  source: hand
+  ref: "https://www.postgresql.org/docs/18/sql-delete.html"
+sessions: [a]
+setup: |
+  CREATE TABLE cart (id int4 PRIMARY KEY, user_id int4, item text);
+  CREATE TABLE banned (user_id int4 PRIMARY KEY);
+  INSERT INTO cart VALUES (1, 10, 'x'), (2, 20, 'y'), (3, NULL, 'z'), (4, 30, 'w');
+  INSERT INTO banned VALUES (20), (30);
+steps:
+  - sql: |
+      DELETE FROM cart AS c USING banned AS b WHERE c.user_id = b.user_id RETURNING c.id, c.item
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id, user_id IS NULL AS uid_null, item FROM cart ORDER BY id
+    expect: rows
+    order: ordered

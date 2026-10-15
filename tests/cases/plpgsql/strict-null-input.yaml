@@ -1,0 +1,28 @@
+# STRICT functions return NULL for a NULL argument without running the body; non-strict bodies see NULL.
+id: plpgsql.strict-null-input
+title: STRICT plpgsql function skips body on NULL input; non-strict body receives NULL
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, strict-functions, null-handling, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_strict(x int) RETURNS int LANGUAGE plpgsql STRICT AS $$
+  BEGIN RAISE EXCEPTION 'body ran'; END $$;
+  CREATE FUNCTION pl_called(x int) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN RETURN coalesce(x::text, 'was null'); END $$;
+steps:
+  - sql: |
+      SELECT pl_strict(NULL::int) IS NULL AS result_is_null
+    expect: rows
+  - sql: |
+      SELECT pl_called(NULL::int) AS seen
+    expect: rows
+  - sql: |
+      SELECT pl_strict(1)
+    expect: error
+    sqlstate: "P0001"
+    comment: body runs for non-NULL input and RAISE EXCEPTION defaults to P0001

@@ -1,0 +1,38 @@
+# Scalar subqueries: zero rows give NULL, more than one row is an error, more than one column is a parse error.
+id: subselect.scalar-cardinality
+title: Scalar subquery returns NULL for no rows and fails for extra rows or columns
+family: subselect
+tier: core
+feature_ids: [select, subqueries, scalar-subquery, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/subselect.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE sq (id int4 PRIMARY KEY, v int4, w text);
+  INSERT INTO sq VALUES (1, 10, 'a'), (2, 20, NULL);
+steps:
+  - sql: |
+      SELECT (SELECT v FROM sq WHERE id = 99) AS none
+    expect: rows
+    comment: zero rows gives NULL
+  - sql: |
+      SELECT (SELECT v FROM sq WHERE id = 1) AS one
+    expect: rows
+  - sql: |
+      SELECT (SELECT v FROM sq) AS many
+    expect: error
+    sqlstate: "21000"
+  - sql: |
+      SELECT (SELECT v, w FROM sq WHERE id = 1) AS two_cols
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT id, (SELECT max(v) FROM sq s2 WHERE s2.id <= sq.id) AS running_max FROM sq ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT (SELECT w FROM sq WHERE id = 2) IS NULL AS null_value
+    expect: rows
+    comment: the scalar subquery returns a NULL value from a real row, so IS NULL is true

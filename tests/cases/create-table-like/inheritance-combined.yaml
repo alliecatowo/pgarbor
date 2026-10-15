@@ -1,0 +1,29 @@
+# LIKE combined with INHERITS: the LIKE columns are local to the child, copy structure only (no rows), and the child's rows are visible through the parent.
+id: create-table-like.inheritance-combined
+title: LIKE with INHERITS copies structure only and rows surface through the parent
+family: create-table-like
+tier: extended
+feature_ids: [create-table, create-table-like, inheritance, insert, select, defaults]
+required_capabilities: [create-table, insert, select, inheritance]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE inhx (xx text DEFAULT 'text');
+  CREATE TABLE ctla (aa text);
+  CREATE TABLE ctlb (bb text) INHERITS (ctla);
+  CREATE TABLE inhe (ee text, LIKE inhx) INHERITS (ctlb);
+steps:
+  - sql: |
+      INSERT INTO inhe (aa, bb, ee) VALUES ('a1', 'b1', 'e1')
+    expect: ok
+  - sql: |
+      SELECT aa, bb, ee, xx IS NULL AS xx_null FROM inhe
+    expect: rows
+    order: multiset
+    comment: the LIKE column xx has no default copied, so it is NULL
+  - sql: |
+      SELECT (SELECT count(*) FROM inhx) AS src_rows, (SELECT count(*) FROM ctla) AS parent_rows
+    expect: rows
+    comment: LIKE copies structure only; the child row is seen through the parent ctla

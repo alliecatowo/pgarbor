@@ -1,0 +1,80 @@
+# Rules on the target table that COPY (DML) TO cannot translate are rejected with 0A000.
+id: copydml.copy-rules-unsupported
+title: "COPY over DML is rejected for INSTEAD NOTHING, DO ALSO, multi-statement and conditional rules"
+family: copydml
+tier: extended
+feature_ids: [copy, rules, insert, update, delete, errors]
+required_capabilities: [create-table, insert, update, delete, copy, rules, returning]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/copydml.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE copydml_test (id serial, t text);
+  INSERT INTO copydml_test (t) VALUES ('a'), ('b'), ('c'), ('d'), ('e');
+steps:
+  - sql: |
+      CREATE RULE qqq AS ON INSERT TO copydml_test DO INSTEAD NOTHING
+    expect: ok
+  - sql: |
+      COPY (INSERT INTO copydml_test (t) VALUES ('f') RETURNING id) TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      DROP RULE qqq ON copydml_test
+    expect: ok
+  - sql: |
+      CREATE RULE qqq AS ON INSERT TO copydml_test DO ALSO DELETE FROM copydml_test
+    expect: ok
+  - sql: |
+      COPY (INSERT INTO copydml_test (t) VALUES ('f') RETURNING id) TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      DROP RULE qqq ON copydml_test
+    expect: ok
+  - sql: |
+      CREATE RULE qqq AS ON INSERT TO copydml_test DO INSTEAD (DELETE FROM copydml_test; DELETE FROM copydml_test)
+    expect: ok
+  - sql: |
+      COPY (INSERT INTO copydml_test (t) VALUES ('f') RETURNING id) TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      DROP RULE qqq ON copydml_test
+    expect: ok
+  - sql: |
+      CREATE RULE qqq AS ON INSERT TO copydml_test WHERE NEW.t <> 'f' DO INSTEAD DELETE FROM copydml_test
+    expect: ok
+  - sql: |
+      COPY (INSERT INTO copydml_test (t) VALUES ('f') RETURNING id) TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      DROP RULE qqq ON copydml_test
+    expect: ok
+  - sql: |
+      CREATE RULE qqq AS ON UPDATE TO copydml_test DO INSTEAD NOTHING
+    expect: ok
+  - sql: |
+      COPY (UPDATE copydml_test SET t = 'f' RETURNING id) TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      DROP RULE qqq ON copydml_test
+    expect: ok
+  - sql: |
+      CREATE RULE qqq AS ON DELETE TO copydml_test DO ALSO INSERT INTO copydml_test DEFAULT VALUES
+    expect: ok
+  - sql: |
+      COPY (DELETE FROM copydml_test RETURNING id) TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      DROP RULE qqq ON copydml_test
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM copydml_test
+    expect: rows
+    comment: every rejected COPY rolled back before any row change, so still five rows

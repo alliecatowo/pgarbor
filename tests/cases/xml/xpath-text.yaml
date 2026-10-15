@@ -1,0 +1,40 @@
+id: xml.xpath-text
+title: xpath returns matched nodes, counts, names and empty arrays over xml values
+family: xml
+tier: core
+feature_ids: [xml, xpath, arrays]
+required_capabilities: [xml, create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/xml.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE xmltest (id int4, data xml);
+  INSERT INTO xmltest VALUES (1, '<value>one</value>'), (2, '<value>two</value>');
+steps:
+  - sql: |
+      SELECT id, xpath('/value', data) FROM xmltest ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT xpath('/nosuchtag', '<root/>'::xml)
+    expect: rows
+    comment: no match gives an empty array
+  - sql: |
+      SELECT xpath('count(//*)', '<root><sub/><sub/></root>'::xml)
+    expect: rows
+  - sql: |
+      SELECT xpath('name(/*)', '<root><sub/><sub/></root>'::xml)
+    expect: rows
+  - sql: |
+      SELECT xpath('//b', '<a>one <b>two</b> three <b>etc</b></a>'::xml)
+    expect: rows
+    comment: node results come back in document order
+  - sql: |
+      SELECT xpath('//text()', '<root>&lt;</root>'::xml)
+    expect: rows
+    comment: the escaped less-than is returned as text
+  - sql: |
+      SELECT xpath(NULL::text, NULL::xml) IS NULL AS is_null
+    expect: rows
+    comment: xpath is strict

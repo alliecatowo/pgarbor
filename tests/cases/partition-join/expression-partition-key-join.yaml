@@ -1,0 +1,30 @@
+# Tables partitioned by expressions (integer division); joins match on the expression values and not on raw columns.
+id: partition-join.expression-partition-key-join
+title: Join on expressions over expression-partitioned tables uses integer division semantics
+family: partition-join
+tier: extended
+feature_ids: [joins, partitioning, expression-partitioning, integer-arithmetic, select]
+required_capabilities: [create-table, insert, select, partitioning, joins]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/partition_join.sql (partitioned by expression section)"
+sessions: [a]
+setup: |
+  CREATE TABLE prt1_e (a int, b int, c int) PARTITION BY RANGE(((a + b)/2));
+  CREATE TABLE prt1_e_p1 PARTITION OF prt1_e FOR VALUES FROM (0) TO (5);
+  CREATE TABLE prt1_e_p2 PARTITION OF prt1_e FOR VALUES FROM (5) TO (10);
+  INSERT INTO prt1_e VALUES (0, 0, 0), (3, 4, 0), (4, 5, 1), (9, 8, 0);
+  CREATE TABLE prt2_e (a int, b int, c int) PARTITION BY RANGE(((b + a)/2));
+  CREATE TABLE prt2_e_p1 PARTITION OF prt2_e FOR VALUES FROM (0) TO (5);
+  CREATE TABLE prt2_e_p2 PARTITION OF prt2_e FOR VALUES FROM (5) TO (10);
+  INSERT INTO prt2_e VALUES (0, 1, 0), (6, 7, 0), (2, 3, 0), (-1, 0, 2);
+steps:
+  - sql: |
+      SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_e t1, prt2_e t2 WHERE (t1.a + t1.b)/2 = (t2.b + t2.a)/2 AND t1.c = 0 ORDER BY t1.a, t2.b
+    expect: rows
+    order: ordered
+    comment: division truncates toward zero, so -1/2 is 0 and pairs with 0/2 on the other side
+  - sql: |
+      SELECT count(*) FROM prt1_e t1 JOIN prt2_e t2 ON (t1.a + t1.b) / 2 = (t2.b + t2.a) / 2
+    expect: rows
+    order: multiset

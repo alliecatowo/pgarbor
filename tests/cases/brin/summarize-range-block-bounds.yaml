@@ -1,0 +1,25 @@
+# brin_summarize_range with block numbers that do not fit the valid range (negative, or above
+# the 32-bit unsigned max) is an out-of-range error.
+id: brin.summarize-range-block-bounds
+title: brin_summarize_range rejects negative and over-32-bit block numbers
+family: brin
+tier: core
+feature_ids: [brin, brin-maintenance-functions, errors]
+required_capabilities: [create-table, insert, create-index, brin-index, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brin_summarize_range invalid block number values)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4) WITH (fillfactor = 10, autovacuum_enabled = off);
+  INSERT INTO t SELECT g FROM generate_series(1, 200) g;
+  CREATE INDEX t_brin ON t USING brin (a) WITH (pages_per_range = 2);
+steps:
+  - sql: |
+      SELECT brin_summarize_range('t_brin', -1)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT brin_summarize_range('t_brin', 4294967296)
+    expect: error
+    sqlstate: "22003"

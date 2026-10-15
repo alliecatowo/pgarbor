@@ -1,0 +1,29 @@
+# UPDATE ... RETURNING with whole-row reference, DEFAULT assignment and a no-match update.
+id: returning.update-default-returning
+title: UPDATE RETURNING with whole-row reference, DEFAULT assignment and zero matched rows
+family: returning
+tier: core
+feature_ids: [returning, update, column-defaults]
+required_capabilities: [create-table, insert, update, select, returning, serial]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (f1 serial, f2 text, f3 int DEFAULT 42);
+  INSERT INTO foo (f2, f3) VALUES ('test', DEFAULT), ('More', 11), ('MORE', 16);
+steps:
+  - sql: |
+      UPDATE foo SET f2 = lower(f2), f3 = DEFAULT RETURNING foo.*, f1+f3 AS sum13
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, f2, f3 FROM foo ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE foo SET f3 = 0 WHERE f1 > 100 RETURNING f1, f3
+    expect: rows
+    order: multiset
+    comment: no matching rows gives an empty result set, not an error

@@ -1,0 +1,36 @@
+# CREATE TABLE AS with and without data, plus a prepared statement as the source.
+id: create-table.ctas-with-and-without-data
+title: CREATE TABLE AS populates rows only WITH DATA, and accepts EXECUTE as source
+family: create-table
+tier: core
+feature_ids: [create-table, create-table-as, prepared-statements, select]
+required_capabilities: [create-table, select, prepared-statements]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table.sql (CREATE TABLE AS EXECUTE cases)"
+sessions: [a]
+setup: |
+  CREATE TABLE src (n int4, s text);
+  INSERT INTO src VALUES (1, 'x'), (2, NULL);
+steps:
+  - sql: |
+      CREATE TABLE copy_data AS SELECT n, s FROM src WITH DATA
+    expect: ok
+  - sql: |
+      CREATE TABLE copy_nodata AS SELECT n, s FROM src WITH NO DATA
+    expect: ok
+  - sql: |
+      SELECT n, s, s IS NULL AS s_null FROM copy_data ORDER BY n
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM copy_nodata
+    expect: rows
+    order: multiset
+  - sql: |
+      PREPARE sel1 AS SELECT 1 AS a; CREATE TABLE from_exec AS EXECUTE sel1; SELECT a FROM from_exec
+    expect: rows
+    order: multiset
+  - sql: |
+      DEALLOCATE sel1
+    expect: ok

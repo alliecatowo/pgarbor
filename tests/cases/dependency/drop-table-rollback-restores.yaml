@@ -1,0 +1,26 @@
+# DROP TABLE CASCADE inside a transaction that rolls back leaves the table, its view and rows intact.
+id: dependency.drop-table-rollback-restores
+title: Rolled-back DROP TABLE CASCADE restores table, view and data
+family: dependency
+tier: core
+feature_ids: [drop-table, views, transactions, dependencies]
+required_capabilities: [create-table, insert, select, views, drop-table, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/dependency.sql (DROP ... inside transactional test blocks)"
+sessions: [a]
+setup: |
+  CREATE TABLE rb (k int4 PRIMARY KEY, v text);
+  INSERT INTO rb VALUES (1, 'a'), (2, NULL);
+  CREATE VIEW rb_v AS SELECT k, v FROM rb;
+steps:
+  - sql: |
+      BEGIN;
+      DROP TABLE rb CASCADE;
+      ROLLBACK
+    expect: ok
+    order: multiset
+  - sql: |
+      SELECT k, v IS NULL AS v_null FROM rb_v ORDER BY k
+    expect: rows
+    order: ordered

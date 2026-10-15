@@ -1,0 +1,31 @@
+# LIKE copies column names, types and NOT NULL, but not defaults (regress: create_table_like.sql, top-of-file LIKE checks).
+id: create-table-like.basic-not-null
+title: LIKE copies columns and NOT NULL but not defaults
+family: create-table-like
+tier: core
+feature_ids: [create-table, create-table-like, not-null, insert, select, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE src (a int4, b text NOT NULL, c int4 DEFAULT 7);
+  CREATE TABLE dst (LIKE src);
+steps:
+  - sql: |
+      INSERT INTO dst (a, b) VALUES (1, 'x')
+    expect: ok
+  - sql: |
+      SELECT a, b, c IS NULL AS c_null FROM dst ORDER BY a
+    expect: rows
+    order: ordered
+    comment: c default 7 is not copied, so c is NULL
+  - sql: |
+      INSERT INTO dst (a, b) VALUES (2, NULL)
+    expect: error
+    sqlstate: "23502"
+    comment: NOT NULL is copied by LIKE with no options
+  - sql: |
+      SELECT count(*) FROM dst
+    expect: rows

@@ -1,0 +1,36 @@
+# CREATE ROLE defaults and explicit attributes, read back from pg_roles; SYSID is accepted and ignored.
+id: create-role.basic-attributes
+title: CREATE ROLE sets default and explicit attributes; read back from pg_roles; DROP ROLE removes it
+family: create-role
+tier: slice
+feature_ids: [roles, create-role, catalog-introspection, drop-role]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rb_plain
+    expect: ok
+  - sql: |
+      CREATE ROLE rb_full LOGIN CREATEDB CREATEROLE INHERIT CONNECTION LIMIT 3
+    expect: ok
+  - sql: |
+      CREATE ROLE rb_noise SYSID 12345
+    expect: ok
+    comment: SYSID is a no-op noise word (emits a NOTICE in PG18)
+  - sql: |
+      SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin,
+             rolreplication, rolbypassrls, rolconnlimit
+        FROM pg_roles
+       WHERE rolname IN ('rb_plain', 'rb_full', 'rb_noise')
+       ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE rb_plain, rb_full, rb_noise
+    expect: ok
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_roles WHERE rolname IN ('rb_plain', 'rb_full', 'rb_noise')
+    expect: rows

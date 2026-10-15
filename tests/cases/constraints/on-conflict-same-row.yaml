@@ -1,0 +1,31 @@
+# INSERT ... ON CONFLICT DO UPDATE cannot affect the same row twice in one command.
+id: constraints.on-conflict-same-row
+title: ON CONFLICT DO UPDATE rejects a second change to the same row in one statement with 21000
+family: constraints
+tier: core
+feature_ids: [upsert, unique-constraints, insert, errors, select]
+required_capabilities: [create-table, insert, select, upsert]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE up (i int UNIQUE, t text);
+  INSERT INTO up VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      INSERT INTO up VALUES (5, 'five-insert') ON CONFLICT (i) DO UPDATE SET t = 'five-update'
+    expect: ok
+    comment: no conflict, so plain insert
+  - sql: |
+      INSERT INTO up VALUES (1, 'a') ON CONFLICT (i) DO UPDATE SET t = 'updated'
+    expect: ok
+  - sql: |
+      INSERT INTO up VALUES (1, 'a'), (2, 'b'), (2, 'c') ON CONFLICT (i) DO UPDATE SET t = 'fails'
+    expect: error
+    sqlstate: "21000"
+    comment: second proposed row hits the row already changed in this command
+  - sql: |
+      SELECT i, t FROM up ORDER BY i
+    expect: rows
+    order: ordered

@@ -1,0 +1,62 @@
+# North-star slice: every v1 column type in one CREATE TABLE, one fully populated row and one all-NULL row.
+id: slice-ddl.types-all-v1
+title: CREATE TABLE with every v1 type, populated and all-NULL rows
+family: slice-ddl
+tier: slice
+feature_ids: [create-table, insert, select, bool, int2, int4, int8, text, varchar, char, bytea, numeric, uuid, date, time, timestamp, timestamptz, interval, json, jsonb, arrays, enum]
+required_capabilities: [create-table, insert, select, bool, int2, int4, int8, text, varchar, char, bytea, numeric, uuid, date, time, timestamp, timestamptz, interval, json, jsonb, arrays, enum]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype.html, datatype-enum.html, arrays.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+      CREATE TABLE all_types (
+        id int4 PRIMARY KEY,
+        b bool,
+        s2 int2,
+        i4 int4,
+        i8 int8,
+        t text,
+        vc varchar(5),
+        ch char(4),
+        by bytea,
+        nu numeric(6,2),
+        u uuid,
+        d date,
+        tm time,
+        ts timestamp,
+        tz timestamptz,
+        iv interval,
+        js json,
+        jb jsonb,
+        ia int4[],
+        ta text[],
+        m mood
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO all_types VALUES (
+        1, true, 32767, 2147483647, 9223372036854775807, 'hello', 'abc', 'ab',
+        '\x0001ff', 1234.5, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', '2024-02-29',
+        '12:34:56', '2024-02-29 12:34:56', '2024-02-29 12:34:56+00', '1 day 02:00:00',
+        '{"a": 1}', '{"b": [1, 2]}', '{1,2,NULL}', '{x,"y z"}', 'ok'
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO all_types (id) VALUES (2)
+    expect: ok
+  - sql: |
+      SELECT id, b, s2, i4, i8, t, vc, ch, by, nu, u, d, tm, ts,
+             tz AT TIME ZONE 'UTC' AS tz_utc, iv, js, jb, ia, ta, m
+      FROM all_types ORDER BY id
+    expect: rows
+    order: ordered
+    comment: tz is shown as a UTC wall-clock value so the output does not depend on the session TimeZone
+  - sql: |
+      SELECT id, ch = 'ab' AS char_eq, length(ch) AS char_len, ia IS NULL AS ia_null
+      FROM all_types ORDER BY id
+    expect: rows
+    order: ordered
+    comment: char(n) comparison ignores trailing blanks, length() excludes them; NULL array column in row 2

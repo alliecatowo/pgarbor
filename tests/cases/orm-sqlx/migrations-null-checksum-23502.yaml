@@ -1,0 +1,31 @@
+# A NULL checksum on a migration record violates NOT NULL; nothing is written.
+id: orm-sqlx.migrations-null-checksum-23502
+title: NULL checksum on migration record fails NOT NULL, empty table stays empty
+family: orm-sqlx
+tier: core
+feature_ids: [extended-protocol, constraints, not-null, errors, bytea]
+required_capabilities: [create-table, select, extended-protocol, bytea]
+provenance:
+  source: research
+  ref: "PG18 errcodes 23502 not_null_violation"
+sessions: [a]
+setup: |
+  CREATE TABLE _sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),
+    success BOOLEAN NOT NULL,
+    checksum BYTEA NOT NULL,
+    execution_time BIGINT NOT NULL
+  );
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES ($1, $2, $3, $4, $5)
+      params: ["2", "no checksum", "true", null, "3"]
+      param_types: [20, 25, 16, 17, 20]
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT count(*) AS n FROM _sqlx_migrations
+    expect: rows

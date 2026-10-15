@@ -1,0 +1,36 @@
+# Timestamp minus timestamp yields an interval; interval addition uses calendar months with end-of-month clamping.
+id: timestamp.interval-arithmetic
+title: Timestamp subtraction, interval addition with month clamping, and age
+family: timestamp
+tier: core
+feature_ids: [timestamp, interval, arithmetic]
+required_capabilities: [create-table, insert, select, timestamp, interval]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamp.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE ts_ivl (d1 timestamp without time zone);
+  INSERT INTO ts_ivl VALUES ('1902-01-01'), ('1997-01-02'), ('1997-02-10 17:32:01'), ('2038-01-01')
+steps:
+  - sql: |
+      SELECT d1 - timestamp without time zone '1997-01-02' AS diff FROM ts_ivl WHERE d1 BETWEEN '1902-01-01' AND '2038-01-01' ORDER BY d1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT timestamp '1997-01-03 12:00:00' - timestamp '1997-01-02' AS diff
+    expect: rows
+  - sql: |
+      SELECT timestamp '1997-01-02' + interval '1 month 2 days' AS r
+    expect: rows
+  - sql: |
+      SELECT timestamp '1997-01-31' + interval '1 month' AS r
+    expect: rows
+    comment: month addition clamps to the last day of February
+  - sql: |
+      SELECT timestamp '1997-03-01 00:00:00' - interval '1 day' AS r
+    expect: rows
+  - sql: |
+      SELECT age(timestamp '1997-02-10', timestamp '1997-01-02') AS a
+    expect: rows

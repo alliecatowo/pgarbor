@@ -1,0 +1,34 @@
+# Derived from PG18 btree_index.sql index ordering behavior; default NULL placement for btree ASC/DESC.
+id: btree-index.null-ordering-default
+title: Default NULL placement in btree-backed ORDER BY is NULLS LAST for ASC and NULLS FIRST for DESC
+family: btree-index
+tier: core
+feature_ids: [order-by, create-index, nulls, btree-index]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (btree ordering over nullable keys)"
+setup: |
+  CREATE TABLE nul (k int4, tag text);
+  INSERT INTO nul VALUES (2, 'b'), (NULL, 'n1'), (1, 'a'), (NULL, 'n2'), (3, 'c');
+  CREATE INDEX nul_k_idx ON nul USING btree (k);
+steps:
+  - sql: |
+      SELECT k, tag FROM nul ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k, tag FROM nul ORDER BY k DESC
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k, tag FROM nul ORDER BY k NULLS FIRST, tag
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k, tag FROM nul ORDER BY k DESC NULLS LAST, tag
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FILTER (WHERE k IS NULL) AS nulls, count(k) AS non_nulls FROM nul
+    expect: rows

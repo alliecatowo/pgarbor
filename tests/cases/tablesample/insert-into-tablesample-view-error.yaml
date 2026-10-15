@@ -1,0 +1,26 @@
+# A view whose definition uses TABLESAMPLE is not automatically updatable.
+id: tablesample.insert-into-view-error
+title: INSERT into a view defined with TABLESAMPLE raises feature_not_supported
+family: tablesample
+tier: extended
+feature_ids: [tablesample, views, insert, errors]
+required_capabilities: [create-table, insert, select, tablesample, views, storage-parameters]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tablesample.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE test_tablesample (id int, name text) WITH (fillfactor=10);
+  INSERT INTO test_tablesample SELECT i, repeat(i::text, 200) FROM generate_series(0, 9) s(i);
+  CREATE VIEW test_tablesample_v1 AS SELECT id FROM test_tablesample TABLESAMPLE SYSTEM (10*2) REPEATABLE (2);
+steps:
+  - sql: |
+      INSERT INTO test_tablesample_v1 VALUES (1)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      SELECT count(*) FROM test_tablesample
+    expect: rows
+    order: multiset
+    comment: the base table is unchanged by the rejected insert

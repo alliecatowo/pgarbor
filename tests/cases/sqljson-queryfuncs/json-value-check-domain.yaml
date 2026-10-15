@@ -1,0 +1,26 @@
+# A RETURNING domain with a CHECK constraint: failures are NULL by default and errors under ERROR ON ERROR.
+id: sqljson-queryfuncs.json-value-check-domain
+title: JSON_VALUE RETURNING CHECK domain is NULL by default and an error under ERROR ON ERROR
+family: sqljson-queryfuncs
+tier: core
+feature_ids: [sql-json, json-value, domains, check-constraints, errors]
+required_capabilities: [create-domain, select, jsonb]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sqljson_queryfuncs.sql (rgb domain check)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE DOMAIN rgb AS text CHECK (VALUE IN ('red', 'green', 'blue'));
+steps:
+  - sql: |
+      SELECT JSON_VALUE(jsonb '"red"', '$' RETURNING rgb ERROR ON ERROR) AS allowed
+    expect: rows
+  - sql: |
+      SELECT JSON_VALUE(jsonb '"purple"', '$' RETURNING rgb ERROR ON ERROR)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT JSON_VALUE(jsonb '"purple"', '$' RETURNING rgb) AS suppressed
+    expect: rows
+    comment: default ON ERROR NULL also covers domain check failures

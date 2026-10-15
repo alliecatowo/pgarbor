@@ -1,0 +1,26 @@
+# gen_random_uuid produces distinct version-4 values; only deterministic aggregates are compared.
+id: uuid.generate-v4-distinct
+title: gen_random_uuid yields distinct version-4 values, checked by aggregates only
+family: uuid
+tier: core
+feature_ids: [uuid, uuid-generation, aggregates]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/uuid.sql"
+setup: |
+  CREATE TABLE g (id int4 PRIMARY KEY, guid_field uuid NOT NULL);
+steps:
+  - sql: |
+      INSERT INTO g SELECT i, gen_random_uuid() FROM generate_series(1, 20) AS i
+    expect: ok
+  - sql: |
+      SELECT count(*), count(DISTINCT guid_field), count(*) FILTER (WHERE uuid_extract_version(guid_field) = 4) FROM g
+    expect: rows
+    comment: values themselves are random and never output
+  - sql: |
+      INSERT INTO g SELECT i, uuidv4() FROM generate_series(21, 30) AS i
+    expect: ok
+  - sql: |
+      SELECT count(DISTINCT guid_field), count(*) FILTER (WHERE uuid_extract_version(guid_field) = 4) FROM g
+    expect: rows

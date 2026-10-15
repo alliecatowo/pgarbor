@@ -1,0 +1,47 @@
+id: window.window-placement-errors
+title: Window functions in WHERE, nesting, bad frame bounds and RANGE offset rules raise 42P20 and 22013
+family: window
+tier: extended
+feature_ids: [window-functions, errors, window-frames, sqlstate]
+required_capabilities: [create-table, insert, select, window-functions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/window.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE w (a int4);
+  INSERT INTO w VALUES (1), (2);
+steps:
+  - sql: |
+      SELECT a FROM w WHERE row_number() OVER () = 1
+    expect: error
+    sqlstate: "42P20"
+    comment: window functions are not allowed in WHERE
+  - sql: |
+      SELECT sum(row_number() OVER ()) FROM w
+    expect: error
+    sqlstate: "42P20"
+    comment: window function calls cannot be nested
+  - sql: |
+      SELECT sum(a) OVER (RANGE 1 PRECEDING) FROM w
+    expect: error
+    sqlstate: "42P20"
+    comment: RANGE with offset requires an ORDER BY
+  - sql: |
+      SELECT sum(a) OVER (ORDER BY a, a RANGE 1 PRECEDING) FROM w
+    expect: error
+    sqlstate: "42P20"
+    comment: RANGE with offset requires exactly one ORDER BY column
+  - sql: |
+      SELECT sum(a) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND 1 PRECEDING) FROM w
+    expect: error
+    sqlstate: "42P20"
+  - sql: |
+      SELECT sum(a) OVER (ORDER BY a ROWS BETWEEN 1 FOLLOWING AND CURRENT ROW) FROM w
+    expect: error
+    sqlstate: "42P20"
+  - sql: |
+      SELECT sum(a) OVER (ROWS BETWEEN -1 PRECEDING AND CURRENT ROW) FROM w
+    expect: error
+    sqlstate: "22013"
+    comment: negative frame offset

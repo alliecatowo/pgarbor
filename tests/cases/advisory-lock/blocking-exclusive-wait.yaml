@@ -1,0 +1,37 @@
+# A session waiting on an advisory lock blocks until the transaction holding it commits.
+id: advisory-lock.blocking-exclusive-wait
+title: "Blocking pg_advisory_xact_lock waits for the holder to commit"
+family: advisory-lock
+tier: extended
+feature_ids: [advisory-locks, transactions, multi-session]
+required_capabilities: [advisory-locks, transactions, multi-session, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/advisory_lock.sql"
+  license: "PostgreSQL License"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT pg_advisory_xact_lock(7)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_xact_lock(7)
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok

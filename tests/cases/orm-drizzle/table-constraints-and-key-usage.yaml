@@ -1,0 +1,34 @@
+# drizzle-kit joins table_constraints with key_column_usage to rebuild PK, FK and UNIQUE definitions.
+id: orm-drizzle.table-constraints-and-key-usage
+title: table_constraints joined with key_column_usage lists PK, UNIQUE and FK columns in order
+family: orm-drizzle
+tier: core
+feature_ids: [catalog-introspection, constraints, primary-key, foreign-key, unique]
+required_capabilities: [create-table, constraints, foreign-key, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 infoschema-table-constraints.html, infoschema-key-column-usage.html"
+sessions: [a]
+setup: |
+  CREATE TABLE teams (
+    id integer NOT NULL,
+    tenant_id integer NOT NULL,
+    slug text NOT NULL,
+    CONSTRAINT teams_pk PRIMARY KEY (tenant_id, id),
+    CONSTRAINT teams_slug_uq UNIQUE (tenant_id, slug)
+  );
+  CREATE TABLE members (
+    id integer PRIMARY KEY,
+    tenant_id integer NOT NULL,
+    team_id integer NOT NULL,
+    CONSTRAINT members_team_fk FOREIGN KEY (tenant_id, team_id) REFERENCES teams (tenant_id, id) ON DELETE CASCADE
+  );
+steps:
+  - sql: |
+      SELECT tc.table_name, tc.constraint_name, tc.constraint_type, kcu.column_name, kcu.ordinal_position FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON kcu.constraint_schema = tc.constraint_schema AND kcu.constraint_name = tc.constraint_name AND kcu.table_name = tc.table_name WHERE tc.table_schema = 'public' ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT constraint_name, constraint_type FROM information_schema.table_constraints WHERE table_name = 'members' AND constraint_type = 'FOREIGN KEY'
+    expect: rows
+    order: multiset

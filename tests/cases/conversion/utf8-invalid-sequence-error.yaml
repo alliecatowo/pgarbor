@@ -1,0 +1,33 @@
+# Invalid and truncated UTF-8 and a NUL byte make convert_from raise a byte-sequence error.
+id: conversion.utf8-invalid-sequence-error
+title: convert_from rejects invalid, truncated and NUL-containing UTF-8 input
+family: conversion
+tier: core
+feature_ids: [encoding-conversion, utf8, error-sqlstate]
+required_capabilities: [select, bytea, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/conversion.sql"
+steps:
+  - sql: |
+      SELECT convert_from('\x666f6f'::bytea, 'UTF8') AS ok_ascii
+    expect: rows
+  - sql: |
+      SELECT convert_from('\x66e8b1ff6f6f'::bytea, 'UTF8')
+    expect: error
+    sqlstate: "22021"
+    comment: invalid byte 0xff in the middle of a valid prefix
+  - sql: |
+      SELECT convert_from('\x666f6fe8b1'::bytea, 'UTF8')
+    expect: error
+    sqlstate: "22021"
+    comment: incomplete character at end of input
+  - sql: |
+      SELECT convert_from('\x66006f'::bytea, 'UTF8')
+    expect: error
+    sqlstate: "22021"
+    comment: NUL byte is not allowed in a UTF8 database text value
+  - sql: |
+      SELECT 1
+    expect: rows
+    comment: the session is still usable after the errors

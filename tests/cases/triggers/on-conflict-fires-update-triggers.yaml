@@ -1,0 +1,40 @@
+# INSERT ... ON CONFLICT DO UPDATE fires statement INSERT triggers, and UPDATE triggers only for the conflicting path.
+id: triggers.on-conflict-fires-update-triggers
+title: ON CONFLICT DO UPDATE fires UPDATE triggers only when a conflict is taken
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, insert-conflict, insert, select]
+required_capabilities: [create-table, insert, select, update, plpgsql, triggers, insert-conflict]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (INSERT ... ON CONFLICT DO UPDATE with statement and row triggers)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int PRIMARY KEY, b int);
+  INSERT INTO t VALUES (5, 10);
+  CREATE TABLE trig_log (msg text);
+  CREATE FUNCTION log_any() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_LEVEL || ' ' || TG_WHEN || ' ' || TG_OP);
+    IF TG_LEVEL = 'ROW' THEN RETURN NEW; END IF;
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER s_bi BEFORE INSERT ON t FOR EACH STATEMENT EXECUTE PROCEDURE log_any();
+  CREATE TRIGGER s_au AFTER UPDATE ON t FOR EACH STATEMENT EXECUTE PROCEDURE log_any();
+  CREATE TRIGGER r_au AFTER UPDATE ON t FOR EACH ROW EXECUTE PROCEDURE log_any();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (5, 99) ON CONFLICT (a) DO UPDATE SET b = EXCLUDED.b
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (6, 1) ON CONFLICT (a) DO UPDATE SET b = EXCLUDED.b
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM t ORDER BY a
+    expect: rows
+    order: ordered

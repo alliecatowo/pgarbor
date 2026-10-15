@@ -1,0 +1,35 @@
+# Nearest-neighbour ordering by distance operator <-> on a GiST-indexed point column.
+# Distances are chosen to be distinct; the id tie-breaker keeps output deterministic.
+id: gist.point-knn-order
+title: ORDER BY point distance with LIMIT returns nearest rows from a GiST index
+family: gist
+tier: core
+feature_ids: [gist, create-index, point, geometric-operators, order-by, limit]
+required_capabilities: [create-table, insert, select, create-index, gist-index, point-type, order-by, limit]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE knn_pts (id int4 PRIMARY KEY, p point);
+  INSERT INTO knn_pts VALUES (1, point(0,0)), (2, point(1,1)), (3, point(5,5)), (4, point(10,10)), (5, point(0.5,0.5)), (6, point(-3,2));
+  CREATE INDEX knn_pts_gist ON knn_pts USING gist (p);
+steps:
+  - sql: |
+      SELECT id FROM knn_pts ORDER BY p <-> point(0,0), id LIMIT 3
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM knn_pts ORDER BY point(0,0) <-> p, id LIMIT 3
+    expect: rows
+    order: ordered
+    comment: commuted operand order must give the same result
+  - sql: |
+      SELECT id FROM knn_pts ORDER BY p <-> point(10,10), id LIMIT 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM knn_pts WHERE p <@ box(point(-1,-1), point(2,2)) ORDER BY p <-> point(0.2,0.2), id
+    expect: rows
+    order: ordered
+    comment: combined containment filter and distance ordering

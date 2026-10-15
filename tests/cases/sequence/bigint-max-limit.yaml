@@ -1,0 +1,31 @@
+# bigint boundary: values up to MAXVALUE are returned exactly, then the next call raises 2200H.
+id: sequence.bigint-max-limit
+title: bigint sequence returns values up to 9223372036854775807 exactly, then raises 2200H
+family: sequence
+tier: extended
+feature_ids: [sequences, bigint, errors, boundaries]
+required_capabilities: [create-table, select, errors, sequences, int8]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-createsequence.html (MAXVALUE, NO CYCLE); sequence.sql bigint cases"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE SEQUENCE sq_big AS bigint START WITH 9223372036854775806 MAXVALUE 9223372036854775807 CACHE 1;
+steps:
+  - sql: |
+      SELECT nextval('sq_big') AS v
+    expect: rows
+    comment: 9223372036854775806
+  - sql: |
+      SELECT nextval('sq_big') AS v
+    expect: rows
+    comment: 9223372036854775807, the largest bigint
+  - sql: |
+      SELECT nextval('sq_big')
+    expect: error
+    sqlstate: "2200H"
+  - sql: |
+      SELECT last_value, is_called FROM sq_big
+    expect: rows
+    comment: last_value remains at MAXVALUE after the failed call

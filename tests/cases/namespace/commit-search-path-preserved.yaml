@@ -1,0 +1,43 @@
+# A SET search_path inside a committed transaction persists after COMMIT, and a schema created
+# inside that transaction is visible through the new path.
+id: namespace.commit-search-path-preserved
+title: search_path set in a committed transaction persists and sees schema created inside it
+family: namespace
+tier: extended
+feature_ids: [search-path, transactions, create-schema, create-view]
+required_capabilities: [search-path, transactions, create-schema, create-table, create-view, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/namespace.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA cm_one;
+  CREATE TABLE cm_one.abc (a int4, b int4);
+  INSERT INTO cm_one.abc VALUES (1, 2);
+steps:
+  - sql: |
+      SET search_path TO public
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET search_path TO public, cm_one
+    expect: ok
+  - sql: |
+      CREATE SCHEMA cm_two CREATE VIEW abc_view AS SELECT a FROM cm_one.abc
+    expect: ok
+  - sql: |
+      SELECT current_setting('search_path') AS sp
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_setting('search_path') AS sp
+    expect: rows
+    comment: the committed SET persists
+  - sql: |
+      SELECT a FROM abc
+    expect: rows
+    comment: unqualified name resolves through cm_one on the committed path

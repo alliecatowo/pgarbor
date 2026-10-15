@@ -1,0 +1,28 @@
+# Row-valued NOT IN and IN against a subquery that casts a float column to int4.
+id: subselect.not-in-row-cast
+title: Row NOT IN and IN over a subquery with a cast and a NULL filtered out
+family: subselect
+tier: core
+feature_ids: [select, subqueries, row-constructor, in-subquery, numeric]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/subselect.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE st (f1 int4, f2 int4, f3 float8);
+  INSERT INTO st VALUES (1, 2, 3), (2, 3, 4), (3, 4, 5), (1, 1, 1), (6, 7, 8), (8, 9, NULL);
+steps:
+  - sql: |
+      SELECT f1, f2 FROM st WHERE (f1, f2) NOT IN (SELECT f2, CAST(f3 AS int4) FROM st WHERE f3 IS NOT NULL) ORDER BY f1, f2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1, f2 FROM st WHERE (f1, f2) IN (SELECT f2, CAST(f3 AS int4) FROM st WHERE f3 IS NOT NULL) ORDER BY f1, f2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1, f2 FROM st WHERE (f1, f2) IN (SELECT f2, f3 FROM st)
+    expect: rows
+    order: multiset
+    comment: float f3 compared to int4 f2 uses cross-type equality, NULL f3 never matches

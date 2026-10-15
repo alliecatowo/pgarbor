@@ -1,0 +1,35 @@
+# Unaliased subqueries, VALUES in FROM with default column names, and unknown-type literal resolution.
+id: subselect.derived-table-naming
+title: Unaliased derived tables, default VALUES column names and unknown literal typing
+family: subselect
+tier: core
+feature_ids: [select, subqueries, derived-tables, values, aggregates, distinct]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/subselect.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE road (name text);
+  INSERT INTO road VALUES ('Main'), ('Main'), ('Oak'), (NULL);
+  CREATE TABLE i4 (f1 int4);
+  INSERT INTO i4 VALUES (0), (123456), (-123456);
+steps:
+  - sql: |
+      SELECT count FROM (SELECT COUNT(DISTINCT name) FROM road) AS sub
+    expect: rows
+    comment: the output column of an unaliased aggregate is named count
+  - sql: |
+      SELECT COUNT(*) FROM (SELECT DISTINCT name FROM road) AS sub
+    expect: rows
+    order: multiset
+    comment: DISTINCT keeps NULL as its own value
+  - sql: |
+      SELECT * FROM (SELECT * FROM i4), (VALUES (123456)) WHERE f1 = column1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT *, pg_typeof(x) FROM (SELECT 'foo' AS x FROM generate_series(1, 3)) ss ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: an unknown-type literal in an output column resolves to text

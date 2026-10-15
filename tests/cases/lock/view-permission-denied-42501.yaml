@@ -1,0 +1,37 @@
+# Locking a view needs UPDATE, DELETE or TRUNCATE on the view itself; SELECT on the view is not enough.
+id: lock.view-permission-denied-42501
+title: LOCK TABLE on a view without privilege on the view raises insufficient_privilege
+family: lock
+tier: extended
+feature_ids: [lock-table, views, roles, privileges, transactions, errors]
+required_capabilities: [create-table, create-view, lock-table, roles, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql (permission denied for view lock_view1)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS lock_case_rol;
+  CREATE ROLE lock_case_rol;
+  CREATE TABLE lock_tbl1 (a BIGINT);
+  CREATE VIEW lock_view1 AS SELECT * FROM lock_tbl1;
+  GRANT SELECT ON lock_tbl1 TO lock_case_rol;
+  GRANT SELECT ON lock_view1 TO lock_case_rol;
+steps:
+  - sql: |
+      SET ROLE lock_case_rol
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE lock_view1
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+notes: "Creates a cluster-level role; the name is fixed so the setup drops and recreates it."

@@ -1,0 +1,33 @@
+# reg* column types store oids, print by name, compare by oid, and reject unknown names on INSERT.
+id: regproc.regclass-column-roundtrip
+title: regclass, regprocedure and regtype columns store oids and reject unknown names
+family: regproc
+tier: core
+feature_ids: [reg-types, create-table, insert, select, errors]
+required_capabilities: [create-table, insert, select, catalog-introspection]
+provenance:
+  source: hand
+  ref: "src/test/regress/sql/regproc.sql (column use of reg* types)"
+sessions: [a]
+setup: |
+  CREATE TABLE rc (id int4 PRIMARY KEY, rel regclass, proc regprocedure, ty regtype);
+  INSERT INTO rc VALUES (1, 'pg_class', 'abs(numeric)', 'int4'), (2, NULL, NULL, NULL);
+steps:
+  - sql: |
+      SELECT id, rel::text AS rel, proc::text AS proc, ty::text AS ty, rel IS NULL AS rel_null
+      FROM rc ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM rc WHERE rel = 'pg_class'::regclass
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO rc VALUES (3, 'no_such_rel', NULL, NULL)
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT count(*) FROM rc
+    expect: rows
+    order: multiset
+    comment: the failed insert must leave no row behind

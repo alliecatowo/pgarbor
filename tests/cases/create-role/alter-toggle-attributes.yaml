@@ -1,0 +1,54 @@
+# A role holding REPLICATION, BYPASSRLS and CREATEDB can toggle them on another role, but not SUPERUSER.
+id: create-role.alter-toggle-attributes
+title: ALTER ROLE toggles REPLICATION, BYPASSRLS and CREATEDB for a holder of those attributes; SUPERUSER toggles fail
+family: create-role
+tier: core
+feature_ids: [roles, alter-role, session-authorization, errors]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql (ALTER ROLE toggling section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rt_admin CREATEDB CREATEROLE REPLICATION BYPASSRLS
+    expect: ok
+  - sql: |
+      CREATE ROLE rt_target REPLICATION BYPASSRLS CREATEDB
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION rt_admin
+    expect: ok
+  - sql: |
+      ALTER ROLE rt_target NOREPLICATION
+    expect: ok
+  - sql: |
+      ALTER ROLE rt_target REPLICATION
+    expect: ok
+  - sql: |
+      ALTER ROLE rt_target NOBYPASSRLS
+    expect: ok
+  - sql: |
+      ALTER ROLE rt_target NOCREATEDB
+    expect: ok
+  - sql: |
+      ALTER ROLE rt_target SUPERUSER
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      ALTER ROLE rt_target NOSUPERUSER
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT rolname, rolsuper, rolcreatedb, rolreplication, rolbypassrls
+        FROM pg_roles
+       WHERE rolname IN ('rt_admin', 'rt_target')
+       ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE rt_target, rt_admin
+    expect: ok

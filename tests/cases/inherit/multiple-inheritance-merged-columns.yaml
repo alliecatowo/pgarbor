@@ -1,0 +1,32 @@
+# Multiple inheritance merges the shared column aa into a single column; rows are visible through every ancestor.
+id: inherit.multiple-inheritance-merged-columns
+title: Multiple inheritance merges shared columns and exposes child rows through each ancestor
+family: inherit
+tier: extended
+feature_ids: [inheritance, create-table, insert, select, catalog-introspection]
+required_capabilities: [create-table, insert, select, inheritance, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/inherit.sql
+  license: PostgreSQL License
+sessions: [a]
+setup: |
+  CREATE TABLE b (bb TEXT, aa TEXT);
+  CREATE TABLE a (aa TEXT);
+  CREATE TABLE c (cc TEXT) INHERITS (a);
+  CREATE TABLE d (dd TEXT) INHERITS (b, c, a);
+  INSERT INTO d (aa, bb, cc, dd) VALUES ('ddd', 'b', 'c', 'd');
+steps:
+  - sql: |
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'd' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tableoid::regclass::text AS relname, aa FROM a ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT aa, dd FROM c
+    expect: rows
+    order: multiset

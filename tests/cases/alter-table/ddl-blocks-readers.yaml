@@ -1,0 +1,42 @@
+# ALTER TABLE takes ACCESS EXCLUSIVE: a concurrent reader blocks until the DDL transaction commits, then sees the new shape.
+id: alter-table.ddl-blocks-readers
+title: ALTER TABLE ADD COLUMN in an open transaction blocks a concurrent SELECT until commit
+family: alter-table
+tier: core
+feature_ids: [alter-table, add-column, transactions, locks, multi-session]
+required_capabilities: [create-table, alter-table, insert, select, transactions, multi-session]
+provenance:
+  source: hand
+  ref: "PG18 explicit-locking.html, ACCESS EXCLUSIVE lock; sql-altertable.html"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1), (2);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      ALTER TABLE t ADD COLUMN x int4
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM t
+    async: true
+    expect_blocked: true
+    comment: blocked on the ACCESS EXCLUSIVE lock held by a
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    comment: count is 2 either way; the reader proceeds after commit
+  - session: b
+    sql: |
+      SELECT id, x FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,42 @@
+# Invalid values, unknown parameters and out-of-range values are rejected with the documented SQLSTATEs.
+id: guc.invalid-value-sqlstate
+title: Invalid SET values and unknown parameters raise SQLSTATE 22023 and 42704
+family: guc
+tier: core
+feature_ids: [guc, set, show, errors]
+required_capabilities: [select, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/guc.sql
+sessions: [a]
+steps:
+  - sql: |
+      SET work_mem = 'abc'
+    expect: error
+    sqlstate: "22023"
+    comment: invalid value for parameter "work_mem"
+  - sql: |
+      SET seq_page_cost TO 'NaN'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SET statement_timeout TO -1
+    expect: error
+    sqlstate: "22023"
+    comment: outside the valid range
+  - sql: |
+      SET intervalstyle TO 'asd'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SET no_such_variable TO 42
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SHOW no_such_variable
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT current_setting('work_mem')
+    expect: rows
+    comment: the failed SETs must not have changed work_mem, the value is recorded from PG

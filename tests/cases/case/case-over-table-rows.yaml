@@ -1,0 +1,39 @@
+# CASE over table rows: WHEN with range, equality chain, and NULL-aware filtering in WHERE.
+id: case.case-over-table-rows
+title: CASE in select list and WHERE over table rows with a NULL column
+family: case
+tier: core
+feature_ids: [case-expression, null-semantics, select, where]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/case.sql"
+  license: PostgreSQL License
+notes: From case.sql lines 81-100 and 121 (CASE_TBL); rewritten as a small table. Float column is not printed to avoid float text formatting.
+sessions: [a]
+setup: |
+  CREATE TABLE case_tbl (i int4, f float8);
+  INSERT INTO case_tbl VALUES (1, 10.1), (2, 20.2), (3, -30.3), (4, NULL);
+steps:
+  - sql: |
+      SELECT i, CASE WHEN i >= 3 THEN i END AS ge3
+        FROM case_tbl ORDER BY i
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT i,
+             CASE WHEN i < 0 THEN 'small'
+                  WHEN i = 0 THEN 'zero'
+                  WHEN i = 1 THEN 'one'
+                  WHEN i = 2 THEN 'two'
+                  ELSE 'big' END AS category
+        FROM case_tbl ORDER BY i
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT i FROM case_tbl
+       WHERE CASE WHEN f IS NULL THEN false ELSE f > 15 END
+       ORDER BY i
+    expect: rows
+    order: ordered
+    comment: the NULL f row is excluded; only i=2 has f > 15

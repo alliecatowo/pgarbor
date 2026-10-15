@@ -1,0 +1,44 @@
+# Pending migrations are rows with NULL finished_at; "= NULL" never matches, IS NULL does.
+id: orm-prisma.migrations-null-finished-at
+title: NULL finished_at marks pending migrations; = NULL versus IS NULL and COALESCE on logs
+family: orm-prisma
+tier: core
+feature_ids: [select, null-semantics, where-clause, coalesce]
+required_capabilities: [create-table, insert, select, timestamptz, varchar]
+provenance:
+  source: research
+  ref: "Prisma migrate status reads unfinished rows from _prisma_migrations; PG18 docs functions-comparison.html"
+sessions: [a]
+setup: |
+  CREATE TABLE "_prisma_migrations" (
+    "id" VARCHAR(36) PRIMARY KEY,
+    "checksum" VARCHAR(64) NOT NULL,
+    "finished_at" TIMESTAMPTZ,
+    "migration_name" VARCHAR(255) NOT NULL,
+    "logs" TEXT,
+    "rolled_back_at" TIMESTAMPTZ,
+    "started_at" TIMESTAMPTZ NOT NULL,
+    "applied_steps_count" INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO "_prisma_migrations" VALUES
+    ('a', 'x', NULL, 'm_1', '', NULL, '2024-03-01 00:00:00+00', 1),
+    ('b', 'y', '2024-03-01 00:00:05+00', 'm_2', NULL, NULL, '2024-03-01 00:00:01+00', 1),
+    ('c', 'z', NULL, 'm_3', NULL, '2024-03-02 00:00:00+00', '2024-03-02 00:00:00+00', 0);
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM "_prisma_migrations" WHERE "finished_at" = NULL
+    expect: rows
+    comment: equality with NULL is unknown, so no row qualifies
+  - sql: |
+      SELECT "migration_name" FROM "_prisma_migrations"
+      WHERE "finished_at" IS NULL AND "rolled_back_at" IS NULL
+      ORDER BY "migration_name"
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT "migration_name", COALESCE("logs", '<none>') AS logs, "logs" = '' AS empty_logs
+      FROM "_prisma_migrations"
+      ORDER BY "migration_name"
+    expect: rows
+    order: ordered
+    comment: empty string is not NULL; NULL logs become the COALESCE fallback

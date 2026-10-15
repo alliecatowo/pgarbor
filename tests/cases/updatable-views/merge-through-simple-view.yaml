@@ -1,0 +1,31 @@
+# MERGE targeting an auto-updatable view applies UPDATE, INSERT and DELETE actions to the base table.
+id: updatable-views.merge-through-simple-view
+title: MERGE into a simple auto-updatable view updates, inserts and deletes base rows
+family: updatable-views
+tier: extended
+feature_ids: [updatable-views, create-view, merge, insert, update, delete]
+required_capabilities: [create-table, create-view, insert, update, delete, merge, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/updatable_views.sql (MERGE into rw_view1)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int PRIMARY KEY, b text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+  CREATE VIEW v AS SELECT a, b FROM t WHERE a < 10;
+steps:
+  - sql: |
+      MERGE INTO v AS tv
+        USING (VALUES (1, 'ONE'), (3, 'three')) AS s(a, b) ON tv.a = s.a
+        WHEN MATCHED THEN UPDATE SET b = s.b
+        WHEN NOT MATCHED THEN INSERT (a, b) VALUES (s.a, s.b)
+    expect: ok
+  - sql: |
+      MERGE INTO v AS tv
+        USING (VALUES (2)) AS s(a) ON tv.a = s.a
+        WHEN MATCHED THEN DELETE
+    expect: ok
+  - sql: |
+      SELECT a, b FROM t ORDER BY a
+    expect: rows
+    order: ordered

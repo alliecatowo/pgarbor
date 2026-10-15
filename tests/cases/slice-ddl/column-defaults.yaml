@@ -1,0 +1,51 @@
+# Column DEFAULT expressions: constant, parenthesised expression, explicit DEFAULT keyword, explicit NULL override, SET DEFAULT.
+id: slice-ddl.column-defaults
+title: Column defaults apply to omitted and DEFAULT-keyword values, not to explicit NULL
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, defaults, numeric, arrays, alter-table]
+required_capabilities: [create-table, insert, select, defaults, numeric, arrays, alter-table]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-default.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE dflt (
+        id int4 PRIMARY KEY,
+        n int4 DEFAULT (1 + 2),
+        flag bool DEFAULT true,
+        label text DEFAULT 'none',
+        amt numeric(5,2) DEFAULT 9.99,
+        arr int4[] DEFAULT '{}'
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO dflt (id) VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO dflt (id, n, label) VALUES (2, NULL, DEFAULT)
+    expect: ok
+    comment: explicit NULL stays NULL; DEFAULT keyword picks the column default
+  - sql: |
+      INSERT INTO dflt VALUES (3, 7, false, 'x', 1.5, '{1}')
+    expect: ok
+  - sql: |
+      INSERT INTO dflt (id, amt) VALUES (4, 123.456)
+    expect: ok
+    comment: 123.456 rounds to 123.46, which fits numeric(5,2)
+  - sql: |
+      SELECT id, n, flag, label, amt, arr FROM dflt ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE dflt ALTER COLUMN label SET DEFAULT 'changed'
+    expect: ok
+  - sql: |
+      INSERT INTO dflt (id) VALUES (5)
+    expect: ok
+  - sql: |
+      SELECT id, label FROM dflt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the new row sees the changed default; existing rows keep their stored values

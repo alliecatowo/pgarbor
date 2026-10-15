@@ -1,0 +1,39 @@
+# A virtual generated column depends on its base column: plain DROP fails, CASCADE drops the generated column.
+id: generated-virtual.drop-column-dependency
+title: Dropping the base column of a virtual generated column requires CASCADE
+family: generated-virtual
+tier: core
+feature_ids: [generated-columns, alter-table, dependency, errors]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest10 (a int PRIMARY KEY, b int, c int GENERATED ALWAYS AS (b * 2) VIRTUAL);
+  INSERT INTO gtest10 (a, b) VALUES (1, 5);
+  CREATE TABLE gtest10a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
+steps:
+  - sql: |
+      ALTER TABLE gtest10 DROP COLUMN b
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT a, c FROM gtest10 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE gtest10 DROP COLUMN b CASCADE
+    expect: ok
+  - sql: |
+      SELECT * FROM gtest10 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only a remains
+  - sql: |
+      ALTER TABLE gtest10a DROP COLUMN b
+    expect: ok
+    comment: dropping the generated column itself needs no CASCADE
+  - sql: |
+      INSERT INTO gtest10a (a) VALUES (1)
+    expect: ok

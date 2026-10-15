@@ -1,0 +1,41 @@
+# Field selection on a composite column, including nested fields and the table-reference pitfall.
+id: rowtypes.nested-composite-table-field
+title: Nested composite column field selection and whole-field expansion
+family: rowtypes
+tier: core
+feature_ids: [composite-types, field-selection, nulls, table-columns]
+required_capabilities: [create-type, create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowtypes.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TYPE complex AS (r float8, i float8);
+  CREATE TYPE quad AS (c1 complex, c2 complex);
+  CREATE TABLE quadtable (f1 int4, q quad);
+  INSERT INTO quadtable VALUES (1, ((3.3,4.4),(5.5,6.6))), (2, ((null,4.4),(5.5,6.6)));
+steps:
+  - sql: |
+      SELECT f1, (q).c1.r AS c1r, (q).c1.i AS c1i, (q).c2.r AS c2r, (q).c2.i AS c2i
+      FROM quadtable ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1, (qq.q).c1.i AS c1i FROM quadtable qq ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1, (q).c1 IS NULL AS c1_null, (q).c1.r IS NULL AS c1r_null
+      FROM quadtable ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: a partially null composite is not IS NULL
+  - sql: |
+      SELECT f1, q.c1 FROM quadtable
+    expect: error
+    sqlstate: "42P01"
+    comment: q is read as a table alias here, so the FROM clause has no entry for it
+  - sql: |
+      SELECT (q).* FROM quadtable ORDER BY f1
+    expect: rows
+    order: ordered

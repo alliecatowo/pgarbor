@@ -1,0 +1,30 @@
+# NULL points: operators return NULL, WHERE drops them, aggregates skip them.
+id: point.null-semantics
+title: NULL point operands yield NULL and are excluded by predicates and aggregates
+family: point
+tier: core
+feature_ids: [point-type, null-handling, point-operators, aggregates]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: hand
+  ref: "PG18 SQL NULL semantics; point operators are strict"
+sessions: [a]
+setup: |
+  CREATE TABLE pts (id int4 PRIMARY KEY, p point);
+  INSERT INTO pts VALUES (1, '(0,0)'), (2, NULL), (3, '(3,4)');
+steps:
+  - sql: |
+      SELECT (NULL::point <-> '(0,0)'::point) IS NULL AS dist_null, ('(1,1)'::point ~= NULL::point) IS NULL AS eq_null, (NULL::point << '(0,0)'::point) IS NULL AS left_null
+    expect: rows
+  - sql: |
+      SELECT count(p) AS non_null, count(*) AS total FROM pts
+    expect: rows
+  - sql: |
+      SELECT id FROM pts WHERE p << '(100,100)' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL row 2 must not appear
+  - sql: |
+      SELECT id FROM pts WHERE p IS NULL ORDER BY id
+    expect: rows
+    order: ordered

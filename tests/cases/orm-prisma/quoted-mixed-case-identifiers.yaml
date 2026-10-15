@@ -1,0 +1,49 @@
+# Quoted mixed-case identifiers ("User", "emailAddress") are case-sensitive; unquoted names fold to lowercase.
+id: orm-prisma.quoted-mixed-case-identifiers
+title: Quoted mixed-case table and column names; unquoted references fold to lowercase and fail
+family: orm-prisma
+tier: core
+feature_ids: [quoted-identifiers, create-table, create-index, insert, select, unique-index, errors, timestamp]
+required_capabilities: [create-table, create-index, insert, select, unique-constraint, timestamp]
+provenance:
+  source: research
+  ref: "Prisma generates quoted mixed-case identifiers on PostgreSQL; PG18 docs sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS"
+sessions: [a]
+setup: |
+  CREATE TABLE "User" (
+    "Id" integer PRIMARY KEY,
+    "emailAddress" text NOT NULL,
+    "createdAt" timestamp(3) NOT NULL DEFAULT '2024-05-01 10:00:00'
+  );
+  CREATE UNIQUE INDEX "User_emailAddress_key" ON "User" ("emailAddress");
+steps:
+  - sql: |
+      INSERT INTO "User" ("Id", "emailAddress", "createdAt")
+      VALUES (1, 'a@example.com', '2024-05-01 10:00:00.5'), (2, 'B@example.com', DEFAULT)
+    expect: ok
+  - sql: |
+      SELECT "Id", "emailAddress", "createdAt"::text AS created_text FROM "User" ORDER BY "Id"
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT "Id" FROM "User" WHERE "emailAddress" = 'B@example.com'
+    expect: rows
+    order: multiset
+    comment: comparison is case-sensitive, so the stored mixed-case value matches exactly
+  - sql: |
+      SELECT count(*) AS n FROM "User" WHERE "emailAddress" = 'b@example.com'
+    expect: rows
+  - sql: |
+      INSERT INTO "User" ("Id", "emailAddress") VALUES (3, 'a@example.com')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT emailAddress FROM "User"
+    expect: error
+    sqlstate: "42703"
+    comment: unquoted emailAddress folds to emailaddress, which does not exist
+  - sql: |
+      SELECT "Id" FROM User
+    expect: error
+    sqlstate: "42P01"
+    comment: unquoted User folds to user, which does not exist

@@ -1,0 +1,27 @@
+# SP-GiST point_ops supports the distance ordering operator <-> (nearest-neighbour scan).
+id: spgist.point-knn-order
+title: Nearest-neighbour ordering on an SP-GiST point index with LIMIT
+family: spgist
+tier: extended
+feature_ids: [spgist, create-index, point, order-by, limit]
+required_capabilities: [create-table, create-index, insert, select, spgist, point, order-by, limit]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/spgist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE sp_knn (id int4, p point);
+  CREATE INDEX sp_knn_idx ON sp_knn USING spgist (p);
+  INSERT INTO sp_knn (id, p) VALUES
+    (1, point(0, 0)), (2, point(3, 4)), (3, point(10, 0)),
+    (4, point(-1, -1)), (5, point(6, 8)), (6, point(30, 40));
+steps:
+  - sql: |
+      SELECT id FROM sp_knn ORDER BY p <-> point(0, 0) LIMIT 4
+    expect: rows
+    order: ordered
+    comment: distances 0, sqrt(2), 5, 10 are all distinct
+  - sql: |
+      SELECT id, p <-> point(0, 0) AS d FROM sp_knn ORDER BY d LIMIT 1
+    expect: rows
+    order: ordered

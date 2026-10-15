@@ -1,0 +1,36 @@
+# avg(interval), extract(epoch) and infinity comparisons over a small table.
+id: interval.avg-extract-infinity
+title: avg over intervals, epoch extraction, and infinity comparison semantics
+family: interval
+tier: core
+feature_ids: [interval, aggregates, extract, infinity]
+required_capabilities: [create-table, insert, select, interval, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/interval.sql (avg(interval); isfinite filter; infinity)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE iv_avg (f1 interval);
+  INSERT INTO iv_avg VALUES ('1 day'), ('3 days'), ('infinity'), (NULL);
+steps:
+  - sql: |
+      SELECT avg(f1) AS mean FROM iv_avg WHERE isfinite(f1)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT extract(epoch FROM interval '1 day') AS secs,
+             extract(epoch FROM interval '1 month') AS month_secs
+    expect: rows
+    order: multiset
+    comment: month counts as 30 days for epoch
+  - sql: |
+      SELECT interval 'infinity' > interval '10000 years' AS inf_gt,
+             interval '-infinity' < interval '-10000 years' AS ninf_lt,
+             isfinite(interval 'infinity') AS fin
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1 FROM iv_avg WHERE f1 IS NOT NULL ORDER BY f1 DESC
+    expect: rows
+    order: ordered

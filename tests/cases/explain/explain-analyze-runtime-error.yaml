@@ -1,0 +1,25 @@
+# EXPLAIN ANALYZE executes the query, so a run-time error in the query propagates and no plan is returned.
+id: explain.analyze-runtime-error
+title: EXPLAIN ANALYZE surfaces a division_by_zero raised during execution
+family: explain
+tier: core
+feature_ids: [explain, explain-analyze, errors, numeric-division]
+required_capabilities: [create-table, insert, select, explain, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/explain.sql"
+  license: "PostgreSQL License"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4, b text, c int4);
+  INSERT INTO t VALUES (1, 'x', 10), (2, NULL, 20), (3, 'z', NULL);
+steps:
+  - sql: |
+      EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF) SELECT 10 / (a - 1) FROM t
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    order: ordered
+    comment: the failed EXPLAIN left the table unchanged

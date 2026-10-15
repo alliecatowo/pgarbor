@@ -1,0 +1,32 @@
+# Within one transaction block 'now' is fixed, so two inserts of 'now' store the same value.
+id: timestamptz.now-within-transaction
+title: now is constant for the duration of a transaction block
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, insert, select, transactions]
+required_capabilities: [create-table, insert, select, transactions, date-type]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamptz.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE tz_now (d1 timestamp(2) with time zone);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO tz_now VALUES ('now'), ('now')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n_rows, count(DISTINCT d1) AS distinct_values FROM tz_now
+    expect: rows
+    order: multiset
+    comment: asserts only counts, never the wall-clock value
+  - sql: |
+      SELECT count(*) AS n_match FROM tz_now WHERE d1 = timestamp(2) with time zone 'now'
+    expect: rows
+    order: multiset
+  - sql: |
+      COMMIT
+    expect: ok

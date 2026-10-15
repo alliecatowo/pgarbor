@@ -1,0 +1,52 @@
+# PostgreSQL 18 regression create_cast.sql, rewritten as a self-contained case.
+id: create-cast.null-inputs-and-column
+title: "I/O cast of NULL yields NULL, both as a literal and per table row"
+family: create-cast
+tier: core
+feature_ids: [create-cast, null-semantics, casts]
+required_capabilities: [create-type, create-cast, create-function-sql, create-function-internal, select, create-table, insert]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_cast.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TYPE casttesttype;
+  CREATE FUNCTION casttesttype_in(cstring)
+     RETURNS casttesttype
+     AS 'textin'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION casttesttype_out(casttesttype)
+     RETURNS cstring
+     AS 'textout'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE TYPE casttesttype (
+     internallength = variable,
+     input = casttesttype_in,
+     output = casttesttype_out,
+     alignment = int4
+  );
+  CREATE FUNCTION casttestfunc(casttesttype) RETURNS int4 LANGUAGE SQL AS
+  $$ SELECT 1; $$;
+steps:
+  - sql: |
+      CREATE CAST (int4 AS casttesttype) WITH INOUT;
+    expect: ok
+  - sql: |
+      CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 10), (2, NULL), (3, -5);
+    expect: ok
+  - sql: |
+      SELECT id,
+             v::casttesttype IS NULL AS is_null,
+             v::casttesttype::text AS txt
+      FROM t
+      ORDER BY id;
+    expect: rows
+    order: ordered
+    comment: "NULL row yields NULL text"
+  - sql: |
+      SELECT (NULL::int4)::casttesttype IS NULL AS n;
+    expect: rows
+    order: multiset

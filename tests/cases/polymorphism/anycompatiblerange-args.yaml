@@ -1,0 +1,27 @@
+# anycompatiblerange with compatible scalar arguments; an incompatible scalar is rejected.
+id: polymorphism.anycompatiblerange-args
+title: anycompatiblerange unifies range subtype with scalar arguments; numeric against int4range fails
+family: polymorphism
+tier: core
+feature_ids: [polymorphic-types, anycompatible, ranges, arrays]
+required_capabilities: [create-function, select, arrays]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/polymorphism.sql"
+setup: |
+  CREATE FUNCTION polyf(x anycompatiblerange, y anycompatible, z anycompatible) RETURNS anycompatiblearray AS $$
+    SELECT array[lower(x), upper(x), y, z]
+  $$ LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT polyf(int4range(42, 49), 11, 2::smallint) AS int_result
+    expect: rows
+    comment: range subtype int4, smallint and integer unify to integer
+  - sql: |
+      SELECT polyf(float8range(4.5, 7.8), 7.8, 11::real) AS num_result
+    expect: rows
+    comment: real widens to float8
+  - sql: |
+      SELECT polyf(int4range(42, 49), 11, 4.5) AS fail
+    expect: error
+    comment: no range type with a numeric subtype matches int4range; recorder decides the SQLSTATE

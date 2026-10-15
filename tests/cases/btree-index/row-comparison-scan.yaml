@@ -1,0 +1,37 @@
+# Derived from PG18 btree_index.sql RowCompare qual tests (forward and backward scans), on a small self-contained table.
+id: btree-index.row-comparison-scan
+title: Row-wise comparison quals over a two-column btree index return the correct ranges in both scan directions
+family: btree-index
+tier: core
+feature_ids: [select, create-index, btree-index, row-comparison, order-by, limit]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (RowCompare quals, forward and backward scans)"
+setup: |
+  CREATE TABLE rc (a text, b int4, c int4);
+  INSERT INTO rc
+    SELECT x, y, x::int4 * 10 + y
+    FROM (VALUES ('abs'), ('abt'), ('zzz')) v(x),
+         generate_series(0, 3) y;
+  CREATE INDEX rc_ab_idx ON rc USING btree (a, b);
+steps:
+  - sql: |
+      SELECT a, b FROM rc WHERE (a, b) > ('abs', 1) ORDER BY a, b
+    expect: rows
+    order: ordered
+    comment: first column ties resolved by second column, forward scan
+  - sql: |
+      SELECT a, b FROM rc WHERE (a, b) < ('abt', 2) ORDER BY a DESC, b DESC
+    expect: rows
+    order: ordered
+    comment: backward scan using a < RowCompare
+  - sql: |
+      SELECT a, b FROM rc WHERE (a, b) >= ('abs', 2) AND (a, b) <= ('abt', 1) ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM rc WHERE a = 'abs' AND (a, b) > ('abs', 3) ORDER BY a, b LIMIT 1
+    expect: rows
+    order: ordered
+    comment: boundary, no row strictly greater than the largest b for this a

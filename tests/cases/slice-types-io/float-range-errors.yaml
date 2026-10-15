@@ -1,0 +1,36 @@
+# Special float literals in float4 and float8, plus out-of-range input errors.
+id: slice-types-io.float-range-errors
+title: "float4 and float8 special values and out-of-range input"
+family: slice-types-io
+tier: core
+feature_ids: [float4, float8, text-output, errors]
+required_capabilities: [select, float4, float8, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-numeric.html#DATATYPE-FLOAT; errcodes class 22"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 1.1::float4::text AS f4_one_point_one, 'NaN'::float4::text AS f4_nan, '-Infinity'::float4::text AS f4_neg_inf, '-0'::float4::text AS f4_negzero
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT '1e39'::float4
+    expect: error
+    sqlstate: "22003"
+    comment: "float4 input above the float4 maximum is out of range"
+  - sql: |
+      SELECT '1e309'::float8
+    expect: error
+    sqlstate: "22003"
+    comment: "float8 input above the float8 maximum is out of range"
+  - sql: |
+      SELECT 'Infinity'::float8 + 1 AS still_inf, 'Infinity'::float8 - 'Infinity'::float8 AS inf_minus_inf
+    expect: rows
+    order: multiset
+    comment: "Infinity plus finite stays Infinity; Infinity minus Infinity is NaN"
+  - sql: |
+      SELECT 1.0::float8 / 0
+    expect: error
+    sqlstate: "22012"
+    comment: "float division by zero raises division_by_zero"

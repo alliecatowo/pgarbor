@@ -1,0 +1,28 @@
+# Incremental sort inside a LATERAL subquery is rescanned once per outer row.
+id: incremental-sort.rescan-lateral
+title: Incremental sort re-executed per outer row through LATERAL subqueries
+family: incremental-sort
+tier: extended
+feature_ids: [incremental-sort, order-by, lateral, joins]
+required_capabilities: [create-table, insert, select, order-by, joins, lateral]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/incremental_sort.sql
+sessions: [a]
+setup: |
+  CREATE TABLE t (a integer, b integer);
+  INSERT INTO t VALUES (1, 30), (1, 10), (1, 20), (2, 5), (2, 1), (3, 9);
+  CREATE TABLE k (a integer);
+  INSERT INTO k VALUES (1), (2), (4);
+steps:
+  - sql: |
+      SELECT k.a AS outer_a, s.a, s.b
+      FROM k
+      LEFT JOIN LATERAL (
+        SELECT v.a, v.b FROM (SELECT a, b FROM t WHERE t.a = k.a ORDER BY a) v
+        ORDER BY v.a, v.b LIMIT 2
+      ) s ON true
+      ORDER BY k.a, s.b
+    expect: rows
+    order: ordered
+    comment: outer row 4 has no matches and must produce one NULL row

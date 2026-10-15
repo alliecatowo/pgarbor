@@ -1,0 +1,31 @@
+# Multicolumn GiST index (inet_ops, range_ops) with long numeric bounds, as in the regression
+# tuple-descriptor check. Values must read back exactly, not at a shifted offset.
+id: gist.inet-numrange-tupdesc
+title: Multicolumn GiST inet and numrange index returns exact long numeric range bounds
+family: gist
+tier: extended
+feature_ids: [gist, create-index, inet, range-types, numeric, index-only-scan]
+required_capabilities: [create-table, insert, select, create-index, gist-index, inet-type, numrange-type, numeric, vacuum]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE ios (a inet, r numrange);
+  INSERT INTO ios VALUES ('::1', numrange(repeat('7',200)::numeric, repeat('8',200)::numeric));
+  CREATE INDEX ios_gist ON ios USING gist (a inet_ops, r);
+  VACUUM ANALYZE ios;
+steps:
+  - sql: |
+      SELECT lower(r) = repeat('7',200)::numeric AS lower_ok, upper(r) = repeat('8',200)::numeric AS upper_ok FROM ios WHERE r && numrange(null, null)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT a, lower(r) = repeat('7',200)::numeric AS lower_ok FROM ios WHERE a = '::1'::inet AND r && numrange(null, null)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) FROM ios WHERE r && numrange(1, 2)
+    expect: rows
+    order: multiset
+    comment: the stored range does not overlap [1,2)

@@ -1,0 +1,37 @@
+# numeric(p,s) stores and prints the declared scale; literal scale survives casts and arithmetic.
+id: slice-types-io.numeric-scale-preservation
+title: "numeric scale preservation in columns and literals with overflow error"
+family: slice-types-io
+tier: core
+feature_ids: [numeric, create-table, insert, select, text-output]
+required_capabilities: [create-table, insert, select, numeric]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-numeric.html; PG18 numeric scale functions scale() and trim_scale()"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE nums (id int4 PRIMARY KEY, v numeric(10,2))
+    expect: ok
+  - sql: |
+      INSERT INTO nums VALUES (1, 1.5), (2, 2), (3, 0.005), (4, -0), (5, NULL)
+    expect: ok
+    comment: "0.005 is rounded to the column scale of 2 on store"
+  - sql: |
+      SELECT id, v::text AS txt, scale(v) AS sc FROM nums ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 1.10::numeric::text AS lit, (1.10::numeric * 2)::text AS mul, 2.500::numeric::text AS lit3, trim_scale(2.500::numeric)::text AS trimmed, scale(2.500::numeric) AS sc
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT 1::numeric(3,2)::text AS fits, 10::numeric(3,2) AS overflows
+    expect: error
+    sqlstate: "22003"
+    comment: "numeric(3,2) allows at most one integer digit; 10 overflows"
+  - sql: |
+      SELECT 'NaN'::numeric::text AS nan_txt, 'Infinity'::numeric::text AS inf_txt, '-Infinity'::numeric(10,2)::text AS neg_inf_typmod
+    expect: rows
+    order: multiset
+    comment: "PG14 and later accept Infinity in numeric; typmod scale does not apply to special values"

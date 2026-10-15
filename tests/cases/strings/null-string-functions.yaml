@@ -1,0 +1,31 @@
+# Built-in string functions with NULL arguments: most are strict and return NULL, concat ignores NULLs.
+id: strings.null-string-functions
+title: String functions with NULL arguments are strict, while concat and concat_ws skip NULLs
+family: strings
+tier: core
+feature_ids: [string-functions, nulls, concatenation]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/strings.sql"
+steps:
+  - sql: |
+      SELECT length(NULL::text) IS NULL AS len_null,
+             lower(NULL::text) IS NULL AS lower_null,
+             replace('abc', NULL::text, 'x') IS NULL AS replace_null,
+             strpos(NULL::text, 'a') IS NULL AS strpos_null,
+             split_part(NULL::text, '@', 1) IS NULL AS split_null
+    expect: rows
+  - sql: |
+      SELECT concat(NULL::text) IS NULL AS concat_only_null,
+             concat(NULL::text, 'x') AS concat_skip,
+             concat_ws(NULL::text, 'a', 'b') IS NULL AS sep_null,
+             concat_ws(',', NULL::text) AS ws_only_null
+    expect: rows
+  - sql: |
+      SELECT '' IS NULL AS empty_not_null, '' = NULL::text IS NULL AS eq_null, coalesce(NULLIF('', ''), 'was-empty') AS nullif_empty
+    expect: rows
+  - sql: |
+      SELECT string_agg(x, ',' ORDER BY x) AS agg FROM (VALUES ('b'::text), (NULL::text), ('a'::text)) AS v(x)
+    expect: rows
+    comment: aggregate skips NULL inputs

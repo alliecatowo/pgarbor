@@ -1,0 +1,34 @@
+# FOR UPDATE SKIP LOCKED returns only unlocked rows instead of waiting.
+id: mvcc.skip-locked-skips-held-row
+title: SELECT FOR UPDATE SKIP LOCKED skips a row locked by another open transaction
+family: mvcc
+tier: extended
+feature_ids: [transactions, row-locks, select, skip-locked]
+required_capabilities: [create-table, insert, select, transactions, row-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE"
+sessions: [a, b]
+setup: |
+  CREATE TABLE q (id int4 PRIMARY KEY, state text NOT NULL);
+  INSERT INTO q VALUES (1, 'new'), (2, 'new'), (3, 'new');
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM q WHERE state = 'new' ORDER BY id LIMIT 1 FOR UPDATE
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      SELECT id FROM q WHERE state = 'new' ORDER BY id FOR UPDATE SKIP LOCKED
+    expect: rows
+    order: ordered
+    comment: rows 2 and 3 only, no waiting
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

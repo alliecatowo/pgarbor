@@ -1,0 +1,42 @@
+# Index sort options (DESC, default NULL placement) must not change query results; ORDER BY defines the output.
+id: create-index.desc-nulls-ordering
+title: DESC and NULL-placement index options do not change ORDER BY results
+family: create-index
+tier: core
+feature_ids: [create-index, index-ordering, nulls-ordering, select]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (IS NULL with btree indexes section, nulls first/desc index)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ord (id int NOT NULL PRIMARY KEY, k int)
+    expect: ok
+  - sql: |
+      INSERT INTO ord VALUES (1, 10), (2, NULL), (3, 5), (4, 10), (5, NULL)
+    expect: ok
+  - sql: |
+      CREATE INDEX ord_k_desc ON ord (k DESC NULLS FIRST, id)
+    expect: ok
+  - sql: |
+      CREATE INDEX ord_k_asc ON ord (k)
+    expect: ok
+  - sql: |
+      SELECT id, k FROM ord ORDER BY k ASC, id
+    expect: rows
+    order: ordered
+    comment: ASC places NULLs last by default
+  - sql: |
+      SELECT id, k FROM ord ORDER BY k DESC, id
+    expect: rows
+    order: ordered
+    comment: DESC places NULLs first by default
+  - sql: |
+      SELECT id, k FROM ord ORDER BY k DESC NULLS LAST, id DESC
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM ord WHERE k IS NULL ORDER BY id
+    expect: rows
+    order: ordered

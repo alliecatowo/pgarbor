@@ -1,0 +1,33 @@
+# INSERT ... SELECT: a CHECK violation in any selected row aborts the whole statement; NULL-result rows pass.
+id: constraints.check-insert-select-atomic
+title: INSERT SELECT with a CHECK violation inserts nothing; NULL check results pass
+family: constraints
+tier: core
+feature_ids: [check-constraints, insert, insert-select, null-semantics, errors, select]
+required_capabilities: [create-table, insert, select, temp-tables]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE tgt (x INT, y TEXT, z INT,
+    CONSTRAINT tgt_con CHECK (x > 3 AND y <> 'check failed' AND x < 8));
+  CREATE TEMP TABLE src (xd INT, yd TEXT, zd INT);
+  INSERT INTO src VALUES (NULL, 'Y', NULL), (5, 'check failed', NULL), (NULL, 'try again', NULL);
+steps:
+  - sql: |
+      INSERT INTO tgt SELECT xd, yd, zd FROM src
+    expect: error
+    sqlstate: "23514"
+    comment: the second selected row has y = 'check failed', so the whole statement fails
+  - sql: |
+      SELECT count(*) FROM tgt
+    expect: rows
+  - sql: |
+      INSERT INTO tgt (y) SELECT yd FROM src WHERE yd <> 'check failed'
+    expect: ok
+    comment: x is NULL in both rows, so x > 3 and x < 8 are UNKNOWN and the rows pass
+  - sql: |
+      SELECT x, y, z FROM tgt ORDER BY y
+    expect: rows
+    order: ordered

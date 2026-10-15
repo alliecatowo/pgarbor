@@ -1,0 +1,33 @@
+# Lexer edge cases around != and a prefix operator named !=- (comments and block comments terminate tokens).
+id: create-operator.lexer-not-equal-edges
+title: Operator names ending in minus and != next to comments lex as the intended tokens
+family: create-operator
+tier: extended
+feature_ids: [create-operator, lexer, comments, prefix-operators]
+required_capabilities: [create-function, create-operator, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_operator.sql (!=- and != lexing cases)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION dbl(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 2 $$;
+  CREATE OPERATOR !=- (rightarg = int8, procedure = dbl);
+steps:
+  - sql: |
+      SELECT !=- 10 AS doubled
+    expect: rows
+  - sql: |
+      SELECT 10 !=-;
+    expect: error
+    sqlstate: "42601"
+    comment: postfix use of an operator is a syntax error
+  - sql: |
+      SELECT 2 !=/**/ 1 AS ne_true, 2 !=/**/ 2 AS ne_false
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT 2 !=-- trailing comment
+        1 AS ne
+    expect: rows
+    order: multiset

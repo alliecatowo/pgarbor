@@ -1,0 +1,48 @@
+# EXCLUSIVE conflicts with ROW EXCLUSIVE (INSERT) but not with ACCESS SHARE (SELECT).
+id: lock.exclusive-allows-select-blocks-insert
+title: EXCLUSIVE table lock lets SELECT through but blocks a concurrent INSERT
+family: lock
+tier: core
+feature_ids: [lock-table, lock-modes, transactions, multi-session, insert]
+required_capabilities: [create-table, insert, select, lock-table, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql; PG18 docs explicit-locking.html (table-level lock conflict table)"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE lock_tbl1 (a BIGINT);
+  INSERT INTO lock_tbl1 VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE lock_tbl1 IN EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      SELECT a FROM lock_tbl1 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: ACCESS SHARE does not conflict with EXCLUSIVE
+  - session: b
+    sql: |
+      INSERT INTO lock_tbl1 VALUES (2)
+    async: true
+    expect_blocked: true
+    comment: ROW EXCLUSIVE conflicts with EXCLUSIVE
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT a FROM lock_tbl1 ORDER BY a
+    expect: rows
+    order: ordered

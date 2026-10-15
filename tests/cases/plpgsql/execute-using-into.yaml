@@ -1,0 +1,40 @@
+# Dynamic EXECUTE with USING parameters, INTO results, format %I identifiers, and errors from the dynamic statement.
+id: plpgsql.execute-using-into
+title: EXECUTE with USING and INTO; NULL values; duplicate key and unknown table raise dynamic errors
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, dynamic-sql, execute, errors, null-handling]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE kv (k text PRIMARY KEY, v int);
+  CREATE FUNCTION pl_put(p_tab text, p_key text, p_val int) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    EXECUTE format('INSERT INTO %I (k, v) VALUES ($1, $2)', p_tab) USING p_key, p_val;
+    RETURN 1;
+  END $$;
+  CREATE FUNCTION pl_get(p_key text) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE r int;
+  BEGIN
+    EXECUTE 'SELECT v FROM kv WHERE k = $1' INTO r USING p_key;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_put('kv', 'a', 1) AS put_a, pl_put('kv', 'b', NULL::int) AS put_b
+    expect: rows
+  - sql: |
+      SELECT pl_get('a') AS a, pl_get('b') AS b_null, pl_get('zz') AS missing
+    expect: rows
+    comment: b has a NULL v; zz has no row so INTO assigns NULL
+  - sql: |
+      SELECT pl_put('kv', 'a', 2)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT pl_put('no_such_table', 'x', 1)
+    expect: error
+    sqlstate: "42P01"

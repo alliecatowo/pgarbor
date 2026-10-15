@@ -1,0 +1,31 @@
+# Direct routing through a range-partitioned parent: rows outside every bound (including the exclusive upper bound) fail with 23514.
+id: insert.range-partition-no-match
+title: Range-partitioned INSERT with no matching partition raises 23514
+family: insert
+tier: core
+feature_ids: [insert, partitioning, expressions, errors]
+required_capabilities: [create-table, insert, select, partitioning]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE range_parted (a text, b int4) PARTITION BY RANGE (a, (b + 0));
+  CREATE TABLE part1 PARTITION OF range_parted FOR VALUES FROM ('a', 1) TO ('a', 10);
+  CREATE TABLE part3 PARTITION OF range_parted FOR VALUES FROM ('b', 1) TO ('b', 10);
+steps:
+  - sql: |
+      INSERT INTO range_parted VALUES ('a', 11)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO range_parted VALUES ('b', 10)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO range_parted VALUES ('a', 1), ('b', 9)
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, a, b FROM range_parted ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered

@@ -1,0 +1,31 @@
+# DELETE ... RETURNING on a referenced parent fails with 23503 and leaves both tables intact.
+id: copydml.delete-restricted-by-foreign-key
+title: "DELETE RETURNING of a referenced parent row raises foreign_key_violation"
+family: copydml
+tier: extended
+feature_ids: [delete, returning, foreign-key, errors]
+required_capabilities: [create-table, insert, delete, returning, foreign-key, errors, select]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 23503 foreign_key_violation; sql-createtable.html REFERENCES"
+  license: CC0
+sessions: [a]
+setup: |
+  CREATE TABLE copydml_test (id serial PRIMARY KEY, t text);
+  CREATE TABLE copydml_child (id serial PRIMARY KEY, parent_id int4 REFERENCES copydml_test (id));
+  INSERT INTO copydml_test (t) VALUES ('a'), ('b');
+  INSERT INTO copydml_child (parent_id) VALUES (1);
+steps:
+  - sql: |
+      DELETE FROM copydml_test WHERE t = 'a' RETURNING id
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM copydml_test WHERE t = 'b' RETURNING id
+    expect: rows
+    order: multiset
+    comment: unreferenced row deletes fine
+  - sql: |
+      SELECT id, t FROM copydml_test ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# Default LOCK mode needs UPDATE, DELETE or TRUNCATE; SELECT alone only allows ACCESS SHARE.
+id: lock.permission-denied-42501
+title: LOCK TABLE in ACCESS EXCLUSIVE mode without write privilege raises insufficient_privilege
+family: lock
+tier: extended
+feature_ids: [lock-table, roles, privileges, transactions, errors]
+required_capabilities: [create-table, select, lock-table, roles, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql (permission denied for table lock_tbl2 without UPDATE); PG18 docs sql-lock.html"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS lock_case_rol;
+  CREATE ROLE lock_case_rol;
+  CREATE TABLE lock_tbl1 (a BIGINT);
+  GRANT SELECT ON lock_tbl1 TO lock_case_rol;
+steps:
+  - sql: |
+      SET ROLE lock_case_rol
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE lock_tbl1 IN ACCESS SHARE MODE
+    expect: ok
+  - sql: |
+      LOCK TABLE lock_tbl1
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+notes: "Creates a cluster-level role; the name is fixed so the setup drops and recreates it."

@@ -1,0 +1,31 @@
+# Partial hash index on seqno WHERE seqno = 9999: the matching row is found, others are unaffected, and an update that leaves the predicate removes it.
+id: hash-index.partial-index
+title: Partial hash index serves its predicate and stays consistent when the predicate row changes
+family: hash-index
+tier: core
+feature_ids: [hash-index, partial-index, update, select]
+required_capabilities: [create-table, create-index, insert, update, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+setup: |
+  CREATE TABLE seq (seqno int4, random int4);
+  CREATE INDEX seq_partial ON seq USING hash (seqno) WHERE seqno = 9999;
+  INSERT INTO seq SELECT g, g * 3 FROM generate_series(1, 10000) g;
+steps:
+  - sql: |
+      SELECT seqno, random FROM seq WHERE seqno = 9999
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT seqno, random FROM seq WHERE seqno = 9998
+    expect: rows
+    order: multiset
+  - sql: |
+      UPDATE seq SET seqno = 10001 WHERE seqno = 9999
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM seq WHERE seqno = 9999
+    expect: rows
+    order: multiset
+    comment: no row has seqno 9999 any more

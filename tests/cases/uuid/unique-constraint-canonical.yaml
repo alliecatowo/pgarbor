@@ -1,0 +1,44 @@
+# Uniqueness of uuid keys is by value, not spelling; NULLs are allowed in a plain UNIQUE column but not a PRIMARY KEY.
+id: uuid.unique-constraint-canonical
+title: Primary key and unique constraints compare uuid values across input spellings
+family: uuid
+tier: core
+feature_ids: [uuid, constraints, unique, primary-key, errors]
+required_capabilities: [create-table, insert, select, constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/uuid.sql"
+setup: |
+  CREATE TABLE uq (g uuid PRIMARY KEY, label text);
+  CREATE TABLE uq2 (g uuid UNIQUE);
+  INSERT INTO uq VALUES ('{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}', 'braced');
+steps:
+  - sql: |
+      INSERT INTO uq VALUES ('a0eebc999c0b4ef8bb6d6bb9bd380a11', 'compact')
+    expect: error
+    sqlstate: "23505"
+    comment: compact spelling of an existing key
+  - sql: |
+      INSERT INTO uq VALUES ('A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 'upper')
+    expect: error
+    sqlstate: "23505"
+    comment: uppercase spelling of an existing key
+  - sql: |
+      INSERT INTO uq VALUES (NULL, 'null-key')
+    expect: error
+    sqlstate: "23502"
+    comment: primary key may not be NULL
+  - sql: |
+      INSERT INTO uq VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12', 'other')
+    expect: ok
+  - sql: |
+      INSERT INTO uq2 VALUES (NULL), (NULL)
+    expect: ok
+    comment: multiple NULLs are distinct under a UNIQUE constraint
+  - sql: |
+      SELECT label FROM uq ORDER BY label
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM uq2 WHERE g IS NULL
+    expect: rows

@@ -1,0 +1,49 @@
+# GRANT OPTION lets a role pass a privilege on; REVOKE ... CASCADE removes the dependent grant too.
+id: privileges.grant-option-cascade
+title: Role with GRANT OPTION re-grants SELECT; REVOKE CASCADE removes the dependent grant
+family: privileges
+tier: core
+feature_ids: [grant, revoke, grant-option, roles, privileges]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_go_a;
+  CREATE ROLE pv_go_b;
+  CREATE TABLE pv_go_t (id int4);
+  INSERT INTO pv_go_t VALUES (1);
+  GRANT SELECT ON pv_go_t TO pv_go_a WITH GRANT OPTION;
+steps:
+  - sql: |
+      SET ROLE pv_go_a
+    expect: ok
+  - sql: |
+      GRANT SELECT ON pv_go_t TO pv_go_b
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pv_go_b
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_go_t
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE SELECT ON pv_go_t FROM pv_go_a CASCADE
+    expect: ok
+  - sql: |
+      SET ROLE pv_go_b
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_go_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,32 @@
+# Cardinality and emptiness: multiple items, empty path results, and their ON ERROR / ON EMPTY handling.
+id: sqljson-queryfuncs.json-value-cardinality
+title: JSON_VALUE multi-item and empty-result behavior under ON ERROR and ON EMPTY
+family: sqljson-queryfuncs
+tier: core
+feature_ids: [sql-json, json-value, errors, jsonpath]
+required_capabilities: [select, jsonb]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sqljson_queryfuncs.sql (JSON_VALUE ON ERROR / ON EMPTY section)"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT JSON_VALUE(jsonb '[1,2]', '$[*]' DEFAULT '0' ON ERROR) AS multi_default
+    expect: rows
+  - sql: |
+      SELECT JSON_VALUE(jsonb '[1,2]', '$[*]' ERROR ON ERROR)
+    expect: error
+    comment: more than one item is not a single scalar; SQLSTATE left unpinned
+  - sql: |
+      SELECT JSON_VALUE(jsonb '1', 'lax $.a' ERROR ON EMPTY ERROR ON ERROR)
+    expect: error
+    sqlstate: "22035"
+    comment: no SQL/JSON item found for the path
+  - sql: |
+      SELECT JSON_VALUE(jsonb '1', 'lax $.a' ERROR ON ERROR) AS empty_default_null
+    expect: rows
+  - sql: |
+      SELECT JSON_VALUE(jsonb '1', 'lax $.a' DEFAULT '2' ON EMPTY) AS empty_default,
+             JSON_VALUE(jsonb '1', 'lax $.a' NULL ON EMPTY DEFAULT '2' ON ERROR) AS empty_null
+    expect: rows

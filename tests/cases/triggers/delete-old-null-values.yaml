@@ -1,0 +1,34 @@
+# AFTER DELETE row trigger reads OLD; NULL column values in OLD are visible as NULL.
+id: triggers.delete-old-null-values
+title: AFTER DELETE row trigger sees OLD values including NULL
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, delete, select, null-semantics]
+required_capabilities: [create-table, insert, select, delete, plpgsql, triggers]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (dump trigger data: OLD on DELETE)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int, v int);
+  INSERT INTO t VALUES (1, NULL), (2, 7), (3, NULL);
+  CREATE TABLE trig_log (id int, was_null boolean);
+  CREATE FUNCTION log_del() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (id, was_null) VALUES (OLD.id, OLD.v IS NULL);
+    RETURN OLD;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_del AFTER DELETE ON t FOR EACH ROW EXECUTE PROCEDURE log_del();
+steps:
+  - sql: |
+      DELETE FROM t WHERE id IN (1, 2)
+    expect: ok
+  - sql: |
+      SELECT id, was_null FROM trig_log ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

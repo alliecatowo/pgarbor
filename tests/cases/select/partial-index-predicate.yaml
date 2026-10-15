@@ -1,0 +1,50 @@
+# Results must match a sequential scan when a partial btree index's predicate is involved.
+id: select.partial-index-predicate
+title: Queries with predicates implied by or disjoint from a partial index return correct rows
+family: select
+tier: extended
+feature_ids: [select, btree-index, partial-index, where]
+required_capabilities: [create-table, insert, select, create-index, partial-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/select.sql (test partial btree indexes, onek2 replaced by a small table)"
+sessions: [a]
+setup: |
+  CREATE TABLE onek2 (unique1 int4, unique2 int4, stringu1 text);
+  INSERT INTO onek2 VALUES
+    (1, 11, 'AAAA'), (2, 11, 'BBBB'), (3, 11, 'ZZZZ'), (0, 12, 'AAAA'), (4, 13, 'BCAA');
+  CREATE INDEX onek2_u2_pred ON onek2 (unique2) WHERE stringu1 < 'B';
+steps:
+  - sql: |
+      SELECT unique1, unique2, stringu1 FROM onek2
+      WHERE unique2 = 11 AND stringu1 < 'B'
+      ORDER BY unique1
+    expect: rows
+    order: ordered
+    comment: predicate implied by the index predicate
+  - sql: |
+      SELECT unique1, unique2 FROM onek2
+      WHERE unique2 = 11 AND stringu1 < 'B' FOR UPDATE
+      ORDER BY unique1
+    expect: rows
+    order: ordered
+    comment: FOR UPDATE must still see the same single row
+  - sql: |
+      SELECT unique1, unique2 FROM onek2
+      WHERE unique2 = 11 AND stringu1 < 'C'
+      ORDER BY unique1
+    expect: rows
+    order: ordered
+    comment: predicate outside the partial index, so the index cannot be used
+  - sql: |
+      SELECT unique1, unique2 FROM onek2
+      WHERE (unique2 = 11 OR unique1 = 0) AND stringu1 < 'B'
+      ORDER BY unique1, unique2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT unique1, unique2 FROM onek2
+      WHERE (unique2 = 11 AND stringu1 < 'B') OR unique1 = 0
+      ORDER BY unique1, unique2
+    expect: rows
+    order: ordered

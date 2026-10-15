@@ -1,0 +1,43 @@
+# TRUNCATE without RESTART IDENTITY keeps the identity sequence; RESTART IDENTITY resets it.
+id: truncate.identity-restart
+title: "TRUNCATE keeps identity values unless RESTART IDENTITY is given"
+family: truncate
+tier: extended
+feature_ids: [truncate, identity, insert, select, sequence]
+required_capabilities: [create-table, insert, select, identity, truncate, transactions]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE tid (id int4 GENERATED ALWAYS AS IDENTITY (START WITH 44), v text);
+steps:
+  - sql: |
+      INSERT INTO tid (v) VALUES ('a'), ('b')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM tid ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      TRUNCATE tid
+    expect: ok
+  - sql: |
+      INSERT INTO tid (v) VALUES ('c'), ('d')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM tid ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "identity keeps counting after a plain TRUNCATE"
+  - sql: |
+      TRUNCATE tid RESTART IDENTITY
+    expect: ok
+  - sql: |
+      INSERT INTO tid (v) VALUES ('e'), ('f')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM tid ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "RESTART IDENTITY resets the sequence to its START WITH value"

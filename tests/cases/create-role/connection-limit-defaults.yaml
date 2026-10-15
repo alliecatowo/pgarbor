@@ -1,0 +1,47 @@
+# Default login/inherit/connection-limit values, explicit overrides, -1 as unlimited, and rejection of invalid limits.
+id: create-role.connection-limit-defaults
+title: Role defaults, CONNECTION LIMIT values (including -1 and invalid -2) and their pg_roles representation
+family: create-role
+tier: core
+feature_ids: [roles, create-role, alter-role, errors, catalog-introspection]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql (CONNECTION LIMIT, INHERIT); PG18 docs sql-createrole.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rc_a
+    expect: ok
+  - sql: |
+      CREATE ROLE rc_b LOGIN NOINHERIT CONNECTION LIMIT 5
+    expect: ok
+  - sql: |
+      SELECT rolname, rolcanlogin, rolinherit, rolconnlimit
+        FROM pg_roles
+       WHERE rolname IN ('rc_a', 'rc_b')
+       ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROLE rc_b CONNECTION LIMIT -2
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT rolconnlimit FROM pg_roles WHERE rolname = 'rc_b'
+    expect: rows
+  - sql: |
+      ALTER ROLE rc_b CONNECTION LIMIT -1
+    expect: ok
+  - sql: |
+      SELECT rolconnlimit FROM pg_roles WHERE rolname = 'rc_b'
+    expect: rows
+  - sql: |
+      CREATE ROLE rc_c CONNECTION LIMIT 0
+    expect: ok
+  - sql: |
+      SELECT rolconnlimit FROM pg_roles WHERE rolname = 'rc_c'
+    expect: rows
+  - sql: |
+      DROP ROLE rc_a, rc_b, rc_c
+    expect: ok

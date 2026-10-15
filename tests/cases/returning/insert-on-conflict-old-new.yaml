@@ -1,0 +1,27 @@
+# INSERT ... ON CONFLICT DO UPDATE RETURNING with WITH (OLD AS / NEW AS): conflict rows carry old and new, inserted rows have NULL old.
+id: returning.insert-on-conflict-old-new
+title: ON CONFLICT DO UPDATE RETURNING exposes old and new for updated rows and NULL old for inserted rows
+family: returning
+tier: extended
+feature_ids: [returning, insert-conflict, returning-old-new, upsert]
+required_capabilities: [create-table, insert, insert-conflict, select, returning, returning-old-new, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (f1 int PRIMARY KEY, f2 text, f3 int);
+  INSERT INTO foo VALUES (4, 'conflict-old', 10)
+steps:
+  - sql: |
+      INSERT INTO foo VALUES (4, 'conflict', 0), (5, 'ok', 0)
+        ON CONFLICT (f1) DO UPDATE SET f2 = excluded.f2 || 'ed', f3 = -1
+        RETURNING WITH (OLD AS o, NEW AS n)
+          o.f2 AS old_f2, n.f2 AS new_f2, o.f3 AS old_f3, n.f3 AS new_f3, n.f1 AS f1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, f2, f3 FROM foo ORDER BY f1
+    expect: rows
+    order: ordered

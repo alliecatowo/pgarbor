@@ -1,0 +1,42 @@
+# UNIQUE constraints under default NULLS DISTINCT: several NULLs allowed, non-NULL duplicates rejected, column and table-level forms.
+id: slice-ddl.unique-null-semantics
+title: UNIQUE allows multiple NULLs and rejects duplicate non-NULL values
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, unique, nulls, errors]
+required_capabilities: [create-table, insert, select, unique, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE uq (
+        id int4 PRIMARY KEY,
+        email text UNIQUE,
+        code int4,
+        CONSTRAINT code_uq UNIQUE (code)
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO uq VALUES (1, NULL, NULL), (2, NULL, NULL)
+    expect: ok
+    comment: NULLs are distinct for UNIQUE by default
+  - sql: |
+      INSERT INTO uq VALUES (3, 'a@example.test', 10)
+    expect: ok
+  - sql: |
+      INSERT INTO uq VALUES (4, 'a@example.test', 11)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO uq VALUES (5, 'b@example.test', 10)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO uq VALUES (6, 'b@example.test', NULL)
+    expect: ok
+  - sql: |
+      SELECT id, email, code FROM uq ORDER BY id
+    expect: rows
+    order: ordered

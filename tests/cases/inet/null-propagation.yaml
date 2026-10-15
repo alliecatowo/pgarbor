@@ -1,0 +1,27 @@
+# pg-regress inet.sql style NULL handling: inet functions and operators propagate NULL, IS NULL still works.
+id: inet.null-propagation
+title: NULL inet and cidr operands propagate through functions and operators
+family: inet
+tier: core
+feature_ids: [inet, cidr, nulls, functions, operators]
+required_capabilities: [create-table, insert, select, nulls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/inet.sql"
+setup: |
+  CREATE TABLE inet_tbl (id int4 PRIMARY KEY, c cidr, i inet);
+  INSERT INTO inet_tbl (id, c, i) VALUES
+    (1, NULL, NULL),
+    (2, '10.0.0.0/8', NULL),
+    (3, NULL, '10.1.2.3/8'),
+    (4, '10.0.0.0/8', '10.1.2.3/8');
+steps:
+  - sql: |
+      SELECT id, host(i) AS h, family(i) AS fam, masklen(c) AS mc, abbrev(c) AS ab,
+        i << c AS sb, i = c AS eq, i + 1 AS plus1, ~i AS notv, i IS NULL AS i_null
+      FROM inet_tbl ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM inet_tbl WHERE i = c
+    expect: rows

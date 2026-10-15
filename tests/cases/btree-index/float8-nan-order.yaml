@@ -1,0 +1,33 @@
+# Edge case in the btree float8 opclass: NaN sorts greater than all other values, including infinity.
+id: btree-index.float8-nan-order
+title: float8 btree index orders NaN above infinity and returns NaN for range probes above the maximum
+family: btree-index
+tier: core
+feature_ids: [select, create-index, btree-index, float8, order-by, nan]
+required_capabilities: [create-table, insert, select, create-index, float8]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (bt_f8_index probes); PG18 datatype-numeric float NaN ordering"
+setup: |
+  CREATE TABLE f8 (seqno float8, rnd int4);
+  INSERT INTO f8 VALUES (1.5, 1), ('NaN', 2), ('-Infinity', 3), ('Infinity', 4), (0, 5), (NULL, 6);
+  CREATE INDEX f8_idx ON f8 USING btree (seqno float8_ops);
+steps:
+  - sql: |
+      SELECT seqno, rnd FROM f8 ORDER BY seqno, rnd
+    expect: rows
+    order: ordered
+    comment: NaN last among non-null, NULL after NaN
+  - sql: |
+      SELECT rnd FROM f8 WHERE seqno >= 'Infinity'::float8 ORDER BY rnd
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT rnd FROM f8 WHERE seqno = 'NaN'::float8
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT rnd FROM f8 WHERE seqno < 'NaN'::float8 ORDER BY rnd
+    expect: rows
+    order: ordered
+    comment: everything non-NaN and non-null

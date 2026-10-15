@@ -1,0 +1,32 @@
+# Derived from PG18 partition_prune.sql (LIKE operators do not prune; results must still be correct).
+id: partition-prune.like-operator-no-prune
+title: LIKE predicates on a list-partitioned text key return the same rows as an unpartitioned table
+family: partition-prune
+tier: extended
+feature_ids: [partitioning, list-partitioning, pattern-matching, partition-pruning, select]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE like_op_noprune (a text) PARTITION BY LIST (a);
+  CREATE TABLE like_op_noprune1 PARTITION OF like_op_noprune FOR VALUES IN ('ABC');
+  CREATE TABLE like_op_noprune2 PARTITION OF like_op_noprune FOR VALUES IN ('BCD');
+  CREATE TABLE like_op_noprune_default PARTITION OF like_op_noprune DEFAULT;
+  INSERT INTO like_op_noprune VALUES ('ABC'), ('BCD'), ('XYZ'), ('ABD'), (NULL);
+steps:
+  - sql: |
+      SELECT a FROM like_op_noprune WHERE a LIKE 'A%' ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the prefix pattern matches rows in the one-value partition and the default partition
+  - sql: |
+      SELECT a FROM like_op_noprune WHERE a LIKE 'B%' ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM like_op_noprune WHERE a NOT LIKE 'A%' ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: NOT LIKE on a NULL key is NULL and excluded

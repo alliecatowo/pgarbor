@@ -1,0 +1,30 @@
+# An operator cannot be set as its own negator; the attempt fails and no negator is recorded.
+id: alter-operator.negator-self-error
+title: Setting an operator as its own negator is rejected and leaves NEGATOR unset
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, negator, errors]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (NEGATOR = ===)
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      SELECT oprnegate = 0 AS no_negator
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset

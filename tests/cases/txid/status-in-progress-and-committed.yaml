@@ -1,0 +1,31 @@
+# txid_status reports in progress for the open transaction and committed once it commits.
+id: txid.status-in-progress-and-committed
+title: txid_status reports in progress inside a transaction and committed after COMMIT
+family: txid
+tier: core
+feature_ids: [txid-status, transactions, create-table, insert, select]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/txid.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE xid_log (kind text PRIMARY KEY, xid bigint NOT NULL);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO xid_log SELECT 'inprogress', txid_current()
+    expect: ok
+  - sql: |
+      SELECT txid_status(xid) AS status FROM xid_log WHERE kind = 'inprogress'
+    expect: rows
+    comment: the open transaction reports its own xid as in progress
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT txid_status(xid) AS status FROM xid_log WHERE kind = 'inprogress'
+    expect: rows
+    comment: the same xid after commit

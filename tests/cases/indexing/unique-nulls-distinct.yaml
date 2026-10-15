@@ -1,0 +1,29 @@
+# Default unique btree index: NULL keys are distinct, so repeated NULLs are accepted,
+# but a duplicate non-NULL key is rejected.
+id: indexing.unique-nulls-distinct
+title: Unique index accepts repeated NULL keys and rejects duplicate non-NULL keys
+family: indexing
+tier: core
+feature_ids: [create-index, unique-constraints, nulls, insert, errors]
+required_capabilities: [create-table, create-index, insert, select, unique-constraints]
+provenance:
+  source: hand
+  ref: "PG18 docs indexes-unique.html; SQLSTATE 23505"
+setup: |
+  CREATE TABLE u (k int, v text);
+  CREATE UNIQUE INDEX u_k_idx ON u (k);
+steps:
+  - sql: |
+      INSERT INTO u VALUES (NULL, 'a'), (NULL, 'b'), (1, 'c')
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM u WHERE k IS NULL
+    expect: rows
+  - sql: |
+      INSERT INTO u VALUES (1, 'dup')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT k, v FROM u ORDER BY v COLLATE "C"
+    expect: rows
+    order: ordered

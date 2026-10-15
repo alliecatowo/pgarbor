@@ -1,0 +1,28 @@
+# Dropping a column silently drops the indexes that use it (no CASCADE needed).
+id: dependency.drop-column-drops-index
+title: DROP COLUMN removes dependent indexes without CASCADE
+family: dependency
+tier: core
+feature_ids: [alter-table, indexes, dependencies]
+required_capabilities: [create-table, insert, select, btree-index, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/dependency.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE deptest1 (f1 int4 UNIQUE, f2 int4, f3 text);
+  INSERT INTO deptest1 VALUES (1, 10, 'p'), (2, NULL, NULL);
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM pg_indexes WHERE tablename = 'deptest1' AND indexdef LIKE '%(f1)%'
+    expect: rows
+  - sql: |
+      ALTER TABLE deptest1 DROP COLUMN f1
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_indexes WHERE tablename = 'deptest1' AND indexdef LIKE '%(f1)%'
+    expect: rows
+  - sql: |
+      SELECT f2 IS NULL AS f2_null, f3 FROM deptest1 ORDER BY f3 NULLS LAST
+    expect: rows
+    order: ordered

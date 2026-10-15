@@ -1,0 +1,55 @@
+# Derived from PG18 partition_prune.sql (list partitioning with DEFAULT and NULL partitions).
+# Checks result rows only; plans are not compared. NULL keys and <> / NOT IN semantics.
+id: partition-prune.list-null-default-not-equal
+title: List partitioning with default and null partitions, result rows for equality and inequality
+family: partition-prune
+tier: core
+feature_ids: [partitioning, list-partitioning, partition-pruning, null-semantics, select]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE lp (a char) PARTITION BY LIST (a);
+  CREATE TABLE lp_default PARTITION OF lp DEFAULT;
+  CREATE TABLE lp_ef PARTITION OF lp FOR VALUES IN ('e', 'f');
+  CREATE TABLE lp_ad PARTITION OF lp FOR VALUES IN ('a', 'd');
+  CREATE TABLE lp_bc PARTITION OF lp FOR VALUES IN ('b', 'c');
+  CREATE TABLE lp_g PARTITION OF lp FOR VALUES IN ('g');
+  CREATE TABLE lp_null PARTITION OF lp FOR VALUES IN (NULL);
+  INSERT INTO lp VALUES ('a'), ('b'), ('c'), ('d'), ('e'), ('f'), ('g'), ('x'), (NULL);
+steps:
+  - sql: |
+      SELECT a FROM lp ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: all nine rows across every partition, including default and null
+  - sql: |
+      SELECT a FROM lp WHERE a > 'a' AND a < 'd' ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM lp WHERE 'a' = a ORDER BY a
+    expect: rows
+    order: ordered
+    comment: commuted equality
+  - sql: |
+      SELECT a FROM lp WHERE a <> 'g' ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: NULL <> 'g' is NULL, so the null row must be excluded
+  - sql: |
+      SELECT a FROM lp WHERE a NOT IN ('a', 'd') ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: NOT IN with a NULL key yields NULL and is excluded
+  - sql: |
+      SELECT a FROM lp WHERE a IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT a FROM lp WHERE a = 'x'
+    expect: rows
+    order: multiset
+    comment: value matched only by the default partition

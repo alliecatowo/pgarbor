@@ -1,0 +1,55 @@
+# timestamptz bind parameters over the extended protocol, including a NULL and a malformed text value.
+id: timestamptz.extended-protocol-params
+title: timestamptz bind parameters through prepared and unnamed statements
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, extended-protocol, prepared-statements, errors]
+required_capabilities: [create-table, insert, select, extended-protocol, prepared-statements, date-type, guc]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY; timestamptz type oid 1184"
+sessions: [a]
+setup: |
+  CREATE TABLE tz_ext (id int4, d timestamptz);
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - parse:
+      name: ins
+      sql: |
+        INSERT INTO tz_ext (id, d) VALUES ($1, $2)
+      param_types: [23, 1184]
+    expect: ok
+  - describe:
+      statement: ins
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["1", "1997-02-10 17:32:01-08"]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["2", null]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["3", "not a time"]
+    expect: error
+    sqlstate: "22007"
+  - exec_params:
+      sql: |
+        SELECT id, d::text AS d_text FROM tz_ext WHERE d >= $1 ORDER BY id
+      params: ["1997-01-01 00:00:00+00"]
+      param_types: [1184]
+    expect: rows
+    order: ordered
+  - exec_params:
+      sql: |
+        SELECT id, d IS NULL AS d_null FROM tz_ext WHERE id = $1 ORDER BY id
+      params: ["2"]
+      param_types: [23]
+    expect: rows
+    order: ordered
+  - close:
+      statement: ins

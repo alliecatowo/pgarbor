@@ -1,0 +1,36 @@
+# Indexes may not use system columns such as ctid, directly, inside an expression, or in a predicate.
+id: create-index.system-column-index-rejected
+title: Indexes on system columns are rejected while ordinary indexes still work
+family: create-index
+tier: extended
+feature_ids: [create-index, system-columns, errors]
+required_capabilities: [create-table, select, create-index, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (indexes on system columns section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE syscol_table (a int)
+    expect: ok
+  - sql: |
+      CREATE INDEX ON syscol_table (ctid)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      CREATE INDEX ON syscol_table ((ctid >= '(1000,0)'))
+    expect: error
+    sqlstate: "0A000"
+    comment: system column inside an index expression
+  - sql: |
+      CREATE INDEX ON syscol_table (a) WHERE ctid >= '(1000,0)'
+    expect: error
+    sqlstate: "0A000"
+    comment: system column inside a predicate
+  - sql: |
+      CREATE INDEX syscol_a ON syscol_table (a)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_indexes WHERE tablename = 'syscol_table'
+    expect: rows
+    order: ordered

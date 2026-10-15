@@ -1,0 +1,26 @@
+# count(DISTINCT), count(col) vs count(*), sum and avg with NULLs, per group across partitions;
+# a filter matching nothing yields a single NULL sum row.
+id: partition-aggregate.count-distinct-nulls
+title: count DISTINCT and NULL-skipping aggregates per partition-key group
+family: partition-aggregate
+tier: core
+feature_ids: [partitioning, group-by, aggregates, distinct, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_cd (a int, b int, c text) PARTITION BY LIST (c);
+  CREATE TABLE pagg_cd_p1 PARTITION OF pagg_cd FOR VALUES IN ('0000', '0001');
+  CREATE TABLE pagg_cd_p2 PARTITION OF pagg_cd FOR VALUES IN ('0002');
+  INSERT INTO pagg_cd VALUES (1, NULL, '0000'), (1, 2, '0000'), (2, 2, '0001'), (NULL, NULL, '0002'), (3, 4, '0002');
+steps:
+  - sql: |
+      SELECT c, count(DISTINCT a), count(a), count(*), sum(b), avg(b) FROM pagg_cd GROUP BY c ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sum(b) FROM pagg_cd WHERE c = 'nope'
+    expect: rows
+    order: multiset

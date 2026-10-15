@@ -1,0 +1,41 @@
+# Domains over varchar(n) and numeric(p,s): INSERT coerces to the base type's typmod, and
+# over-long text is rejected while numeric scale is rounded. Adapted from domain.sql "Test domain input".
+id: domain.basic-insert-coercion
+title: Domain base-type typmods apply on INSERT (varchar length error, numeric rounding)
+family: domain
+tier: core
+feature_ids: [domains, create-domain, insert, varchar, numeric]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN domainvarchar varchar(5);
+  CREATE DOMAIN domainnumeric numeric(8,2);
+  CREATE DOMAIN domainint4 int4;
+  CREATE DOMAIN domaintext text;
+  CREATE TABLE basictest (
+    testint4 domainint4,
+    testtext domaintext,
+    testvarchar domainvarchar,
+    testnumeric domainnumeric
+  );
+steps:
+  - sql: |
+      INSERT INTO basictest VALUES ('88', 'haha', 'short', '123.12')
+    expect: ok
+    comment: good row
+  - sql: |
+      INSERT INTO basictest VALUES ('88', 'haha', 'short text', '123.12')
+    expect: error
+    sqlstate: "22001"
+    comment: varchar(5) domain rejects a 10-character value
+  - sql: |
+      INSERT INTO basictest VALUES ('88', 'haha', 'short', '123.1212')
+    expect: ok
+    comment: numeric(8,2) domain rounds scale on insert, no error
+  - sql: |
+      SELECT testint4, testtext, testvarchar, testnumeric FROM basictest ORDER BY testnumeric, testvarchar
+    expect: rows
+    order: ordered

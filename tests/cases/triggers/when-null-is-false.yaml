@@ -1,0 +1,30 @@
+# A WHEN condition that evaluates to NULL does not fire the trigger; only the TRUE rows fire.
+id: triggers.when-null-is-false
+title: WHEN condition evaluating to NULL or false does not fire the row trigger
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, insert, select, null-semantics]
+required_capabilities: [create-table, insert, select, plpgsql, triggers]
+provenance:
+  source: hand
+  ref: "PG18 docs: CREATE TRIGGER WHEN (trigger fires only when condition is true)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int, x int);
+  CREATE TABLE trig_log (msg text);
+  CREATE FUNCTION log_ins() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES ('fired:' || NEW.id);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_pos AFTER INSERT ON t FOR EACH ROW
+    WHEN (NEW.x > 0) EXECUTE PROCEDURE log_ins();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 5), (2, NULL), (3, -1), (4, 0)
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: ordered

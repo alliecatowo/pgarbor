@@ -1,0 +1,40 @@
+# Grouping by a primary key lets the query reference every other column of that table.
+id: functional-deps.pk-groupby-allows-columns
+title: "GROUP BY primary key allows other columns of that table"
+family: functional-deps
+tier: core
+feature_ids: [group-by, functional-dependencies, primary-key]
+required_capabilities: [create-table, insert, select, group-by, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE articles (
+      id int CONSTRAINT articles_pkey PRIMARY KEY,
+      keywords text,
+      title text UNIQUE NOT NULL,
+      body text UNIQUE,
+      created date
+  );
+  INSERT INTO articles VALUES
+      (1, 'db pg', 'First', 'body one', '2024-01-01'),
+      (2, NULL, 'Second', NULL, '2024-02-01'),
+      (3, '', 'Third', 'body three', NULL);
+steps:
+  - sql: |
+      SELECT id, keywords, title, body, created
+      FROM articles
+      GROUP BY id
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "every non-key column is functionally dependent on the primary key"
+  - sql: |
+      SELECT id, keywords IS NULL AS kw_null, keywords = '' AS kw_empty, body IS NULL AS body_null
+      FROM articles
+      GROUP BY id
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "NULL and empty-string keywords stay distinct"

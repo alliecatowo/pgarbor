@@ -1,0 +1,42 @@
+# Derived from PG18 partition_prune.sql (inverse boolean partitioning on an expression key, PARTITION BY LIST ((NOT a))).
+id: partition-prune.boolean-expression-partition-key
+title: List partitioning on an expression key NOT a with a NULL partition
+family: partition-prune
+tier: extended
+feature_ids: [partitioning, list-partitioning, expression-partition-key, boolean, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE iboolpart (a bool) PARTITION BY LIST ((NOT a));
+  CREATE TABLE iboolpart_default PARTITION OF iboolpart DEFAULT;
+  CREATE TABLE iboolpart_f PARTITION OF iboolpart FOR VALUES IN ('true');
+  CREATE TABLE iboolpart_t PARTITION OF iboolpart FOR VALUES IN ('false');
+  INSERT INTO iboolpart VALUES (true), (false), (NULL);
+  DELETE FROM iboolpart WHERE a IS NULL;
+  CREATE TABLE iboolpart_null PARTITION OF iboolpart FOR VALUES IN (NULL);
+  INSERT INTO iboolpart VALUES (NULL);
+steps:
+  - sql: |
+      SELECT a FROM iboolpart WHERE a IN (true, false) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM iboolpart WHERE a = false ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM iboolpart WHERE a IS NOT TRUE ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: pruning must not change the result, which is false plus the NULL row
+  - sql: |
+      SELECT a FROM iboolpart WHERE a IS NOT FALSE ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM iboolpart ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered

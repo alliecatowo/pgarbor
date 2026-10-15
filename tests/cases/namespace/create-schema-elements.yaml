@@ -1,0 +1,31 @@
+# CREATE SCHEMA with embedded elements: the view and index are written before the table they
+# reference, and all objects must land in the new schema.
+id: namespace.create-schema-elements
+title: CREATE SCHEMA with embedded table, index and view lands all objects in the schema
+family: namespace
+tier: core
+feature_ids: [create-schema, create-table, create-index, create-view, serial]
+required_capabilities: [create-schema, create-table, create-index, create-view, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/namespace.sql"
+  license: PostgreSQL License
+steps:
+  - sql: |
+      CREATE SCHEMA ns_elems
+             CREATE UNIQUE INDEX abc_a_idx ON ns_elems.abc (a)
+             CREATE VIEW ns_elems.abc_view AS SELECT a + 1 AS a, b + 1 AS b FROM ns_elems.abc
+             CREATE TABLE ns_elems.abc (a serial, b int UNIQUE)
+    expect: ok
+  - sql: |
+      INSERT INTO ns_elems.abc (b) VALUES (10), (NULL), (30)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM ns_elems.abc ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM ns_elems.abc_view ORDER BY a
+    expect: rows
+    order: ordered
+    comment: view arithmetic on NULL b yields NULL

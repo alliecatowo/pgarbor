@@ -1,0 +1,36 @@
+# search_path may name schemas that do not exist yet; current_schemas(false) reflects creation and drop.
+id: guc.search-path-schema-drop
+title: search_path tracks schemas created and dropped after it was set
+family: guc
+tier: extended
+feature_ids: [guc, search-path, create-schema, drop-schema, catalog-introspection]
+required_capabilities: [select, create-schema, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/guc.sql
+sessions: [a]
+setup: |
+  CREATE SCHEMA sp_present;
+steps:
+  - sql: |
+      SET search_path = sp_present, public, sp_absent
+    expect: ok
+  - sql: |
+      SELECT current_schemas(false) AS before_create
+    expect: rows
+    comment: sp_absent does not exist yet and is skipped
+  - sql: |
+      CREATE SCHEMA sp_absent
+    expect: ok
+  - sql: |
+      SELECT current_schemas(false) AS after_create
+    expect: rows
+  - sql: |
+      DROP SCHEMA sp_absent
+    expect: ok
+  - sql: |
+      SELECT current_schemas(false) AS after_drop
+    expect: rows
+  - sql: |
+      RESET search_path
+    expect: ok

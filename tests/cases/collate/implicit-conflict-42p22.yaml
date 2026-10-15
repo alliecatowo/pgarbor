@@ -1,0 +1,27 @@
+# Two implicit, different column collations: || is collation-agnostic, comparison fails at run time,
+# and an explicit COLLATE on one side resolves the conflict.
+id: collate.implicit-conflict-42p22
+title: "Implicit collation conflict between columns fails at run time with indeterminate_collation"
+family: collate
+tier: core
+feature_ids: [collation, errors, comparison, string-concat]
+required_capabilities: [create-table, insert, select, collation]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/collate.sql"
+setup: |
+  CREATE TABLE collate_test10 (a int, x text COLLATE "C", y text COLLATE "POSIX");
+  INSERT INTO collate_test10 VALUES (1, 'hij', 'hij'), (2, 'HIJ', 'HIJ');
+steps:
+  - sql: |
+      SELECT x || y FROM collate_test10 ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM collate_test10 WHERE x < y ORDER BY a
+    expect: error
+    sqlstate: "42p22"
+  - sql: |
+      SELECT a, x COLLATE "C" < y AS lt FROM collate_test10 ORDER BY a
+    expect: rows
+    order: ordered

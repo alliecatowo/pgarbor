@@ -1,0 +1,33 @@
+# WHERE CURRENT OF on a cursor that has not fetched any row fails with 24000.
+id: portals.where-current-of-no-current-row-error
+title: DELETE WHERE CURRENT OF before any FETCH fails with 24000
+family: portals
+tier: core
+feature_ids: [cursors, updatable-cursors, delete, errors, transactions]
+required_capabilities: [create-table, insert, select, delete, transactions, cursors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/portals.sql (DELETE WHERE CURRENT OF c1 -- fail, no current row)"
+sessions: [a]
+setup: |
+  CREATE TABLE u (f1 int4, f2 text);
+  INSERT INTO u VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c1 CURSOR FOR SELECT f1 FROM u
+    expect: ok
+  - sql: |
+      DELETE FROM u WHERE CURRENT OF c1
+    expect: error
+    sqlstate: "24000"
+    comment: cursor is not positioned on a row
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT f1 FROM u ORDER BY f1
+    expect: rows
+    order: ordered

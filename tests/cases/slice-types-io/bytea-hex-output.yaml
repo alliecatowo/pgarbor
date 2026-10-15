@@ -1,0 +1,40 @@
+# bytea hex and escape output formats, empty and NULL values, and invalid hex input.
+id: slice-types-io.bytea-hex-output
+title: "bytea hex and escape text output with empty value and invalid hex"
+family: slice-types-io
+tier: core
+feature_ids: [bytea, text-output, guc, errors]
+required_capabilities: [select, bytea, guc, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-binary.html#DATATYPE-BINARY-BYTEA-OUTPUT"
+sessions: [a]
+steps:
+  - sql: |
+      SET bytea_output = 'hex'
+    expect: ok
+  - sql: |
+      SELECT '\xDEADbeef'::bytea::text AS h, ''::bytea::text AS empty, '\x00ff'::bytea::text AS z, NULL::bytea IS NULL AS n
+    expect: rows
+    order: multiset
+  - sql: |
+      SET bytea_output = 'escape'
+    expect: ok
+  - sql: |
+      SELECT '\xDEADbeef'::bytea::text AS e, 'ab\001'::bytea::text AS octal_in, length('\x0102'::bytea) AS len
+    expect: rows
+    order: multiset
+    comment: "escape output prints non-printable bytes as octal; literal backslash-001 input is byte 0x01"
+  - sql: |
+      SELECT '\xzz'::bytea
+    expect: error
+    sqlstate: "22023"
+    comment: "non-hex digit in hex-format bytea input"
+  - sql: |
+      SELECT '\x123'::bytea
+    expect: error
+    sqlstate: "22023"
+    comment: "odd number of hex digits"
+  - sql: |
+      SET bytea_output = 'hex'
+    expect: ok

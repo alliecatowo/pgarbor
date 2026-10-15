@@ -1,0 +1,58 @@
+# Ascending sequence with CYCLE wraps to MINVALUE; after NO CYCLE restart it errors at MAXVALUE.
+id: sequence.cycle-ascending
+title: CYCLE wraps an ascending sequence to MINVALUE; NO CYCLE raises 2200H at the limit
+family: sequence
+tier: core
+feature_ids: [sequences, alter-sequence, cycle]
+required_capabilities: [create-table, select, errors, sequences]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sequence.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE SEQUENCE sq_c START WITH 32;
+steps:
+  - sql: |
+      ALTER SEQUENCE sq_c RESTART WITH 24 INCREMENT BY 4 MAXVALUE 36 MINVALUE 5 CYCLE
+    expect: ok
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+    comment: 24
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+    comment: 28
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+    comment: 32
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+    comment: 36
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+    comment: cycled back to MINVALUE 5
+  - sql: |
+      ALTER SEQUENCE sq_c RESTART WITH 24 NO CYCLE
+    expect: ok
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('sq_c') AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('sq_c')
+    expect: error
+    sqlstate: "2200H"
+    comment: NO CYCLE at MAXVALUE 36 raises sequence_generator_limit_exceeded

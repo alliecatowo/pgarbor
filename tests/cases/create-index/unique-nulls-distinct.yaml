@@ -1,0 +1,34 @@
+# Default NULLS DISTINCT unique index: repeated NULL keys are allowed, duplicate non-NULL keys are rejected.
+id: create-index.unique-nulls-distinct
+title: Default NULLS DISTINCT unique index allows repeated NULL keys but rejects duplicate non-NULL keys
+family: create-index
+tier: core
+feature_ids: [create-index, unique-index, nulls-distinct, errors]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (unique null behavior section)"
+sessions: [a]
+setup: |
+  CREATE TABLE unique_tbl (i int, t text);
+  CREATE UNIQUE INDEX unique_idx1 ON unique_tbl (i) NULLS DISTINCT;
+steps:
+  - sql: |
+      INSERT INTO unique_tbl VALUES (1, 'one'), (2, 'two')
+    expect: ok
+  - sql: |
+      INSERT INTO unique_tbl (t) VALUES ('six'), ('seven')
+    expect: ok
+    comment: two NULL keys are distinct under the default
+  - sql: |
+      INSERT INTO unique_tbl VALUES (1, 'dup')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT i, t FROM unique_tbl WHERE i IS NULL ORDER BY t
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM unique_tbl
+    expect: rows
+    order: ordered

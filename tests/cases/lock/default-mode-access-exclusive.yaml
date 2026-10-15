@@ -1,0 +1,38 @@
+# LOCK TABLE without a mode takes ACCESS EXCLUSIVE, so a concurrent plain SELECT waits.
+id: lock.default-mode-access-exclusive
+title: Default LOCK TABLE mode is ACCESS EXCLUSIVE and blocks a concurrent SELECT
+family: lock
+tier: core
+feature_ids: [lock-table, lock-modes, transactions, multi-session]
+required_capabilities: [create-table, insert, select, lock-table, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql; PG18 docs sql-lock.html (default mode ACCESS EXCLUSIVE)"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE lock_tbl1 (a BIGINT);
+  INSERT INTO lock_tbl1 VALUES (1), (2);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE lock_tbl1
+    expect: ok
+  - session: b
+    sql: |
+      SELECT a FROM lock_tbl1 ORDER BY a
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    order: ordered
+    comment: after a commits, b sees the two committed rows

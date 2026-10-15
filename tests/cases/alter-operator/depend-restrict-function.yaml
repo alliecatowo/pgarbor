@@ -1,0 +1,52 @@
+# The pg_depend entries for an operator follow its RESTRICT estimator: a custom function is a
+# dependency while set and disappears after RESTRICT = NONE; the procedure and schema remain.
+id: alter-operator.depend-restrict-function
+title: pg_depend for an operator tracks a custom RESTRICT function through SET and reset
+family: alter-operator
+tier: extended
+feature_ids: [alter-operator, dependencies, catalog-introspection, restrict-selectivity]
+required_capabilities: [alter-operator, create-function-sql, create-operator, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE FUNCTION customcontsel(internal, oid, internal, integer)
+  RETURNS float8 AS 'contsel' LANGUAGE internal STABLE STRICT;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn,
+      RESTRICT = customcontsel,
+      JOIN = contjoinsel
+  );
+steps:
+  - sql: |
+      SELECT pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype
+      FROM pg_depend
+      WHERE classid = 'pg_operator'::regclass AND objid = '===(bool,bool)'::regoperator
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE)
+    expect: ok
+  - sql: |
+      SELECT pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype
+      FROM pg_depend
+      WHERE classid = 'pg_operator'::regclass AND objid = '===(bool,bool)'::regoperator
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = customcontsel)
+    expect: ok
+  - sql: |
+      SELECT pg_describe_object(refclassid, refobjid, refobjsubid) AS ref, deptype
+      FROM pg_depend
+      WHERE classid = 'pg_operator'::regclass AND objid = '===(bool,bool)'::regoperator
+      ORDER BY 1
+    expect: rows
+    order: ordered

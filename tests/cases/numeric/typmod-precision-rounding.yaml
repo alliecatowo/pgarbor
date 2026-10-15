@@ -1,0 +1,30 @@
+# numeric(6,2) rounds input to scale 2 (half away from zero) and rejects values with too many integer digits.
+id: numeric.typmod-precision-rounding
+title: numeric(6,2) rounds on insert and rejects values with more than four integer digits
+family: numeric
+tier: core
+feature_ids: [numeric, insert, typmod, errors]
+required_capabilities: [create-table, insert, select, numeric, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/numeric.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE r (id int, v numeric(6,2));
+steps:
+  - sql: |
+      INSERT INTO r VALUES (1, '2.345'), (2, '2.355'), (3, '-2.345'), (4, '1.5'), (5, NULL), (6, '1234.5')
+    expect: ok
+  - sql: |
+      INSERT INTO r VALUES (7, '10000')
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      INSERT INTO r VALUES (8, '12345.6')
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT id, v, v IS NULL AS v_null FROM r ORDER BY id
+    expect: rows
+    order: ordered

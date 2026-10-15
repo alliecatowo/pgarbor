@@ -1,0 +1,26 @@
+# Array hashing: salt-0 invariant, NULL array and NULL element handling.
+id: hash-func.array-salt-zero
+title: "int4 array hashes keep the salt-0 invariant and handle NULL arrays and elements"
+family: hash-func
+tier: core
+feature_ids: [hash-functions, arrays, null-handling, hash-salt]
+required_capabilities: [select, values, arrays]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_func.sql"
+steps:
+  - sql: |
+      SELECT v::text AS value,
+             hash_array(v)::bit(32) = hash_array_extended(v, 0)::bit(32) AS salt0_matches,
+             hash_array(v)::bit(32) = hash_array_extended(v, 1)::bit(32) AS salt1_matches
+      FROM (VALUES ('{}'::int4[]), ('{0}'::int4[]), ('{0,1,2,3,4}'::int4[]),
+                   ('{17,18,19,20}'::int4[]), ('{207112489,807112489}'::int4[])) x(v)
+      ORDER BY value
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT hash_array('{1,NULL,3}'::int4[]) IS NOT NULL AS has_hash,
+             hash_array('{NULL}'::int4[])::bit(32) = hash_array_extended('{NULL}'::int4[], 0)::bit(32) AS null_elem_salt0,
+             hash_array(NULL::int4[]) IS NULL AS null_array_is_null,
+             hash_array_extended(NULL::int4[], 0) IS NULL AS null_array_ext_is_null
+    expect: rows

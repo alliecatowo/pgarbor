@@ -1,0 +1,33 @@
+# A domain DEFAULT fills omitted columns, and a NOT NULL domain rejects an explicit NULL even
+# when the column itself would accept it. Adapted from domain.sql "defaulttest".
+id: domain.default-and-not-null
+title: Domain DEFAULT applies to omitted columns; NOT NULL domain rejects explicit NULL
+family: domain
+tier: core
+feature_ids: [domains, create-domain, defaults, not-null, insert]
+required_capabilities: [create-table, insert, select, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN ddef1 int4 DEFAULT 3;
+  CREATE DOMAIN ddef5 numeric(8,2) NOT NULL DEFAULT '12.12';
+  CREATE TABLE defaulttest (c1 ddef1, c2 ddef5);
+steps:
+  - sql: |
+      INSERT INTO defaulttest DEFAULT VALUES
+    expect: ok
+    comment: both columns take the domain defaults
+  - sql: |
+      INSERT INTO defaulttest (c1, c2) VALUES (7, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO defaulttest (c1) VALUES (NULL)
+    expect: ok
+    comment: c1 is nullable and c2 takes its NOT NULL domain default
+  - sql: |
+      SELECT c1, c2 FROM defaulttest ORDER BY c1 NULLS FIRST, c2
+    expect: rows
+    order: ordered

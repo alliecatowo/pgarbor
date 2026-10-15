@@ -1,0 +1,33 @@
+id: window.nth-value-frame
+title: nth_value over default and full frames, out-of-frame NULL, and zero argument error
+family: window
+tier: extended
+feature_ids: [window-functions, nth-value, window-frames, errors]
+required_capabilities: [create-table, insert, select, window-functions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/window.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE q (k int4 PRIMARY KEY, v text);
+  INSERT INTO q VALUES (1, 'a'), (2, 'b'), (3, 'c');
+steps:
+  - sql: |
+      SELECT k, nth_value(v, 2) OVER (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS second
+      FROM q ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k, nth_value(v, 2) OVER (ORDER BY k) AS second FROM q ORDER BY k
+    expect: rows
+    order: ordered
+    comment: default frame ends at the current row so the first row has no second row
+  - sql: |
+      SELECT k, nth_value(v, 5) OVER (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS far
+      FROM q ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT nth_value(v, 0) OVER (ORDER BY k) FROM q
+    expect: error
+    sqlstate: "2201W"

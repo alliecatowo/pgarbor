@@ -1,0 +1,44 @@
+# NULL timestamps: comparisons yield no rows, ordering places NULLs last by default, aggregates skip them.
+id: timestamp.null-semantics
+title: NULL timestamps in comparisons, ordering, aggregates and arithmetic
+family: timestamp
+tier: core
+feature_ids: [timestamp, null-handling, select, aggregates, ordering]
+required_capabilities: [create-table, insert, select, timestamp, aggregates]
+provenance:
+  source: hand
+  ref: "PG18 docs functions-datetime; NULL propagation rules"
+sessions: [a]
+setup: |
+  CREATE TABLE ts_null (id int4 PRIMARY KEY, d1 timestamp without time zone);
+  INSERT INTO ts_null VALUES (1, '1997-01-02'), (2, NULL), (3, '1997-02-10 17:32:01'), (4, NULL)
+steps:
+  - sql: |
+      SELECT id, d1 FROM ts_null ORDER BY d1, id
+    expect: rows
+    order: ordered
+    comment: NULLs sort last under ascending order by default
+  - sql: |
+      SELECT id, d1 FROM ts_null ORDER BY d1 DESC NULLS FIRST, id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM ts_null WHERE d1 = NULL
+    expect: rows
+    order: multiset
+    comment: equality with NULL is unknown, so no rows
+  - sql: |
+      SELECT id FROM ts_null WHERE d1 IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS total, count(d1) AS non_null, count(*) FILTER (WHERE d1 IS NULL) AS nulls FROM ts_null
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT NULL::timestamp - timestamp '1997-01-02' AS d, NULL::timestamp + interval '1 day' AS a
+    expect: rows
+  - sql: |
+      SELECT id, coalesce(d1, timestamp '1970-01-01') AS d FROM ts_null ORDER BY id
+    expect: rows
+    order: ordered

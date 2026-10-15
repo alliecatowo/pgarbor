@@ -1,0 +1,41 @@
+# DO INSTEAD UPDATE and DELETE rules on a select-star view; delete removes every row matching old.a.
+id: rules.view-update-delete-instead
+title: UPDATE and DELETE through a view use DO INSTEAD rules keyed on OLD values
+family: rules
+tier: core
+feature_ids: [rules, views, update, delete]
+required_capabilities: [create-table, create-view, create-rule, insert, select, update, delete]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (rtest_v1_upd, rtest_v1_del)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (a int4, b int4);
+  CREATE VIEW v1 AS SELECT * FROM t1;
+  CREATE RULE v1_upd AS ON UPDATE TO v1 DO INSTEAD
+    UPDATE t1 SET a = NEW.a, b = NEW.b WHERE a = OLD.a;
+  CREATE RULE v1_del AS ON DELETE TO v1 DO INSTEAD
+    DELETE FROM t1 WHERE a = OLD.a;
+  INSERT INTO t1 VALUES (1, 11), (2, 12), (2, 13), (3, 14);
+steps:
+  - sql: |
+      UPDATE v1 SET b = b + 100 WHERE a = 1
+    expect: ok
+  - sql: |
+      SELECT a, b FROM v1 ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM v1 WHERE b = 12
+    expect: ok
+    comment: the rule deletes by OLD.a, so both rows with a = 2 go, including (2, 13)
+  - sql: |
+      SELECT a, b FROM v1 ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM v1
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t1
+    expect: rows

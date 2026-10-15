@@ -1,0 +1,37 @@
+# JSON string grammar: legal backslash escapes pass, single quotes, unclosed quotes, raw newline and bad escapes fail with 22P02.
+id: json.string-literals
+title: "JSON string literals - legal escapes accepted, malformed strings rejected"
+family: json
+tier: core
+feature_ids: [json, json-input, json-string]
+required_capabilities: [select, json]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/json.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '""'::json::text AS empty, '"abc"'::json::text AS abc, '"\n\"\\"'::json::text AS escapes
+    expect: rows
+  - sql: |
+      SELECT ('"' || repeat('.', 12) || 'abc\n"')::json::text AS long_escape
+    expect: rows
+  - sql: |
+      SELECT $$''$$::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '"abc'::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '"abc
+      def"'::json
+    expect: error
+    sqlstate: "22P02"
+    comment: unescaped newline inside a string constant
+  - sql: |
+      SELECT '"\v"'::json
+    expect: error
+    sqlstate: "22P02"
+    comment: \v is not a JSON escape

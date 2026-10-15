@@ -1,0 +1,39 @@
+# Views, materialized views and legacy inheritance parents and children are not partition tree members.
+id: partition-info.non-partition-relkinds
+title: Views, materialized views and inheritance parent and child return no partition tree rows and a NULL root
+family: partition-info
+tier: extended
+feature_ids: [create-view, create-matview, inheritance, partition-tree-functions, null-handling]
+required_capabilities: [create-table, create-view, create-matview, inheritance, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE VIEW ptif_test_view AS SELECT 1;
+  CREATE MATERIALIZED VIEW ptif_test_matview AS SELECT 1;
+  CREATE TABLE ptif_li_parent ();
+  CREATE TABLE ptif_li_child () INHERITS (ptif_li_parent);
+steps:
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_partition_tree('ptif_test_view')) AS tree_rows,
+             (SELECT count(*) FROM pg_partition_ancestors('ptif_test_view')) AS ancestor_rows,
+             pg_partition_root('ptif_test_view') IS NULL AS root_is_null
+    expect: rows
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_partition_tree('ptif_test_matview')) AS tree_rows,
+             (SELECT count(*) FROM pg_partition_ancestors('ptif_test_matview')) AS ancestor_rows,
+             pg_partition_root('ptif_test_matview') IS NULL AS root_is_null
+    expect: rows
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_partition_tree('ptif_li_parent')) AS tree_rows,
+             (SELECT count(*) FROM pg_partition_ancestors('ptif_li_parent')) AS ancestor_rows,
+             pg_partition_root('ptif_li_parent') IS NULL AS root_is_null
+    expect: rows
+    comment: legacy inheritance parent is not a partition root
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_partition_tree('ptif_li_child')) AS tree_rows,
+             (SELECT count(*) FROM pg_partition_ancestors('ptif_li_child')) AS ancestor_rows,
+             pg_partition_root('ptif_li_child') IS NULL AS root_is_null
+    expect: rows
+    comment: legacy inheritance child is not a partition either

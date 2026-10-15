@@ -1,0 +1,45 @@
+# Deleting scattered and contiguous ranges from a GiST-indexed table, then VACUUM ANALYZE.
+# Scaled down from the regression file's 10000-row load to keep the case small.
+id: gist.delete-vacuum-gist
+title: Scattered and range deletes on a GiST table survive VACUUM ANALYZE
+family: gist
+tier: extended
+feature_ids: [gist, create-index, delete, vacuum, analyze, point, select]
+required_capabilities: [create-table, insert, select, delete, create-index, gist-index, point-type, vacuum, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE dv (id int4, p point);
+  CREATE INDEX dv_p ON dv USING gist (p);
+  INSERT INTO dv SELECT g, point(g*10, g*10) FROM generate_series(1, 2000) g;
+steps:
+  - sql: |
+      DELETE FROM dv WHERE id % 2 = 1
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM dv
+    expect: rows
+    order: multiset
+  - sql: |
+      DELETE FROM dv WHERE id > 1000
+    expect: ok
+  - sql: |
+      SELECT count(*), min(id), max(id) FROM dv
+    expect: rows
+    order: multiset
+  - sql: |
+      VACUUM ANALYZE dv
+    expect: ok
+  - sql: |
+      SELECT id FROM dv WHERE p <@ box(point(0,0), point(100,100)) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO dv VALUES (2001, point(20000,20000))
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM dv WHERE p <@ box(point(19999,19999), point(20001,20001))
+    expect: rows
+    order: multiset

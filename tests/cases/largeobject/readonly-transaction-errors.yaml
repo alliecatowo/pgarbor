@@ -1,0 +1,79 @@
+# Inside a READ ONLY transaction, INV_READ opens succeed while every writing LO function raises 25006.
+id: largeobject.readonly-transaction-errors
+title: Writing large object functions are refused in read-only transactions
+family: largeobject
+tier: core
+feature_ids: [large-objects, errors, transactions, read-only-transactions]
+required_capabilities: [large-objects, transactions, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  SELECT lo_create(48);
+steps:
+  - sql: |
+      START TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT lo_open(48, CAST(x'40000' AS integer))
+    expect: rows
+    comment: INV_READ is allowed
+  - sql: |
+      SELECT lo_open(48, CAST(x'20000' AS integer))
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      START TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT lo_create(0)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      START TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT lo_unlink(48)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      START TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT lo_put(48, 0, 'x'::bytea)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      START TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT lo_from_bytea(0, 'x'::bytea)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      START TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT lo_truncate64(48, 0)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok

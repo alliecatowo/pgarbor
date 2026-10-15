@@ -1,0 +1,27 @@
+# brin_desummarize_range on a block number beyond the table, and repeated on the same range,
+# succeeds and returns a single empty value each time.
+id: brin.desummarize-large-range
+title: brin_desummarize_range is idempotent and accepts out-of-table block numbers
+family: brin
+tier: extended
+feature_ids: [brin, brin-maintenance-functions, select]
+required_capabilities: [create-table, insert, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brin_desummarize_range('brinidx', 0) twice, 100000000)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4);
+  INSERT INTO t SELECT g FROM generate_series(1, 50) g;
+  CREATE INDEX t_brin ON t USING brin (a) WITH (pages_per_range = 1);
+steps:
+  - sql: |
+      SELECT brin_desummarize_range('t_brin', 0)
+    expect: rows
+  - sql: |
+      SELECT brin_desummarize_range('t_brin', 0)
+    expect: rows
+    comment: second call on an already desummarized range
+  - sql: |
+      SELECT brin_desummarize_range('t_brin', 100000000)
+    expect: rows

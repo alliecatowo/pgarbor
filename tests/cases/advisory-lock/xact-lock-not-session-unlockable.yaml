@@ -1,0 +1,29 @@
+# A transaction-level advisory lock cannot be released with pg_advisory_unlock.
+id: advisory-lock.xact-lock-not-session-unlockable
+title: "pg_advisory_unlock on a transaction-level lock returns false and keeps the lock"
+family: advisory-lock
+tier: core
+feature_ids: [advisory-locks, transactions]
+required_capabilities: [advisory-locks, transactions, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/advisory_lock.sql"
+  license: "PostgreSQL License"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT pg_advisory_xact_lock(1), pg_advisory_xact_lock_shared(2)
+    expect: rows
+  - sql: |
+      SELECT pg_advisory_unlock(1), pg_advisory_unlock_shared(2)
+    expect: rows
+    comment: both false, since these are xact locks
+  - sql: |
+      SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    expect: rows
+  - sql: |
+      ROLLBACK
+    expect: ok

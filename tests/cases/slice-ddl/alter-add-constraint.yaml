@@ -1,0 +1,45 @@
+# ALTER TABLE ADD/DROP CONSTRAINT: validation of existing rows, a second primary key is refused, dropping a missing constraint fails.
+id: slice-ddl.alter-add-constraint
+title: ADD CONSTRAINT validates existing rows; second primary key and missing constraint errors
+family: slice-ddl
+tier: core
+feature_ids: [alter-table, create-table, insert, update, primary-key, unique, errors]
+required_capabilities: [create-table, insert, select, update, alter-table, primary-key, unique, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-altertable.html#SQL-ALTERTABLE-DESC-ADD-CONSTRAINT"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ak (id int4, code text);
+      INSERT INTO ak VALUES (1, 'a'), (2, 'a')
+    expect: ok
+  - sql: |
+      ALTER TABLE ak ADD CONSTRAINT ak_pk PRIMARY KEY (id)
+    expect: ok
+  - sql: |
+      ALTER TABLE ak ADD CONSTRAINT ak_code_uq UNIQUE (code)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      UPDATE ak SET code = 'b' WHERE id = 2
+    expect: ok
+  - sql: |
+      ALTER TABLE ak ADD CONSTRAINT ak_code_uq UNIQUE (code)
+    expect: ok
+  - sql: |
+      ALTER TABLE ak ADD CONSTRAINT ak_pk2 PRIMARY KEY (code)
+    expect: error
+    sqlstate: "42P16"
+    comment: a table may have only one primary key
+  - sql: |
+      ALTER TABLE ak DROP CONSTRAINT ak_code_uq
+    expect: ok
+  - sql: |
+      ALTER TABLE ak DROP CONSTRAINT ak_code_uq
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT id, code FROM ak ORDER BY id
+    expect: rows
+    order: ordered

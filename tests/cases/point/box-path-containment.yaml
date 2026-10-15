@@ -1,0 +1,33 @@
+# Point containment in box and path; boundary inclusion; NULL rows excluded from both polarities.
+id: point.box-path-containment
+title: Point containment in boxes and paths, including boundary and NULL cases
+family: point
+tier: core
+feature_ids: [point-type, box-type, path-type, point-containment]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/point.sql (<@ box, @> box, <@ path)"
+sessions: [a]
+setup: |
+  CREATE TABLE pts (id int4 PRIMARY KEY, p point);
+  INSERT INTO pts VALUES (1, '(0,0)'), (2, '(-10,0)'), (3, '(-3,4)'), (4, '(5.1,34.5)'), (5, '(-5,-12)'), (6, NULL);
+steps:
+  - sql: |
+      SELECT id FROM pts WHERE p <@ box '(0,0,100,100)' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: origin lies on the box corner and must be included
+  - sql: |
+      SELECT id FROM pts WHERE box '(0,0,100,100)' @> p ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM pts WHERE NOT p <@ box '(0,0,100,100)' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL point is neither in nor out, so row 6 is excluded
+  - sql: |
+      SELECT id FROM pts WHERE p <@ path '[(0,0),(-10,0),(-10,10)]' ORDER BY id
+    expect: rows
+    order: ordered

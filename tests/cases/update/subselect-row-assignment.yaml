@@ -1,0 +1,43 @@
+# Row assignment from a scalar subquery: uncorrelated, correlated, NULL on zero rows, and a cardinality error.
+id: update.subselect-row-assignment
+title: SET (a,b) = (SELECT ...) assigns NULL on zero rows and fails on multiple rows
+family: update
+tier: core
+feature_ids: [update, subqueries, multi-column-assignment]
+required_capabilities: [create-table, insert, select, update, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/update.sql (uncorrelated/correlated sub-select, fail multiple rows, set to null if no rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE update_test (a INT, b INT, c TEXT);
+  INSERT INTO update_test VALUES (100, 20, 'x'), (11, 41, 'car'), (11, 42, 'y');
+steps:
+  - sql: |
+      UPDATE update_test SET (b, a) = (SELECT a, b FROM update_test WHERE b = 41 AND c = 'car')
+        WHERE a = 100 AND b = 20
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM update_test ORDER BY c, a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE update_test o SET (b, a) = (SELECT i.a + 1, i.b FROM update_test i
+        WHERE i.a = o.a AND i.b = o.b AND i.c IS NOT DISTINCT FROM o.c)
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM update_test ORDER BY c, a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE update_test SET (b, a) = (SELECT a + 1, b FROM update_test)
+    expect: error
+    sqlstate: "21000"
+  - sql: |
+      UPDATE update_test SET (b, a) = (SELECT a + 1, b FROM update_test WHERE a = 1000)
+        WHERE c = 'y'
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM update_test ORDER BY c, a, b NULLS LAST
+    expect: rows
+    order: ordered

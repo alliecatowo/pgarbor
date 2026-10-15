@@ -1,0 +1,38 @@
+# brin minmax on text: equality and NULL-aware predicates; empty string and a long value
+# must both round-trip through the summaries.
+id: brin.text-equality
+title: BRIN minmax on text column supports equality, empty string and long values
+family: brin
+tier: extended
+feature_ids: [brin, create-index, select, text]
+required_capabilities: [create-table, insert, select, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (textcol, repeat(stringu1, 8) rows and textcol = '' update)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, name text);
+  INSERT INTO t SELECT g, repeat('ab', g % 40) FROM generate_series(1, 300) g;
+  INSERT INTO t VALUES (1000, NULL), (1001, '');
+  CREATE INDEX t_name_brin ON t USING brin (name) WITH (pages_per_range = 2);
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE name = ''
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id FROM t WHERE name = repeat('ab', 39) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t WHERE name = 'no-such-value' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no matches; empty result set
+  - sql: |
+      UPDATE t SET name = '' WHERE name IS NOT NULL AND id <= 10
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE name = ''
+    expect: rows
+    order: multiset

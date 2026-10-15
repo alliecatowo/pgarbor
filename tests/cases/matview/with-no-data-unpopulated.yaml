@@ -1,0 +1,34 @@
+id: matview.with-no-data-unpopulated
+title: WITH NO DATA leaves the view unpopulated until first REFRESH
+family: matview
+tier: core
+feature_ids: [materialized-views, nulls]
+required_capabilities: [create-table, insert, select, create-materialized-view, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE items (k int4 PRIMARY KEY, label text);
+  INSERT INTO items VALUES (1, 'a'), (2, NULL);
+steps:
+  - sql: |
+      CREATE MATERIALIZED VIEW items_mv AS SELECT k, label FROM items WITH NO DATA
+    expect: ok
+  - sql: |
+      SELECT relispopulated FROM pg_class WHERE oid = 'items_mv'::regclass
+    expect: rows
+  - sql: |
+      SELECT k FROM items_mv
+    expect: error
+    sqlstate: "55000"
+    comment: querying an unpopulated materialized view
+  - sql: |
+      REFRESH MATERIALIZED VIEW items_mv
+    expect: ok
+  - sql: |
+      SELECT k, label, label IS NULL AS label_null FROM items_mv ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT relispopulated FROM pg_class WHERE oid = 'items_mv'::regclass
+    expect: rows

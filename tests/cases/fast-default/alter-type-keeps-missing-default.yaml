@@ -1,0 +1,29 @@
+# ALTER COLUMN TYPE that does not rewrite the table: the missing default and a later SET DEFAULT both survive the change.
+id: fast-default.alter-type-keeps-missing-default
+title: ALTER COLUMN TYPE to a wider varchar keeps added-column defaults per row
+family: fast-default
+tier: core
+feature_ids: [alter-table, defaults, types, varchar]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/fast_default.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE vtype2 (a int4);
+  INSERT INTO vtype2 VALUES (1);
+  ALTER TABLE vtype2 ADD COLUMN b varchar(10) DEFAULT 'xxx';
+  ALTER TABLE vtype2 ALTER COLUMN b SET DEFAULT 'yyy';
+  INSERT INTO vtype2 (a) VALUES (2);
+steps:
+  - sql: |
+      SELECT a, b FROM vtype2 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE vtype2 ALTER COLUMN b TYPE varchar(20) USING b::varchar(20)
+    expect: ok
+  - sql: |
+      SELECT a, b, length(b) AS len FROM vtype2 ORDER BY a
+    expect: rows
+    order: ordered

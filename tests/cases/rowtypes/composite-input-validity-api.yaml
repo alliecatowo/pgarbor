@@ -1,0 +1,31 @@
+# pg_input_is_valid and pg_input_error_info report composite input problems without raising.
+id: rowtypes.composite-input-validity-api
+title: Non-throwing input validity API for composite types
+family: rowtypes
+tier: extended
+feature_ids: [composite-types, record-io, input-validation, catalog-introspection]
+required_capabilities: [create-type, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowtypes.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TYPE complex AS (r float8, i float8);
+steps:
+  - sql: |
+      SELECT pg_input_is_valid('(1,2)', 'complex') AS good,
+             pg_input_is_valid('(1,2', 'complex') AS unterminated,
+             pg_input_is_valid('(1,zed)', 'complex') AS bad_field
+    expect: rows
+  - sql: |
+      SELECT sql_error_code FROM pg_input_error_info('(1,zed)', 'complex')
+    expect: rows
+  - sql: |
+      SELECT sql_error_code FROM pg_input_error_info('(1,1e400)', 'complex')
+    expect: rows
+    comment: out-of-range float8 field reports a numeric range error code
+  - sql: |
+      SELECT pg_input_is_valid('(1,2)', 'no_such_type_rowtypes')
+    expect: error
+    sqlstate: "42704"
+    comment: unknown type name is an error, not a false result

@@ -1,0 +1,34 @@
+# FORCE ROW LEVEL SECURITY with no policies: default deny for reads, inserts are rejected, updates/deletes touch zero rows.
+id: rowsecurity.force-default-deny
+title: "Forced row-level security with no policies denies reads and inserts by default"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, insert, update, delete, errors]
+required_capabilities: [create-table, insert, select, update, delete, rls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE document (did int4 PRIMARY KEY, dlevel int4 NOT NULL, dtitle text);
+  INSERT INTO document VALUES (1, 1, 'a'), (2, 2, 'b'), (3, 3, 'c');
+  ALTER TABLE document ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE document FORCE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SELECT count(*) FROM document
+    expect: rows
+    comment: no permissive policy means no rows are visible to the owner
+  - sql: |
+      INSERT INTO document VALUES (4, 1, 'd')
+    expect: error
+    sqlstate: "42501"
+    comment: no INSERT policy, so the new row fails the implicit check
+  - sql: |
+      UPDATE document SET dtitle = 'x'
+    expect: ok
+    comment: invisible rows are silently skipped, no error
+  - sql: |
+      DELETE FROM document
+    expect: ok
+    comment: invisible rows are silently skipped, no error

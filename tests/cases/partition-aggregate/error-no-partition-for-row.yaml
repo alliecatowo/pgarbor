@@ -1,0 +1,29 @@
+# Rows that match no partition (including a NULL key) are rejected with check_violation and are
+# not stored, so the subsequent aggregate sees only the accepted row.
+id: partition-aggregate.error-no-partition-for-row
+title: Insert with no matching range partition is rejected with SQLSTATE 23514
+family: partition-aggregate
+tier: core
+feature_ids: [partitioning, range-partitioning, insert, aggregates, errors]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_range (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE pagg_range_p1 PARTITION OF pagg_range FOR VALUES FROM (0) TO (10);
+  INSERT INTO pagg_range VALUES (5, 1);
+steps:
+  - sql: |
+      INSERT INTO pagg_range VALUES (10, 2)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO pagg_range VALUES (NULL, 3)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT a, sum(b) FROM pagg_range GROUP BY a ORDER BY a
+    expect: rows
+    order: ordered

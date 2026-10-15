@@ -1,0 +1,34 @@
+# Simple filtered views are auto-updatable, so INSERT goes to the base table without a check option.
+# A GROUP BY view is not auto-updatable and rejects INSERT with 0A000.
+id: create-view.insert-simple-and-groupby
+title: INSERT through a simple view versus a GROUP BY view
+family: create-view
+tier: core
+feature_ids: [create-view, insert, errors, group-by]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_view.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE ut (id int4 PRIMARY KEY, v int4);
+  CREATE VIEW vpos AS SELECT id, v FROM ut WHERE v > 0;
+  CREATE VIEW vgrp AS SELECT v, count(*) AS n FROM ut GROUP BY v;
+steps:
+  - sql: |
+      INSERT INTO vpos (id, v) VALUES (1, 5), (2, -3)
+    expect: ok
+    comment: row failing the view predicate is still inserted into the base table
+  - sql: |
+      SELECT id, v FROM ut ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM vpos ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO vgrp (v, n) VALUES (1, 1)
+    expect: error
+    sqlstate: "0A000"

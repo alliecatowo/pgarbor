@@ -1,0 +1,25 @@
+# Equal jsonb values hash equally regardless of key order; salt-0 invariant over jsonb.
+id: hash-func.jsonb-equal-values-hash
+title: "jsonb hashes ignore object key order and keep the salt-0 invariant"
+family: hash-func
+tier: extended
+feature_ids: [hash-functions, jsonb, hash-salt]
+required_capabilities: [select, values, jsonb]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_func.sql"
+steps:
+  - sql: |
+      SELECT '{"a": 1, "b": [1, 2]}'::jsonb = '{"b": [1, 2], "a": 1}'::jsonb AS json_eq,
+             jsonb_hash('{"a": 1, "b": [1, 2]}'::jsonb) = jsonb_hash('{"b": [1, 2], "a": 1}'::jsonb) AS key_order_hash_eq
+    expect: rows
+  - sql: |
+      SELECT v::text AS value,
+             jsonb_hash(v)::bit(32) = jsonb_hash_extended(v, 0)::bit(32) AS salt0_matches
+      FROM (VALUES ('{"a": "aaa bbb ddd ccc", "b": ["eee fff ggg"], "c": {"d": "hhh iii"}}'::jsonb),
+                   ('{"foo": [true, "bar"], "tags": {"e": 1, "f": null}}'::jsonb),
+                   ('{"g": {"h": "value"}}'::jsonb),
+                   (NULL::jsonb)) x(v)
+      ORDER BY value
+    expect: rows
+    order: ordered

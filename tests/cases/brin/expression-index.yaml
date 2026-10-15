@@ -1,0 +1,26 @@
+# brin index on an expression over an IMMUTABLE SQL function; the index must still answer
+# predicates on that expression.
+id: brin.expression-index
+title: BRIN index on an immutable function expression answers matching predicates
+family: brin
+tier: extended
+feature_ids: [brin, create-index, expression-index, select, sql-functions]
+required_capabilities: [create-table, insert, select, create-index, brin-index, sql-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brintest_expr_idx on brintest_func())"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n int4);
+  INSERT INTO t SELECT g FROM generate_series(1, 500) g;
+  CREATE FUNCTION t_plus_one(int4) RETURNS int4 LANGUAGE sql IMMUTABLE RETURN $1 + 1;
+  CREATE INDEX t_expr_brin ON t USING brin (t_plus_one(n));
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE t_plus_one(n) = 42
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT n FROM t WHERE t_plus_one(n) BETWEEN 10 AND 12 ORDER BY n
+    expect: rows
+    order: ordered

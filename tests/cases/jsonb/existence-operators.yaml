@@ -1,0 +1,40 @@
+# jsonb ?, ?| and ?& look only at top-level object keys and array string elements.
+id: jsonb.existence-operators
+title: jsonb key existence operators ?, ?| and ?& including JSON null values
+family: jsonb
+tier: core
+feature_ids: [jsonb, jsonb-existence]
+required_capabilities: [select, jsonb]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/jsonb.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT jsonb '{"a":null, "b":"qq"}' ? 'a' AS has_a_null,
+             jsonb '{"a":null, "b":"qq"}' ? 'b' AS has_b,
+             jsonb '{"a":null, "b":"qq"}' ? 'c' AS has_c,
+             jsonb '{"a":"null", "b":"qq"}' ? 'a' AS string_null_key
+    expect: rows
+    order: ordered
+    comment: a key with a JSON null value still exists
+  - sql: |
+      SELECT jsonb '{"a":null, "b":"qq"}' ?| ARRAY['c','a'] AS any_hit,
+             jsonb '{"a":null, "b":"qq"}' ?| ARRAY['c','d'] AS any_miss,
+             jsonb '{"a":null, "b":"qq"}' ?| '{}'::text[] AS any_empty
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT jsonb '{"a":null, "b":"qq"}' ?& ARRAY['a','b'] AS all_hit,
+             jsonb '{"a":null, "b":"qq"}' ?& ARRAY['c','a'] AS all_miss,
+             jsonb '{"a":null, "b":"qq"}' ?& '{}'::text[] AS all_empty,
+             jsonb '{"a":null, "b":"qq"}' ?& ARRAY['a','a','b','b','b'] AS all_dupes
+    expect: rows
+    order: ordered
+    comment: ?& over an empty array is true
+  - sql: |
+      SELECT jsonb '["x","y"]' ? 'x' AS array_string_elem, jsonb '["x","y"]' ? 'z' AS array_miss, jsonb '[5]' ? '5' AS number_is_not_string
+    expect: rows
+    order: ordered
+    comment: array elements count as keys only when they are strings; numeric 5 is not the text '5'

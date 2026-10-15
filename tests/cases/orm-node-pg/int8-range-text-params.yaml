@@ -1,0 +1,33 @@
+# int8 accepts the full signed 64-bit range as text and rejects anything outside it with 22003.
+id: orm-node-pg.int8-range-text-params
+title: "int8 text parameters at the 64-bit boundaries and overflow on arithmetic"
+family: orm-node-pg
+tier: extended
+feature_ids: [parameterized-queries, int8, errors, boundaries]
+required_capabilities: [select, extended-protocol, errors]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 22003 numeric_value_out_of_range; node-postgres returns int8 as string"
+sessions: [a]
+steps:
+  - exec_params:
+      sql: |
+        SELECT $1::int8 AS hi, $2::int8 AS lo
+      params: ["9223372036854775807", "-9223372036854775808"]
+    expect: rows
+  - exec_params:
+      sql: |
+        SELECT $1::int8 AS v
+      params: ["9223372036854775808"]
+    expect: error
+    sqlstate: "22003"
+  - exec_params:
+      sql: |
+        SELECT $1::int8 + 1 AS v
+      params: ["9223372036854775807"]
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT count(*)::text AS n, sum(x::int8)::text AS s FROM (VALUES ('1'), ('9223372036854775806')) AS v(x)
+    expect: rows
+    comment: sum(int8) is numeric; the cast to text keeps the exact digits

@@ -1,0 +1,37 @@
+# Duplicate schema names fail with duplicate_schema (42P06); IF NOT EXISTS only emits a notice.
+# A failing element (duplicate table, 42P07) rolls back the whole CREATE SCHEMA.
+id: create-schema.duplicate-schema-and-element-rollback
+title: Duplicate schema name is 42P06, IF NOT EXISTS is a notice, duplicate element rolls back
+family: create-schema
+tier: core
+feature_ids: [create-schema, errors, create-table]
+required_capabilities: [create-schema, create-table]
+provenance:
+  source: hand
+  ref: "PG18 sql-createschema.html; errcodes 42P06, 42P07"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA s5
+    expect: ok
+  - sql: |
+      CREATE SCHEMA s5
+    expect: error
+    sqlstate: "42P06"
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS s5
+    expect: notice
+  - sql: |
+      CREATE SCHEMA s5 CREATE TABLE t5 (id int)
+    expect: error
+    sqlstate: "42P06"
+  - sql: |
+      CREATE SCHEMA s6
+        CREATE TABLE t6 (id int)
+        CREATE TABLE t6 (id int)
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      SELECT count(*) FROM pg_namespace WHERE nspname = 's6'
+    expect: rows
+    comment: the failed CREATE SCHEMA is rolled back, so no schema s6 exists

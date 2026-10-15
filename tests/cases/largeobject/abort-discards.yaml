@@ -1,0 +1,37 @@
+# Writes and object creation inside a rolled-back transaction leave no trace.
+id: largeobject.abort-discards
+title: ROLLBACK discards large object writes and creations
+family: largeobject
+tier: core
+feature_ids: [large-objects, transactions, lo-write, lo-create]
+required_capabilities: [large-objects, create-table, insert, update, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (loid oid, fd integer);
+  INSERT INTO st (loid) SELECT lo_from_bytea(0, convert_to('original', 'UTF8'));
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT lowrite(fd, 'CHANGED!') FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_create(53)
+    expect: rows
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT encode(lo_get(loid), 'escape') FROM st
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_largeobject_metadata WHERE oid = 53
+    expect: rows

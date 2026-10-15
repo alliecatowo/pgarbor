@@ -1,0 +1,45 @@
+# Same unqualified table name in two schemas: the first schema on search_path wins, and
+# changing the path changes the resolved object. Also checks an empty search_path.
+id: namespace.unqualified-resolution-order
+title: Unqualified name resolves to the first matching schema on search_path
+family: namespace
+tier: core
+feature_ids: [search-path, create-schema, create-table, insert, select]
+required_capabilities: [search-path, create-schema, create-table, insert, select]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-schemas.html#DDL-SCHEMAS-PATH"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA ro_first;
+  CREATE SCHEMA ro_second;
+  CREATE TABLE ro_first.t (v text);
+  CREATE TABLE ro_second.t (v text);
+  INSERT INTO ro_first.t VALUES ('first');
+  INSERT INTO ro_second.t VALUES ('second');
+steps:
+  - sql: |
+      SET search_path TO ro_first, ro_second
+    expect: ok
+  - sql: |
+      SELECT v FROM t
+    expect: rows
+  - sql: |
+      SET search_path TO ro_second, ro_first
+    expect: ok
+  - sql: |
+      SELECT v FROM t
+    expect: rows
+    comment: the other schema now wins
+  - sql: |
+      SET search_path TO ''
+    expect: ok
+  - sql: |
+      SELECT v FROM t
+    expect: error
+    sqlstate: "42P01"
+    comment: an empty search_path has no schemas to search
+  - sql: |
+      SELECT v FROM ro_second.t
+    expect: rows
+    comment: qualified names ignore search_path

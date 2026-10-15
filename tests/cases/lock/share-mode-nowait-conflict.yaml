@@ -1,0 +1,45 @@
+# SHARE mode is self-compatible but conflicts with ROW EXCLUSIVE; NOWAIT reports 55P03 instead of waiting.
+id: lock.share-self-compatible-row-exclusive-nowait
+title: SHARE locks coexist, but ROW EXCLUSIVE with NOWAIT fails with lock_not_available
+family: lock
+tier: extended
+feature_ids: [lock-table, lock-modes, nowait, transactions, multi-session, errors]
+required_capabilities: [create-table, lock-table, transactions, multi-session, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql; PG18 docs explicit-locking.html; errcodes 55P03"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE lock_tbl1 (a BIGINT);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE lock_tbl1 IN SHARE MODE
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE lock_tbl1 IN SHARE MODE NOWAIT
+    expect: ok
+    comment: SHARE is self-compatible
+  - session: b
+    sql: |
+      LOCK TABLE lock_tbl1 IN ROW EXCLUSIVE MODE NOWAIT
+    expect: error
+    sqlstate: "55P03"
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok

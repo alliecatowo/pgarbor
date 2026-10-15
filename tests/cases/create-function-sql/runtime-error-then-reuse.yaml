@@ -1,0 +1,25 @@
+# A SQL function that fails at run time (division by zero) can be called again successfully afterwards.
+id: create-function-sql.runtime-error-then-reuse
+title: SQL function raising division by zero at run time, then reusable for later calls
+family: create-function-sql
+tier: core
+feature_ids: [create-function, errors, null-handling, numeric]
+required_capabilities: [create-function, sql-functions, errors, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE FUNCTION fdiv(int) RETURNS int LANGUAGE sql STRICT IMMUTABLE AS $$ SELECT 100 / $1 $$;
+steps:
+  - sql: |
+      SELECT fdiv(4) AS q
+    expect: rows
+  - sql: |
+      SELECT fdiv(0)
+    expect: error
+    sqlstate: "22012"
+    comment: division by zero at run time, not at plan time
+  - sql: |
+      SELECT fdiv(3) AS q, fdiv(NULL::int) AS n
+    expect: rows
+    comment: the cached function state is still usable after the error; STRICT returns NULL for NULL

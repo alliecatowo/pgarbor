@@ -1,0 +1,33 @@
+# Chained outer joins with grouping: fan-out from one-to-many joins, NULL foreign keys, and coalesce for empty groups.
+id: join.three-way-join-aggregate
+title: Three-table LEFT JOIN chain with GROUP BY, fan-out counts and coalesce for empty groups
+family: join
+tier: extended
+feature_ids: [joins, outer-join, left-join, inner-join, group-by, aggregates, coalesce]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: hand
+  ref: "PG18 docs queries-table-expressions.html#QUERIES-FROM; join.sql multi-way join usage"
+sessions: [a]
+setup: |
+  CREATE TABLE c (id integer, name text);
+  CREATE TABLE o (id integer, c_id integer);
+  CREATE TABLE l (id integer, o_id integer, qty integer);
+  INSERT INTO c VALUES (1, 'ann'), (2, 'bob'), (3, 'cy');
+  INSERT INTO o VALUES (10, 1), (11, 1), (12, 2), (13, NULL);
+  INSERT INTO l VALUES (100, 10, 5), (101, 10, 7), (102, 12, NULL), (103, 99, 1);
+steps:
+  - sql: |
+      SELECT c.name, count(o.id) AS n_rows, coalesce(sum(l.qty), 0) AS total_qty
+      FROM c LEFT JOIN o ON o.c_id = c.id
+             LEFT JOIN l ON l.o_id = o.id
+      GROUP BY c.name
+      ORDER BY c.name
+    expect: rows
+    order: ordered
+    comment: order 11 has no lines and still counts once; cy has no orders; sum of only NULL qty is NULL
+  - sql: |
+      SELECT c.name, o.id, l.id FROM c JOIN o ON o.c_id = c.id JOIN l ON l.o_id = o.id
+    expect: rows
+    order: multiset
+    comment: inner join drops orders without lines and lines with unknown orders

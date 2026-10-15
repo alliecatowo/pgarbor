@@ -1,0 +1,36 @@
+# TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME, TG_NARGS and TG_ARGV as seen by a BEFORE row trigger that skips its row.
+id: triggers.tg-variables-in-log
+title: TG_* trigger variables and TG_ARGV values for BEFORE INSERT and DELETE
+family: triggers
+tier: extended
+feature_ids: [triggers, plpgsql, insert, delete, select]
+required_capabilities: [create-table, insert, select, delete, plpgsql, triggers]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (trigger_data: TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME, TG_NARGS, TG_ARGV)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int);
+  CREATE TABLE trig_log (seq serial, msg text);
+  CREATE FUNCTION describe_trig() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (concat_ws('|', TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME, TG_NARGS, TG_ARGV[0], TG_ARGV[1]));
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_desc BEFORE INSERT OR DELETE ON t
+    FOR EACH ROW EXECUTE PROCEDURE describe_trig('x', 'y');
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+  - sql: |
+      DELETE FROM t
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered

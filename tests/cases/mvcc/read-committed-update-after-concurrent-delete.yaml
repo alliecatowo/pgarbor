@@ -1,0 +1,41 @@
+# READ COMMITTED: an UPDATE blocked on a row that a concurrent transaction deletes re-checks and updates nothing.
+id: mvcc.read-committed-update-after-concurrent-delete
+title: Blocked UPDATE re-evaluates after concurrent DELETE commits and affects zero rows
+family: mvcc
+tier: extended
+feature_ids: [transactions, read-committed, row-locks, update, delete]
+required_capabilities: [create-table, insert, update, delete, select, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (concurrent modification); PG18 docs transaction-iso.html#XACT-READ-COMMITTED"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'x'), (2, 'y');
+steps:
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      DELETE FROM t WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE t SET v = 'z' WHERE id = 1
+    async: true
+    expect_blocked: true
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    wait: true
+    expect: ok
+    comment: UPDATE 0, the row is gone
+  - session: a
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

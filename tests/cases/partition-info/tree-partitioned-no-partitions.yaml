@@ -1,0 +1,27 @@
+# A partitioned table with no partitions is still a tree of one member.
+id: partition-info.tree-partitioned-no-partitions
+title: A partitioned table with no partitions is its own single-row partition tree
+family: partition-info
+tier: extended
+feature_ids: [partitioning, partition-tree-functions, edge-cases]
+required_capabilities: [create-table, select, joins, catalog-introspection, partitioning]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_test (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_test3 PARTITION OF ptif_test FOR VALUES FROM (200) TO (MAXVALUE) PARTITION BY LIST (b);
+steps:
+  - sql: |
+      SELECT c.relname, p.parentrelid::regclass::text AS parent, p.level
+      FROM pg_partition_tree('ptif_test3') p
+      JOIN pg_class c ON (p.relid = c.oid)
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+    comment: exactly one row, ptif_test3 itself, parent is ptif_test
+  - sql: |
+      SELECT pg_partition_root('ptif_test3')::text AS root
+    expect: rows
+    comment: a partitioned member with no children still resolves to the root

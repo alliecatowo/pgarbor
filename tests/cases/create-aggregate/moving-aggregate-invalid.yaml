@@ -1,0 +1,39 @@
+# Moving-aggregate validation: a strict forward msfunc with a non-strict inverse, and a
+# minvfunc whose return type does not match mstype, are both rejected.
+id: create-aggregate.moving-aggregate-invalid
+title: "Moving-aggregate rejects non-strict inverse with strict forward and mismatched minvfunc return type"
+family: create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, moving-aggregate, errors]
+required_capabilities: [create-table, aggregates, create-function, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (invalidsumdouble, wrongreturntype)"
+  license: PostgreSQL
+setup: |
+  CREATE FUNCTION float8mi_n(float8, float8) RETURNS float8 AS
+    $$ SELECT $1 - $2; $$ LANGUAGE SQL;
+  CREATE FUNCTION float8mi_int(float8, float8) RETURNS int AS
+    $$ SELECT CAST($1 - $2 AS INT); $$ LANGUAGE SQL;
+steps:
+  - sql: |
+      CREATE AGGREGATE invalidsumdouble (float8) (
+        stype = float8, sfunc = float8pl,
+        mstype = float8, msfunc = float8pl, minvfunc = float8mi_n
+      )
+    expect: error
+    comment: non-strict inverse with strict forward transition is invalid
+  - sql: |
+      CREATE AGGREGATE wrongreturntype (float8) (
+        stype = float8, sfunc = float8pl,
+        mstype = float8, msfunc = float8pl, minvfunc = float8mi_int
+      )
+    expect: error
+    comment: minvfunc return type must match mstype
+  - sql: |
+      CREATE AGGREGATE validsumdouble (float8) (
+        stype = float8, sfunc = float8pl,
+        mstype = float8, msfunc = float8pl, minvfunc = float8mi
+      )
+    expect: ok
+    comment: control case with a valid inverse function

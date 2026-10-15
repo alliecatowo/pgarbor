@@ -1,0 +1,38 @@
+# NO SCROLL cursor: ABSOLUTE forward movement is allowed, ABSOLUTE to an earlier row is not.
+id: portals.no-scroll-absolute-backward-error
+title: FETCH ABSOLUTE to an earlier row on a NO SCROLL cursor fails with 55000
+family: portals
+tier: extended
+feature_ids: [cursors, no-scroll, fetch, errors, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/portals.sql (FETCH ABSOLUTE 2 allowed, FETCH ABSOLUTE 1 should fail)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n int4);
+  INSERT INTO t VALUES (1), (2), (3);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c NO SCROLL CURSOR FOR SELECT n FROM t ORDER BY n
+    expect: ok
+  - sql: |
+      FETCH 1 FROM c
+    expect: rows
+    order: ordered
+  - sql: |
+      FETCH ABSOLUTE 2 FROM c
+    expect: rows
+    order: ordered
+    comment: forward movement is allowed
+  - sql: |
+      FETCH ABSOLUTE 1 FROM c
+    expect: error
+    sqlstate: "55000"
+    comment: backward movement is not allowed
+  - sql: |
+      ROLLBACK
+    expect: ok

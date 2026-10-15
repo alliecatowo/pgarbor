@@ -1,0 +1,29 @@
+# \dt filters to relkind IN ('r','p') and pattern matching on relname.
+id: psql-describe.list-tables-pattern
+title: \dt with name pattern lists only matching base tables
+family: psql-describe
+tier: core
+feature_ids: [catalog-introspection, create-table, create-view, psql-describe]
+required_capabilities: [create-table, create-view, catalog-introspection]
+provenance:
+  source: pg-source
+  ref: "src/bin/psql/describe.c listTables(); psql pattern '^t_' via processSQLNamePattern"
+sessions: [a]
+setup: |
+  CREATE TABLE t_one (id int4);
+  CREATE TABLE t_two (id int4);
+  CREATE TABLE other_three (id int4);
+  CREATE VIEW t_view AS SELECT id FROM t_one;
+steps:
+  - sql: |
+      SELECT n.nspname, c.relname
+      FROM pg_catalog.pg_class c
+        LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('r', 'p')
+        AND n.nspname !~ '^pg_toast'
+        AND c.relname OPERATOR(pg_catalog.~) '^t_'
+        AND pg_catalog.pg_table_is_visible(c.oid)
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: t_view is a view, so it must not appear even though it matches the pattern

@@ -1,0 +1,42 @@
+# A failed INSERT (invalid integer) aborts the block; later INSERT and SELECT fail with 25P02 until ROLLBACK.
+id: transactions.aborted-block-rejects-commands
+title: Invalid integer input aborts the block and later commands fail with 25P02
+family: transactions
+tier: core
+feature_ids: [transactions, insert, select, errors, types-int4]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE trans_abc (a int4);
+  INSERT INTO trans_abc VALUES (5), (10);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO trans_abc VALUES (15)
+    expect: ok
+  - sql: |
+      INSERT INTO trans_abc VALUES ('error')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      INSERT INTO trans_abc VALUES (3)
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      SELECT a FROM trans_abc ORDER BY a
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT a FROM trans_abc ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only the committed rows 5 and 10 remain

@@ -1,0 +1,46 @@
+# Subplan (IN) and initplan (EXISTS) expressions inside RETURNING for INSERT ... SELECT, UPDATE and DELETE.
+id: returning.subplan-initplan
+title: RETURNING with IN-subquery subplan and EXISTS initplan across INSERT, UPDATE and DELETE
+family: returning
+tier: extended
+feature_ids: [returning, insert, update, delete, subqueries, exists]
+required_capabilities: [create-table, insert, update, delete, select, returning, subqueries, int8]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (f1 int, f2 text, f3 int);
+  INSERT INTO foo VALUES (1, 'a', 10), (2, 'b', 20);
+  CREATE TABLE int8_tbl (q1 int8, q2 int8);
+  INSERT INTO int8_tbl VALUES (113, 1), (4567890123456789, 2);
+  CREATE TABLE int4_tbl (f1 int4);
+  INSERT INTO int4_tbl VALUES (0)
+steps:
+  - sql: |
+      INSERT INTO foo SELECT f1 + 10, f2, f3 + 99 FROM foo
+        RETURNING *,
+          f1 + 102 IN (SELECT q1 FROM int8_tbl) AS subplan,
+          EXISTS (SELECT * FROM int4_tbl) AS initplan
+    expect: rows
+    order: multiset
+  - sql: |
+      UPDATE foo SET f3 = f3 * 2
+        WHERE f1 > 10
+        RETURNING *,
+          f1 + 102 IN (SELECT q1 FROM int8_tbl) AS subplan,
+          EXISTS (SELECT * FROM int4_tbl) AS initplan
+    expect: rows
+    order: multiset
+  - sql: |
+      DELETE FROM foo
+        WHERE f1 > 10
+        RETURNING *,
+          f1 + 102 IN (SELECT q1 FROM int8_tbl) AS subplan,
+          EXISTS (SELECT * FROM int4_tbl) AS initplan
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) FROM foo
+    expect: rows

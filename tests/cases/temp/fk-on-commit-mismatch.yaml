@@ -1,0 +1,31 @@
+# A foreign key from a table without ON COMMIT to a table with ON COMMIT DELETE ROWS is rejected.
+id: temp.fk-on-commit-mismatch
+title: Foreign key across mismatched ON COMMIT settings is rejected and rolled back
+family: temp
+tier: extended
+feature_ids: [temp-tables, on-commit, foreign-keys, transactions, errors]
+required_capabilities: [create-table, select, transactions, temp-tables, foreign-keys]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/temp.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE temptest3 (col int PRIMARY KEY) ON COMMIT DELETE ROWS
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE temptest4 (col int REFERENCES temptest3)
+    expect: error
+    sqlstate: "0A000"
+    comment: unsupported ON COMMIT and foreign key combination
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM temptest3
+    expect: error
+    sqlstate: "42P01"

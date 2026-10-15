@@ -1,0 +1,32 @@
+id: window.null-partitions-and-aggregates
+title: NULL partition keys, NULL inputs to window aggregates, and NULL ordering in ROW_NUMBER
+family: window
+tier: core
+feature_ids: [window-functions, partition-by, nulls, aggregates, order-by]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/window.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE n (id int4 PRIMARY KEY, grp text, v int4);
+  INSERT INTO n VALUES (1, 'a', 1), (2, 'a', NULL), (3, NULL, 4), (4, NULL, NULL), (5, 'b', NULL);
+steps:
+  - sql: |
+      SELECT id, grp, count(*) OVER (PARTITION BY grp) AS cstar,
+             count(v) OVER (PARTITION BY grp) AS cv,
+             sum(v) OVER (PARTITION BY grp) AS s
+      FROM n ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL partition keys group together into one partition
+  - sql: |
+      SELECT id, min(v) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS mn,
+             max(v) OVER () AS mx
+      FROM n ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, row_number() OVER (ORDER BY v NULLS FIRST, id) AS rn FROM n ORDER BY id
+    expect: rows
+    order: ordered

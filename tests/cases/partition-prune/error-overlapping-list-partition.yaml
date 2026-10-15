@@ -1,0 +1,31 @@
+# Derived from PG18 partition_prune.sql list partition setup; overlap is rejected at CREATE TABLE ... PARTITION OF.
+id: partition-prune.error-overlapping-list-partition
+title: Creating a list partition whose values overlap an existing partition fails with 42P17
+family: partition-prune
+tier: extended
+feature_ids: [partitioning, list-partitioning, errors, ddl]
+required_capabilities: [create-table, insert, select, partitioning, errors, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE lo (a int) PARTITION BY LIST (a);
+  CREATE TABLE lo_12 PARTITION OF lo FOR VALUES IN (1, 2);
+steps:
+  - sql: |
+      CREATE TABLE lo_23 PARTITION OF lo FOR VALUES IN (2, 3)
+    expect: error
+    sqlstate: "42P17"
+    comment: value 2 already belongs to lo_12
+  - sql: |
+      CREATE TABLE lo_3 PARTITION OF lo FOR VALUES IN (3)
+    expect: ok
+  - sql: |
+      INSERT INTO lo VALUES (1), (3)
+    expect: ok
+  - sql: |
+      SELECT a, tableoid::regclass::text AS part FROM lo ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the failed CREATE left no table behind

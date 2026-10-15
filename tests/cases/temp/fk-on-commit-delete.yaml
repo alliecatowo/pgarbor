@@ -1,0 +1,41 @@
+# Temp tables referencing each other: the ON COMMIT DELETE ROWS side is emptied, the referenced side keeps rows.
+id: temp.fk-on-commit-delete
+title: Foreign key between temp tables where only the referencing table has ON COMMIT DELETE ROWS
+family: temp
+tier: extended
+feature_ids: [temp-tables, on-commit, foreign-keys, transactions]
+required_capabilities: [create-table, insert, select, transactions, temp-tables, foreign-keys]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/temp.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE temptest1 (col int PRIMARY KEY)
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE temptest2 (col int REFERENCES temptest1) ON COMMIT DELETE ROWS
+    expect: ok
+  - sql: |
+      INSERT INTO temptest1 VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO temptest2 VALUES (1)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT col FROM temptest1
+    expect: rows
+    order: multiset
+    comment: no ON COMMIT clause, row preserved
+  - sql: |
+      SELECT col FROM temptest2
+    expect: rows
+    order: multiset
+    comment: ON COMMIT DELETE ROWS empties it

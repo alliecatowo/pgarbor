@@ -1,0 +1,34 @@
+# \df: pg_proc join pg_namespace with pg_get_function_result/arguments, prokind filter, visible functions.
+id: psql-describe.list-functions
+title: \df-style listing returns result type, argument list and kind for user functions
+family: psql-describe
+tier: extended
+feature_ids: [catalog-introspection, create-function-sql, psql-describe]
+required_capabilities: [create-function-sql, catalog-introspection]
+provenance:
+  source: pg-source
+  ref: "src/bin/psql/describe.c listFunctions() (pg_proc, prokind, pg_get_function_arguments)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION add_ints(a int4, b int4 DEFAULT 0) RETURNS int4
+    LANGUAGE sql IMMUTABLE AS $$ SELECT a + b $$;
+  CREATE FUNCTION label_of(x text) RETURNS text
+    LANGUAGE sql AS $$ SELECT 'L:' || x $$;
+steps:
+  - sql: |
+      SELECT n.nspname, p.proname,
+        pg_catalog.pg_get_function_result(p.oid) AS result_type,
+        pg_catalog.pg_get_function_arguments(p.oid) AS arguments,
+        p.prokind
+      FROM pg_catalog.pg_proc p
+        LEFT JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public'
+        AND p.prokind IN ('f', 'a', 'w', 'p')
+        AND pg_catalog.pg_function_is_visible(p.oid)
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT add_ints(2, 3), add_ints(4), label_of(NULL::text) IS NULL AS strict_null
+    expect: rows
+    comment: label_of is not STRICT, so label_of(NULL) returns 'L:' || NULL = NULL; checks the null path

@@ -1,0 +1,31 @@
+# A FROM-clause subquery cannot reference an earlier FROM item unless it is LATERAL.
+id: subselect.derived-table-lateral
+title: Correlated reference in a FROM subquery needs LATERAL
+family: subselect
+tier: core
+feature_ids: [select, subqueries, derived-tables, lateral, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/subselect.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE a_t (f1 int4);
+  CREATE TABLE b_t (f2 int4);
+  INSERT INTO a_t VALUES (1), (2);
+  INSERT INTO b_t VALUES (10);
+steps:
+  - sql: |
+      SELECT * FROM a_t a, (SELECT a.f1 AS x) b
+    expect: error
+    sqlstate: "42P01"
+    comment: invalid reference to FROM-clause entry for table a
+  - sql: |
+      SELECT a.f1, b.x FROM a_t a, LATERAL (SELECT a.f1 AS x) b ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a.f1, (SELECT a.f1 + t.f2 FROM b_t t) AS total FROM a_t a ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: a correlated scalar subquery in the select list is allowed

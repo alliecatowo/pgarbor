@@ -1,0 +1,42 @@
+# Only the operator owner may ALTER OPERATOR; a different role gets insufficient_privilege.
+id: alter-operator.non-owner-denied
+title: ALTER OPERATOR by a non-owner role is denied with insufficient_privilege
+family: alter-operator
+tier: extended
+feature_ids: [alter-operator, privileges, errors]
+required_capabilities: [alter-operator, create-function-sql, create-operator, roles, privileges]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS alter_op_nonowner;
+  CREATE ROLE alter_op_nonowner;
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn,
+      RESTRICT = contsel
+  );
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION alter_op_nonowner
+    expect: ok
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT oprrest::regproc::text AS restrict_fn
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP ROLE alter_op_nonowner
+    expect: ok

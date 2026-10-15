@@ -1,0 +1,34 @@
+# generate_series over timestamp: stepped output, infinite upper bound with LIMIT, empty range, and step validation (22023).
+id: timestamp.generate-series-timestamp
+title: generate_series over timestamps with interval steps, empty ranges and invalid step errors
+family: timestamp
+tier: extended
+feature_ids: [timestamp, generate-series, set-returning, errors]
+required_capabilities: [select, timestamp, interval]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamp.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT g.ts FROM generate_series('2020-01-01 00:00'::timestamp, '2020-01-02 03:00'::timestamp, '1 hour'::interval) AS g(ts) ORDER BY g.ts
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM generate_series('2020-01-02'::timestamp, '2020-01-01'::timestamp, '1 hour'::interval) AS g(ts)
+    expect: rows
+    comment: start after stop with a positive step yields no rows
+  - sql: |
+      SELECT generate_series('2022-01-01 00:00'::timestamp, 'infinity'::timestamp, '1 month'::interval) AS ts LIMIT 10
+    expect: rows
+    order: ordered
+    comment: the LIMIT keeps an infinite upper bound finite
+  - sql: |
+      SELECT * FROM generate_series('2020-01-01 00:00'::timestamp, '2020-01-02 03:00'::timestamp, '0 hour'::interval)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT generate_series(timestamp '1995-08-06 12:12:12', timestamp '1996-08-06 12:12:12', interval 'infinity')
+    expect: error
+    sqlstate: "22023"

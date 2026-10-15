@@ -1,0 +1,32 @@
+# Qualified references must name a relation in FROM and a column of that relation.
+id: join.missing-from-entry-error
+title: Qualified column references to relations outside the join raise 42P01 or 42703
+family: join
+tier: core
+feature_ids: [joins, name-resolution, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/join.sql (missing FROM-clause entry / column does not exist)"
+sessions: [a]
+setup: |
+  CREATE TABLE j1 (i integer, j integer, t text);
+  CREATE TABLE j2 (i integer, k integer);
+  INSERT INTO j1 VALUES (1, 4, 'one');
+  INSERT INTO j2 VALUES (1, -1);
+steps:
+  - sql: |
+      SELECT x.t FROM j1 JOIN j2 USING (i)
+    expect: error
+    sqlstate: "42P01"
+    comment: missing FROM-clause entry for table "x"
+  - sql: |
+      SELECT j2.t FROM j1 JOIN j2 USING (i)
+    expect: error
+    sqlstate: "42703"
+    comment: j2 is in FROM but has no column t
+  - sql: |
+      SELECT j1.t, j2.k FROM j1 JOIN j2 USING (i)
+    expect: rows
+    order: multiset
+    comment: valid qualified references

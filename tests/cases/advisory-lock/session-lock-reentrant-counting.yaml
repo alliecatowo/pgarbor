@@ -1,0 +1,35 @@
+# Session locks acquired several times must be unlocked the same number of times.
+id: advisory-lock.session-lock-reentrant-counting
+title: "Repeated session acquisitions of one advisory lock need matching unlocks"
+family: advisory-lock
+tier: core
+feature_ids: [advisory-locks, select]
+required_capabilities: [advisory-locks, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/advisory_lock.sql"
+  license: "PostgreSQL License"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_advisory_lock(1), pg_advisory_lock(1), pg_advisory_lock_shared(2), pg_advisory_lock_shared(2)
+    expect: rows
+  - sql: |
+      SELECT pg_advisory_unlock(1)
+    expect: rows
+  - sql: |
+      SELECT pg_advisory_unlock(1)
+    expect: rows
+  - sql: |
+      SELECT pg_advisory_unlock(1)
+    expect: rows
+    comment: third unlock has nothing left to release, so false
+  - sql: |
+      SELECT locktype, classid, objid, objsubid, mode, granted FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database()) ORDER BY classid, objid, objsubid
+    expect: rows
+  - sql: |
+      SELECT pg_advisory_unlock_shared(2), pg_advisory_unlock_shared(2)
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    expect: rows

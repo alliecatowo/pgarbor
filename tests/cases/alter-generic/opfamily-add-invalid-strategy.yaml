@@ -1,0 +1,31 @@
+# Operator family ADD with an invalid btree strategy number is rejected; the family stays empty.
+id: alter-generic.opfamily-add-invalid-strategy
+title: "ALTER OPERATOR FAMILY ADD OPERATOR with strategy 0 or 6 is rejected for btree"
+family: alter-generic
+tier: extended
+feature_ids: [alter-operator-family, operator-families, btree-index, errors]
+required_capabilities: [create-operator-family, alter-operator-family, btree-index, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (ALTER OPERATOR FAMILY ... ADD OPERATOR 6 / 0 -- operator number should be between 1 and 5)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY ag_opf_s USING btree
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY ag_opf_s USING btree ADD OPERATOR 6 < (int4, int2)
+    expect: error
+    sqlstate: "22023"
+    comment: btree strategy numbers are 1..5
+  - sql: |
+      ALTER OPERATOR FAMILY ag_opf_s USING btree ADD OPERATOR 0 < (int4, int2)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'ag_opf_s'
+    expect: rows
+    comment: no operators were added
+  - sql: |
+      DROP OPERATOR FAMILY ag_opf_s USING btree
+    expect: ok

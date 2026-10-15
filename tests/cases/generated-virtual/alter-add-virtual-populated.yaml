@@ -1,0 +1,43 @@
+# ADD COLUMN of a virtual generated column to a populated table computes values for existing rows.
+id: generated-virtual.alter-add-virtual-populated
+title: ADD COLUMN virtual generated (NOT NULL) to a populated table, then ADD a normal column
+family: generated-virtual
+tier: extended
+feature_ids: [generated-columns, alter-table, not-null]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest21d (a int NOT NULL);
+  INSERT INTO gtest21d (a) VALUES (10);
+steps:
+  - sql: |
+      ALTER TABLE gtest21d ADD COLUMN b INT GENERATED ALWAYS AS (a * 10) VIRTUAL NOT NULL
+    expect: ok
+  - sql: |
+      SELECT a, b FROM gtest21d ORDER BY a
+    expect: rows
+    order: ordered
+    comment: existing row sees the computed value without a rewrite
+  - sql: |
+      INSERT INTO gtest21d (a) VALUES (20)
+    expect: ok
+  - sql: |
+      ALTER TABLE gtest21d ADD COLUMN c INT NOT NULL DEFAULT 1234
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM gtest21d ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE gtest21d ADD COLUMN d INT
+    expect: ok
+  - sql: |
+      INSERT INTO gtest21d (a, c, d) VALUES (30, 12345, 100)
+    expect: ok
+  - sql: |
+      SELECT a, b, c, d FROM gtest21d ORDER BY a
+    expect: rows
+    order: ordered

@@ -1,0 +1,27 @@
+# json_agg with ORDER BY and NULLS FIRST, aggregate over zero rows gives SQL NULL, NULL column values become JSON null.
+id: json.json-agg-nulls
+title: json_agg ordering, NULL sort placement, and empty input
+family: json
+tier: core
+feature_ids: [json, json-aggregates, json-null]
+required_capabilities: [create-table, insert, update, select, json, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/json.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE rows_t (x int4, y text);
+  INSERT INTO rows_t VALUES (1, 'txt1'), (2, 'txt2'), (3, 'txt3');
+steps:
+  - sql: |
+      SELECT json_agg(q ORDER BY x, y)::text AS j FROM rows_t q
+    expect: rows
+  - sql: |
+      UPDATE rows_t SET x = NULL WHERE x = 1
+    expect: ok
+  - sql: |
+      SELECT json_agg(q ORDER BY x NULLS FIRST, y)::text AS j FROM rows_t q
+    expect: rows
+  - sql: |
+      SELECT json_agg(x) IS NULL AS empty_is_sql_null FROM rows_t WHERE false
+    expect: rows

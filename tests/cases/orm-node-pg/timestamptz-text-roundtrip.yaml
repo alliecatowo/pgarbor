@@ -1,0 +1,34 @@
+# timestamptz values travel as text; output is rendered in the session TimeZone, pinned here to UTC.
+id: orm-node-pg.timestamptz-text-roundtrip
+title: "timestamptz text parameters rendered in session TimeZone UTC, invalid input rejected"
+family: orm-node-pg
+tier: core
+feature_ids: [timestamptz, parameterized-queries, insert, select, errors]
+required_capabilities: [create-table, insert, select, extended-protocol, errors]
+provenance:
+  source: hand
+  ref: "PG18 datatype-datetime.html; node-postgres parses timestamptz output text"
+sessions: [a]
+setup: |
+  CREATE TABLE evt (id int4 PRIMARY KEY, at timestamptz NOT NULL);
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - exec_params:
+      sql: |
+        INSERT INTO evt (id, at) VALUES ($1, $2), ($3, $4)
+      params: ["1", "2024-02-29 12:34:56.789+02", "2", "1999-12-31T23:59:59Z"]
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT id, at FROM evt WHERE at > $1 ORDER BY id
+      params: ["2000-01-01T00:00:00Z"]
+    expect: rows
+    order: ordered
+  - exec_params:
+      sql: |
+        SELECT $1::timestamptz AS t
+      params: ["not a date"]
+    expect: error
+    sqlstate: "22007"

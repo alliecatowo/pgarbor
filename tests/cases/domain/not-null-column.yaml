@@ -1,0 +1,33 @@
+# A NOT NULL domain makes every column of that type NOT NULL, including columns that declare
+# no constraint of their own. Adapted from domain.sql "Test not-null restrictions".
+id: domain.not-null-column
+title: NOT NULL on a domain applies to columns using it, including via DEFAULT VALUES
+family: domain
+tier: core
+feature_ids: [domains, create-domain, not-null, insert]
+required_capabilities: [create-table, insert, select, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dnotnull varchar(15) NOT NULL;
+  CREATE TABLE nn_t (col1 dnotnull, col2 int4);
+steps:
+  - sql: |
+      INSERT INTO nn_t DEFAULT VALUES
+    expect: error
+    sqlstate: "23502"
+    comment: col1 has no default and inherits NOT NULL from the domain
+  - sql: |
+      INSERT INTO nn_t (col1, col2) VALUES ('a', NULL)
+    expect: ok
+    comment: col2 is a plain int4 and may be NULL
+  - sql: |
+      INSERT INTO nn_t (col1, col2) VALUES (NULL, 1)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT col1, col2 FROM nn_t ORDER BY col1
+    expect: rows
+    order: ordered

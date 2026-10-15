@@ -1,0 +1,36 @@
+# Integer FOR loops: ascending, REVERSE, BY step, empty range, and a zero BY step error.
+id: plpgsql.for-integer-loop-bounds
+title: FOR integer loops with REVERSE and BY; empty range runs zero times; BY 0 raises 22023
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, control-flow, loops]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_fwd() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE s text := ''; i int;
+  BEGIN FOR i IN 1..5 LOOP s := s || i; END LOOP; RETURN s; END $$;
+  CREATE FUNCTION pl_rev() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE s text := ''; i int;
+  BEGIN FOR i IN REVERSE 5..1 LOOP s := s || i; END LOOP; RETURN s; END $$;
+  CREATE FUNCTION pl_by() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE s text := ''; i int;
+  BEGIN FOR i IN 1..10 BY 3 LOOP s := s || i || ','; END LOOP; RETURN s; END $$;
+  CREATE FUNCTION pl_empty() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE s text := 'x'; i int;
+  BEGIN FOR i IN 5..1 LOOP s := s || i; END LOOP; RETURN s; END $$;
+  CREATE FUNCTION pl_zero_step() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE i int;
+  BEGIN FOR i IN 1..5 BY 0 LOOP NULL; END LOOP; RETURN 1; END $$;
+steps:
+  - sql: |
+      SELECT pl_fwd() AS fwd, pl_rev() AS rev, pl_by() AS stepped, pl_empty() AS empty
+    expect: rows
+  - sql: |
+      SELECT pl_zero_step()
+    expect: error
+    sqlstate: "22023"
+    comment: BY value must be greater than zero

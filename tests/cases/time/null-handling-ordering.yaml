@@ -1,0 +1,36 @@
+# NULL time values: default ordering puts them last, DESC NULLS FIRST moves them up, and comparisons with NULL never match.
+id: time.null-handling-ordering
+title: NULL time values sort, aggregate and compare with SQL NULL semantics
+family: time
+tier: core
+feature_ids: [time, nulls, order-by, aggregates]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-select.html ORDER BY NULLS FIRST|LAST; functions-comparison.html"
+sessions: [a]
+setup: |
+  CREATE TABLE time_tbl (id int4 PRIMARY KEY, f1 time);
+  INSERT INTO time_tbl VALUES (1, '12:00'), (2, NULL), (3, '00:00'), (4, NULL);
+steps:
+  - sql: |
+      SELECT id, f1 FROM time_tbl ORDER BY f1, id
+    expect: rows
+    order: ordered
+    comment: NULLS LAST is the default for ascending order
+  - sql: |
+      SELECT id FROM time_tbl ORDER BY f1 DESC NULLS FIRST, id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, f1 = '12:00' AS is_noon, f1 IS NULL AS is_null FROM time_tbl ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*), count(f1), min(f1), max(f1) FROM time_tbl
+    expect: rows
+  - sql: |
+      SELECT id FROM time_tbl WHERE f1 = NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: equality with NULL is unknown, so no rows match

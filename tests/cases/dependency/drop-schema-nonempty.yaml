@@ -1,0 +1,31 @@
+# A non-empty schema cannot be dropped under RESTRICT; DROP ... CASCADE removes its contents.
+id: dependency.drop-schema-nonempty
+title: DROP SCHEMA refused while it holds objects; CASCADE removes them
+family: dependency
+tier: core
+feature_ids: [schemas, drop-schema, dependencies]
+required_capabilities: [create-table, insert, select, schemas, drop-schema]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/dependency.sql (deptest schema)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA dep_s;
+      CREATE TABLE dep_s.deptest (a serial PRIMARY KEY, b text);
+      INSERT INTO dep_s.deptest (b) VALUES ('q')
+    expect: ok
+  - sql: |
+      DROP SCHEMA dep_s
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT b FROM dep_s.deptest
+    expect: rows
+  - sql: |
+      DROP SCHEMA dep_s CASCADE
+    expect: ok
+    order: multiset
+  - sql: |
+      SELECT to_regnamespace('dep_s') IS NULL AS schema_gone
+    expect: rows

@@ -1,0 +1,31 @@
+# sqlx records applied migrations with an unnamed extended-protocol INSERT and typed parameters.
+id: orm-sqlx.migrations-insert-exec-params
+title: Record a migration with typed bind parameters including bytea checksum
+family: orm-sqlx
+tier: core
+feature_ids: [extended-protocol, insert, bytea, bigint, boolean, bind-parameters]
+required_capabilities: [create-table, insert, select, extended-protocol, bytea]
+provenance:
+  source: research
+  ref: "sqlx-core migrate::Migrator apply; PQexecParams with int8/text/bool/bytea/int8 params"
+sessions: [a]
+setup: |
+  CREATE TABLE _sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),
+    success BOOLEAN NOT NULL,
+    checksum BYTEA NOT NULL,
+    execution_time BIGINT NOT NULL
+  );
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES ($1, $2, $3, $4, $5)
+      params: ["20240101000000", "create users", "true", "\\x0102ff", "1234"]
+      param_types: [20, 25, 16, 17, 20]
+    expect: ok
+  - sql: |
+      SELECT version, description, success, length(checksum) AS checksum_len, execution_time FROM _sqlx_migrations ORDER BY version
+    expect: rows
+    order: ordered

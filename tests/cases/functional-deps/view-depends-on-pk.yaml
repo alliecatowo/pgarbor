@@ -1,0 +1,47 @@
+# A view whose GROUP BY relies on the primary key pins that constraint; dropping it fails until the view is gone.
+id: functional-deps.view-depends-on-pk
+title: "View grouped by primary key blocks dropping that primary key until the view is dropped"
+family: functional-deps
+tier: extended
+feature_ids: [group-by, functional-dependencies, views, primary-key, alter-table, dependencies]
+required_capabilities: [create-table, insert, select, group-by, create-view, alter-table, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE articles (
+      id int CONSTRAINT articles_pkey PRIMARY KEY,
+      keywords text,
+      title text UNIQUE NOT NULL,
+      body text UNIQUE,
+      created date
+  );
+  INSERT INTO articles VALUES
+      (1, 'db pg', 'First', 'body one', '2024-01-01'),
+      (2, NULL, 'Second', NULL, '2024-02-01'),
+      (3, '', 'Third', 'body three', NULL);
+steps:
+  - sql: |
+      CREATE VIEW fdv1 AS
+      SELECT id, keywords, title, body, created
+      FROM articles
+      GROUP BY id
+    expect: ok
+  - sql: |
+      ALTER TABLE articles DROP CONSTRAINT articles_pkey RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: "fdv1 depends on the primary key constraint"
+  - sql: |
+      SELECT id, title FROM fdv1 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "the failed drop leaves the view intact"
+  - sql: |
+      DROP VIEW fdv1
+    expect: ok
+  - sql: |
+      ALTER TABLE articles DROP CONSTRAINT articles_pkey RESTRICT
+    expect: ok
+    comment: "with no dependent view, the primary key can now be dropped"

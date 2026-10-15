@@ -1,0 +1,33 @@
+# pg_index flags (indisunique, indnatts, indnkeyatts), pg_get_indexdef with DESC and partial predicates, and duplicate index name error 42P07.
+id: slice-catalog-introspection.pg-index-flags-duplicate-name
+title: pg_index flags and index definitions for DESC, partial and expression indexes, duplicate index name rejected
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, create-index, unique-constraints, expressions]
+required_capabilities: [create-table, create-index, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/catalog-pg-index.html; https://www.postgresql.org/docs/18/sql-createindex.html"
+sessions: [a]
+setup: |
+  CREATE TABLE ix (a int4, b text, c int8);
+  CREATE INDEX ix_a ON ix (a DESC NULLS FIRST);
+  CREATE UNIQUE INDEX ix_bc ON ix (b, c) WHERE c > 0;
+steps:
+  - sql: |
+      SELECT i.relname, x.indisunique, x.indisprimary, x.indnatts, x.indnkeyatts, pg_get_indexdef(x.indexrelid) AS def FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid WHERE x.indrelid = 'ix'::regclass ORDER BY i.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE INDEX ix_a ON ix (b)
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      CREATE INDEX ix_lower ON ix (lower(b))
+    expect: ok
+  - sql: |
+      SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'ix_lower'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_index WHERE indrelid = 'ix'::regclass AND indisunique
+    expect: rows

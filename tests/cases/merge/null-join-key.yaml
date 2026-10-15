@@ -1,0 +1,30 @@
+# NULL join keys never compare equal, so NULL source keys fall into NOT MATCHED and NULL target keys stay unmatched.
+id: merge.null-join-key
+title: NULL join keys never match; NULL source rows take the NOT MATCHED path
+family: merge
+tier: core
+feature_ids: [merge, null-semantics, insert, update, select]
+required_capabilities: [create-table, insert, update, select, merge]
+provenance:
+  source: hand
+  ref: "PG18 sql-merge.html; SQL three-valued logic for ON predicate (NULL is not true)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (NULL, 99);
+  INSERT INTO source VALUES (NULL, 1), (1, 2);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source AS s
+      ON t.tid = s.sid
+      WHEN MATCHED THEN
+        UPDATE SET balance = t.balance + s.delta
+      WHEN NOT MATCHED THEN
+        INSERT VALUES (s.sid, s.delta)
+    expect: ok
+  - sql: |
+      SELECT tid IS NULL AS tid_null, tid, balance FROM target ORDER BY tid NULLS LAST, balance
+    expect: rows
+    order: ordered
+    comment: expect (false,1,12), (true,null,1), (true,null,99); NULL target key 99 stays unmatched

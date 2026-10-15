@@ -1,0 +1,39 @@
+# date_part and extract on timestamp columns: calendar fields, ISO fields, decade/century, epoch, and the upper-bound epoch case.
+id: timestamp.date-part-fields
+title: date_part and extract return calendar, ISO, and epoch fields for stored timestamps
+family: timestamp
+tier: core
+feature_ids: [timestamp, date-part, extract]
+required_capabilities: [create-table, insert, select, timestamp]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamp.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE ts_part (d1 timestamp(2) without time zone);
+  INSERT INTO ts_part VALUES ('1997-02-10 17:32:01'), ('2001-09-22 18:19:20.5')
+steps:
+  - sql: |
+      SELECT d1, date_part('year', d1) AS "year", date_part('month', d1) AS "month", date_part('day', d1) AS "day", date_part('hour', d1) AS "hour", date_part('minute', d1) AS "minute", date_part('second', d1) AS "second" FROM ts_part ORDER BY d1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT d1, date_part('quarter', d1) AS q, date_part('doy', d1) AS doy, date_part('dow', d1) AS dow, date_part('isodow', d1) AS isodow, date_part('week', d1) AS wk, date_part('isoyear', d1) AS isoyear FROM ts_part ORDER BY d1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT d1, date_part('decade', d1) AS decade, date_part('century', d1) AS century, date_part('millennium', d1) AS millennium, date_part('epoch', d1) AS epoch FROM ts_part ORDER BY d1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT d1, extract(microseconds from d1) AS us, extract(milliseconds from d1) AS ms, extract(seconds from d1) AS s, extract(epoch from d1) AS epoch FROM ts_part ORDER BY d1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT date_part('epoch', '294270-01-01 00:00:00'::timestamp) AS e
+    expect: rows
+    comment: value near the upper bound takes a special-cased path
+  - sql: |
+      SELECT date_part('year', NULL::timestamp) AS y
+    expect: rows

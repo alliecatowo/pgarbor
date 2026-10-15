@@ -1,0 +1,44 @@
+# Interval literals and table round-trip: postgres IntervalStyle, mixed units, infinity, NULL.
+id: interval.literal-roundtrip
+title: Interval literals stored in a column round-trip and sort by duration
+family: interval
+tier: slice
+feature_ids: [interval, create-table, insert, select, order-by, infinity]
+required_capabilities: [create-table, insert, select, interval]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/interval.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SET DATESTYLE = 'ISO';
+      SET IntervalStyle TO postgres
+    expect: ok
+  - sql: |
+      CREATE TABLE interval_tbl (f1 interval)
+    expect: ok
+  - sql: |
+      INSERT INTO interval_tbl (f1) VALUES
+        ('@ 1 minute'), ('@ 5 hour'), ('@ 10 day'), ('@ 3 months'),
+        ('1 day 2 hours 3 minutes 4 seconds'), ('5 months 12 hours'),
+        ('infinity'), ('-infinity')
+    expect: ok
+  - sql: |
+      INSERT INTO interval_tbl (f1) VALUES (NULL)
+    expect: ok
+  - sql: |
+      SELECT f1 FROM interval_tbl ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: NULL sorts last by default; infinities sort at the extremes
+  - sql: |
+      SELECT count(*), count(f1) FROM interval_tbl
+    expect: rows
+    order: multiset
+    comment: count(f1) skips the NULL row
+  - reconnect: true
+  - sql: |
+      SELECT f1 FROM interval_tbl WHERE f1 IS NULL
+    expect: rows
+    order: multiset

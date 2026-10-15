@@ -1,0 +1,25 @@
+# Partitions inherit the identity column of a partitioned table and share its sequence.
+id: identity.partitioned-shared-sequence
+title: Rows inserted through a partitioned table and a partition share one identity sequence
+family: identity
+tier: extended
+feature_ids: [identity-columns, partitioning, sequences, insert]
+required_capabilities: [create-table, insert, select, identity, partitioning, sequences]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/identity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE pitest1 (f1 date NOT NULL, f2 text, f3 bigint GENERATED ALWAYS AS IDENTITY) PARTITION BY RANGE (f1);
+  CREATE TABLE pitest1_p1 PARTITION OF pitest1 FOR VALUES FROM ('2016-07-01') TO ('2016-08-01');
+steps:
+  - sql: |
+      INSERT INTO pitest1 (f1, f2) VALUES ('2016-07-02', 'from pitest1')
+    expect: ok
+  - sql: |
+      INSERT INTO pitest1_p1 (f1, f2) VALUES ('2016-07-03', 'from pitest1_p1')
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass, f1, f2, f3 FROM pitest1 ORDER BY f3
+    expect: rows
+    order: ordered

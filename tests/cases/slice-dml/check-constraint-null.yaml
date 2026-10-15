@@ -1,0 +1,24 @@
+# CHECK (qty >= 0): a negative row fails the statement with 23514, while a NULL qty passes the check.
+id: slice-dml.check-constraint-null
+title: CHECK violation fails the whole INSERT; NULL satisfies the CHECK
+family: slice-dml
+tier: core
+feature_ids: [insert, check-constraint, constraints, null-handling, errors]
+required_capabilities: [create-table, insert, select, check-constraint, not-null-constraint]
+provenance:
+  source: hand
+  ref: "https://www.postgresql.org/docs/18/ddl-constraints.html#DDL-CONSTRAINTS-CHECK-CONSTRAINTS"
+sessions: [a]
+setup: |
+  CREATE TABLE stock_line (id int4 PRIMARY KEY, qty int4 CHECK (qty >= 0), unit text NOT NULL DEFAULT 'ea');
+steps:
+  - sql: |
+      INSERT INTO stock_line (id, qty) VALUES (1, 4), (2, -1), (3, NULL)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT count(*) FROM stock_line
+    expect: rows
+  - sql: |
+      INSERT INTO stock_line (id, qty) VALUES (3, NULL) RETURNING id, qty IS NULL AS qty_null, unit
+    expect: rows

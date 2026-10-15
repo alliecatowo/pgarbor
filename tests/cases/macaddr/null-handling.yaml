@@ -1,0 +1,44 @@
+# NULL semantics for macaddr: comparisons, IS [NOT] DISTINCT FROM, aggregates, grouping and sort order.
+id: macaddr.null-handling
+title: "macaddr NULL handling in comparisons, DISTINCT, aggregates, GROUP BY and ORDER BY"
+family: macaddr
+tier: core
+feature_ids: [macaddr, null-semantics, aggregates, group-by, order-by]
+required_capabilities: [create-table, insert, select, aggregates, group-by, order-by]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/macaddr.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE n (id int4, b macaddr);
+  INSERT INTO n VALUES (1, '08:00:2b:01:02:03'), (2, NULL), (3, '00:00:00:00:00:00'), (4, NULL);
+steps:
+  - sql: |
+      SELECT id FROM n WHERE b = NULL
+    expect: rows
+    comment: equality with NULL is never true
+  - sql: |
+      SELECT id FROM n WHERE b IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, b IS DISTINCT FROM '08:00:2b:01:02:03' AS d FROM n ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS all_rows, count(b) AS non_null FROM n
+    expect: rows
+  - sql: |
+      SELECT id FROM n ORDER BY b, id
+    expect: rows
+    order: ordered
+    comment: NULLs sort last ascending
+  - sql: |
+      SELECT id FROM n ORDER BY b DESC, id
+    expect: rows
+    order: ordered
+    comment: NULLs sort first descending
+  - sql: |
+      SELECT b, count(*) AS n FROM n GROUP BY b ORDER BY b NULLS LAST
+    expect: rows
+    order: ordered

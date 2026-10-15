@@ -1,0 +1,30 @@
+# ALTER FUNCTION ... RENAME TO: the renamed function is callable under the new name and gone under the old.
+id: alter-generic.rename-function-basic
+title: "ALTER FUNCTION RENAME TO moves the name and keeps the function callable"
+family: alter-generic
+tier: slice
+feature_ids: [alter-function, rename, create-function, catalog-introspection]
+required_capabilities: [create-function, alter-function, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (Function and Aggregate: ALTER FUNCTION alt_func1 RENAME TO alt_func3)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION f1(int) RETURNS int LANGUAGE sql AS 'SELECT $1 + 1';
+steps:
+  - sql: |
+      ALTER FUNCTION f1(int) RENAME TO f3
+    expect: ok
+  - sql: |
+      SELECT f3(41)
+    expect: rows
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('f1', 'f3') ORDER BY proname
+    expect: rows
+    order: ordered
+    comment: only f3 remains
+  - sql: |
+      SELECT f1(41)
+    expect: error
+    sqlstate: "42883"
+    comment: old name no longer resolves

@@ -1,0 +1,31 @@
+# Provenance: pg-regress misc_functions.sql, "Test adding a support function" (my_int_eq uses
+# LANGUAGE internal with a builtin symbol). Rewritten without the planner/support parts.
+id: misc-functions.internal-language-function
+title: LANGUAGE internal functions bind to builtin symbols, are strict on NULL, and reject unknown symbols
+family: misc-functions
+tier: extended
+feature_ids: [create-function, internal-language, null-semantics, errors]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/misc_functions.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION misc_int_eq(int, int) RETURNS bool
+        LANGUAGE internal STRICT IMMUTABLE PARALLEL SAFE
+        AS $$int4eq$$
+    expect: ok
+  - sql: |
+      SELECT misc_int_eq(1, 1) AS same, misc_int_eq(1, 2) AS different, misc_int_eq(NULL, 1) AS null_in
+    expect: rows
+    comment: STRICT means a NULL argument yields NULL without calling the builtin
+  - sql: |
+      CREATE FUNCTION misc_bad_internal(int) RETURNS int
+        LANGUAGE internal AS $$no_such_internal_function_xyz$$
+    expect: error
+    sqlstate: "42883"
+    comment: validator rejects a symbol that is not a builtin
+  - sql: |
+      DROP FUNCTION misc_int_eq(int, int)
+    expect: ok

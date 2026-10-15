@@ -1,0 +1,36 @@
+# jsonb @> and <@ semantics: object key/value subset, array element multiset, raw scalars.
+id: jsonb.containment
+title: jsonb containment operators for objects, arrays and raw scalars
+family: jsonb
+tier: core
+feature_ids: [jsonb, jsonb-containment]
+required_capabilities: [select, jsonb]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/jsonb.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '{"a":"b", "b":1, "c":null}'::jsonb @> '{"a":"b"}' AS obj_subset,
+             '{"a":"b", "b":1, "c":null}'::jsonb @> '{"a":"b", "c":null}' AS obj_with_null,
+             '{"a":"b", "b":1, "c":null}'::jsonb @> '{"g":null}' AS missing_key,
+             '{"a":"b", "b":1, "c":null}'::jsonb @> '{"a":"c"}' AS wrong_value
+    expect: rows
+    order: ordered
+    comment: containment is key and value subset, and a missing key is not contained
+  - sql: |
+      SELECT '[1,2]'::jsonb @> '[1,2,2]'::jsonb AS a, '[1,1,2]'::jsonb @> '[1,2,2]'::jsonb AS b, '[1,2,2]'::jsonb <@ '[1,2]'::jsonb AS c
+    expect: rows
+    order: ordered
+    comment: array containment is element-wise with duplicates allowed on the contained side
+  - sql: |
+      SELECT '[5]'::jsonb @> '5'::jsonb AS array_has_scalar, '5'::jsonb @> '[5]'::jsonb AS scalar_has_array, '5'::jsonb @> '5'::jsonb AS scalar_self
+    expect: rows
+    order: ordered
+    comment: an array may contain a raw scalar, but a raw scalar cannot contain an array
+  - sql: |
+      SELECT '["9", ["7", "3"], 1]'::jsonb @> '["9", ["7", "3"], 1]'::jsonb AS self_nested, '{ "name": "Bob", "tags": [ "enim", "qui"]}'::jsonb @> '{"tags":["qu"]}' AS no_substring_match
+    expect: rows
+    order: ordered
+    comment: values contain themselves; array string elements match whole strings only

@@ -1,0 +1,48 @@
+# A generated column depends on its source column: plain DROP fails with 2BP01, CASCADE drops the generated column.
+id: generated-stored.drop-column-dependency
+title: DROP COLUMN of a generation source fails without CASCADE
+family: generated-stored
+tier: extended
+feature_ids: [generated-columns, alter-table, dependencies, errors]
+required_capabilities: [create-table, insert, select, alter-table, generated-columns]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_stored.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE g10 (a int PRIMARY KEY, b int, c int GENERATED ALWAYS AS (b * 2) STORED)
+    expect: ok
+  - sql: |
+      INSERT INTO g10 VALUES (1, 10)
+    expect: ok
+  - sql: |
+      ALTER TABLE g10 DROP COLUMN b
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT a, b, c FROM g10 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE g10 DROP COLUMN b CASCADE
+    expect: ok
+  - sql: |
+      SELECT a, c FROM g10 ORDER BY a
+    expect: error
+    sqlstate: "42703"
+    comment: c was dropped by the cascade
+  - sql: |
+      CREATE TABLE g10a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED)
+    expect: ok
+  - sql: |
+      ALTER TABLE g10a DROP COLUMN b
+    expect: ok
+    comment: dropping the generated column itself does not depend on a
+  - sql: |
+      INSERT INTO g10a (a) VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT a FROM g10a ORDER BY a
+    expect: rows
+    order: ordered

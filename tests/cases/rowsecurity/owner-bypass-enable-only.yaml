@@ -1,0 +1,26 @@
+# Table owner bypasses RLS when only ENABLE is set (no FORCE); policies still exist and are catalogued.
+id: rowsecurity.owner-bypass-enable-only
+title: "Owner bypasses an enabled but unforced row-level security policy"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, catalog-introspection]
+required_capabilities: [create-table, insert, select, rls, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE document (did int4 PRIMARY KEY, dlevel int4 NOT NULL, dauthor text, dtitle text);
+  INSERT INTO document VALUES (1, 1, 'alice', 'a'), (2, 2, 'bob', 'b'), (3, 3, 'carol', 'c');
+  CREATE POLICY p_low ON document USING (dlevel <= 1);
+  ALTER TABLE document ENABLE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SELECT did FROM document ORDER BY did
+    expect: rows
+    order: ordered
+    comment: owner is exempt from the policy because FORCE is not set
+  - sql: |
+      SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'document' AND relnamespace = 'public'::regnamespace
+    expect: rows
+    comment: relrowsecurity is true, relforcerowsecurity is false

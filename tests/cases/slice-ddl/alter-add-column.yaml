@@ -1,0 +1,42 @@
+# ALTER TABLE ADD COLUMN: NOT NULL without default fails on non-empty table; defaults backfill existing rows; duplicate column name.
+id: slice-ddl.alter-add-column
+title: ADD COLUMN backfills defaults, rejects NOT NULL without default on populated table, rejects duplicates
+family: slice-ddl
+tier: core
+feature_ids: [alter-table, create-table, insert, select, defaults, not-null, errors]
+required_capabilities: [create-table, insert, select, alter-table, defaults, not-null, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-altertable.html#SQL-ALTERTABLE-DESC-ADD-COLUMN"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ac (id int4 PRIMARY KEY);
+      INSERT INTO ac VALUES (1), (2)
+    expect: ok
+  - sql: |
+      ALTER TABLE ac ADD COLUMN a int4 NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: existing rows would get NULL
+  - sql: |
+      ALTER TABLE ac ADD COLUMN a int4 NOT NULL DEFAULT 7
+    expect: ok
+  - sql: |
+      ALTER TABLE ac ADD COLUMN b text DEFAULT 'x'
+    expect: ok
+  - sql: |
+      ALTER TABLE ac ADD COLUMN c text
+    expect: ok
+  - sql: |
+      INSERT INTO ac (id, c) VALUES (3, 'z')
+    expect: ok
+  - sql: |
+      SELECT id, a, b, c FROM ac ORDER BY id
+    expect: rows
+    order: ordered
+    comment: existing rows get the defaults; row 3 gets the defaults for a and b
+  - sql: |
+      ALTER TABLE ac ADD COLUMN a int4
+    expect: error
+    sqlstate: "42701"

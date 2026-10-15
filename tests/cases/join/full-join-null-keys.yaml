@@ -1,0 +1,28 @@
+# FULL JOIN keeps unmatched rows from both sides; NULL keys never match, so NULL-key rows stay unmatched.
+id: join.full-join-null-keys
+title: FULL JOIN keeps unmatched rows from both sides and never matches NULL keys
+family: join
+tier: core
+feature_ids: [joins, outer-join, full-join, null-semantics, coalesce]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: hand
+  ref: "PG18 docs queries-table-expressions.html#QUERIES-FROM (FULL OUTER JOIN); join.sql FULL JOIN section"
+sessions: [a]
+setup: |
+  CREATE TABLE fa (id integer, v text);
+  CREATE TABLE fb (id integer, w text);
+  INSERT INTO fa VALUES (1, 'a1'), (2, 'a2'), (NULL, 'an');
+  INSERT INTO fb VALUES (2, 'b2'), (3, 'b3'), (NULL, 'bn');
+steps:
+  - sql: |
+      SELECT fa.v, fb.w FROM fa FULL JOIN fb ON fa.id = fb.id
+    expect: rows
+    order: multiset
+    comment: five rows; the NULL-key rows on each side never match and are null-extended
+  - sql: |
+      SELECT coalesce(fa.id, fb.id) AS id, v, w FROM fa FULL JOIN fb ON fa.id = fb.id
+      ORDER BY id NULLS LAST, v NULLS LAST, w NULLS LAST
+    expect: rows
+    order: ordered
+    comment: merged key via coalesce; unmatched right row id 3 comes from fb

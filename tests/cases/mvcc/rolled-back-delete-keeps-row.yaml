@@ -1,0 +1,34 @@
+# A DELETE inside a rolled-back savepoint leaves the row visible.
+id: mvcc.rolled-back-delete-keeps-row
+title: Row deleted in a rolled-back savepoint is still visible after commit
+family: mvcc
+tier: core
+feature_ids: [transactions, savepoints, delete, select]
+required_capabilities: [create-table, insert, delete, select, transactions, savepoints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (aborted subtransaction visibility)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (k int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'keep'), (2, 'also keep');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT s
+    expect: ok
+  - sql: |
+      DELETE FROM t WHERE k = 1
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT s
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT k, v FROM t ORDER BY k
+    expect: rows
+    order: ordered

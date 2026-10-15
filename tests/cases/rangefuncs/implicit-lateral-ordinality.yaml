@@ -1,0 +1,28 @@
+# Implicit LATERAL: a function in FROM references an earlier FROM item; explicit LEFT JOIN LATERAL keeps unmatched rows as NULL.
+id: rangefuncs.implicit-lateral-ordinality
+title: "Implicit and explicit LATERAL set-returning functions with WITH ORDINALITY"
+family: rangefuncs
+tier: core
+feature_ids: [lateral, with-ordinality, set-returning-functions, outer-joins, sql-functions]
+required_capabilities: [create-table, insert, create-function, sql-functions, set-returning-functions, select, join]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (function with implicit LATERAL and explicit ORDINALITY)"
+setup: |
+  CREATE TABLE rngfunc2(rngfuncid int, f2 int);
+  INSERT INTO rngfunc2 VALUES (1, 11), (2, 22), (1, 111);
+  CREATE FUNCTION rngfunct(int) RETURNS SETOF rngfunc2 AS 'SELECT * FROM rngfunc2 WHERE rngfuncid = $1 ORDER BY f2;' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM rngfunc2, rngfunct(rngfunc2.rngfuncid) WITH ORDINALITY AS z(rngfuncid,f2,ord) WHERE rngfunc2.f2 = z.f2 ORDER BY rngfunc2.f2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT rngfunc2.f2, z.ord FROM rngfunc2 LEFT JOIN LATERAL rngfunct(rngfunc2.rngfuncid) WITH ORDINALITY AS z(rngfuncid,f2,ord) ON z.f2 > rngfunc2.f2 ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: "rows with no later f2 in their function output keep NULL ordinality"
+  - sql: |
+      SELECT r.f2, z.f2 AS fn_f2 FROM rngfunc2 r, rngfunct(r.rngfuncid) z ORDER BY 1, 2
+    expect: rows
+    order: ordered

@@ -1,0 +1,30 @@
+# sum, avg, min, max, stddev and variance ignore NULLs; empty input gives NULL; single-row sample stddev is NULL.
+id: numeric.aggregates-null-empty
+title: numeric aggregates ignore NULLs and return NULL on empty or single-row input
+family: numeric
+tier: core
+feature_ids: [numeric, aggregates, nulls]
+required_capabilities: [create-table, insert, select, numeric, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/numeric.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE agg (id int4, val numeric);
+  INSERT INTO agg VALUES (1, NULL), (2, 0), (3, -34338492.215397047), (4, 4.31), (5, NULL);
+  CREATE TABLE agg_empty (val numeric);
+steps:
+  - sql: |
+      SELECT count(*) AS n_rows, count(val) AS n_vals, sum(val) AS s, min(val) AS mn, max(val) AS mx, avg(val) AS a FROM agg
+    expect: rows
+  - sql: |
+      SELECT stddev(val) AS sd, variance(val) AS vr FROM agg
+    expect: rows
+  - sql: |
+      SELECT stddev(val) AS sd_one FROM agg WHERE id = 2
+    expect: rows
+    comment: sample stddev of a single value is NULL
+  - sql: |
+      SELECT sum(val) AS s, avg(val) AS a, min(val) AS mn, max(val) AS mx, stddev(val) AS sd, count(val) AS c FROM agg_empty
+    expect: rows

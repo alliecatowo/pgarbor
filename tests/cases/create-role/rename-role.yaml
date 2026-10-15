@@ -1,0 +1,36 @@
+# ALTER ROLE ... RENAME moves the name; the old name disappears and renaming onto an existing name is refused.
+id: create-role.rename-role
+title: ALTER ROLE RENAME moves the role name; old name is missing and a clash with an existing role fails
+family: create-role
+tier: core
+feature_ids: [roles, alter-role, errors, catalog-introspection]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql (ALTER ROLE ... RENAME TO)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rn_old
+    expect: ok
+  - sql: |
+      CREATE ROLE rn_other
+    expect: ok
+  - sql: |
+      ALTER ROLE rn_old RENAME TO rn_new
+    expect: ok
+  - sql: |
+      ALTER ROLE rn_old RENAME TO rn_x
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER ROLE rn_new RENAME TO rn_other
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT rolname FROM pg_roles WHERE rolname IN ('rn_old', 'rn_new', 'rn_other') ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE rn_new, rn_other
+    expect: ok

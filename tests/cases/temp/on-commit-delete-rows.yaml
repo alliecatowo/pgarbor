@@ -1,0 +1,43 @@
+# ON COMMIT DELETE ROWS empties the temp table at each commit, including autocommit statements.
+id: temp.on-commit-delete-rows
+title: ON COMMIT DELETE ROWS clears rows at transaction commit but keeps the table
+family: temp
+tier: core
+feature_ids: [temp-tables, on-commit, transactions]
+required_capabilities: [create-table, insert, select, transactions, temp-tables]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/temp.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEMP TABLE temptest (col int) ON COMMIT DELETE ROWS
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO temptest VALUES (1), (2)
+    expect: ok
+  - sql: |
+      SELECT col FROM temptest ORDER BY col
+    expect: rows
+    order: ordered
+    comment: rows visible inside the transaction
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT col FROM temptest
+    expect: rows
+    order: multiset
+    comment: zero rows after commit, table still exists
+  - sql: |
+      INSERT INTO temptest VALUES (3)
+    expect: ok
+    comment: autocommit statement, so the row is deleted at its own commit
+  - sql: |
+      SELECT count(*) FROM temptest
+    expect: rows
+    order: multiset

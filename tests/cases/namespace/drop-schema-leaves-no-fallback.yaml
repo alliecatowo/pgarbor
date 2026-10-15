@@ -1,0 +1,35 @@
+# Dropping a schema that holds a sequence-backed table removes both; a later unqualified
+# reference fails with 42P01 rather than picking up another schema's table.
+id: namespace.drop-schema-leaves-no-fallback
+title: After DROP SCHEMA CASCADE an unqualified name no longer resolves to dropped objects
+family: namespace
+tier: extended
+feature_ids: [drop-schema, search-path, serial, insert, select, errors]
+required_capabilities: [create-schema, create-table, search-path, serial, insert, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-dropschema.html"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA dl_schema;
+  CREATE TABLE dl_schema.t (id serial, v text);
+  INSERT INTO dl_schema.t (v) VALUES ('x');
+steps:
+  - sql: |
+      SET search_path TO dl_schema, public
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t
+    expect: rows
+  - sql: |
+      DROP SCHEMA dl_schema CASCADE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      INSERT INTO dl_schema.t (v) VALUES ('y')
+    expect: error
+    sqlstate: "42P01"
+    comment: a qualified name in a missing schema reports an undefined relation

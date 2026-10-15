@@ -1,0 +1,36 @@
+# An index on a column whose value comes from an added-column default; setting it to NULL is found by index and seq scans alike.
+id: fast-default.index-on-default-column-null-update
+title: Index on an added-column default column finds NULLs after UPDATE, with index and seq scans agreeing
+family: fast-default
+tier: extended
+feature_ids: [alter-table, defaults, create-index, update, nulls]
+required_capabilities: [create-table, insert, select, update, alter-table, create-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/fast_default.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t ();
+  INSERT INTO t DEFAULT VALUES;
+  ALTER TABLE t ADD COLUMN a int4 DEFAULT 1;
+  CREATE INDEX ON t (a);
+steps:
+  - sql: |
+      SELECT a, a IS NULL AS a_null FROM t
+    expect: rows
+    order: multiset
+  - sql: |
+      UPDATE t SET a = NULL
+    expect: ok
+  - sql: |
+      SET enable_seqscan = on
+    expect: ok
+  - sql: |
+      SELECT count(*) AS nulls FROM t WHERE a IS NULL
+    expect: rows
+  - sql: |
+      SET enable_seqscan = off
+    expect: ok
+  - sql: |
+      SELECT count(*) AS nulls FROM t WHERE a IS NULL
+    expect: rows

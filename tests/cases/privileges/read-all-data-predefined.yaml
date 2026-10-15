@@ -1,0 +1,31 @@
+# pg_read_all_data grants SELECT on every table without per-table grants; it grants no write privilege.
+id: privileges.read-all-data-predefined
+title: pg_read_all_data allows reads across tables and denies writes
+family: privileges
+tier: core
+feature_ids: [roles, predefined-roles, select, insert, privileges]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_rad_r;
+  CREATE TABLE pv_rad_t (id int4, v text);
+  INSERT INTO pv_rad_t VALUES (1, 'a');
+  GRANT pg_read_all_data TO pv_rad_r;
+steps:
+  - sql: |
+      SET ROLE pv_rad_r
+    expect: ok
+  - sql: |
+      SELECT id, v FROM pv_rad_t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO pv_rad_t VALUES (2, 'b')
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

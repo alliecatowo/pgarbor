@@ -1,0 +1,36 @@
+# Foreign key: insert of a dangling reference and delete of a referenced parent both fail with 23503;
+# nulling the reference first makes the parent deletable.
+id: slice-dml.foreign-key-restrict
+title: FK violation on insert and on parent delete; NULL reference is not checked
+family: slice-dml
+tier: core
+feature_ids: [insert, update, delete, foreign-key, constraints, errors]
+required_capabilities: [create-table, insert, update, delete, select, foreign-key, returning]
+provenance:
+  source: hand
+  ref: "https://www.postgresql.org/docs/18/ddl-constraints.html#DDL-CONSTRAINTS-FK"
+sessions: [a]
+setup: |
+  CREATE TABLE dept (id int4 PRIMARY KEY);
+  CREATE TABLE emp (id int4 PRIMARY KEY, dept_id int4 REFERENCES dept (id));
+  INSERT INTO dept VALUES (1);
+  INSERT INTO emp VALUES (10, 1), (11, NULL);
+steps:
+  - sql: |
+      INSERT INTO emp VALUES (12, 2)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM dept WHERE id = 1
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      UPDATE emp SET dept_id = NULL WHERE id = 10 RETURNING id, dept_id
+    expect: rows
+  - sql: |
+      DELETE FROM dept WHERE id = 1 RETURNING id
+    expect: rows
+  - sql: |
+      SELECT id, dept_id IS NULL AS d_null FROM emp ORDER BY id
+    expect: rows
+    order: ordered

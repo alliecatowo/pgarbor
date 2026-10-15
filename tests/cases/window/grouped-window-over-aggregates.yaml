@@ -1,0 +1,31 @@
+id: window.grouped-window-over-aggregates
+title: Window functions over GROUP BY output, including nested aggregates in window arguments
+family: window
+tier: core
+feature_ids: [window-functions, group-by, aggregates, order-by]
+required_capabilities: [create-table, insert, select, window-functions, group-by]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/window.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE sales (region text, product text, amount int4, PRIMARY KEY (region, product));
+  INSERT INTO sales VALUES
+    ('east', 'a', 10), ('east', 'b', 20), ('west', 'a', 5),
+    ('west', 'b', NULL), ('north', 'a', 7);
+steps:
+  - sql: |
+      SELECT region, sum(amount) AS total, sum(sum(amount)) OVER (ORDER BY region) AS running
+      FROM sales GROUP BY region ORDER BY region
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT region, sum(amount) AS total, rank() OVER (ORDER BY sum(amount) DESC) AS rk
+      FROM sales GROUP BY region ORDER BY region
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT product, count(*) AS c, count(amount) AS ca, sum(count(*)) OVER () AS total_rows
+      FROM sales GROUP BY product ORDER BY product
+    expect: rows
+    order: ordered

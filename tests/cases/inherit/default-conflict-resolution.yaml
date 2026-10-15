@@ -1,0 +1,36 @@
+# Inherited column defaults: identical defaults merge; conflicting defaults are an error unless the child declares its own.
+id: inherit.default-conflict-resolution
+title: Conflicting inherited column defaults require an explicit default on the child
+family: inherit
+tier: extended
+feature_ids: [inheritance, column-defaults, create-table, insert, errors]
+required_capabilities: [create-table, insert, select, inheritance]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/inherit.sql
+  license: PostgreSQL License
+sessions: [a]
+setup: |
+  CREATE TABLE firstparent (tomorrow INT DEFAULT 1);
+  CREATE TABLE secondparent (tomorrow INT DEFAULT 1);
+  CREATE TABLE jointchild () INHERITS (firstparent, secondparent);
+  CREATE TABLE thirdparent (tomorrow INT DEFAULT 2);
+steps:
+  - sql: |
+      INSERT INTO jointchild DEFAULT VALUES
+    expect: ok
+  - sql: |
+      CREATE TABLE otherchild () INHERITS (firstparent, thirdparent)
+    expect: error
+    comment: column "tomorrow" inherits conflicting default values
+  - sql: |
+      CREATE TABLE otherchild (tomorrow INT DEFAULT 3) INHERITS (firstparent, thirdparent)
+    expect: ok
+    comment: the child resolves the ambiguous default explicitly
+  - sql: |
+      INSERT INTO otherchild DEFAULT VALUES
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS relname, tomorrow FROM firstparent ORDER BY 1, 2
+    expect: rows
+    order: ordered

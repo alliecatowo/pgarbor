@@ -1,0 +1,40 @@
+# After RENAME TO the old name is gone (42P01) and rows are reachable only under the new name.
+id: alter-table.rename-table-visibility
+title: RENAME TABLE removes the old name; data stays reachable under the new name
+family: alter-table
+tier: core
+feature_ids: [alter-table, rename, select, errors]
+required_capabilities: [create-table, alter-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (rename section)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE attmp (regtable int4);
+  INSERT INTO attmp VALUES (1), (2);
+steps:
+  - sql: |
+      ALTER TABLE attmp RENAME TO attmp_new
+    expect: ok
+  - sql: |
+      SELECT regtable FROM attmp
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT regtable FROM attmp_new ORDER BY regtable
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE attmp RENAME TO attmp_new2
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      CREATE TABLE attmp (regtable int4)
+    expect: ok
+    comment: the old name is free again
+  - sql: |
+      ALTER TABLE attmp_new RENAME TO attmp
+    expect: error
+    sqlstate: "42P07"
+    comment: name is taken by the newly created attmp

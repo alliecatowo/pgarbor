@@ -1,0 +1,27 @@
+# A record-returning SQL function whose final statement types do not match the caller's column definition list.
+id: rangefuncs.return-type-mismatch-record
+title: "Column definition list type mismatch against a record-returning SQL function"
+family: rangefuncs
+tier: extended
+feature_ids: [sql-functions, set-returning-functions, column-definition-lists, errors, arrays]
+required_capabilities: [create-function, sql-functions, arrays, set-returning-functions, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (array_to_set; return type mismatch in function declared to return record)"
+setup: |
+  CREATE FUNCTION array_to_set(anyarray) RETURNS setof record AS 'select i, $1[i] from generate_series(array_lower($1,1), array_upper($1,1)) i' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM array_to_set(array['one', 'two'])
+    expect: error
+    sqlstate: "42601"
+    comment: "record result without a column definition list"
+  - sql: |
+      SELECT * FROM array_to_set(array['one', 'two']) AS t(f1 point, f2 text)
+    expect: error
+    sqlstate: "42P13"
+    comment: "final statement returns integer where point is declared"
+  - sql: |
+      SELECT * FROM array_to_set(array['one', 'two']) AS t(f1 int, f2 text) ORDER BY f1
+    expect: rows
+    order: ordered

@@ -1,0 +1,25 @@
+# \d+ extras: obj_description, col_description (NULL when absent) and pg_size_pretty on an empty table.
+id: psql-describe.describe-comments-size
+title: \d+ description and size columns return NULL for undocumented objects and a size for empty tables
+family: psql-describe
+tier: extended
+feature_ids: [catalog-introspection, comments, create-table, psql-describe]
+required_capabilities: [create-table, comments, catalog-introspection]
+provenance:
+  source: pg-source
+  ref: "src/bin/psql/describe.c listTables() verbose path (obj_description, pg_table_size)"
+sessions: [a]
+setup: |
+  CREATE TABLE doc (id int4, body text);
+  COMMENT ON TABLE doc IS 'document store';
+  COMMENT ON COLUMN doc.body IS 'raw text';
+steps:
+  - sql: |
+      SELECT pg_catalog.obj_description('doc'::regclass, 'pg_class') AS table_desc,
+        pg_catalog.col_description('doc'::regclass, 1) AS id_desc,
+        pg_catalog.col_description('doc'::regclass, 2) AS body_desc
+    expect: rows
+  - sql: |
+      SELECT pg_catalog.pg_size_pretty(pg_catalog.pg_table_size('doc'::regclass)) AS size
+    expect: rows
+    comment: empty table, so size should be 0 bytes; if the target differs the recording will show it

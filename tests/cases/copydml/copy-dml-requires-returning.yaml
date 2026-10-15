@@ -1,0 +1,33 @@
+# COPY (INSERT/UPDATE/DELETE ...) TO is only defined when the DML has a RETURNING clause.
+id: copydml.copy-dml-requires-returning
+title: "COPY over INSERT, UPDATE or DELETE without RETURNING is rejected and changes nothing"
+family: copydml
+tier: core
+feature_ids: [copy, insert, update, delete, returning, errors]
+required_capabilities: [create-table, insert, update, delete, copy, returning, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/copydml.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE copydml_test (id serial, t text);
+  INSERT INTO copydml_test (t) VALUES ('a'), ('b'), ('c'), ('d'), ('e');
+steps:
+  - sql: |
+      COPY (INSERT INTO copydml_test (t) VALUES ('f')) TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      COPY (UPDATE copydml_test SET t = 'g' WHERE t = 'a') TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      COPY (DELETE FROM copydml_test WHERE t = 'b') TO STDOUT
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      SELECT id, t FROM copydml_test ORDER BY id
+    expect: rows
+    order: ordered
+    comment: all five rows unchanged, no sequence-visible insert

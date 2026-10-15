@@ -1,0 +1,21 @@
+# Arguments used twice inside one SQL function body must not be corrupted by in-place array_append.
+id: create-function-sql.array-double-use-expanded-datum
+title: Polymorphic SQL function using an array argument twice returns uncorrupted arrays
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, arrays, polymorphism, set-returning-functions, values]
+required_capabilities: [create-function, sql-functions, arrays, set-returning-functions, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE FUNCTION double_append(anyarray, anyelement) RETURNS SETOF anyarray
+  LANGUAGE SQL IMMUTABLE AS
+  $$ SELECT array_append($1, $2) || array_append($1, $2) $$;
+steps:
+  - sql: |
+      SELECT double_append(array_append(ARRAY[q1], q2), q3)
+        FROM (VALUES (1, 2, 3), (4, 5, 6)) v(q1, q2, q3)
+       ORDER BY 1
+    expect: rows
+    order: ordered

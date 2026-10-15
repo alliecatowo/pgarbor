@@ -1,0 +1,44 @@
+# A label added inside a transaction cannot be used there (55P04) until the transaction commits; savepoints do not change this.
+id: enum.transactional-add-value
+title: New enum label is unusable in its adding transaction and usable after commit
+family: enum
+tier: core
+feature_ids: [enum, alter-type, transactions, savepoints, errors]
+required_capabilities: [enum-type, alter-type, transactions, savepoints, errors]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TYPE bogus AS ENUM ('good')
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER TYPE bogus ADD VALUE 'new'
+    expect: ok
+  - sql: |
+      SAVEPOINT x
+    expect: ok
+  - sql: |
+      SELECT 'new'::bogus
+    expect: error
+    sqlstate: "55P04"
+  - sql: |
+      ROLLBACK TO x
+    expect: ok
+  - sql: |
+      SELECT enum_first(NULL::bogus)
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT 'new'::bogus
+    expect: rows
+  - sql: |
+      SELECT enumlabel FROM pg_enum WHERE enumtypid = 'bogus'::regtype ORDER BY enumsortorder
+    expect: rows
+    order: ordered

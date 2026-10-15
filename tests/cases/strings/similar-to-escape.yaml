@@ -1,0 +1,32 @@
+# SIMILAR TO and SUBSTRING ... SIMILAR with ESCAPE, NULL handling, and invalid escape errors.
+id: strings.similar-to-escape
+title: SIMILAR TO and SIMILAR-form SUBSTRING with ESCAPE characters, NULLs, and invalid escapes
+family: strings
+tier: extended
+feature_ids: [similar-to, substring, escape-clause, errors]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/strings.sql"
+steps:
+  - sql: |
+      SELECT 'abcdefg' SIMILAR TO '_bcd%' AS t1, 'abcdefg' SIMILAR TO 'bcd%' AS f1, 'abcd%' SIMILAR TO '_bcd#%' ESCAPE '#' AS t2
+    expect: rows
+  - sql: |
+      SELECT 'abcdefg' SIMILAR TO '_bcd\%' AS backslash_default, 'abcd\efg' SIMILAR TO '_bcd\%' ESCAPE '' AS no_escape
+    expect: rows
+  - sql: |
+      SELECT 'abcdefg' SIMILAR TO '_bcd%' ESCAPE NULL AS null_escape
+    expect: rows
+  - sql: |
+      SELECT 'abcdefg' SIMILAR TO '_bcd#%' ESCAPE '##' AS err
+    expect: error
+    sqlstate: "22025"
+  - sql: |
+      SELECT SUBSTRING('abcdefg' SIMILAR 'a#"(b_d)#"%' ESCAPE '#') AS bcd,
+             SUBSTRING('abcdefg' SIMILAR 'a#"%#"g' ESCAPE '#') AS bcdef,
+             SUBSTRING('abcdefg' SIMILAR '#"(b_d)#"%' ESCAPE '#') IS NULL AS no_match
+    expect: rows
+  - sql: |
+      SELECT SUBSTRING('abcdefg' SIMILAR 'a*#"%#"g*#"x' ESCAPE '#') AS err
+    expect: error

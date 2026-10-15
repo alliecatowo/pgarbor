@@ -1,0 +1,40 @@
+# ALTER TYPE ... ADD VALUE with BEFORE and AFTER placement, observed through pg_enum sort order.
+id: enum.add-value-position
+title: ALTER TYPE ADD VALUE with BEFORE and AFTER placement reorders enum values
+family: enum
+tier: core
+feature_ids: [enum, alter-type, catalog-introspection, order-by]
+required_capabilities: [enum-type, alter-type, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE planets AS ENUM ('venus', 'earth', 'mars');
+steps:
+  - sql: |
+      SELECT enumlabel FROM pg_enum WHERE enumtypid = 'planets'::regtype ORDER BY enumsortorder
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TYPE planets ADD VALUE 'uranus'
+    expect: ok
+  - sql: |
+      SELECT enumlabel FROM pg_enum WHERE enumtypid = 'planets'::regtype ORDER BY enumsortorder
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TYPE planets ADD VALUE 'mercury' BEFORE 'venus';
+      ALTER TYPE planets ADD VALUE 'saturn' BEFORE 'uranus';
+      ALTER TYPE planets ADD VALUE 'jupiter' AFTER 'mars';
+      ALTER TYPE planets ADD VALUE 'neptune' AFTER 'uranus'
+    expect: ok
+  - sql: |
+      SELECT enumlabel FROM pg_enum WHERE enumtypid = 'planets'::regtype ORDER BY enumsortorder
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT enumlabel FROM pg_enum WHERE enumtypid = 'planets'::regtype ORDER BY enumlabel::planets
+    expect: rows
+    order: ordered
+    comment: ordering by the enum type itself must match enumsortorder

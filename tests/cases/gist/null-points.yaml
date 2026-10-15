@@ -1,0 +1,42 @@
+# NULL point values in a GiST-indexed column: IS NULL finds them, containment never matches them,
+# and NOT(containment) is NULL for them, so they are excluded.
+id: gist.null-points
+title: NULL points in a GiST index are excluded from containment and found by IS NULL
+family: gist
+tier: core
+feature_ids: [gist, create-index, point, null-semantics, select, insert]
+required_capabilities: [create-table, insert, select, create-index, gist-index, point-type, null-semantics, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE np (id int4 PRIMARY KEY, p point);
+  CREATE INDEX np_p ON np USING gist (p);
+  INSERT INTO np VALUES (1, point(1,1)), (2, NULL), (3, point(2,2)), (4, NULL);
+steps:
+  - sql: |
+      SELECT id FROM np WHERE p IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM np WHERE p <@ box(point(0,0), point(5,5)) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL rows never match a containment operator
+  - sql: |
+      SELECT id FROM np WHERE NOT (p <@ box(point(0,0), point(5,5)))
+    expect: rows
+    order: multiset
+    comment: NOT of a NULL result is NULL, so no rows qualify
+  - sql: |
+      SELECT count(p) AS non_null, count(*) AS total FROM np
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO np VALUES (5, NULL)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM np WHERE p IS NULL
+    expect: rows
+    order: multiset

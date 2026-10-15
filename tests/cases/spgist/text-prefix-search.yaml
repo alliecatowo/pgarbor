@@ -1,0 +1,34 @@
+# SP-GiST text_ops: equality and the starts-with operator ^@ over a prefix-heavy key set.
+id: spgist.text-prefix-search
+title: SP-GiST text index serves equality and starts-with lookups
+family: spgist
+tier: core
+feature_ids: [spgist, create-index, text, select]
+required_capabilities: [create-table, create-index, insert, select, spgist, text]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/spgist.sql (spgist_text_tbl)"
+sessions: [a]
+setup: |
+  CREATE TABLE sp_txt (id int4, t text);
+  CREATE INDEX sp_txt_idx ON sp_txt USING spgist (t);
+  INSERT INTO sp_txt (id, t)
+    SELECT g, 'f' || repeat('o', 20) || g FROM generate_series(1, 50) g
+    UNION ALL
+    SELECT g, 'baaar' || g FROM generate_series(1, 10) g;
+  INSERT INTO sp_txt (id, t) VALUES (900, ''), (901, 'f');
+steps:
+  - sql: |
+      SELECT id FROM sp_txt WHERE t = 'f' || repeat('o', 20) || '7'
+    expect: rows
+    order: multiset
+    comment: exactly one row
+  - sql: |
+      SELECT count(*) FROM sp_txt WHERE t ^@ 'f'
+    expect: rows
+    comment: 50 long-prefix rows plus the row 'f' itself
+  - sql: |
+      SELECT id FROM sp_txt WHERE t ^@ '' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: empty prefix matches every row, including the empty string

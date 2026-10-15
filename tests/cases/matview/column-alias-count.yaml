@@ -1,0 +1,29 @@
+id: matview.column-alias-count
+title: Column alias list may be shorter than the query output but not longer
+family: matview
+tier: extended
+feature_ids: [materialized-views, column-aliases, errors, catalog-introspection]
+required_capabilities: [create-table, insert, select, create-materialized-view, catalog-introspection, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE wide (i int4, j int4);
+  INSERT INTO wide VALUES (1, 2), (3, 4);
+steps:
+  - sql: |
+      CREATE MATERIALIZED VIEW mv7_bad (ii, jj, kk) AS SELECT i, j FROM wide
+    expect: error
+    sqlstate: "42601"
+    comment: too many column names
+  - sql: |
+      CREATE MATERIALIZED VIEW mv7 (ii) AS SELECT i, j FROM wide
+    expect: ok
+  - sql: |
+      SELECT * FROM mv7 ORDER BY ii
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'mv7'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered

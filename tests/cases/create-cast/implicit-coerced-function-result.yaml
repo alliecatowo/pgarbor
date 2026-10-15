@@ -1,0 +1,58 @@
+# PostgreSQL 18 regression create_cast.sql, rewritten as a self-contained case.
+id: create-cast.implicit-coerced-function-result
+title: "Cast function returning text is coerced through an implicit text cast and recorded as a dependency"
+family: create-cast
+tier: core
+feature_ids: [create-cast, casts, catalog-introspection, dependencies]
+required_capabilities: [create-type, create-cast, create-function-sql, create-function-internal, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_cast.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TYPE casttesttype;
+  CREATE FUNCTION casttesttype_in(cstring)
+     RETURNS casttesttype
+     AS 'textin'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION casttesttype_out(casttesttype)
+     RETURNS cstring
+     AS 'textout'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE TYPE casttesttype (
+     internallength = variable,
+     input = casttesttype_in,
+     output = casttesttype_out,
+     alignment = int4
+  );
+  CREATE FUNCTION casttestfunc(casttesttype) RETURNS int4 LANGUAGE SQL AS
+  $$ SELECT 1; $$;
+steps:
+  - sql: |
+      CREATE CAST (text AS casttesttype) WITHOUT FUNCTION AS IMPLICIT;
+    expect: ok
+  - sql: |
+      CREATE FUNCTION bar_int4_text(int4) RETURNS text LANGUAGE SQL AS
+      $$ SELECT ('bar'::text || $1::text); $$;
+    expect: ok
+  - sql: |
+      CREATE CAST (int4 AS casttesttype) WITH FUNCTION bar_int4_text(int4) AS IMPLICIT;
+    expect: ok
+  - sql: |
+      SELECT 1234::int4::casttesttype AS v;
+    expect: rows
+    order: ordered
+    comment: "function result text is implicitly coerced to casttesttype"
+  - sql: |
+      SELECT pg_describe_object(classid, objid, objsubid) AS obj,
+             pg_describe_object(refclassid, refobjid, refobjsubid) AS objref,
+             deptype
+      FROM pg_depend
+      WHERE classid = 'pg_cast'::regclass AND
+            objid = (SELECT oid FROM pg_cast
+                     WHERE castsource = 'int4'::regtype
+                       AND casttarget = 'casttesttype'::regtype)
+      ORDER BY objref;
+    expect: rows
+    order: ordered
+    comment: "cast depends on the function and on the text->casttesttype cast"

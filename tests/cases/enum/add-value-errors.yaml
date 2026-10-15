@@ -1,0 +1,32 @@
+# Error paths for ALTER TYPE ADD VALUE: overlong label, unknown neighbour label, and the type stays unchanged.
+id: enum.add-value-errors
+title: ADD VALUE rejects an overlong label and an unknown BEFORE or AFTER neighbour
+family: enum
+tier: core
+feature_ids: [enum, alter-type, errors]
+required_capabilities: [enum-type, alter-type, select, errors]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE planets AS ENUM ('venus', 'earth', 'mars');
+steps:
+  - sql: |
+      ALTER TYPE planets ADD VALUE 'plutoplutoplutoplutoplutoplutoplutoplutoplutoplutoplutoplutoplutopluto'
+    expect: error
+    sqlstate: "22023"
+    comment: label longer than NAMEDATALEN-1 bytes
+  - sql: |
+      ALTER TYPE planets ADD VALUE 'pluto' AFTER 'zeus'
+    expect: error
+    sqlstate: "42704"
+    comment: neighbour label does not exist
+  - sql: |
+      SELECT COUNT(*) FROM pg_enum WHERE enumtypid = 'planets'::regtype
+    expect: rows
+    comment: failed statements must not add labels
+  - sql: |
+      SELECT 'pluto'::planets
+    expect: error
+    sqlstate: "22P02"

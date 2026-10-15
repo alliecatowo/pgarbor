@@ -1,0 +1,38 @@
+# Values with empty, unbounded and huge bounds are merged into the range summary; after
+# desummarize and resummarize the index must still answer containment correctly.
+id: brin.numrange-summary-merge
+title: BRIN numrange summary merges empty, huge and negative bounds and resummarizes
+family: brin
+tier: extended
+feature_ids: [brin, create-index, select, numrange, range-types, summaries]
+required_capabilities: [create-table, insert, select, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brintest_2 numrange add_value merging)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n numrange);
+  CREATE INDEX t_n_brin ON t USING brin (n);
+  INSERT INTO t VALUES ('empty');
+  INSERT INTO t VALUES (numrange(0, 2 ^ 1000::numeric));
+  INSERT INTO t VALUES ('(-1, 0)');
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE n @> 0::numeric
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE n = 'empty'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT brin_desummarize_range('t_n_brin', 0)
+    expect: rows
+  - sql: |
+      SELECT brin_summarize_range('t_n_brin', 0)
+    expect: rows
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE n && numrange(-5, -2)
+    expect: rows
+    order: multiset
+    comment: the summary must not exclude the (-1,0) row after resummarizing

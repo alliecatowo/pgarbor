@@ -1,0 +1,41 @@
+# ALTER COLUMN ... ADD GENERATED: column must be NOT NULL first; column must exist; no double identity; no DROP NOT NULL.
+id: identity.add-identity-requires-not-null
+title: Adding identity to a column requires NOT NULL and an existing column, and is one-shot
+family: identity
+tier: core
+feature_ids: [identity-columns, alter-table, errors, constraints]
+required_capabilities: [create-table, insert, alter-table, identity, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/identity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE itest4 (a int, b text);
+steps:
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a ADD GENERATED ALWAYS AS IDENTITY
+    expect: error
+    sqlstate: "55000"
+    comment: column a must be declared NOT NULL before identity can be added
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a SET NOT NULL
+    expect: ok
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN c ADD GENERATED ALWAYS AS IDENTITY
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a ADD GENERATED ALWAYS AS IDENTITY
+    expect: ok
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a DROP NOT NULL
+    expect: error
+    comment: NOT NULL of an identity column cannot be dropped
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a ADD GENERATED ALWAYS AS IDENTITY
+    expect: error
+    comment: column already has an identity
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN b ADD GENERATED ALWAYS AS IDENTITY
+    expect: error
+    comment: text column cannot be an identity column

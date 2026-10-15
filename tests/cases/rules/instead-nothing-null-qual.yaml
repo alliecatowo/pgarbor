@@ -1,0 +1,27 @@
+# DO INSTEAD NOTHING rule with a range qualification; a NULL qualification value does not fire the rule.
+id: rules.instead-nothing-null-qual
+title: DO INSTEAD NOTHING drops matching rows, while NULL in the rule qualifier leaves the row inserted
+family: rules
+tier: core
+feature_ids: [rules, insert, null-semantics]
+required_capabilities: [create-table, create-rule, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (rtest_nothn_r1, instead nothing test)"
+sessions: [a]
+setup: |
+  CREATE TABLE nt1 (a int4, b text);
+  CREATE RULE nt1_r1 AS ON INSERT TO nt1
+    WHERE NEW.a >= 10 AND NEW.a < 20 DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      INSERT INTO nt1 VALUES (5, 'five'), (10, 'ten'), (19, 'nineteen'), (20, 'twenty'), (NULL, 'null-a')
+    expect: ok
+  - sql: |
+      SELECT a, b FROM nt1 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: 10 and 19 are dropped; NULL a makes the qualifier NULL, so the rule does not fire and the row is kept
+  - sql: |
+      SELECT count(*) FROM nt1 WHERE a IS NULL
+    expect: rows

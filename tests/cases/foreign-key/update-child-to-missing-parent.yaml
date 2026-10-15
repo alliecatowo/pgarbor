@@ -1,0 +1,32 @@
+# Updating a child key checks the new value, and NULL is always accepted under MATCH SIMPLE.
+id: foreign-key.update-child-to-missing-parent
+title: "UPDATE of a referencing column checks the new key against the parent"
+family: foreign-key
+tier: core
+feature_ids: [foreign-keys, update, select, create-table, constraints, nulls]
+required_capabilities: [create-table, insert, select, update, foreign-keys, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4 REFERENCES pk (id));
+  INSERT INTO pk VALUES (1), (2);
+  INSERT INTO fk VALUES (1, 1);
+steps:
+  - sql: |
+      UPDATE fk SET pid = NULL WHERE id = 1
+    expect: ok
+  - sql: |
+      UPDATE fk SET pid = 99 WHERE id = 1
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      UPDATE fk SET pid = 2 WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM fk ORDER BY id
+    expect: rows
+    order: ordered

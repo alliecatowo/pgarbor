@@ -1,0 +1,40 @@
+# TEXT[] columns: literal and ARRAY[] inputs, NULL element and NULL array, cardinality, ANY, out-of-range subscripts.
+id: orm-prisma.text-array-ops
+title: TEXT[] round-trip with NULL array, NULL element, empty array, ANY and subscripts
+family: orm-prisma
+tier: core
+feature_ids: [arrays, text, create-table, insert, select, null-semantics]
+required_capabilities: [create-table, insert, select, arrays, text]
+provenance:
+  source: research
+  ref: "Prisma String[] scalar lists on PostgreSQL map to TEXT[]; PG18 docs arrays.html"
+sessions: [a]
+setup: |
+  CREATE TABLE "Post" ("id" integer PRIMARY KEY, "tags" TEXT[]);
+steps:
+  - sql: |
+      INSERT INTO "Post" ("id", "tags") VALUES
+        (1, ARRAY['a', 'b']),
+        (2, '{}'),
+        (3, NULL),
+        (4, '{"x y",NULL}')
+    expect: ok
+  - sql: |
+      SELECT "id", "tags"::text AS tags_text, cardinality("tags") AS n, "tags" IS NULL AS tags_null
+      FROM "Post" ORDER BY "id"
+    expect: rows
+    order: ordered
+    comment: cardinality of an empty array is 0; cardinality of a NULL array is NULL
+  - sql: |
+      SELECT "id" FROM "Post" WHERE 'a' = ANY("tags") ORDER BY "id"
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT "id", "tags"[2] AS second, "tags"[9] AS missing FROM "Post" WHERE "id" IN (1, 4) ORDER BY "id"
+    expect: rows
+    order: ordered
+    comment: out-of-range subscript yields NULL, not an error
+  - sql: |
+      SELECT ARRAY['a', NULL]::text[]::text AS mixed, array_length('{}'::text[], 1) AS len_empty
+    expect: rows
+    comment: array_length of an empty array with dimension 1 is NULL

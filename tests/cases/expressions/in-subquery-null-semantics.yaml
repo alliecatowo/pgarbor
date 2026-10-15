@@ -1,0 +1,35 @@
+# IN (subquery) and NOT IN (subquery) with NULLs in the subquery result and in the outer row,
+# plus the empty-subquery case where NOT IN is true even for a NULL operand.
+id: expressions.in-subquery-null-semantics
+title: IN and NOT IN over subqueries with NULL values and empty results
+family: expressions
+tier: core
+feature_ids: [in-operator, subquery, null-semantics]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/expressions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE outer_t (k int4);
+  CREATE TABLE inner_t (v int4);
+  INSERT INTO outer_t VALUES (1), (2), (NULL);
+  INSERT INTO inner_t VALUES (1), (NULL);
+steps:
+  - sql: |
+      SELECT k,
+             k IN (SELECT v FROM inner_t) AS in_sub,
+             k NOT IN (SELECT v FROM inner_t) AS not_in_sub
+      FROM outer_t ORDER BY k
+    expect: rows
+    order: ordered
+    comment: k=1 is TRUE for IN and FALSE for NOT IN; k=2 is NULL for both because of the NULL in inner_t
+  - sql: |
+      SELECT k,
+             k IN (SELECT v FROM inner_t WHERE false) AS in_empty,
+             k NOT IN (SELECT v FROM inner_t WHERE false) AS not_in_empty
+      FROM outer_t ORDER BY k
+    expect: rows
+    order: ordered
+    comment: an empty subquery gives IN false and NOT IN true, including for the NULL row

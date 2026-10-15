@@ -1,0 +1,38 @@
+# Set operations over two tables with WHERE filters on each arm, plus a final ORDER BY.
+id: union.from-tables-with-where
+title: "UNION and EXCEPT over filtered tables with a final ORDER BY"
+family: union
+tier: core
+feature_ids: [union, except, create-table, insert, where]
+required_capabilities: [create-table, insert, select, order-by]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/union.sql (table-based section)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE f8 (f1 float8);
+  CREATE TABLE i4 (f1 int4);
+  INSERT INTO f8 VALUES (0), (-34.84), (1004.3), (1.2345678901234e+200);
+  INSERT INTO i4 VALUES (0), (123456), (-123456), (2147483647);
+steps:
+  - sql: |
+      SELECT f1 AS five FROM f8 WHERE f1 BETWEEN -1e6 AND 1e6
+      UNION
+      SELECT f1 FROM i4 WHERE f1 BETWEEN 0 AND 1000000
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1 AS ten FROM f8
+      UNION ALL
+      SELECT f1 FROM i4
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1 FROM f8
+      EXCEPT
+      SELECT f1 FROM i4 WHERE f1 = 0
+    expect: rows
+    order: multiset
+    comment: removes the 0 that is present on both sides

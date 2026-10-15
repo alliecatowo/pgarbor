@@ -1,0 +1,37 @@
+# Row constructor compared with scalar row subqueries and row IN subqueries.
+id: subselect.row-comparison
+title: ROW comparison against scalar and IN row subqueries, including cardinality errors
+family: subselect
+tier: core
+feature_ids: [select, subqueries, row-constructor, scalar-subquery, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/subselect.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE rc (f1 int4, f2 int4);
+  INSERT INTO rc VALUES (1, 2), (2, 3), (3, 4);
+steps:
+  - sql: |
+      SELECT ROW(1, 2) = (SELECT 1, 2) AS eq
+    expect: rows
+  - sql: |
+      SELECT ROW(1, 2) = (SELECT 3, 4) AS eq
+    expect: rows
+  - sql: |
+      SELECT ROW(1, 2) = (SELECT f1, f2 FROM rc WHERE f1 = 1) AS eq
+    expect: rows
+  - sql: |
+      SELECT ROW(1, 2) = (SELECT f1, f2 FROM rc) AS eq
+    expect: error
+    sqlstate: "21000"
+    comment: more than one row from a row subquery
+  - sql: |
+      SELECT f1, f2 FROM rc WHERE (f1, f2) IN (SELECT 2, 3) ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ROW(1, NULL::int4) = (SELECT 1, 2) AS eq
+    expect: rows
+    comment: a NULL field makes the row comparison NULL

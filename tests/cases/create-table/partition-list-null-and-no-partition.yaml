@@ -1,0 +1,27 @@
+# LIST partitions can hold NULL; a value with no matching partition fails with 23514.
+id: create-table.partition-list-null-and-no-partition
+title: LIST partition for NULL routes NULL rows; unmatched value fails with 23514
+family: create-table
+tier: core
+feature_ids: [create-table, partitioning, insert, null-semantics, errors]
+required_capabilities: [create-table, insert, select, partitioning, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table.sql (list partition bounds with null)"
+sessions: [a]
+setup: |
+  CREATE TABLE list_parted (a int) PARTITION BY LIST (a);
+  CREATE TABLE part_p1 PARTITION OF list_parted FOR VALUES IN ('1');
+  CREATE TABLE part_null PARTITION OF list_parted FOR VALUES IN (null);
+steps:
+  - sql: |
+      INSERT INTO list_parted VALUES (1), (NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO list_parted VALUES (2)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT a, a IS NULL AS a_null, tableoid::regclass::text AS part FROM list_parted ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered

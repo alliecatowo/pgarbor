@@ -1,0 +1,40 @@
+# COPY FROM STDIN option and column-list validation errors are raised before any data is read; the session stays usable.
+id: copy2.copy-option-and-column-errors
+title: COPY FROM STDIN rejects unknown and duplicate columns and conflicting or invalid options
+family: copy2
+tier: extended
+feature_ids: [copy, column-list, errors]
+required_capabilities: [create-table, copy, errors, serial]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE x (a serial, b int, c text NOT NULL DEFAULT 'stuff', d text, e text);
+steps:
+  - sql: |
+      COPY x (xyz) FROM stdin
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column in COPY column list
+  - sql: |
+      COPY x FROM stdin (format CSV, FORMAT CSV)
+    expect: error
+    sqlstate: "42601"
+    comment: redundant option
+  - sql: |
+      COPY x FROM stdin (format BINARY, delimiter ',')
+    expect: error
+    comment: delimiter is not allowed with binary format
+  - sql: |
+      COPY x FROM stdin (on_error unsupported)
+    expect: error
+    comment: invalid on_error value
+  - sql: |
+      COPY x (a, b, c, d, e, d, c) FROM stdin
+    expect: error
+    sqlstate: "42701"
+    comment: column listed twice
+  - sql: |
+      SELECT 1 AS still_usable
+    expect: rows

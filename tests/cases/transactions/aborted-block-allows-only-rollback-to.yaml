@@ -1,0 +1,43 @@
+# In an aborted block only ROLLBACK TO SAVEPOINT (and ROLLBACK/COMMIT) are accepted; RELEASE and SAVEPOINT fail with 25P02.
+id: transactions.aborted-block-allows-only-rollback-to
+title: Division by zero aborts the block; only ROLLBACK TO SAVEPOINT recovers it
+family: transactions
+tier: core
+feature_ids: [transactions, savepoints, errors, select]
+required_capabilities: [transactions, savepoints, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT one
+    expect: ok
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SAVEPOINT two
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      RELEASE SAVEPOINT one
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK TO SAVEPOINT one
+    expect: ok
+  - sql: |
+      SELECT 1
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT 1
+    expect: rows

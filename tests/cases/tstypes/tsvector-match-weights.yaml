@@ -1,0 +1,47 @@
+# tsvector @@ tsquery with weight restrictions, prefix matching, negation, and strip().
+id: tstypes.tsvector-match-weights
+title: tsvector match honours weight classes, prefixes and strip()
+family: tstypes
+tier: core
+feature_ids: [tsvector, tsquery, text-search, text-match, weights]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tstypes.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 'a b:89  ca:23A,64b d:34c'::tsvector @@ 'd:AC & ca' AS result
+    expect: rows
+    comment: weight-set restriction matches any listed weight
+  - sql: |
+      SELECT 'a b:89  ca:23A,64b d:34c'::tsvector @@ 'd:AC & ca:C' AS result
+    expect: rows
+    comment: lexeme present but not with weight C
+  - sql: |
+      SELECT 'a b:89  ca:23A,64b d:34c'::tsvector @@ 'd:AC & c:*CB' AS result
+    expect: rows
+    comment: prefix with weight restriction
+  - sql: |
+      SELECT 'wa:1D wb:2A'::tsvector @@ 'w:*D & w:*A'::tsquery AS result
+    expect: rows
+  - sql: |
+      SELECT 'wa:1A'::tsvector @@ '!w:*A'::tsquery AS result
+    expect: rows
+  - sql: |
+      SELECT 'wa:1A'::tsvector @@ '!w:*D'::tsquery AS result
+    expect: rows
+  - sql: |
+      SELECT 'supernova'::tsvector @@ 'super'::tsquery AS result
+    expect: rows
+    comment: no prefix marker means whole-lexeme match only
+  - sql: |
+      SELECT 'supernova'::tsvector @@ 'super:*'::tsquery AS result
+    expect: rows
+  - sql: |
+      SELECT strip('wa:1A'::tsvector) @@ 'w:*D'::tsquery AS result
+    expect: rows
+    comment: stripped tsvector ignores weights
+  - sql: |
+      SELECT strip('wa:1A'::tsvector) @@ '!w:*A'::tsquery AS result
+    expect: rows

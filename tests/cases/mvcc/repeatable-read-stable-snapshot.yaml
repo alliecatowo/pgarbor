@@ -1,0 +1,48 @@
+# REPEATABLE READ keeps one snapshot for the whole transaction: concurrent UPDATE and DELETE stay invisible.
+id: mvcc.repeatable-read-stable-snapshot
+title: REPEATABLE READ transaction keeps seeing rows as of its first statement despite concurrent commits
+family: mvcc
+tier: core
+feature_ids: [transactions, repeatable-read, update, delete, select]
+required_capabilities: [create-table, insert, update, delete, select, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql; PG18 docs transaction-iso.html#XACT-REPEATABLE-READ"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      UPDATE t SET v = 'uno' WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      DELETE FROM t WHERE id = 2
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: still the original snapshot
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: new transaction sees committed changes

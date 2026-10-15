@@ -1,0 +1,32 @@
+# SET SCHEMA to the schema the function already lives in is a successful no-op.
+id: alter-generic.set-schema-same-schema
+title: "ALTER FUNCTION SET SCHEMA to the current schema succeeds and a real move follows"
+family: alter-generic
+tier: core
+feature_ids: [alter-function, set-schema, schemas, catalog-introspection]
+required_capabilities: [create-schema, create-function, alter-function, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (ALTER FUNCTION alt_func2(int) SET SCHEMA alt_nsp1 -- OK, already there)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE FUNCTION public.f1(int) RETURNS int LANGUAGE sql AS 'SELECT $1 + 1';
+steps:
+  - sql: |
+      ALTER FUNCTION public.f1(int) SET SCHEMA public
+    expect: ok
+  - sql: |
+      SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'f1' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER FUNCTION public.f1(int) SET SCHEMA s1
+    expect: ok
+  - sql: |
+      SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'f1' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT s1.f1(4)
+    expect: rows

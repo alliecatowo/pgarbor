@@ -1,0 +1,32 @@
+# Writes made inside a block that raises are rolled back to the block's savepoint; the handler's writes persist.
+id: plpgsql.exception-rolls-back-block-writes
+title: Rows inserted before an error inside an EXCEPTION block are discarded; handler rows persist
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, exception-handling, subtransactions, insert, errors]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE log_t (id int PRIMARY KEY, note text);
+  CREATE FUNCTION pl_write_then_fail(k int) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO log_t VALUES (k, 'inside');
+    PERFORM 1 / (k - k);
+    RETURN 'ok';
+  EXCEPTION
+    WHEN division_by_zero THEN
+      INSERT INTO log_t VALUES (k + 100, 'handler');
+      RETURN 'caught';
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_write_then_fail(1) AS result
+    expect: rows
+  - sql: |
+      SELECT id, note FROM log_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the handler row survives; the 'inside' row was rolled back

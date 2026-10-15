@@ -1,0 +1,45 @@
+# TRUNCATE is a separate privilege: DELETE does not allow it, and an explicit TRUNCATE grant does.
+id: privileges.truncate-privilege
+title: TRUNCATE requires its own grant; DELETE privilege does not imply it
+family: privileges
+tier: extended
+feature_ids: [truncate, delete, grant, privileges, errors]
+required_capabilities: [create-table, insert, delete, truncate, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_tr_r;
+  CREATE TABLE pv_tr_t (id int4);
+  INSERT INTO pv_tr_t VALUES (1), (2);
+  GRANT INSERT, UPDATE, DELETE ON pv_tr_t TO pv_tr_r;
+steps:
+  - sql: |
+      SET ROLE pv_tr_r
+    expect: ok
+  - sql: |
+      TRUNCATE pv_tr_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      DELETE FROM pv_tr_t WHERE id = 1
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT TRUNCATE ON pv_tr_t TO pv_tr_r
+    expect: ok
+  - sql: |
+      SET ROLE pv_tr_r
+    expect: ok
+  - sql: |
+      TRUNCATE pv_tr_t
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pv_tr_t
+    expect: rows

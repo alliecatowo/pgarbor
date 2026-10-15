@@ -1,0 +1,50 @@
+# Privileges of a granted role are used automatically only by members with INHERIT; a NOINHERIT member needs SET ROLE.
+id: privileges.role-inherit-noinherit
+title: INHERIT member uses parent role privileges; NOINHERIT member is denied until SET ROLE
+family: privileges
+tier: core
+feature_ids: [roles, role-membership, grant, select, privileges]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_inh_parent;
+  CREATE ROLE pv_inh_yes;
+  CREATE ROLE pv_inh_no NOINHERIT;
+  GRANT pv_inh_parent TO pv_inh_yes;
+  GRANT pv_inh_parent TO pv_inh_no;
+  CREATE TABLE pv_inh_t (id int4);
+  INSERT INTO pv_inh_t VALUES (5);
+  GRANT SELECT ON pv_inh_t TO pv_inh_parent;
+steps:
+  - sql: |
+      SET ROLE pv_inh_yes
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_inh_t
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pv_inh_no
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_inh_t
+    expect: error
+    sqlstate: "42501"
+    comment: NOINHERIT member does not get the parent's privileges automatically
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pv_inh_parent
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_inh_t
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok

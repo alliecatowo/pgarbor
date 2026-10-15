@@ -1,0 +1,64 @@
+# pg_temp is searched first for relations but not for functions, unless explicitly placed in search_path.
+id: temp.search-path-precedence
+title: Temp schema precedes public for tables by default, not for unqualified functions
+family: temp
+tier: core
+feature_ids: [temp-tables, search-path, sql-functions, name-resolution]
+required_capabilities: [create-table, insert, select, temp-tables, sql-functions, search-path]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/temp.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE public.whereami (f1 text);
+  INSERT INTO public.whereami VALUES ('public');
+  CREATE FUNCTION public.whoami() RETURNS text AS $$SELECT 'public'::text$$ LANGUAGE sql;
+steps:
+  - sql: |
+      CREATE TEMP TABLE whereami (f1 text)
+    expect: ok
+  - sql: |
+      INSERT INTO whereami VALUES ('temp')
+    expect: ok
+  - sql: |
+      CREATE FUNCTION pg_temp.whoami() RETURNS text AS $$SELECT 'temp'::text$$ LANGUAGE sql
+    expect: ok
+  - sql: |
+      SELECT f1 FROM whereami
+    expect: rows
+    order: multiset
+    comment: default path, pg_temp implicit first for relations
+  - sql: |
+      SELECT whoami()
+    expect: rows
+    order: multiset
+    comment: default path does not search pg_temp for functions
+  - sql: |
+      SET search_path = pg_temp, public
+    expect: ok
+  - sql: |
+      SELECT f1 FROM whereami
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT whoami()
+    expect: rows
+    order: multiset
+    comment: listing pg_temp first still does not affect functions
+  - sql: |
+      SET search_path = public, pg_temp
+    expect: ok
+  - sql: |
+      SELECT f1 FROM whereami
+    expect: rows
+    order: multiset
+    comment: pg_temp last, so the permanent table wins
+  - sql: |
+      SELECT pg_temp.whoami()
+    expect: rows
+    order: multiset
+    comment: explicit qualification reaches the temp function
+  - sql: |
+      RESET search_path
+    expect: ok

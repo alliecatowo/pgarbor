@@ -1,0 +1,30 @@
+# JSON_EXISTS inside a CHECK constraint: passing rows are stored, failing rows raise 23514.
+id: sqljson-queryfuncs.json-check-constraint
+title: JSON_EXISTS as a CHECK constraint accepts matching rows and rejects others
+family: sqljson-queryfuncs
+tier: core
+feature_ids: [sql-json, json-exists, check-constraints, constraints, jsonb]
+required_capabilities: [create-table, insert, select, jsonb, check-constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sqljson_queryfuncs.sql (test_jsonb_constraints CHECK section)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE jchk (js text, CONSTRAINT jchk_has_a CHECK (JSON_EXISTS(js::jsonb, '$.a')));
+steps:
+  - sql: |
+      INSERT INTO jchk VALUES ('{"a": 1}'), ('{"a": 10, "b": 2}')
+    expect: ok
+  - sql: |
+      INSERT INTO jchk VALUES ('{"b": 1}')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO jchk VALUES ('[]')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT js FROM jchk ORDER BY js
+    expect: rows
+    order: ordered

@@ -1,0 +1,30 @@
+# A predicate on the nullable side in ON preserves left rows; the same predicate in WHERE removes them.
+id: join.left-join-on-vs-where
+title: LEFT JOIN predicate placed in ON versus WHERE changes which left rows survive
+family: join
+tier: core
+feature_ids: [joins, outer-join, left-join, where-clause, null-semantics]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: hand
+  ref: "PG18 docs queries-table-expressions.html#QUERIES-FROM (joined tables and outer join qualification)"
+sessions: [a]
+setup: |
+  CREATE TABLE j1 (i integer, t text);
+  CREATE TABLE j2 (i integer, k integer);
+  INSERT INTO j1 VALUES (1, 'one'), (2, 'two'), (3, 'three'), (NULL, 'null');
+  INSERT INTO j2 VALUES (1, -1), (2, 2), (2, 4);
+steps:
+  - sql: |
+      SELECT j1.i, j1.t, j2.k FROM j1 LEFT JOIN j2 ON j1.i = j2.i AND j2.k > 0
+      ORDER BY j1.i NULLS LAST, j2.k NULLS LAST
+    expect: rows
+    order: ordered
+    comment: the k > 0 filter only removes matches, so left rows survive with k NULL
+  - sql: |
+      SELECT j1.i, j1.t, j2.k FROM j1 LEFT JOIN j2 ON j1.i = j2.i
+      WHERE j2.k > 0
+      ORDER BY j1.i NULLS LAST, j2.k NULLS LAST
+    expect: rows
+    order: ordered
+    comment: the same predicate in WHERE discards the null-extended rows

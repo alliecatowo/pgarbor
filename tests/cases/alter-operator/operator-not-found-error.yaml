@@ -1,0 +1,27 @@
+# ALTER OPERATOR on a signature that was never created fails with undefined_function.
+id: alter-operator.operator-not-found-error
+title: ALTER OPERATOR on a nonexistent operator signature errors
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, errors]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: hand
+  ref: "src/test/regress/sql/alter_operator.sql (lookup of operator by name and argument types)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR ==== (boolean, boolean) SET (RESTRICT = NONE)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT count(*) AS n FROM pg_operator WHERE oprname = '====' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset

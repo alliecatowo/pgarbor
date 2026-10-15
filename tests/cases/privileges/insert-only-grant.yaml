@@ -1,0 +1,41 @@
+# A role granted only INSERT can insert but cannot read, update or delete the table.
+id: privileges.insert-only-grant
+title: INSERT-only grant allows insert and denies select, update and delete
+family: privileges
+tier: core
+feature_ids: [insert, grant, privileges, errors]
+required_capabilities: [create-table, insert, select, update, delete, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_ins_r;
+  CREATE TABLE pv_ins_t (id int4, v text);
+  GRANT INSERT ON pv_ins_t TO pv_ins_r;
+steps:
+  - sql: |
+      SET ROLE pv_ins_r
+    expect: ok
+  - sql: |
+      INSERT INTO pv_ins_t VALUES (1, 'a')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM pv_ins_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      UPDATE pv_ins_t SET v = 'b'
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      DELETE FROM pv_ins_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM pv_ins_t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,40 @@
+# currval and lastval are session-local and error with 55000 before any nextval in the session.
+id: sequence.currval-lastval-undefined
+title: currval and lastval error with object_not_in_prerequisite_state before nextval in a session
+family: sequence
+tier: core
+feature_ids: [sequences, currval, lastval, errors]
+required_capabilities: [create-table, select, errors, sequences]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sequence.sql"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE SEQUENCE sq_cur;
+steps:
+  - session: a
+    sql: |
+      SELECT currval('sq_cur')
+    expect: error
+    sqlstate: "55000"
+  - session: a
+    sql: |
+      SELECT lastval()
+    expect: error
+    sqlstate: "55000"
+    comment: no nextval has run in session a yet
+  - session: b
+    sql: |
+      SELECT nextval('sq_cur') AS v
+    expect: rows
+  - session: a
+    sql: |
+      SELECT currval('sq_cur')
+    expect: error
+    sqlstate: "55000"
+    comment: currval is per session, so a still has no value
+  - session: b
+    sql: |
+      SELECT currval('sq_cur') AS v
+    expect: rows

@@ -1,0 +1,37 @@
+# ON UPDATE CASCADE and ON DELETE CASCADE propagate to referencing rows; NULL keys are untouched.
+id: foreign-key.cascade-delete-and-update
+title: "ON UPDATE CASCADE and ON DELETE CASCADE propagate to child rows"
+family: foreign-key
+tier: core
+feature_ids: [foreign-keys, update, delete, select, create-table, constraints]
+required_capabilities: [create-table, insert, select, update, delete, foreign-keys, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY, v text);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4 REFERENCES pk (id) ON DELETE CASCADE ON UPDATE CASCADE);
+  INSERT INTO pk VALUES (1, 'a'), (2, 'b'), (3, 'c');
+  INSERT INTO fk VALUES (10, 1), (11, 1), (12, 2), (13, NULL);
+steps:
+  - sql: |
+      UPDATE pk SET id = 7 WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM fk ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both children of parent 1 now reference 7
+  - sql: |
+      DELETE FROM pk WHERE id = 7
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM fk ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM pk ORDER BY id
+    expect: rows
+    order: ordered

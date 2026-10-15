@@ -1,0 +1,28 @@
+# Assigning a too-long literal to a domain[] column fails with 22001, while an explicit cast of the
+# array truncates each element to the domain's varchar(n). Adapted from domain.sql (vc4 section).
+id: domain.array-varchar-element-cast
+title: "Array of varchar(n) domain: literal overflow errors, explicit array cast truncates"
+family: domain
+tier: core
+feature_ids: [domains, create-domain, arrays, varchar, cast]
+required_capabilities: [create-table, insert, select, arrays]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN vc4 AS varchar(4);
+  CREATE TABLE vc4table (f1 vc4[]);
+steps:
+  - sql: |
+      INSERT INTO vc4table VALUES (ARRAY['too long'])
+    expect: error
+    sqlstate: "22001"
+  - sql: |
+      INSERT INTO vc4table VALUES (ARRAY['too long']::vc4[])
+    expect: ok
+    comment: explicit cast of the array truncates each element
+  - sql: |
+      SELECT f1, cardinality(f1) AS n FROM vc4table
+    expect: rows
+    order: multiset

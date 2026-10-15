@@ -1,0 +1,35 @@
+# numeric(4,4) accepts only values with absolute value below 1 after rounding; NaN is allowed, Infinity is not.
+id: numeric.typmod-fractional-overflow
+title: numeric(4,4) typmod overflow on insert, including rounding up to 1 and Infinity
+family: numeric
+tier: core
+feature_ids: [numeric, insert, typmod, errors]
+required_capabilities: [create-table, insert, select, numeric, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/numeric.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE fract_only (id int, val numeric(4,4));
+steps:
+  - sql: |
+      INSERT INTO fract_only VALUES (1, '0.0'), (2, '0.1'), (4, '-0.9999'), (5, '0.99994'), (7, '0.00001'), (9, 'NaN')
+    expect: ok
+  - sql: |
+      INSERT INTO fract_only VALUES (3, '1.0')
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      INSERT INTO fract_only VALUES (6, '0.99995')
+    expect: error
+    sqlstate: "22003"
+    comment: rounds up to 1.0000 which does not fit numeric(4,4)
+  - sql: |
+      INSERT INTO fract_only VALUES (10, 'Inf')
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT id, val FROM fract_only ORDER BY id
+    expect: rows
+    order: ordered

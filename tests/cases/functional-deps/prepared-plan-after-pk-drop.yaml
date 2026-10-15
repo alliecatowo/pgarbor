@@ -1,0 +1,44 @@
+# A prepared statement that was valid at PREPARE time fails at EXECUTE once the primary key it relied on is dropped.
+id: functional-deps.prepared-plan-after-pk-drop
+title: "Prepared grouped query fails at EXECUTE after the primary key is dropped"
+family: functional-deps
+tier: extended
+feature_ids: [group-by, functional-dependencies, prepared-statements, primary-key, alter-table, errors]
+required_capabilities: [create-table, insert, select, group-by, prepared-statements, alter-table, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE articles (
+      id int CONSTRAINT articles_pkey PRIMARY KEY,
+      keywords text,
+      title text UNIQUE NOT NULL,
+      body text UNIQUE,
+      created date
+  );
+  INSERT INTO articles VALUES
+      (1, 'db pg', 'First', 'body one', '2024-01-01'),
+      (2, NULL, 'Second', NULL, '2024-02-01'),
+      (3, '', 'Third', 'body three', NULL);
+steps:
+  - sql: |
+      PREPARE foo AS
+      SELECT id, keywords, title, body, created
+      FROM articles
+      GROUP BY id
+      ORDER BY id
+    expect: ok
+  - sql: |
+      EXECUTE foo
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE articles DROP CONSTRAINT articles_pkey RESTRICT
+    expect: ok
+    comment: "a prepared statement is not a dependency, so the drop succeeds"
+  - sql: |
+      EXECUTE foo
+    expect: error
+    sqlstate: "42803"
+    comment: "re-analysis of the cached statement now rejects keywords"

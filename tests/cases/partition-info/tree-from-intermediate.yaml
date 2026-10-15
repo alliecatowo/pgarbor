@@ -1,0 +1,27 @@
+# pg_partition_tree from an intermediate partitioned table returns only its subtree.
+id: partition-info.tree-from-intermediate
+title: pg_partition_tree from an intermediate partitioned table returns only that subtree with a NULL parent at its top
+family: partition-info
+tier: core
+feature_ids: [partitioning, partition-tree-functions, joins]
+required_capabilities: [create-table, select, joins, catalog-introspection, partitioning]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_test (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_test0 PARTITION OF ptif_test FOR VALUES FROM (MINVALUE) TO (0) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test01 PARTITION OF ptif_test0 FOR VALUES IN (1);
+  CREATE TABLE ptif_test1 PARTITION OF ptif_test FOR VALUES FROM (0) TO (100) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test11 PARTITION OF ptif_test1 FOR VALUES IN (1);
+  CREATE TABLE ptif_test2 PARTITION OF ptif_test FOR VALUES FROM (100) TO (200);
+steps:
+  - sql: |
+      SELECT c.relname, p.parentrelid::regclass::text AS parent, p.level, p.isleaf
+      FROM pg_partition_tree('ptif_test0') p
+      JOIN pg_class c ON (p.relid = c.oid)
+      ORDER BY p.level, c.relname
+    expect: rows
+    order: ordered
+    comment: ptif_test1 and ptif_test2 must not appear

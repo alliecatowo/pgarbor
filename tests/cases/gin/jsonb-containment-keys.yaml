@@ -1,0 +1,41 @@
+# Default jsonb_ops GIN opclass: @> containment and key-existence operators ?, ?| on NULL and nested documents.
+id: gin.jsonb-containment-keys
+title: GIN jsonb_ops index answers @> containment and ? / ?| key existence
+family: gin
+tier: core
+feature_ids: [gin-index, jsonb, jsonb-containment]
+required_capabilities: [create-table, create-index, gin-index, insert, select, jsonb]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/datatype-json.html#JSON-INDEXING"
+sessions: [a]
+setup: |
+  CREATE TABLE gin_doc (id int4 PRIMARY KEY, doc jsonb);
+  CREATE INDEX gin_doc_idx ON gin_doc USING gin (doc);
+  INSERT INTO gin_doc VALUES
+    (1, '{"a": 1, "tags": ["x", "y"]}'),
+    (2, '{"b": null}'),
+    (3, '{}'),
+    (4, NULL),
+    (5, '{"a": {"n": 2}}');
+steps:
+  - sql: |
+      SELECT id FROM gin_doc WHERE doc @> '{"a": 1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_doc WHERE doc @> '{"tags": ["x"]}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_doc WHERE doc ? 'b' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_doc WHERE doc ?| array['a', 'zzz'] ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_doc WHERE doc @> '{}' ORDER BY id
+    expect: rows
+    order: ordered

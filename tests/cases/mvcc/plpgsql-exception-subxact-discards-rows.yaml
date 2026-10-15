@@ -1,0 +1,38 @@
+# Each BEGIN...EXCEPTION block in PL/pgSQL is a subtransaction; rows inserted before a caught error vanish.
+id: mvcc.plpgsql-exception-subxact-discards-rows
+title: DO block loop with caught exceptions discards each iteration's insert and keeps later inserts
+family: mvcc
+tier: extended
+feature_ids: [plpgsql, do-block, exceptions, insert, select, transactions]
+required_capabilities: [create-table, insert, select, plpgsql, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (DO block with EXCEPTION WHEN, kill_prior_tuple scenario)"
+sessions: [a]
+setup: |
+  CREATE TABLE sub_t (k int4 PRIMARY KEY, v text);
+steps:
+  - sql: |
+      DO $$
+      BEGIN
+        FOR i IN 1..5 LOOP
+          BEGIN
+            INSERT INTO sub_t VALUES (i, 'rolled back');
+            RAISE EXCEPTION USING MESSAGE = 'abort this subtransaction', ERRCODE = 'P0001';
+          EXCEPTION WHEN raise_exception THEN
+            NULL;
+          END;
+        END LOOP;
+      END;
+      $$
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM sub_t
+    expect: rows
+  - sql: |
+      INSERT INTO sub_t VALUES (100, 'kept')
+    expect: ok
+  - sql: |
+      SELECT k, v FROM sub_t ORDER BY k
+    expect: rows
+    order: ordered

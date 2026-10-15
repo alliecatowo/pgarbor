@@ -1,0 +1,39 @@
+# A NULL boolean in USING hides the row from SELECT; a NULL WITH CHECK result rejects the INSERT.
+id: rowsecurity.null-using-hides-rows
+title: "NULL policy predicates hide rows and reject inserts"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, insert, nulls]
+required_capabilities: [create-table, insert, select, rls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, visible boolean);
+  INSERT INTO t VALUES (1, true), (2, false), (3, NULL), (4, true);
+  CREATE POLICY sel_visible ON t FOR SELECT USING (visible);
+  CREATE POLICY ins_visible ON t FOR INSERT WITH CHECK (visible);
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE t FORCE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows 2 and 3 are hidden; row 3 because its predicate is NULL
+  - sql: |
+      SELECT count(*) FROM t WHERE visible IS NULL
+    expect: rows
+    comment: the NULL row cannot be seen, so the count is 0
+  - sql: |
+      INSERT INTO t VALUES (5, NULL)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      INSERT INTO t VALUES (5, true)
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

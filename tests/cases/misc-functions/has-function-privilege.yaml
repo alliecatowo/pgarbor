@@ -1,0 +1,47 @@
+# Provenance: pg-regress misc_functions.sql, "Test replication slot directory functions" and
+# has_function_privilege checks. Roles are cluster-wide; the case drops its role at the end.
+id: misc-functions.has-function-privilege
+title: has_function_privilege reflects role membership in pg_monitor for built-in admin functions
+family: misc-functions
+tier: extended
+feature_ids: [has-function-privilege, roles, privileges, catalog-introspection]
+required_capabilities: [roles, catalog]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/misc_functions.sql"
+sessions: [a]
+notes: >-
+  CREATE ROLE is cluster-wide, not per database; the final DROP ROLE keeps the cluster clean for
+  other cases. The privilege answers are booleans and do not depend on the cluster contents.
+steps:
+  - sql: |
+      CREATE ROLE misc_fn_priv
+    expect: ok
+  - sql: |
+      SELECT has_function_privilege('misc_fn_priv', 'pg_ls_logicalsnapdir()', 'EXECUTE') AS snap,
+             has_function_privilege('misc_fn_priv', 'pg_ls_logicalmapdir()', 'EXECUTE') AS map,
+             has_function_privilege('misc_fn_priv', 'pg_ls_replslotdir(text)', 'EXECUTE') AS slot
+    expect: rows
+    comment: not granted by default
+  - sql: |
+      GRANT pg_monitor TO misc_fn_priv
+    expect: ok
+  - sql: |
+      SELECT has_function_privilege('misc_fn_priv', 'pg_ls_logicalsnapdir()', 'EXECUTE') AS snap,
+             has_function_privilege('misc_fn_priv', 'pg_ls_logicalmapdir()', 'EXECUTE') AS map,
+             has_function_privilege('misc_fn_priv', 'pg_ls_replslotdir(text)', 'EXECUTE') AS slot
+    expect: rows
+    comment: membership in pg_monitor inherits the EXECUTE privilege
+  - sql: |
+      SELECT has_function_privilege('misc_fn_priv', 'no_such_function()', 'EXECUTE')
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      REVOKE pg_monitor FROM misc_fn_priv
+    expect: ok
+  - sql: |
+      SELECT has_function_privilege('misc_fn_priv', 'pg_ls_logicalsnapdir()', 'EXECUTE') AS snap
+    expect: rows
+  - sql: |
+      DROP ROLE misc_fn_priv
+    expect: ok

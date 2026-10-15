@@ -1,0 +1,36 @@
+# pg_policies and pg_class RLS flags reflect policy command, permissiveness, roles and the enable/force state.
+id: rowsecurity.catalog-pg-policies
+title: "pg_policies and pg_class report RLS policy metadata"
+family: rowsecurity
+tier: extended
+feature_ids: [rls, policies, catalog-introspection]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, owner text, v int4);
+  CREATE POLICY p_sel ON t FOR SELECT USING (true);
+  CREATE POLICY p_ins ON t AS RESTRICTIVE FOR INSERT WITH CHECK (v > 0);
+  CREATE POLICY p_all ON t FOR ALL TO public USING (owner = 'x') WITH CHECK (owner = 'x');
+steps:
+  - sql: |
+      SELECT policyname, permissive, cmd, roles::text FROM pg_policies WHERE schemaname = 'public' AND tablename = 't' ORDER BY policyname
+    expect: rows
+    order: ordered
+    comment: default roles are reported as {public}
+  - sql: |
+      SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 't' AND relnamespace = 'public'::regnamespace
+    expect: rows
+    comment: RLS is not yet enabled, so both flags are false
+  - sql: |
+      ALTER TABLE t ENABLE ROW LEVEL SECURITY
+    expect: ok
+  - sql: |
+      ALTER TABLE t FORCE ROW LEVEL SECURITY
+    expect: ok
+  - sql: |
+      SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 't' AND relnamespace = 'public'::regnamespace
+    expect: rows
+    comment: both flags are true after ENABLE and FORCE

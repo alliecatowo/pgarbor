@@ -1,0 +1,29 @@
+# information_schema.columns ordering with attnum gaps from a dropped column, typmod-derived fields and visibility of dropped columns.
+id: slice-catalog-introspection.information-schema-columns-order
+title: information_schema.columns ordinal positions with a dropped column gap and typmod fields
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, create-table, alter-table, information-schema]
+required_capabilities: [create-table, alter-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/infoschema-columns.html"
+sessions: [a]
+setup: |
+  CREATE TABLE wide (c1 int4, c2 text NOT NULL DEFAULT 'x', c3 varchar(10), c4 numeric(6,2), c5 timestamptz(3), c6 int4[], c7 bit varying(5), c8 boolean DEFAULT false);
+  ALTER TABLE wide DROP COLUMN c3;
+  ALTER TABLE wide ADD COLUMN c9 float8;
+steps:
+  - sql: |
+      SELECT ordinal_position, column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'wide' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+    comment: ordinal_position keeps the gap left by the dropped column
+  - sql: |
+      SELECT column_name, character_maximum_length, numeric_precision, numeric_scale, datetime_precision FROM information_schema.columns WHERE table_name = 'wide' AND column_name IN ('c4', 'c5', 'c7') ORDER BY column_name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM information_schema.columns WHERE table_name = 'wide' AND column_name = 'c3'
+    expect: rows
+    comment: dropped column is not visible

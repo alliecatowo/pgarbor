@@ -1,0 +1,41 @@
+# NULLs compare as equal for UNION/INTERSECT/EXCEPT duplicate elimination, but NULL is distinct from ''.
+id: union.null-dedup
+title: "NULL values are deduplicated by set operations, distinct from empty string"
+family: union
+tier: core
+feature_ids: [union, intersect, except, nulls]
+required_capabilities: [select, order-by, null-handling]
+provenance:
+  source: hand
+  ref: "PG18 queries-union.html; union.sql NULL handling"
+sessions: [a]
+setup: |
+  CREATE TABLE ns (v text);
+  INSERT INTO ns VALUES (NULL), (NULL), (''), ('a');
+steps:
+  - sql: |
+      SELECT NULL::int4 AS n UNION SELECT NULL::int4
+    expect: rows
+    order: multiset
+    comment: one row with NULL
+  - sql: |
+      SELECT NULL::int4 AS n UNION ALL SELECT NULL::int4
+    expect: rows
+    order: multiset
+    comment: two rows with NULL
+  - sql: |
+      SELECT v IS NULL AS is_null, v FROM ns
+      UNION
+      SELECT NULL, NULL
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: NULL row from the table merges with the literal row; '' stays a separate row
+  - sql: |
+      SELECT v FROM ns INTERSECT SELECT NULL::text ORDER BY 1 NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT v FROM ns EXCEPT SELECT NULL::text ORDER BY 1 NULLS LAST
+    expect: rows
+    order: ordered

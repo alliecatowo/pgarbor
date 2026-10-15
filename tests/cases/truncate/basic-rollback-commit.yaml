@@ -1,0 +1,49 @@
+# Basic TRUNCATE: a ROLLBACK keeps the rows, a COMMIT removes them.
+id: truncate.basic-rollback-commit
+title: "TRUNCATE is transactional: ROLLBACK keeps rows, COMMIT removes them"
+family: truncate
+tier: slice
+feature_ids: [truncate, transactions, create-table, insert, select]
+required_capabilities: [create-table, insert, select, transactions, truncate]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE truncate_a (col1 integer PRIMARY KEY);
+steps:
+  - sql: |
+      INSERT INTO truncate_a VALUES (1), (2)
+    expect: ok
+  - sql: |
+      SELECT col1 FROM truncate_a ORDER BY col1
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      TRUNCATE truncate_a
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT col1 FROM truncate_a ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: "rolled back, so both rows are still visible"
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      TRUNCATE truncate_a
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT col1 FROM truncate_a ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: "committed, so the table is empty"

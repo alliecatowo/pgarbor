@@ -1,0 +1,38 @@
+# TIMESTAMP(3) rounds fractional seconds to milliseconds, carries across the second, and rejects invalid dates.
+id: orm-prisma.timestamp3-rounding
+title: TIMESTAMP(3) rounds to milliseconds with carry, and rejects an invalid calendar date
+family: orm-prisma
+tier: core
+feature_ids: [timestamp, typmod, create-table, insert, select, errors, order-by]
+required_capabilities: [create-table, insert, select, timestamp, varchar]
+provenance:
+  source: research
+  ref: "Prisma DateTime maps to TIMESTAMP(3) on PostgreSQL; PG18 docs datatype-datetime.html"
+sessions: [a]
+setup: |
+  CREATE TABLE "Event" (
+    "id" integer PRIMARY KEY,
+    "at" TIMESTAMP(3) NOT NULL,
+    "note" TEXT
+  );
+steps:
+  - sql: |
+      INSERT INTO "Event" ("id", "at", "note") VALUES
+        (1, '2024-01-02 03:04:05.6789', 'frac'),
+        (2, '2024-01-02 03:04:05.9996', 'carry'),
+        (3, '2024-01-02 03:04:05', NULL)
+    expect: ok
+  - sql: |
+      SELECT "id", "at"::text AS at_text, "note" FROM "Event" ORDER BY "id"
+    expect: rows
+    order: ordered
+    comment: .6789 rounds to .679; .9996 rounds up across the second boundary
+  - sql: |
+      SELECT "id" FROM "Event" WHERE "at" = TIMESTAMP '2024-01-02 03:04:05.679' ORDER BY "id"
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '2024-02-30 00:00:00'::timestamp(3)
+    expect: error
+    sqlstate: "22008"
+    comment: February 30 is not a valid date

@@ -1,0 +1,47 @@
+# COMMUTATOR and MERGES cannot be changed once set; the rejected statements leave the operator as it was.
+id: alter-operator.commutator-already-set-rejected
+title: Changing an already-set COMMUTATOR or MERGES is rejected and nothing changes
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, commutator, merges, errors]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn_bool_real(boolean, real)
+  RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE FUNCTION alter_op_test_fn_real_bool(real, boolean)
+  RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR ==== (
+      LEFTARG = real,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn_real_bool
+  );
+  CREATE OPERATOR @= (
+      LEFTARG = real,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn_real_bool
+  );
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = real,
+      PROCEDURE = alter_op_test_fn_bool_real,
+      COMMUTATOR = ====,
+      MERGES
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (COMMUTATOR = @=)
+    expect: error
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (MERGES = false)
+    expect: error
+  - sql: |
+      SELECT oprcanmerge, oprcom::regoperator::text AS commutator
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'real'::regtype
+    expect: rows
+    order: multiset

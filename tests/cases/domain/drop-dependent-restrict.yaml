@@ -1,0 +1,39 @@
+# DROP DOMAIN fails while a dependent domain exists, succeeds with CASCADE, and a second DROP
+# of the same name fails with undefined_object. Adapted from domain.sql "Test Comment / Drop".
+id: domain.drop-dependent-restrict
+title: DROP DOMAIN refuses dependents; CASCADE removes them; re-drop reports undefined object
+family: domain
+tier: core
+feature_ids: [domains, create-domain, drop-domain, comments]
+required_capabilities: [create-table, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DOMAIN domaindroptest int4
+    expect: ok
+  - sql: |
+      COMMENT ON DOMAIN domaindroptest IS 'About to drop this..'
+    expect: ok
+  - sql: |
+      CREATE DOMAIN dependenttypetest domaindroptest
+    expect: ok
+  - sql: |
+      DROP DOMAIN domaindroptest
+    expect: error
+    sqlstate: "2BP01"
+    comment: dependent_objects_still_exist without CASCADE
+  - sql: |
+      DROP DOMAIN domaindroptest CASCADE
+    expect: ok
+  - sql: |
+      DROP DOMAIN domaindroptest CASCADE
+    expect: error
+    sqlstate: "42704"
+    comment: already gone
+  - sql: |
+      SELECT count(*) FROM pg_type WHERE typname = 'dependenttypetest'
+    expect: rows
+    order: ordered

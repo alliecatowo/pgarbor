@@ -1,0 +1,29 @@
+# A domain carries a collation; a column may override it. A collation on a non-collatable domain base type fails.
+id: collate.domain-collation
+title: "Domain with COLLATE orders rows; column COLLATE overrides; int domain collation rejected"
+family: collate
+tier: extended
+feature_ids: [collation, domains, order-by, errors, create-table, insert]
+required_capabilities: [create-table, insert, select, collation, create-domain]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/collate.sql"
+setup: |
+  CREATE DOMAIN testdomain_p AS text COLLATE "POSIX";
+  CREATE TABLE collate_test4 (a int, b testdomain_p);
+  CREATE TABLE collate_test5 (a int, b testdomain_p COLLATE "C");
+  INSERT INTO collate_test4 VALUES (1, 'abc'), (2, 'Abc'), (3, 'bbc'), (4, 'ABD');
+  INSERT INTO collate_test5 SELECT * FROM collate_test4;
+steps:
+  - sql: |
+      SELECT a, b FROM collate_test4 ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM collate_test5 ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE DOMAIN testdomain_i AS int COLLATE "POSIX"
+    expect: error
+    sqlstate: "42804"

@@ -1,0 +1,37 @@
+# Nested savepoints: ROLLBACK TO discards only inner work; RELEASE keeps it; outer inserts commit.
+id: transactions.savepoint-rollback-to-keeps-outer-work
+title: Nested SAVEPOINT, ROLLBACK TO and RELEASE keep exactly the surviving rows
+family: transactions
+tier: core
+feature_ids: [transactions, savepoints, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE sp (a int4);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO sp VALUES (1);
+      SAVEPOINT one;
+      INSERT INTO sp VALUES (2);
+      ROLLBACK TO SAVEPOINT one;
+      RELEASE SAVEPOINT one;
+      SAVEPOINT two;
+      SAVEPOINT three;
+      SAVEPOINT four;
+      INSERT INTO sp VALUES (4);
+      RELEASE SAVEPOINT four;
+      ROLLBACK TO SAVEPOINT three;
+      RELEASE SAVEPOINT three;
+      INSERT INTO sp VALUES (3);
+      RELEASE SAVEPOINT two;
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT a FROM sp ORDER BY a
+    expect: rows
+    order: ordered

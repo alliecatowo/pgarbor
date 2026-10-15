@@ -1,0 +1,36 @@
+# CHECK constraints pass when the expression is NULL (unknown); only FALSE rejects. NOT ENFORCED is never checked.
+id: constraints.check-null-passes
+title: CHECK passes on NULL result, rejects FALSE, and ignores NOT ENFORCED constraints
+family: constraints
+tier: core
+feature_ids: [check-constraints, insert, null-semantics, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ck (x int, CONSTRAINT ck_gt3 CHECK (x > 3));
+      CREATE TABLE ck_ne (x int, CONSTRAINT ck_ne_gt3 CHECK (x > 3) NOT ENFORCED)
+    expect: ok
+  - sql: |
+      INSERT INTO ck VALUES (5), (4), (NULL)
+    expect: ok
+    comment: NULL makes the check UNKNOWN, which does not reject the row
+  - sql: |
+      INSERT INTO ck VALUES (3)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO ck_ne VALUES (5), (3), (1)
+    expect: ok
+    comment: NOT ENFORCED constraints are not evaluated on insert
+  - sql: |
+      SELECT x FROM ck ORDER BY x NULLS FIRST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x FROM ck_ne ORDER BY x
+    expect: rows
+    order: ordered

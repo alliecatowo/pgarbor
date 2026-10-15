@@ -1,0 +1,24 @@
+id: matview.nulls-and-aggregates
+title: Materialized view over GROUP BY with NULL group keys and NULL aggregate inputs
+family: matview
+tier: extended
+feature_ids: [materialized-views, group-by, aggregates, nulls, numeric]
+required_capabilities: [create-table, insert, select, create-materialized-view, group-by, aggregates, numeric, nulls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE n12 (g text, x numeric);
+  INSERT INTO n12 VALUES ('a', 1.5), ('a', NULL), (NULL, 2), (NULL, NULL), ('b', NULL);
+steps:
+  - sql: |
+      CREATE MATERIALIZED VIEW mv12 AS
+        SELECT g, sum(x) AS s, count(x) AS cx, count(*) AS cstar FROM n12 GROUP BY g
+    expect: ok
+  - sql: |
+      SELECT g IS NULL AS gnull, g, s, cx, cstar FROM mv12 ORDER BY g NULLS FIRST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM mv12 WHERE g IS NULL
+    expect: rows

@@ -1,0 +1,35 @@
+# Hash functions and encode/decode round trips with fixed inputs and known-length edge values.
+id: strings.hash-encode-crc
+title: sha2 digests, crc32 and crc32c, and encode/decode round trips over bytea
+family: strings
+tier: extended
+feature_ids: [bytea, hash-functions, encode-decode, crc]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/strings.sql"
+steps:
+  - sql: |
+      SET bytea_output TO hex
+    expect: ok
+  - sql: |
+      SELECT sha224('') AS s224, sha256('') AS s256
+    expect: rows
+  - sql: |
+      SELECT sha256('The quick brown fox jumps over the lazy dog.') AS fox256, sha512('') AS s512_empty
+    expect: rows
+  - sql: |
+      SELECT crc32('') AS c32_empty, crc32c('') AS c32c_empty, crc32c(repeat('A', 128)::bytea) AS c32c_128
+    expect: rows
+  - sql: |
+      SELECT encode('\x1234567890abcdef00', 'hex') AS h, decode('1234567890abcdef00', 'hex') AS d, encode('\x1234567890abcdef00', 'escape') AS e
+    expect: rows
+  - sql: |
+      SELECT decode(encode(('\x' || repeat('1234567890abcdef0001', 7))::bytea, 'base64'), 'base64') = ('\x' || repeat('1234567890abcdef0001', 7))::bytea AS round_trip
+    expect: rows
+  - sql: |
+      SELECT get_bit('\x1234567890abcdef00'::bytea, 43) AS gb, set_byte('\x1234567890abcdef00'::bytea, 7, 11) AS sb
+    expect: rows
+  - sql: |
+      SELECT decode('zz', 'hex') AS bad
+    expect: error

@@ -1,0 +1,32 @@
+# One MERGE with MATCHED (conditional delete, update) and NOT MATCHED (insert) actions.
+id: merge.basic-update-delete-insert
+title: MERGE updates, deletes and inserts in one statement; unmatched target rows are untouched
+family: merge
+tier: core
+feature_ids: [merge, insert, update, delete, select]
+required_capabilities: [create-table, insert, update, delete, select, merge]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/merge.sql (initial tests; MATCHED UPDATE/DELETE and NOT MATCHED INSERT)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (2, 20), (3, 30);
+  INSERT INTO source VALUES (1, 5), (2, -20), (4, 40);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source AS s
+      ON t.tid = s.sid
+      WHEN MATCHED AND s.delta < 0 THEN
+        DELETE
+      WHEN MATCHED THEN
+        UPDATE SET balance = t.balance + s.delta
+      WHEN NOT MATCHED THEN
+        INSERT VALUES (s.sid, s.delta)
+    expect: ok
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect (1,15), (3,30), (4,40); tid 2 deleted by the conditional DELETE

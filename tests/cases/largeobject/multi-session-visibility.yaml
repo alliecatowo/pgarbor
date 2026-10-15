@@ -1,0 +1,43 @@
+# An uncommitted lo_create is invisible to another session until COMMIT.
+id: largeobject.multi-session-visibility
+title: Large object creation is invisible to other sessions until commit
+family: largeobject
+tier: extended
+feature_ids: [large-objects, transactions, multi-session, catalog-introspection]
+required_capabilities: [large-objects, catalog-introspection, transactions, multi-session, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT lo_create(54)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_largeobject_metadata WHERE oid = 54
+    expect: rows
+    comment: uncommitted object is not visible
+  - session: b
+    sql: |
+      SELECT lo_get(54)
+    expect: error
+    sqlstate: "42704"
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_largeobject_metadata WHERE oid = 54
+    expect: rows
+  - session: b
+    sql: |
+      SELECT length(lo_get(54))
+    expect: rows

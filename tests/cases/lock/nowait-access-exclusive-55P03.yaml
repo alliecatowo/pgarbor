@@ -1,0 +1,40 @@
+# ACCESS EXCLUSIVE held by another session: NOWAIT fails immediately with 55P03.
+id: lock.nowait-access-exclusive-55p03
+title: LOCK ... NOWAIT against an ACCESS EXCLUSIVE holder raises lock_not_available
+family: lock
+tier: extended
+feature_ids: [lock-table, nowait, transactions, multi-session, errors]
+required_capabilities: [create-table, lock-table, transactions, multi-session, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql; errcodes 55P03 lock_not_available"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE lock_tbl1 (a BIGINT);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE lock_tbl1 IN ACCESS EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE lock_tbl1 IN ACCESS SHARE MODE NOWAIT
+    expect: error
+    sqlstate: "55P03"
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok

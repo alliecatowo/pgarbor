@@ -1,0 +1,37 @@
+# Resetting RESTRICT and JOIN on an operator that never had them set is a valid no-op
+# and leaves both catalog columns NULL (NULL edge case).
+id: alter-operator.noop-reset-unset-restrict
+title: Resetting never-set RESTRICT and JOIN leaves them NULL
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, restrict-selectivity, join-selectivity, null-handling]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn
+  );
+steps:
+  - sql: |
+      SELECT oprrest IS NULL AS rest_null, oprjoin IS NULL AS join_null
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE);
+      ALTER OPERATOR === (boolean, boolean) SET (JOIN = NONE)
+    expect: ok
+  - sql: |
+      SELECT oprrest IS NULL AS rest_null, oprjoin IS NULL AS join_null
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset

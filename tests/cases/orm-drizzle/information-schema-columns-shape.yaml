@@ -1,0 +1,31 @@
+# drizzle-kit introspection reads information_schema.columns for types, nullability and defaults.
+id: orm-drizzle.information-schema-columns-shape
+title: information_schema.columns reports types, nullability, defaults and identity for ORM-style DDL
+family: orm-drizzle
+tier: core
+feature_ids: [catalog-introspection, create-table, identity, serial, uuid, jsonb, timestamp]
+required_capabilities: [create-table, identity, serial, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 infoschema-columns.html; drizzle-kit pull column introspection"
+sessions: [a]
+setup: |
+  CREATE TABLE public.users (
+    id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    legacy_serial serial NOT NULL,
+    external_id uuid NOT NULL DEFAULT gen_random_uuid(),
+    email varchar(255) NOT NULL,
+    profile jsonb,
+    score numeric(10, 2) DEFAULT 0,
+    created_at timestamp without time zone NOT NULL DEFAULT now(),
+    note text
+  );
+steps:
+  - sql: |
+      SELECT column_name, data_type, udt_name, is_nullable, column_default, is_identity, identity_generation, character_maximum_length, numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM information_schema.columns WHERE table_name = 'users' AND is_nullable = 'NO'
+    expect: rows
+    order: multiset

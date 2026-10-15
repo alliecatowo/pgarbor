@@ -1,0 +1,33 @@
+# Disabling enable_incremental_sort must not change the result of the same query.
+id: incremental-sort.guc-equivalence
+title: enable_incremental_sort on and off return identical ordered results
+family: incremental-sort
+tier: core
+feature_ids: [incremental-sort, order-by, planner-settings]
+required_capabilities: [create-table, insert, select, order-by, guc]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/incremental_sort.sql
+sessions: [a]
+setup: |
+  CREATE TABLE t (a integer, b integer, c integer);
+  INSERT INTO t SELECT g % 10, g % 7, g FROM generate_series(1, 200) AS g(g);
+  ANALYZE t;
+steps:
+  - sql: |
+      SET enable_incremental_sort = off
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM (SELECT a, b, c FROM t ORDER BY a) s ORDER BY a, b, c LIMIT 25
+    expect: rows
+    order: ordered
+  - sql: |
+      SET enable_incremental_sort = on
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM (SELECT a, b, c FROM t ORDER BY a) s ORDER BY a, b, c LIMIT 25
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET enable_incremental_sort
+    expect: ok

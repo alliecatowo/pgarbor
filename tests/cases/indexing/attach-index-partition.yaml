@@ -1,0 +1,34 @@
+# ALTER INDEX ... ATTACH PARTITION links an existing partition index to a parent ON ONLY index.
+# Attaching an index on different columns is rejected.
+id: indexing.attach-index-partition
+title: ALTER INDEX ATTACH PARTITION links matching index and rejects mismatched columns
+family: indexing
+tier: extended
+feature_ids: [create-index, partitioning, catalog-introspection, alter-index]
+required_capabilities: [create-table, create-index, partitioning, catalog-introspection, alter-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/indexing.sql"
+setup: |
+  CREATE TABLE idxpart (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE idxpart1 PARTITION OF idxpart FOR VALUES FROM (0) TO (10);
+  CREATE INDEX ON ONLY idxpart (a);
+  CREATE INDEX ON idxpart1 (a);
+  CREATE INDEX ON idxpart1 (b);
+steps:
+  - sql: |
+      ALTER INDEX idxpart_a_idx ATTACH PARTITION idxpart1_a_idx
+    expect: ok
+  - sql: |
+      ALTER INDEX idxpart_a_idx ATTACH PARTITION idxpart1_b_idx
+    expect: error
+    comment: index on different columns cannot be attached
+  - sql: |
+      SELECT c.relname, inh.inhparent::regclass::text AS parent
+      FROM pg_index x
+      JOIN pg_class c ON c.oid = x.indexrelid
+      LEFT JOIN pg_inherits inh ON inh.inhrelid = c.oid
+      WHERE c.relname LIKE 'idxpart%'
+      ORDER BY c.relname COLLATE "C"
+    expect: rows
+    order: ordered

@@ -1,0 +1,42 @@
+# SETOF types are rejected as operator arguments; the failure aborts the transaction and ROLLBACK clears it.
+id: create-operator.setof-argument-aborted-txn
+title: SETOF operator argument is rejected, the block is aborted, then ROLLBACK recovers
+family: create-operator
+tier: core
+feature_ids: [create-operator, transactions, errors]
+required_capabilities: [create-function, create-operator, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_operator.sql (SETOF leftarg and rightarg cases)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION dbl(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 2 $$;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #*# (leftarg = SETOF int8, procedure = dbl)
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #*# (rightarg = SETOF int8, procedure = dbl)
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #*# (rightarg = int8, procedure = dbl)
+    expect: ok

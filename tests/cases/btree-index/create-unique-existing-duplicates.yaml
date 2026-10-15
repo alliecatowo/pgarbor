@@ -1,0 +1,26 @@
+# Derived from PG18 btree_index.sql unique index build over existing data; a duplicate in the table blocks creation.
+id: btree-index.create-unique-existing-duplicates
+title: CREATE UNIQUE INDEX over a table that already holds duplicate keys fails with 23505 and leaves no index
+family: btree-index
+tier: core
+feature_ids: [unique-index, create-index, errors, constraints]
+required_capabilities: [create-table, insert, select, create-index, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (dedup_unique_test_table); PG18 errcodes 23505"
+setup: |
+  CREATE TABLE dup (a int);
+  INSERT INTO dup VALUES (5), (5), (6);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX dup_a ON dup (a)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      CREATE INDEX dup_a ON dup (a)
+    expect: ok
+    comment: the non-unique form must succeed on the same data
+  - sql: |
+      SELECT a FROM dup ORDER BY a
+    expect: rows
+    order: ordered

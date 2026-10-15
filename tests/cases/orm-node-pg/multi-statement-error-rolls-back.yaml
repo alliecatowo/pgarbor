@@ -1,0 +1,26 @@
+# A failing statement inside a multi-statement simple Query aborts the implicit transaction,
+# so the earlier INSERT in the same message is rolled back and the later one never runs.
+id: orm-node-pg.multi-statement-error-rolls-back
+title: "Error midway through a multi-statement Query rolls back the whole message"
+family: orm-node-pg
+tier: extended
+feature_ids: [simple-query, multiple-statements, transactions, errors, insert]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow simple query (implicit transaction); errcodes 22012 division_by_zero"
+sessions: [a]
+setup: |
+  CREATE TABLE ledger (id int4 PRIMARY KEY, amt int4 NOT NULL);
+steps:
+  - sql: |
+      INSERT INTO ledger VALUES (1, 10);
+      SELECT 1 / (amt - amt) FROM ledger;
+      INSERT INTO ledger VALUES (2, 20)
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SELECT id, amt FROM ledger ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect zero rows; the first INSERT was rolled back with the implicit transaction

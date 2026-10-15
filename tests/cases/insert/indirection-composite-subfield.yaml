@@ -1,0 +1,29 @@
+# Column-list field selectors assign composite subfields, including subscripted subfields; DEFAULT on a subfield is rejected.
+id: insert.indirection-composite-subfield
+title: INSERT column-list composite subfield and subscripted-subfield assignment
+family: insert
+tier: extended
+feature_ids: [insert, composite-types, arrays, indirection]
+required_capabilities: [create-table, create-type, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert.sql"
+sessions: [a]
+setup: |
+  CREATE TYPE ins_pair AS (if1 int4, if2 text[]);
+  CREATE TABLE cf (f1 int4, f3 ins_pair);
+steps:
+  - sql: |
+      INSERT INTO cf (f3.if1, f3.if2) VALUES (1, ARRAY['foo']), (2, '{bar}')
+    expect: ok
+  - sql: |
+      INSERT INTO cf (f3.if2[1], f3.if2[2]) VALUES ('foo', 'bar'), ('baz', 'quux')
+    expect: ok
+  - sql: |
+      INSERT INTO cf (f3.if1, f3.if2) VALUES (1, DEFAULT)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      SELECT (f3).if1 AS if1, (f3).if2 AS if2 FROM cf
+    expect: rows
+    order: multiset

@@ -1,0 +1,43 @@
+# NULL handling for int4 columns: arithmetic and comparison propagate NULL, IS DISTINCT FROM treats
+# NULL as a value, aggregates skip NULL, and sum(int4) widens to bigint.
+id: int4.null-semantics
+title: int4 NULL propagation in expressions, comparisons, filters and aggregates
+family: int4
+tier: core
+feature_ids: [int4, nulls, aggregates, sum, where, order-by]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/int4.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE int4_tbl (f1 int4);
+  INSERT INTO int4_tbl VALUES (1), (NULL), (3);
+steps:
+  - sql: |
+      SELECT f1, f1 + 1 AS plus1, f1 = 1 AS is_one, f1 IS DISTINCT FROM 1 AS distinct_one
+      FROM int4_tbl ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: NULLs sort last in ascending order by default
+  - sql: |
+      SELECT f1 FROM int4_tbl WHERE f1 <> 1
+    expect: rows
+    order: multiset
+    comment: the NULL row is excluded because NULL <> 1 is NULL
+  - sql: |
+      SELECT count(*) AS star, count(f1) AS nonnull, sum(f1) AS total FROM int4_tbl
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_typeof(sum(f1))::text AS sum_type FROM int4_tbl
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sum(f1) AS total_of_nulls FROM int4_tbl WHERE f1 IS NULL
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT (NULL::int4 + 1) AS n, (NULL::int4 * 0) AS z
+    expect: rows
+    order: ordered

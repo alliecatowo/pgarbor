@@ -1,0 +1,35 @@
+# Range union (+), difference (-), intersection (*) and range_merge. Non-contiguous union and
+# difference must fail; range_merge must never fail. Mirrors rangetypes.sql lines 104-130.
+id: rangetypes.union-minus-merge-errors
+title: Range union, difference and intersection succeed when contiguous and fail with 22000 otherwise
+family: rangetypes
+tier: core
+feature_ids: [range-types, range-operators, range-set-ops, errors]
+required_capabilities: [range-types, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangetypes.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT numrange(1.0, 2.0) + numrange(2.0, 3.0) AS union_touching,
+             numrange(1.0, 2.0) + numrange(1.5, 3.0) AS union_overlap,
+             range_merge(numrange(1.0, 2.0), numrange(2.5, 3.0)) AS merge_gap,
+             numrange(1.1, 2.2) - numrange(2.0, 3.0) AS minus_overlap,
+             numrange(1.1, 2.2) - numrange(2.2, 3.0) AS minus_touching,
+             range_minus(numrange(10.1, 12.2, '[]'), numrange(110.0, 120.2, '(]')) AS minus_disjoint,
+             numrange(1.0, 2.0) * numrange(2.0, 3.0) AS isect_touching,
+             numrange(1.0, 2.0) * numrange(1.5, 3.0) AS isect_overlap,
+             numrange(1.0, 2.0) * numrange(2.5, 3.0) AS isect_disjoint
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT numrange(1.0, 2.0) + numrange(2.5, 3.0)
+    expect: error
+    sqlstate: "22000"
+    comment: union of disjoint ranges is not contiguous
+  - sql: |
+      SELECT numrange(1.0, 10.0) - numrange(3.0, 4.0)
+    expect: error
+    sqlstate: "22000"
+    comment: subtracting an interior range would split the result

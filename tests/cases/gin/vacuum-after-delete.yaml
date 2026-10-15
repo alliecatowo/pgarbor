@@ -1,0 +1,35 @@
+# Delete rows whose arrays contain 2, VACUUM, then verify containment counts on the surviving rows.
+id: gin.vacuum-after-delete
+title: GIN containment results after DELETE and VACUUM
+family: gin
+tier: core
+feature_ids: [gin-index, arrays, delete, vacuum]
+required_capabilities: [create-table, create-index, gin-index, insert, select, delete, vacuum, arrays]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_vac (id int4 PRIMARY KEY, i int4[]);
+  CREATE INDEX gin_vac_idx ON gin_vac USING gin (i);
+  INSERT INTO gin_vac SELECT g, array[1, 2, g] FROM generate_series(1, 1000) g;
+  INSERT INTO gin_vac SELECT g, array[1, 3, g] FROM generate_series(1001, 2000) g;
+steps:
+  - sql: |
+      DELETE FROM gin_vac WHERE i @> '{2}'
+    expect: ok
+  - sql: |
+      VACUUM gin_vac
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM gin_vac WHERE i @> '{1}'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM gin_vac WHERE i @> '{2}'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM gin_vac WHERE i @> '{}'
+    expect: rows
+  - sql: |
+      SELECT min(id), max(id) FROM gin_vac WHERE i @> '{3}'
+    expect: rows

@@ -1,0 +1,46 @@
+# Renaming a schema keeps its objects reachable under the new name; the old name disappears.
+# DROP SCHEMA without CASCADE refuses a non-empty schema; CASCADE removes everything.
+id: namespace.rename-and-drop-cascade
+title: ALTER SCHEMA RENAME moves name resolution; DROP SCHEMA refuses then CASCADE clears objects
+family: namespace
+tier: core
+feature_ids: [alter-schema, drop-schema, create-table, create-view, insert, select, catalog-introspection]
+required_capabilities: [create-schema, create-table, create-view, insert, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/namespace.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA rn_old;
+  CREATE TABLE rn_old.abc (a serial, b int UNIQUE);
+  CREATE VIEW rn_old.abc_view AS SELECT a + 1 AS a, b + 1 AS b FROM rn_old.abc;
+  INSERT INTO rn_old.abc DEFAULT VALUES;
+  INSERT INTO rn_old.abc DEFAULT VALUES;
+steps:
+  - sql: |
+      ALTER SCHEMA rn_old RENAME TO rn_new
+    expect: ok
+  - sql: |
+      SELECT a, b FROM rn_new.abc ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM rn_new.abc_view ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM rn_old.abc
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      DROP SCHEMA rn_new
+    expect: error
+    sqlstate: "2BP01"
+    comment: non-empty schema without CASCADE
+  - sql: |
+      DROP SCHEMA rn_new CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'rn_new')
+    expect: rows
+    comment: subquery finds no schema, so zero relations are attached to it

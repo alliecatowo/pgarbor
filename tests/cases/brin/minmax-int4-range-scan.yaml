@@ -1,0 +1,35 @@
+# BRIN minmax index on int4 with pages_per_range=1: equality and range predicates must return
+# the same rows as a sequential scan would (plan choice is not asserted).
+id: brin.minmax-int4-range-scan
+title: BRIN minmax index answers int4 equality and range predicates
+family: brin
+tier: core
+feature_ids: [brin, create-index, select, where]
+required_capabilities: [create-table, insert, select, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brinidx, brinopers int4 rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t SELECT g, (g * 37) % 1000 FROM generate_series(1, 2000) g;
+  CREATE INDEX t_v_brin ON t USING brin (v) WITH (pages_per_range = 1);
+steps:
+  - sql: |
+      SELECT id, v FROM t WHERE v = 370 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: equality through the brin index must match the seqscan result
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE v BETWEEN 100 AND 199
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE v > 990 OR v < 3
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE v = 100000
+    expect: rows
+    order: multiset
+    comment: value outside every range summary returns zero rows

@@ -1,0 +1,42 @@
+# Grouping by the full composite primary key of the right table allows its non-key column.
+id: functional-deps.composite-pk-right-table-allows-column
+title: "GROUP BY full composite primary key allows the other column of that table"
+family: functional-deps
+tier: core
+feature_ids: [group-by, functional-dependencies, joins, primary-key]
+required_capabilities: [create-table, insert, select, group-by, joins, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE articles (
+      id int CONSTRAINT articles_pkey PRIMARY KEY,
+      keywords text,
+      title text UNIQUE NOT NULL,
+      body text UNIQUE,
+      created date
+  );
+  CREATE TABLE articles_in_category (
+      article_id int,
+      category_id int,
+      changed date,
+      PRIMARY KEY (article_id, category_id)
+  );
+  INSERT INTO articles VALUES
+      (1, 'db pg', 'First', 'body one', '2024-01-01'),
+      (2, NULL, 'Second', NULL, '2024-02-01'),
+      (3, '', 'Third', 'body three', NULL);
+  INSERT INTO articles_in_category VALUES
+      (1, 14, '2024-03-01'), (1, 62, '2024-03-02'), (2, 99, '2024-03-03'),
+      (3, 14, '2024-03-04'), (3, 70, NULL);
+steps:
+  - sql: |
+      SELECT aic.changed
+      FROM articles AS a JOIN articles_in_category AS aic ON a.id = aic.article_id
+      WHERE aic.category_id IN (14, 62, 70, 53, 138)
+      GROUP BY aic.category_id, aic.article_id
+      ORDER BY aic.category_id, aic.article_id
+    expect: rows
+    order: ordered
+    comment: "changed is functionally dependent on the composite key; NULL changed is returned as NULL"

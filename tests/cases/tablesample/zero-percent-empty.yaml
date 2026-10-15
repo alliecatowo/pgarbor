@@ -1,0 +1,29 @@
+# Zero percent sampling returns no rows under both methods, including a percentage computed from an expression.
+id: tablesample.zero-percent-empty
+title: Zero percent sampling returns no rows, including expression-computed zero
+family: tablesample
+tier: core
+feature_ids: [tablesample, select, collations, expressions]
+required_capabilities: [create-table, insert, select, tablesample, storage-parameters, collations]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tablesample.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE test_tablesample (id int, name text) WITH (fillfactor=10);
+  INSERT INTO test_tablesample SELECT i, repeat(i::text, 200) FROM generate_series(0, 9) s(i);
+steps:
+  - sql: |
+      SELECT count(*) FROM test_tablesample TABLESAMPLE BERNOULLI (0)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) FROM test_tablesample TABLESAMPLE SYSTEM (0)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) FROM test_tablesample TABLESAMPLE BERNOULLI (('1'::text < '0'::text)::int)
+    expect: rows
+    order: multiset
+    comment: the argument is 0 because '1' sorts after '0' under the default collation

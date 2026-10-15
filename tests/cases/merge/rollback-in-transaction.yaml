@@ -1,0 +1,41 @@
+# MERGE effects are visible inside the transaction and disappear on ROLLBACK.
+id: merge.rollback-in-transaction
+title: MERGE inside a transaction is visible to the same session and rolled back cleanly
+family: merge
+tier: core
+feature_ids: [merge, transactions, update, insert]
+required_capabilities: [create-table, insert, update, select, transactions, merge]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/merge.sql (BEGIN; MERGE ...; SELECT; ROLLBACK pattern)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (2, 20);
+  INSERT INTO source VALUES (2, 5), (3, 7);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      MERGE INTO target t
+      USING source s
+      ON t.tid = s.sid
+      WHEN MATCHED THEN
+        UPDATE SET balance = t.balance + s.delta
+      WHEN NOT MATCHED THEN
+        INSERT VALUES (s.sid, s.delta)
+    expect: ok
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect (1,10), (2,25), (3,7) inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect the original (1,10), (2,20)

@@ -1,0 +1,34 @@
+# One multi-column brin index over int8, numeric and date; each column's predicate must be
+# answered correctly regardless of the other columns' values.
+id: brin.multi-column-mixed-types
+title: Multi-column BRIN index over int8, numeric and date columns
+family: brin
+tier: extended
+feature_ids: [brin, create-index, select, numeric, date, multi-column-index]
+required_capabilities: [create-table, insert, select, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brinidx multi-column definition)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, big int8, num numeric, d date);
+  INSERT INTO t SELECT g, 142857 * (g % 100), (g % 50) / 4.0, date '1995-08-15' + (g % 300)
+  FROM generate_series(1, 1000) g;
+  CREATE INDEX t_multi_brin ON t USING brin (big, num, d) WITH (pages_per_range = 1);
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE big = 142857 * 42
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id FROM t WHERE num = 2.25 ORDER BY id LIMIT 5
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE d >= date '1996-01-01' AND d < date '1996-02-01'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE big > 0 AND num < 1 AND d = date '1995-08-15'
+    expect: rows
+    order: multiset

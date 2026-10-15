@@ -1,0 +1,33 @@
+# Setting MERGES = false and HASHES = false on an operator that never had them is a successful no-op.
+id: alter-operator.merges-hashes-noop-false
+title: Setting MERGES and HASHES to false on an operator without them succeeds
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, merges, hashes, boolean-attributes]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn_bool_real(boolean, real)
+  RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = real,
+      PROCEDURE = alter_op_test_fn_bool_real
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (MERGES = false)
+    expect: ok
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (HASHES = false)
+    expect: ok
+  - sql: |
+      SELECT oprcanmerge, oprcanhash
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'real'::regtype
+    expect: rows
+    order: multiset

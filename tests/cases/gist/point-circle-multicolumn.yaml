@@ -1,0 +1,38 @@
+# Two-column GiST index (point, circle): both predicates combined, plus NULL in either column.
+id: gist.point-circle-multicolumn
+title: Multicolumn GiST index on point and circle columns with NULL entries
+family: gist
+tier: core
+feature_ids: [gist, create-index, multicolumn-index, point, circle, geometric-operators, null-semantics]
+required_capabilities: [create-table, insert, select, create-index, gist-index, multicolumn-index, point-type, circle-type, box-type, null-semantics]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE gmc (id int4 PRIMARY KEY, p point, c circle);
+  INSERT INTO gmc VALUES
+    (1, point(0,0), circle(point(0,0),1)),
+    (2, point(5,5), circle(point(5,5),2)),
+    (3, point(5,6), circle(point(5,6),0.5)),
+    (4, NULL, circle(point(1,1),1)),
+    (5, point(9,9), NULL);
+  CREATE INDEX gmc_pc ON gmc USING gist (p, c);
+steps:
+  - sql: |
+      SELECT id FROM gmc WHERE p <@ box(point(4,4), point(6,7)) AND c @> circle(point(5,5), 0.25) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: id 3 fails the circle containment because the centers are too far apart
+  - sql: |
+      SELECT id FROM gmc WHERE c && circle(point(5,5), 1) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gmc WHERE p IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id FROM gmc WHERE c IS NULL
+    expect: rows
+    order: multiset

@@ -1,0 +1,32 @@
+# NULL array values make containment NULL, so NOT (i @> q) drops them too (three-valued logic).
+id: gin.array-null-rows-three-valued
+title: NULL array column values are excluded from @> and from its negation
+family: gin
+tier: core
+feature_ids: [gin-index, arrays, nulls, array-containment]
+required_capabilities: [create-table, create-index, gin-index, insert, select, arrays]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_n (id int4 PRIMARY KEY, i int4[]);
+  CREATE INDEX gin_n_idx ON gin_n USING gin (i);
+  INSERT INTO gin_n VALUES (1, '{1}'), (2, NULL), (3, '{2}');
+steps:
+  - sql: |
+      SELECT id FROM gin_n WHERE i @> '{1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_n WHERE NOT (i @> '{1}') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the NULL-array row is neither in the result nor in its negation
+  - sql: |
+      SELECT id FROM gin_n WHERE i IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM gin_n WHERE i @> NULL::int4[]
+    expect: rows

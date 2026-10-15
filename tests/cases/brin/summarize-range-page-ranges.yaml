@@ -1,0 +1,28 @@
+# Summarizing individual ranges of a populated table: already-summarized and past-end ranges
+# return results (values are the count of ranges summarized, recorded from the oracle).
+id: brin.summarize-range-page-ranges
+title: brin_summarize_range over populated ranges, already-summarized and past-end ranges
+family: brin
+tier: extended
+feature_ids: [brin, brin-maintenance-functions, select]
+required_capabilities: [create-table, insert, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brin_summarize_range sequence on brin_summarize_idx)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (value int4) WITH (fillfactor = 10, autovacuum_enabled = false);
+  CREATE INDEX t_brin ON t USING brin (value) WITH (pages_per_range = 2);
+  INSERT INTO t SELECT 1 FROM generate_series(1, 300);
+steps:
+  - sql: |
+      SELECT brin_summarize_range('t_brin', 0)
+    expect: rows
+  - sql: |
+      SELECT brin_summarize_range('t_brin', 1)
+    expect: rows
+    comment: nothing new expected if already summarized
+  - sql: |
+      SELECT brin_summarize_range('t_brin', 4294967295)
+    expect: rows
+    comment: range beyond the table end

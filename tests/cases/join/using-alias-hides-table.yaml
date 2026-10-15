@@ -1,0 +1,32 @@
+# JOIN ... USING ... AS alias names the merged join columns only; the base table names stay visible, but the alias does not expose other columns.
+id: join.using-alias-hides-table
+title: USING join alias exposes only the merged columns and rejects other columns through the alias
+family: join
+tier: extended
+feature_ids: [joins, using-clause, join-alias, name-resolution, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/join.sql (test join using aliases, lines 130-139)"
+sessions: [a]
+setup: |
+  CREATE TABLE j1 (i integer, j integer, t text);
+  CREATE TABLE j2 (i integer, k integer);
+  INSERT INTO j1 VALUES (1, 4, 'one'), (2, 3, 'two');
+  INSERT INTO j2 VALUES (1, -1), (2, 2);
+steps:
+  - sql: |
+      SELECT * FROM j1 JOIN j2 USING (i) AS x WHERE j1.t = 'one'
+    expect: rows
+    order: multiset
+    comment: base table names remain usable with the alias present
+  - sql: |
+      SELECT * FROM j1 JOIN j2 USING (i) AS x WHERE x.i = 1
+    expect: rows
+    order: multiset
+    comment: the merged column is reachable through the alias
+  - sql: |
+      SELECT * FROM j1 JOIN j2 USING (i) AS x WHERE x.t = 'one'
+    expect: error
+    sqlstate: "42703"
+    comment: t is not part of the USING alias, so x.t does not exist

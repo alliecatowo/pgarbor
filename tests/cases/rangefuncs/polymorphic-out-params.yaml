@@ -1,0 +1,35 @@
+# Polymorphic OUT parameters: resolution from an anyelement input, the unknown-literal failure, and renaming an input.
+id: rangefuncs.polymorphic-out-params
+title: "Polymorphic OUT parameters resolve from typed inputs and fail on untyped literals"
+family: rangefuncs
+tier: extended
+feature_ids: [polymorphic-types, out-parameters, sql-functions, errors, arrays]
+required_capabilities: [create-function, sql-functions, arrays, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (polymorphic OUT parameters, dup)"
+setup: |
+  CREATE FUNCTION dup (f1 anyelement, f2 out anyelement, f3 out anyarray) AS 'select $1, array[$1,$1]' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT dup(22)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT dup('xyz')
+    expect: error
+    sqlstate: "42804"
+    comment: "an unknown-type literal cannot determine the polymorphic type"
+  - sql: |
+      SELECT dup('xyz'::text)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM dup('xyz'::text)
+    expect: rows
+    order: multiset
+  - sql: |
+      CREATE OR REPLACE FUNCTION dup (inout f2 anyelement, out f3 anyarray) AS 'select $1, array[$1,$1]' LANGUAGE sql
+    expect: error
+    sqlstate: "42P13"
+    comment: "input parameter f1 cannot be renamed by CREATE OR REPLACE"

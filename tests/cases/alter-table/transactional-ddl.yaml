@@ -1,0 +1,37 @@
+# ALTER TABLE is transactional: ROLLBACK undoes ADD COLUMN and DROP COLUMN; COMMIT keeps them.
+id: alter-table.transactional-ddl
+title: ALTER TABLE ADD and DROP COLUMN roll back inside a transaction block
+family: alter-table
+tier: core
+feature_ids: [alter-table, transactions, add-column, drop-column, rollback]
+required_capabilities: [create-table, alter-table, insert, select, transactions]
+provenance:
+  source: hand
+  ref: "PG18 sql-altertable.html; PG18 transactions, DDL is transactional in PostgreSQL"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      BEGIN;
+      ALTER TABLE t ADD COLUMN extra int4 DEFAULT 9;
+      ALTER TABLE t DROP COLUMN v;
+      SELECT * FROM t ORDER BY id;
+      ROLLBACK
+    expect: ok
+    comment: the SELECT inside shows the altered shape
+  - sql: |
+      SELECT * FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: after rollback the original columns are back and extra is gone
+  - sql: |
+      BEGIN;
+      ALTER TABLE t ADD COLUMN extra int4 DEFAULT 9;
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, v, extra FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,30 @@
+# SET NULL on a NOT NULL referencing column fails with not_null_violation, and the delete is rolled back.
+id: foreign-key.set-null-not-null-column-error
+title: "ON DELETE SET NULL on a NOT NULL column raises 23502 and rolls back"
+family: foreign-key
+tier: extended
+feature_ids: [foreign-keys, delete, select, create-table, constraints, nulls]
+required_capabilities: [create-table, insert, select, delete, foreign-keys, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4 NOT NULL REFERENCES pk (id) ON DELETE SET NULL);
+  INSERT INTO pk VALUES (1);
+  INSERT INTO fk VALUES (10, 1);
+steps:
+  - sql: |
+      DELETE FROM pk WHERE id = 1
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT id, pid FROM pk ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, pid FROM fk ORDER BY id
+    expect: rows
+    order: ordered

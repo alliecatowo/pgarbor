@@ -1,0 +1,37 @@
+# jsonb columns as written by drizzle jsonb(): SQL NULL, JSON null and nested documents are distinct.
+id: orm-drizzle.jsonb-column-roundtrip
+title: jsonb keeps SQL NULL distinct from JSON null and supports containment and text extraction
+family: orm-drizzle
+tier: core
+feature_ids: [jsonb, insert, select, null-semantics, errors]
+required_capabilities: [create-table, insert, select, jsonb, errors]
+provenance:
+  source: hand
+  ref: "PG18 datatype-json.html; functions-json.html"
+sessions: [a]
+setup: |
+  CREATE TABLE settings (
+    id integer PRIMARY KEY,
+    doc jsonb
+  );
+steps:
+  - sql: |
+      INSERT INTO settings VALUES (1, '{"theme": "dark", "limits": {"max": 10}}'), (2, 'null'), (3, NULL), (4, '[1, 2, {"k": "v"}]')
+    expect: ok
+  - sql: |
+      SELECT id, doc IS NULL AS sql_null, doc = 'null'::jsonb AS json_null, jsonb_typeof(doc) AS kind FROM settings ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, doc->>'theme' AS theme, (doc->'limits'->>'max')::int AS max_limit FROM settings WHERE doc @> '{"theme": "dark"}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM settings WHERE doc -> 'k' IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no row has a top-level key k, so every id is listed (scalar, SQL NULL and array inputs yield NULL)
+  - sql: |
+      INSERT INTO settings VALUES (5, '{"broken": }')
+    expect: error
+    sqlstate: "22P02"

@@ -1,0 +1,45 @@
+# Overloaded procedures: CALL resolves while unique, DROP by bare name is ambiguous, DROP with OUT mode picks one overload.
+id: create-procedure.overloaded-drop-ambiguous
+title: Overloaded procedure DROP is ambiguous unless the argument list identifies one overload
+family: create-procedure
+tier: extended
+feature_ids: [procedures, call, drop, overloading, errors, transactions]
+required_capabilities: [create-procedure, call, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_procedure.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE ptest10(OUT a int, IN b int, IN c int)
+      LANGUAGE SQL AS $$ SELECT b - c $$
+    expect: ok
+  - sql: |
+      CALL ptest10(null, 7, 4)
+    expect: rows
+  - sql: |
+      CALL ptest10(a => null, b => 8, c => 2)
+    expect: rows
+  - sql: |
+      CREATE PROCEDURE ptest10(IN a int, IN b int, IN c int)
+      LANGUAGE SQL AS $$ SELECT a + b - c $$
+    expect: ok
+  - sql: |
+      DROP PROCEDURE ptest10
+    expect: error
+    sqlstate: "42725"
+  - sql: |
+      DROP PROCEDURE ptest10(int, int, int)
+    expect: error
+    sqlstate: "42725"
+  - sql: |
+      BEGIN;
+      DROP PROCEDURE ptest10(OUT int, int, int);
+      DROP PROCEDURE ptest10(int, int, int);
+      ROLLBACK
+    expect: ok
+    comment: the OUT-mode identity picks the OUT overload, leaving the IN overload unique
+  - sql: |
+      CALL ptest10(1, 2, 3)
+    expect: ok

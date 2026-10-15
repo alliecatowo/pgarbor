@@ -1,0 +1,32 @@
+# A USING column must exist in both inputs; a column that exists only on the right is rejected as missing on the left.
+id: join.using-missing-column-error
+title: JOIN USING with a column absent from one side raises 42703
+family: join
+tier: core
+feature_ids: [joins, using-clause, errors, name-resolution]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/join.sql (USING clause errors)"
+sessions: [a]
+setup: |
+  CREATE TABLE j1 (i integer, j integer, t text);
+  CREATE TABLE j2 (i integer, k integer);
+  INSERT INTO j1 VALUES (1, 4, 'one'), (2, 3, 'two');
+  INSERT INTO j2 VALUES (1, -1), (2, 2);
+steps:
+  - sql: |
+      SELECT * FROM j1 JOIN j2 USING (zzz)
+    expect: error
+    sqlstate: "42703"
+    comment: column "zzz" specified in USING clause does not exist in left table
+  - sql: |
+      SELECT * FROM j1 JOIN j2 USING (k)
+    expect: error
+    sqlstate: "42703"
+    comment: k exists only on the right side, so it is missing from the left table
+  - sql: |
+      SELECT * FROM j1 JOIN j2 USING (i)
+    expect: rows
+    order: multiset
+    comment: the valid form still works after the errors

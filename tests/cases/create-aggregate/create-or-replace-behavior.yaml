@@ -1,0 +1,32 @@
+# CREATE OR REPLACE AGGREGATE with the same signature replaces the definition in place;
+# subsequent calls use the new transition function and initcond.
+id: create-aggregate.create-or-replace-behavior
+title: "CREATE OR REPLACE AGGREGATE with same signature replaces transition function and initcond"
+family: create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, create-or-replace]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (create or replace aggregate myavg)"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE r (x int4);
+  INSERT INTO r VALUES (2), (3), (4);
+  CREATE AGGREGATE myagg (int4) (sfunc = int4pl, stype = int4, initcond = '0');
+steps:
+  - sql: |
+      SELECT myagg(x) FROM r
+    expect: rows
+    comment: 2+3+4 with the original definition
+  - sql: |
+      CREATE OR REPLACE AGGREGATE myagg (int4) (sfunc = int4mul, stype = int4, initcond = '1')
+    expect: ok
+  - sql: |
+      SELECT myagg(x) FROM r
+    expect: rows
+    comment: 1*2*3*4 with the replaced definition
+  - sql: |
+      SELECT myagg(x) FROM r WHERE false
+    expect: rows
+    comment: empty input returns the new initcond 1

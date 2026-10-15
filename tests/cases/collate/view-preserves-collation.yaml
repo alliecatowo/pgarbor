@@ -1,0 +1,28 @@
+# Views keep the collation of the column and of their own ORDER BY / WHERE expressions.
+id: collate.view-preserves-collation
+title: "Views keep COLLATE clauses in their WHERE and ORDER BY definitions"
+family: collate
+tier: extended
+feature_ids: [collation, views, order-by, catalog-introspection]
+required_capabilities: [create-table, insert, select, collation, views, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/collate.sql"
+setup: |
+  CREATE TABLE collate_test1 (a int, b text COLLATE "C" NOT NULL);
+  INSERT INTO collate_test1 VALUES (1, 'abc'), (2, 'Abc'), (3, 'bbc'), (4, 'ABD');
+  CREATE VIEW collview1 AS SELECT a, b FROM collate_test1 WHERE b COLLATE "C" >= 'bbc';
+  CREATE VIEW collview2 AS SELECT a, b FROM collate_test1 ORDER BY b COLLATE "C";
+steps:
+  - sql: |
+      SELECT a, b FROM collview1 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM collview2 ORDER BY b COLLATE "C"
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT table_name FROM information_schema.views WHERE table_name IN ('collview1', 'collview2') ORDER BY 1
+    expect: rows
+    order: ordered

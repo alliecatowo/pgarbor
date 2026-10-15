@@ -1,0 +1,41 @@
+# Functions with OUT and INOUT parameters: scalar call, FROM call, multi-column records, and aliasing.
+id: rangefuncs.out-parameters-basic
+title: "OUT and INOUT parameter functions called in select list and FROM"
+family: rangefuncs
+tier: core
+feature_ids: [out-parameters, inout-parameters, sql-functions, set-returning-functions, column-aliases]
+required_capabilities: [create-function, sql-functions, select, set-returning-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (test cases involving OUT parameters)"
+setup: |
+  CREATE FUNCTION rngfunc(in f1 int, out f2 int) AS 'select $1+1' LANGUAGE sql;
+  CREATE FUNCTION rngfuncr(in f1 int, out f2 int, out text) AS $$select $1-1, $1::text || 'z'$$ LANGUAGE sql;
+  CREATE FUNCTION rngfuncb(in f1 int, inout f2 int, out text) AS $$select $2-1, $1::text || 'z'$$ LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT rngfunc(42)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM rngfunc(42)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, rngfuncr(f1) FROM (VALUES (42),(0)) v(f1) ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM rngfuncr(42)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM rngfuncb(42, 99)
+    expect: rows
+    order: multiset
+    comment: "INOUT input 99 is returned minus one; the text OUT is built from f1"
+  - sql: |
+      SELECT * FROM rngfuncb(42, 99) AS p(a,b)
+    expect: rows
+    order: multiset
+    comment: "column alias list without types is allowed for OUT-parameter functions"

@@ -1,0 +1,34 @@
+# An explicit cast to a varchar(n) domain truncates instead of raising an error, while
+# assignment through INSERT raises 22001. Adapted from domain.sql explicit coercion checks.
+id: domain.explicit-cast-truncates
+title: Explicit cast to varchar(n) domain truncates; implicit insert does not
+family: domain
+tier: core
+feature_ids: [domains, create-domain, cast, varchar]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN domainvarchar varchar(5);
+  CREATE TABLE vc_probe (v domainvarchar);
+steps:
+  - sql: |
+      SELECT CAST('123456' AS domainvarchar) AS truncated
+    expect: rows
+    order: ordered
+    comment: explicit cast truncates to 5 characters
+  - sql: |
+      SELECT CAST('12345' AS domainvarchar) AS exact_fit
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO vc_probe VALUES ('123456')
+    expect: error
+    sqlstate: "22001"
+    comment: assignment through a table column does not truncate
+  - sql: |
+      SELECT count(*) FROM vc_probe
+    expect: rows
+    order: ordered

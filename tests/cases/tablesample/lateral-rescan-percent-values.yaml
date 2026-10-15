@@ -1,0 +1,28 @@
+# TABLESAMPLE percentages taken from a LATERAL outer row are re-evaluated on each rescan; 0 and 100 are the extremes.
+id: tablesample.lateral-rescan-percent-values
+title: LATERAL TABLESAMPLE with percentage from VALUES rescans per outer row
+family: tablesample
+tier: extended
+feature_ids: [tablesample, lateral, values, aggregates]
+required_capabilities: [create-table, insert, select, tablesample, lateral-joins, values, storage-parameters]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tablesample.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE test_tablesample (id int, name text) WITH (fillfactor=10);
+  INSERT INTO test_tablesample SELECT i, repeat(i::text, 200) FROM generate_series(0, 9) s(i);
+steps:
+  - sql: |
+      SELECT * FROM (VALUES (0), (100)) v(pct),
+        LATERAL (SELECT count(*) FROM test_tablesample TABLESAMPLE BERNOULLI (pct)) ss
+      ORDER BY pct
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM (VALUES (0), (100)) v(pct),
+        LATERAL (SELECT count(*) FROM test_tablesample TABLESAMPLE SYSTEM (pct)) ss
+      ORDER BY pct
+    expect: rows
+    order: ordered

@@ -1,0 +1,34 @@
+# An error aborts the transaction; the transaction-level advisory lock is released by ROLLBACK.
+id: advisory-lock.xact-lock-released-on-rollback-after-error
+title: "Advisory xact lock is released after an error and ROLLBACK"
+family: advisory-lock
+tier: core
+feature_ids: [advisory-locks, transactions, errors]
+required_capabilities: [advisory-locks, transactions, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/advisory_lock.sql"
+  license: "PostgreSQL License"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT pg_advisory_xact_lock(9)
+    expect: rows
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    expect: error
+    sqlstate: "25P02"
+    comment: transaction is aborted, so the catalog query is rejected
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    expect: rows

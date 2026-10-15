@@ -1,0 +1,28 @@
+# DO UPDATE that moves a row onto a value held by another row violates the other unique index (23505); the row is unchanged.
+id: insert-conflict.duplicate-after-update
+title: ON CONFLICT DO UPDATE that collides with a second unique index raises 23505
+family: insert-conflict
+tier: core
+feature_ids: [insert, on-conflict, unique-index, constraints, errors]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert_conflict.sql (Non-spurious duplicate violation tests)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (key int4, fruit text);
+  CREATE UNIQUE INDEX t_key ON t (key);
+  CREATE UNIQUE INDEX t_fruit ON t (fruit);
+  INSERT INTO t VALUES (25, 'Peach'), (26, 'Fig');
+steps:
+  - sql: |
+      INSERT INTO t VALUES (26, 'Peach') ON CONFLICT (key) DO UPDATE SET fruit = excluded.fruit
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO t VALUES (27, 'Peach') ON CONFLICT (fruit) DO NOTHING
+    expect: ok
+  - sql: |
+      SELECT key, fruit FROM t ORDER BY key
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# Extended protocol: a text parameter bound into a char(4) cast keeps its padding on the wire,
+# and a bind of an over-long bpchar into a char(4) column raises 22001 through the prepared path.
+id: char.extended-bind-padding
+title: Bound char parameters are padded on output and enforce char(4) length on insert
+family: char
+tier: core
+feature_ids: [char-type, extended-protocol, prepared-statements, errors]
+required_capabilities: [create-table, insert, select, extended-protocol]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY; datatype-character.html"
+sessions: [a]
+setup: |
+  CREATE TABLE char_bind (f1 char(4));
+steps:
+  - exec_params:
+      sql: |
+        SELECT $1::char(4) AS v, length($1::char(4)) AS n
+      params: ["ab"]
+      param_types: [25]
+    expect: rows
+    comment: the result value is blank-padded to 4 characters on the wire
+  - exec_params:
+      sql: |
+        INSERT INTO char_bind (f1) VALUES ($1)
+      params: ["abcde"]
+      param_types: [1042]
+    expect: error
+    sqlstate: "22001"
+  - exec_params:
+      sql: |
+        INSERT INTO char_bind (f1) VALUES ($1)
+      params: ["xy"]
+      param_types: [1042]
+    expect: ok
+  - sql: |
+      SELECT f1::text AS t FROM char_bind
+    expect: rows

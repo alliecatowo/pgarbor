@@ -1,0 +1,31 @@
+# float8 and float4 hash keys: -0 and 0 are equal, NaN equals NaN, float4 equality through the index.
+id: hash-index.float-zero-and-nan
+title: Hash index on float8 treats negative zero as zero and NaN as equal to NaN
+family: hash-index
+tier: core
+feature_ids: [hash-index, float8, float4, select]
+required_capabilities: [create-table, create-index, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+setup: |
+  CREATE TABLE fz (id int4, f float8);
+  CREATE INDEX fz_f ON fz USING hash (f);
+  INSERT INTO fz VALUES (1, '-0'::float8), (2, 0), (3, 'NaN'::float8), (4, 1.5);
+  CREATE TABLE f4 (id int4, x float4);
+  CREATE INDEX f4_x ON f4 USING hash (x);
+  INSERT INTO f4 VALUES (1, 1.1), (2, 1.2);
+steps:
+  - sql: |
+      SELECT id FROM fz WHERE f = 0 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both -0 and +0 match
+  - sql: |
+      SELECT id FROM fz WHERE f = 'NaN'::float8 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM f4 WHERE x = 1.1::float4
+    expect: rows
+    order: multiset

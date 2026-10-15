@@ -1,0 +1,41 @@
+# Primary key and unique indexes are not copied by LIKE unless INCLUDING INDEXES; NOT NULL on the key is still copied.
+id: create-table-like.indexes-not-copied
+title: LIKE copies no PK or UNIQUE indexes by default, INCLUDING INDEXES does
+family: create-table-like
+tier: core
+feature_ids: [create-table, create-table-like, indexes, constraints, insert, select, errors]
+required_capabilities: [create-table, insert, select, indexes]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE src (k int4 PRIMARY KEY, v text UNIQUE);
+  CREATE TABLE plain (LIKE src);
+  CREATE TABLE idx (LIKE src INCLUDING INDEXES);
+steps:
+  - sql: |
+      INSERT INTO plain VALUES (1, 'a'), (1, 'a')
+    expect: ok
+    comment: no PK or UNIQUE indexes were copied, so duplicates are accepted
+  - sql: |
+      INSERT INTO plain (v) VALUES ('z')
+    expect: error
+    sqlstate: "23502"
+    comment: NOT NULL on the primary key column was copied
+  - sql: |
+      INSERT INTO idx VALUES (1, 'a')
+    expect: ok
+  - sql: |
+      INSERT INTO idx VALUES (1, 'b')
+    expect: error
+    sqlstate: "23505"
+    comment: PK index copied
+  - sql: |
+      INSERT INTO idx VALUES (2, 'a')
+    expect: error
+    sqlstate: "23505"
+    comment: UNIQUE index copied
+  - sql: |
+      SELECT count(*) FROM plain
+    expect: rows

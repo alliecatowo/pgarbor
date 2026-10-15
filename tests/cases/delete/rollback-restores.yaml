@@ -1,0 +1,38 @@
+# A DELETE inside a transaction is invisible to others until commit and undone by ROLLBACK.
+id: delete.rollback-restores
+title: DELETE rolled back leaves every row in place
+family: delete
+tier: core
+feature_ids: [delete, transactions, insert, select, create-table]
+required_capabilities: [create-table, insert, select, delete, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/delete.sql
+sessions: [a, b]
+setup: |
+  CREATE TABLE d (id int4 PRIMARY KEY, a int4);
+  INSERT INTO d VALUES (1, 10), (2, 50), (3, 100);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      DELETE FROM d WHERE a > 25
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id FROM d ORDER BY id
+    expect: rows
+    order: ordered
+    comment: session b still sees all three rows
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM d ORDER BY id
+    expect: rows
+    order: ordered

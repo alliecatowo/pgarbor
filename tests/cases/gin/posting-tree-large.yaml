@@ -1,0 +1,38 @@
+# Large GIN index whose frequent elements form posting trees; deletes plus VACUUM on the posting trees (adapted from gin.sql).
+id: gin.posting-tree-large
+title: Containment counts and VACUUM over a 20000-row GIN index with posting trees
+family: gin
+tier: extended
+feature_ids: [gin-index, arrays, posting-tree, delete, vacuum]
+required_capabilities: [create-table, create-index, gin-index, insert, select, delete, vacuum, analyze, arrays]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_big (id int4 PRIMARY KEY, j int4[]);
+  CREATE INDEX gin_big_idx ON gin_big USING gin (j);
+  INSERT INTO gin_big SELECT g, array[2, g, g/10] FROM generate_series(1, 20000) g;
+  ANALYZE gin_big;
+steps:
+  - sql: |
+      SELECT count(*) FROM gin_big WHERE j @> '{50}'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM gin_big WHERE j @> '{2}'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM gin_big WHERE j @> '{}'::int4[]
+    expect: rows
+  - sql: |
+      DELETE FROM gin_big WHERE id <= 10000
+    expect: ok
+  - sql: |
+      VACUUM gin_big
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM gin_big WHERE j @> '{50}'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM gin_big WHERE j @> '{2}'
+    expect: rows

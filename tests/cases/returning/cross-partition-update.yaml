@@ -1,0 +1,41 @@
+# Cross-partition UPDATE and DELETE on a LIST-partitioned table, with RETURNING old/new tableoid regclass and mixed column order.
+id: returning.cross-partition-update
+title: RETURNING reports old and new partitions for cross-partition UPDATE and partition DELETE
+family: returning
+tier: extended
+feature_ids: [returning, update, delete, partitioning, returning-old-new]
+required_capabilities: [create-table, insert, update, delete, select, returning, returning-old-new, partitioning, regclass]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo_parted (a int, b float8, c text) PARTITION BY LIST (a);
+  CREATE TABLE foo_part_s1 PARTITION OF foo_parted FOR VALUES IN (1);
+  CREATE TABLE foo_part_s2 PARTITION OF foo_parted FOR VALUES IN (2);
+  CREATE TABLE foo_part_d1 (c text, a int, b float8);
+  ALTER TABLE foo_parted ATTACH PARTITION foo_part_d1 FOR VALUES IN (3);
+  INSERT INTO foo_parted VALUES (1, 17.5, 'P1'), (2, 17.25, 'P2'), (3, 17.75, 'P3')
+steps:
+  - sql: |
+      UPDATE foo_parted SET a = 2, b = b + 1, c = c || '->P2' WHERE a = 1
+        RETURNING old.tableoid::regclass AS old_part, new.tableoid::regclass AS new_part,
+                  old.a AS old_a, new.a AS new_a, new.b AS new_b, new.c AS new_c
+    expect: rows
+    order: multiset
+  - sql: |
+      UPDATE foo_parted SET a = 1, b = b + 1, c = c || '->P1' WHERE a = 3
+        RETURNING old.tableoid::regclass AS old_part, new.tableoid::regclass AS new_part,
+                  new.a AS new_a, new.b AS new_b, new.c AS new_c
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT tableoid::regclass AS part, a, b, c FROM foo_parted ORDER BY a, c
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM foo_parted WHERE a = 2 AND c = 'P2'
+        RETURNING old.tableoid::regclass AS part, old.b AS old_b, new.b IS NULL AS new_null
+    expect: rows
+    order: multiset

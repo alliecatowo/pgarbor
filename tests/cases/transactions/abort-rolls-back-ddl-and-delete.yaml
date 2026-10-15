@@ -1,0 +1,30 @@
+# ABORT (synonym of ROLLBACK) discards both DDL and DML made inside the block.
+id: transactions.abort-rolls-back-ddl-and-delete
+title: ABORT undoes CREATE TABLE and DELETE inside the same transaction block
+family: transactions
+tier: core
+feature_ids: [transactions, create-table, delete, rollback]
+required_capabilities: [create-table, insert, select, delete, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE keep (a int4);
+  INSERT INTO keep VALUES (1), (2), (3);
+steps:
+  - sql: |
+      BEGIN;
+      CREATE TABLE disappear (a int4);
+      DELETE FROM keep;
+      SELECT count(*) FROM keep;
+      ABORT
+    expect: ok
+  - sql: |
+      SELECT a FROM keep ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_regclass('disappear') IS NULL AS table_gone
+    expect: rows

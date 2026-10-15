@@ -1,0 +1,38 @@
+# Aggregates over an inheritance tree, including NULL-skipping and empty-input behavior.
+id: create-misc.inherit-aggregate-group
+title: Aggregates and GROUP BY over an inheritance tree skip NULLs
+family: create-misc
+tier: core
+feature_ids: [inheritance, aggregates, group-by, null-handling]
+required_capabilities: [create-table, insert, select, inheritance, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_misc.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE p (class char, a int4);
+  CREATE TABLE c1 (x text) INHERITS (p);
+  CREATE TABLE c2 () INHERITS (p);
+  INSERT INTO p VALUES ('a', 1), ('a', 2), ('a', NULL);
+  INSERT INTO c1 (class, a, x) VALUES ('b', 3, 'x'), ('b', NULL, 'y');
+  INSERT INTO c2 (class, a) VALUES ('c', 5), ('c', NULL);
+steps:
+  - sql: |
+      SELECT sum(a) FROM p*
+    expect: rows
+    order: multiset
+    comment: 1+2+3+5 = 11
+  - sql: |
+      SELECT class, sum(a), count(a), count(*) FROM p* GROUP BY class ORDER BY class
+    expect: rows
+    order: ordered
+    comment: count(a) skips NULLs, count(*) does not
+  - sql: |
+      SELECT sum(a) FROM ONLY p
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT max(a) FROM p* WHERE a > 100
+    expect: rows
+    order: multiset
+    comment: aggregate over empty input returns one NULL row

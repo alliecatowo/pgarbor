@@ -1,0 +1,24 @@
+# An aggregate call in WHERE is rejected with grouping_error; the session stays usable after.
+id: partition-aggregate.error-aggregate-in-where
+title: Aggregate function in WHERE is rejected with SQLSTATE 42803
+family: partition-aggregate
+tier: core
+feature_ids: [partitioning, aggregates, errors, group-by]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_err (a int, c text) PARTITION BY LIST (c);
+  CREATE TABLE pagg_err_p1 PARTITION OF pagg_err FOR VALUES IN ('0000');
+  INSERT INTO pagg_err VALUES (1, '0000');
+steps:
+  - sql: |
+      SELECT c FROM pagg_err WHERE sum(a) > 0 GROUP BY c
+    expect: error
+    sqlstate: "42803"
+  - sql: |
+      SELECT c, sum(a) FROM pagg_err GROUP BY c HAVING sum(a) > 0 ORDER BY c
+    expect: rows
+    order: ordered

@@ -1,0 +1,50 @@
+# Derived from PG18 partition_prune.sql (redundant and contradictory clauses on a range-partitioned key).
+id: partition-prune.contradictory-clauses-empty
+title: Contradictory and redundant range predicates return the correct rows, including empty results
+family: partition-prune
+tier: core
+feature_ids: [partitioning, range-partitioning, partition-pruning, boolean-logic, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE rlp (a int, b varchar) PARTITION BY RANGE (a);
+  CREATE TABLE rlp1 PARTITION OF rlp FOR VALUES FROM (MINVALUE) TO (1);
+  CREATE TABLE rlp2 PARTITION OF rlp FOR VALUES FROM (1) TO (10);
+  CREATE TABLE rlp3 PARTITION OF rlp FOR VALUES FROM (10) TO (20);
+  CREATE TABLE rlp_default PARTITION OF rlp DEFAULT;
+  INSERT INTO rlp VALUES (-5, 'x'), (1, 'ab'), (10, 'ab'), (15, 'cd'), (16, 'ab'), (16, NULL), (25, 'q');
+steps:
+  - sql: |
+      SELECT a FROM rlp WHERE a = 1 AND a = 3 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: contradictory equalities, empty result
+  - sql: |
+      SELECT a FROM rlp WHERE (a = 1 AND a = 3) OR (a > 1 AND a = 15) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM rlp WHERE a > 1 AND a >= 15 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: redundant bound, the stricter one wins
+  - sql: |
+      SELECT a FROM rlp WHERE a > 1 AND a = 10 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM rlp WHERE a = 16 AND b IS NULL ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM rlp WHERE a = 16 AND b <= 'ab' ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the NULL b row is excluded
+  - sql: |
+      SELECT a FROM rlp WHERE a IS NULL AND a IS NOT NULL ORDER BY a
+    expect: rows
+    order: ordered

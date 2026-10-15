@@ -1,0 +1,30 @@
+# SP-GiST box_ops with the overlap operator, the rescan pattern from bug #15378 at small scale.
+id: spgist.box-overlap-count
+title: SP-GiST box index answers overlap probes inside a correlated EXISTS
+family: spgist
+tier: extended
+feature_ids: [spgist, create-index, box, subqueries, exists]
+required_capabilities: [create-table, create-index, insert, select, spgist, box, subqueries]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/spgist.sql (spgist_box_tbl rescan)"
+sessions: [a]
+setup: |
+  CREATE TABLE sp_box (id serial, b box);
+  INSERT INTO sp_box (b)
+    SELECT box(point(i, j), point(i + s, j + s))
+      FROM generate_series(1, 20, 5) i,
+           generate_series(1, 20, 5) j,
+           generate_series(1, 2) s;
+  CREATE INDEX sp_box_idx ON sp_box USING spgist (b);
+steps:
+  - sql: |
+      SELECT count(*)
+        FROM (VALUES (point(5,5)), (point(8,8)), (point(12,12))) v(p)
+       WHERE EXISTS (SELECT 1 FROM sp_box b WHERE b.b && box(v.p, v.p))
+    expect: rows
+    comment: count of probe points covered by at least one box; result is a single row
+  - sql: |
+      SELECT count(*) FROM sp_box WHERE b && box '((100,100),(200,200))'
+    expect: rows
+    comment: no box reaches that far, so zero

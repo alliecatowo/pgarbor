@@ -1,0 +1,30 @@
+# Transaction-level advisory locks are held until COMMIT and then released.
+id: advisory-lock.xact-lock-release-at-commit
+title: "Transaction-scoped advisory locks are visible in pg_locks and released at COMMIT"
+family: advisory-lock
+tier: core
+feature_ids: [advisory-locks, transactions, catalog-introspection]
+required_capabilities: [advisory-locks, transactions, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/advisory_lock.sql"
+  license: "PostgreSQL License"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT pg_advisory_xact_lock(1), pg_advisory_xact_lock_shared(2)
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    expect: rows
+    comment: two advisory locks held by this transaction
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    expect: rows
+    comment: xact locks released at commit

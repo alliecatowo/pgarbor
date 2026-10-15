@@ -1,0 +1,49 @@
+# SQL-standard function bodies (RETURN and BEGIN ATOMIC): scalar results, NULLs, multi-statement body.
+id: create-function-sql.sql-standard-body-basic
+title: SQL-standard RETURN and BEGIN ATOMIC bodies return the expected scalar results
+family: create-function-sql
+tier: core
+feature_ids: [create-function, sql-standard-function-body, null-handling]
+required_capabilities: [create-function, sql-functions, sql-standard-function-body, arrays, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+steps:
+  - sql: |
+      CREATE FUNCTION functest_s_1(a text, b date) RETURNS boolean
+          LANGUAGE SQL
+          RETURN a = 'abcd' AND b > '2001-01-01'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION functest_s_2(a text[]) RETURNS int
+          RETURN a[1]::int
+    expect: ok
+  - sql: |
+      CREATE FUNCTION functest_s_3() RETURNS boolean
+          RETURN false
+    expect: ok
+  - sql: |
+      CREATE FUNCTION functest_s_10(a text, b date) RETURNS boolean
+          LANGUAGE SQL
+          BEGIN ATOMIC
+              SELECT a = 'abcd' AND b > '2001-01-01';
+          END
+    expect: ok
+  - sql: |
+      CREATE FUNCTION functest_s_13() RETURNS boolean
+          BEGIN ATOMIC
+              SELECT 1;
+              SELECT false;
+          END
+    expect: ok
+    comment: the body result is the last statement, so the function returns false
+  - sql: |
+      SELECT functest_s_1('abcd', '2020-01-01') AS t,
+             functest_s_1('abcd', '1999-01-01') AS f,
+             functest_s_1(NULL, '2020-01-01') AS n,
+             functest_s_2(ARRAY['1', '2', '3']) AS two,
+             functest_s_3() AS three,
+             functest_s_10('abcd', '2020-01-01') AS ten,
+             functest_s_13() AS thirteen
+    expect: rows
+    order: ordered

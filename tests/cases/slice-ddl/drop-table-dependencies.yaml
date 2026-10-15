@@ -1,0 +1,46 @@
+# DROP TABLE without CASCADE refuses when a foreign key depends on it; CASCADE removes only the dependent constraint.
+id: slice-ddl.drop-table-dependencies
+title: DROP TABLE is refused while a foreign key depends on it, CASCADE drops only the constraint
+family: slice-ddl
+tier: core
+feature_ids: [drop-table, foreign-key, errors]
+required_capabilities: [create-table, insert, select, drop-table, foreign-key, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-droptable.html; errcodes 2BP01, 42P01"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE dp (id int4 PRIMARY KEY);
+      CREATE TABLE dc (id int4 PRIMARY KEY, pid int4 REFERENCES dp (id));
+      INSERT INTO dp VALUES (1);
+      INSERT INTO dc VALUES (1, 1)
+    expect: ok
+  - sql: |
+      DROP TABLE dp
+    expect: error
+    sqlstate: "2BP01"
+    comment: dependent_objects_still_exist; the FK on dc depends on dp
+  - sql: |
+      SELECT count(*) FROM dp
+    expect: rows
+  - sql: |
+      DROP TABLE dp CASCADE
+    expect: any
+    comment: emits a NOTICE that the constraint dc_pid_fkey is dropped too
+  - sql: |
+      SELECT id, pid FROM dc ORDER BY id
+    expect: rows
+    order: ordered
+    comment: dc survives with its data; only the foreign key was removed
+  - sql: |
+      SELECT id FROM dp
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      DROP TABLE IF EXISTS dp
+    expect: any
+    comment: NOTICE only, table already gone
+  - sql: |
+      DROP TABLE dc
+    expect: ok

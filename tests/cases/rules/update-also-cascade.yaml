@@ -1,0 +1,48 @@
+# DO ALSO rules cascade a parent key change and a delete to child tables, with multiple actions in one rule.
+id: rules.update-also-cascade
+title: DO ALSO update and delete rules with multiple actions cascade to child tables
+family: rules
+tier: core
+feature_ids: [rules, update, delete]
+required_capabilities: [create-table, create-rule, insert, select, update, delete]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (rtest_sys_upd, rtest_sys_del constraint update/delete test)"
+sessions: [a]
+setup: |
+  CREATE TABLE rtest_system (sysname text, sysdesc text);
+  CREATE TABLE rtest_interface (sysname text, ifname text);
+  CREATE TABLE rtest_admin (pname text, sysname text);
+  CREATE RULE rtest_sys_upd AS ON UPDATE TO rtest_system DO ALSO (
+    UPDATE rtest_interface SET sysname = NEW.sysname WHERE sysname = OLD.sysname;
+    UPDATE rtest_admin SET sysname = NEW.sysname WHERE sysname = OLD.sysname
+  );
+  CREATE RULE rtest_sys_del AS ON DELETE TO rtest_system DO ALSO (
+    DELETE FROM rtest_interface WHERE sysname = OLD.sysname;
+    DELETE FROM rtest_admin WHERE sysname = OLD.sysname
+  );
+  INSERT INTO rtest_system VALUES ('s1', 'one'), ('s2', 'two');
+  INSERT INTO rtest_interface VALUES ('s1', 'eth0'), ('s1', 'eth1'), ('s2', 'eth0');
+  INSERT INTO rtest_admin VALUES ('root', 's1'), ('ops', 's2');
+steps:
+  - sql: |
+      UPDATE rtest_system SET sysname = 's9' WHERE sysname = 's1'
+    expect: ok
+  - sql: |
+      SELECT sysname, ifname FROM rtest_interface ORDER BY sysname, ifname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pname, sysname FROM rtest_admin ORDER BY pname
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM rtest_system WHERE sysname = 's2'
+    expect: ok
+  - sql: |
+      SELECT pname, sysname FROM rtest_admin ORDER BY pname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM rtest_interface
+    expect: rows

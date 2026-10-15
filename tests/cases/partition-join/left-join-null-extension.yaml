@@ -1,0 +1,35 @@
+# LEFT JOIN between partitioned tables: unmatched outer rows are NULL-extended, including rows from pruned-away partitions.
+id: partition-join.left-join-null-extension
+title: LEFT JOIN between partitioned tables NULL-extends unmatched outer rows
+family: partition-join
+tier: core
+feature_ids: [joins, outer-join, left-join, partitioning, nulls, select]
+required_capabilities: [create-table, insert, select, partitioning, joins]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/partition_join.sql (left outer join section)"
+sessions: [a]
+setup: |
+  CREATE TABLE prt1 (a int, b int, c varchar) PARTITION BY RANGE(a);
+  CREATE TABLE prt1_p1 PARTITION OF prt1 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE prt1_p2 PARTITION OF prt1 FOR VALUES FROM (10) TO (20);
+  INSERT INTO prt1 VALUES (0, 0, 'a0'), (2, 0, 'a2'), (11, 0, 'a11'), (15, 1, 'a15');
+  CREATE TABLE prt2 (a int, b int, c varchar) PARTITION BY RANGE(b);
+  CREATE TABLE prt2_p1 PARTITION OF prt2 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE prt2_p2 PARTITION OF prt2 FOR VALUES FROM (10) TO (20);
+  INSERT INTO prt2 VALUES (1, 0, 'b0'), (3, 11, 'b11');
+steps:
+  - sql: |
+      SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a, t2.b
+    expect: rows
+    order: ordered
+    comment: unmatched t1 rows must appear with NULL t2 columns
+  - sql: |
+      SELECT t1.a, t2.b IS NULL AS no_match FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b ORDER BY t1.a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*), count(t2.b) FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b
+    expect: rows
+    order: multiset
+    comment: count(*) counts NULL-extended rows, count(col) does not

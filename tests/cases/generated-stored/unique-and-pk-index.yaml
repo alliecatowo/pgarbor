@@ -1,0 +1,37 @@
+# UNIQUE and PRIMARY KEY constraints work on generated columns and enforce 23505 on the computed values.
+id: generated-stored.unique-and-pk-index
+title: UNIQUE on a generated column and PRIMARY KEY over a generated column enforce 23505
+family: generated-stored
+tier: core
+feature_ids: [generated-columns, unique-constraints, primary-key, errors]
+required_capabilities: [create-table, insert, select, generated-columns, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_stored.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE g12 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a / 2) STORED UNIQUE)
+    expect: ok
+  - sql: |
+      INSERT INTO g12 VALUES (2), (4)
+    expect: ok
+  - sql: |
+      INSERT INTO g12 VALUES (3)
+    expect: error
+    sqlstate: "23505"
+    comment: 3 / 2 = 1 duplicates the generated value of a = 2
+  - sql: |
+      SELECT a, b FROM g12 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE g12b (a int, b int GENERATED ALWAYS AS (a / 2) STORED, PRIMARY KEY (a, b))
+    expect: ok
+  - sql: |
+      INSERT INTO g12b VALUES (2)
+    expect: ok
+  - sql: |
+      INSERT INTO g12b VALUES (2)
+    expect: error
+    sqlstate: "23505"

@@ -1,0 +1,29 @@
+# Derived from PG18 btree_index.sql dedup coverage: many duplicate keys under deduplicate_items=on, then delete and re-query.
+id: btree-index.deduplicate-duplicate-keys
+title: Btree index with deduplicate_items on keeps correct counts across many duplicate keys and deletes
+family: btree-index
+tier: extended
+feature_ids: [create-index, btree-index, dedup, select, delete, collation]
+required_capabilities: [create-table, insert, select, create-index, delete, collation-c]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (btree_bpchar single-value dedup, WITH (deduplicate_items=on))"
+setup: |
+  CREATE TABLE dd (f1 text COLLATE "C", n int4);
+  CREATE INDEX dd_f1 ON dd (f1 text_ops) WITH (deduplicate_items=on);
+  INSERT INTO dd SELECT 'foo', g FROM generate_series(1, 1500) g;
+  INSERT INTO dd VALUES ('fool', 0), ('bar', 0), ('quux', 0);
+steps:
+  - sql: |
+      SELECT count(*) FROM dd WHERE f1 = 'foo'
+    expect: rows
+  - sql: |
+      SELECT f1, count(*) FROM dd GROUP BY f1 ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM dd WHERE f1 = 'foo' AND n <= 750
+    expect: ok
+  - sql: |
+      SELECT count(*), min(n), max(n) FROM dd WHERE f1 = 'foo'
+    expect: rows

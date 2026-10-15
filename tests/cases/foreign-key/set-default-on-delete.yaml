@@ -1,0 +1,31 @@
+# ON DELETE SET DEFAULT moves children to the column default; the default must still reference a live parent.
+id: foreign-key.set-default-on-delete
+title: "ON DELETE SET DEFAULT reassigns children to the default key or fails"
+family: foreign-key
+tier: core
+feature_ids: [foreign-keys, delete, select, create-table, constraints, column-defaults]
+required_capabilities: [create-table, insert, select, delete, foreign-keys, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4 DEFAULT 0 REFERENCES pk (id) ON DELETE SET DEFAULT);
+  INSERT INTO pk VALUES (0), (1), (2);
+  INSERT INTO fk VALUES (10, 1), (11, 2);
+steps:
+  - sql: |
+      DELETE FROM pk WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM fk ORDER BY id
+    expect: rows
+    order: ordered
+    comment: child 10 reassigned to default 0
+  - sql: |
+      DELETE FROM pk WHERE id = 0
+    expect: error
+    sqlstate: "23503"
+    comment: the default target is gone, so the SET DEFAULT action violates the constraint

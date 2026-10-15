@@ -1,0 +1,42 @@
+# An INSERT that duplicates an uncommitted key blocks; when the holder commits, the waiter fails with 23505.
+id: slice-txn.unique-conflict-holder-commits
+title: Duplicate-key insert waits on an uncommitted holder and fails 23505 after it commits
+family: slice-txn
+tier: core
+feature_ids: [transactions, insert, primary-key, unique-constraints, errors, multi-session, null-handling]
+required_capabilities: [create-table, insert, select, transactions, constraints, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/index-unique-checks.html; errcodes 23505"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (k int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (2, NULL);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO t VALUES (1, 'a')
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (1, 'b')
+    async: true
+    expect_blocked: true
+    comment: duplicate of an uncommitted key, so b waits for a
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: error
+    sqlstate: "23505"
+  - session: b
+    sql: |
+      SELECT k, v, v IS NULL AS v_null FROM t ORDER BY k
+    expect: rows
+    order: ordered

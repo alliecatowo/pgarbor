@@ -1,0 +1,38 @@
+# sqlx/Postgres migration runners serialize with pg_advisory_lock: a second session blocks until the holder unlocks.
+id: orm-sqlx.advisory-lock-two-sessions-blocking
+title: Session-level advisory lock blocks a second session until unlock
+family: orm-sqlx
+tier: core
+feature_ids: [advisory-locks, multi-session, select]
+required_capabilities: [select, advisory-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT pg_advisory_lock(42)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(42)
+    expect: rows
+    comment: lock held by a, so try returns false
+  - session: b
+    sql: |
+      SELECT pg_advisory_lock(42)
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(42)
+    expect: rows
+  - session: b
+    wait: true
+    expect: rows
+    comment: b acquires the lock after a unlocks
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock(42)
+    expect: rows

@@ -1,0 +1,41 @@
+# Explicit non-DEFAULT values for a generated column are rejected, and the whole statement is atomic.
+id: generated-stored.insert-explicit-value-error
+title: INSERT with an explicit value for a generated column fails with 428C9
+family: generated-stored
+tier: core
+feature_ids: [generated-columns, insert, errors]
+required_capabilities: [create-table, insert, select, generated-columns]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_stored.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE g3 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED);
+  INSERT INTO g3 (a) VALUES (1);
+steps:
+  - sql: |
+      INSERT INTO g3 VALUES (2, DEFAULT)
+    expect: ok
+  - sql: |
+      INSERT INTO g3 VALUES (3, 33)
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      INSERT INTO g3 VALUES (4, 44), (5, 55)
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      INSERT INTO g3 VALUES (3, DEFAULT), (4, 44)
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      SELECT count(*) FROM g3
+    expect: rows
+    comment: failed multi-row inserts must leave no rows behind
+  - sql: |
+      INSERT INTO g3 VALUES (3, DEFAULT), (4, DEFAULT)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM g3 ORDER BY a
+    expect: rows
+    order: ordered

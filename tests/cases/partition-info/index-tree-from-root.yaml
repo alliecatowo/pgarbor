@@ -1,0 +1,42 @@
+# pg_partition_tree on an index: from the partitioned root index and from a mid-level index.
+id: partition-info.index-tree-from-root
+title: pg_partition_tree on a partitioned index lists the attached index tree, and from an intermediate index returns its subtree
+family: partition-info
+tier: extended
+feature_ids: [partitioning, partitioned-indexes, partition-tree-functions, joins, create-index]
+required_capabilities: [create-table, create-index, select, joins, catalog-introspection, partitioning]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_test (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_test0 PARTITION OF ptif_test FOR VALUES FROM (MINVALUE) TO (0) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test01 PARTITION OF ptif_test0 FOR VALUES IN (1);
+  CREATE TABLE ptif_test1 PARTITION OF ptif_test FOR VALUES FROM (0) TO (100) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test11 PARTITION OF ptif_test1 FOR VALUES IN (1);
+  CREATE INDEX ptif_test_index ON ONLY ptif_test (a);
+  CREATE INDEX ptif_test0_index ON ONLY ptif_test0 (a);
+  ALTER INDEX ptif_test_index ATTACH PARTITION ptif_test0_index;
+  CREATE INDEX ptif_test01_index ON ptif_test01 (a);
+  ALTER INDEX ptif_test0_index ATTACH PARTITION ptif_test01_index;
+  CREATE INDEX ptif_test1_index ON ONLY ptif_test1 (a);
+  ALTER INDEX ptif_test_index ATTACH PARTITION ptif_test1_index;
+  CREATE INDEX ptif_test11_index ON ptif_test11 (a);
+  ALTER INDEX ptif_test1_index ATTACH PARTITION ptif_test11_index;
+steps:
+  - sql: |
+      SELECT c.relname, p.parentrelid::regclass::text AS parent, p.level, p.isleaf
+      FROM pg_partition_tree('ptif_test_index') p
+      JOIN pg_class c ON (p.relid = c.oid)
+      ORDER BY p.level, c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c.relname, p.parentrelid::regclass::text AS parent, p.level, p.isleaf
+      FROM pg_partition_tree('ptif_test0_index') p
+      JOIN pg_class c ON (p.relid = c.oid)
+      ORDER BY p.level, c.relname
+    expect: rows
+    order: ordered
+    comment: subtree only, ptif_test_index and ptif_test1_index must not appear

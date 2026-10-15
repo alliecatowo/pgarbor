@@ -1,0 +1,48 @@
+# Binding time values as parameters over the extended protocol, both as a text parameter and as a NULL, plus an out-of-range bind.
+id: time.extended-protocol-param
+title: Time values bound as extended-protocol parameters round-trip and reject bad input
+family: time
+tier: extended
+feature_ids: [time, extended-protocol, prepared-statements, errors]
+required_capabilities: [create-table, insert, select, extended-protocol, errors]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY; time type OID 1083, int4 OID 23"
+sessions: [a]
+setup: |
+  CREATE TABLE tm (k int4 PRIMARY KEY, t time(3));
+steps:
+  - parse:
+      name: ins
+      sql: |
+        INSERT INTO tm (k, t) VALUES ($1, $2)
+      param_types: [23, 1083]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["1", "08:15:30.1234"]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["2", null]
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT k, t FROM tm WHERE t < $1 ORDER BY k
+      params: ["09:00:00"]
+      param_types: [1083]
+    expect: rows
+    order: ordered
+  - execute:
+      statement: ins
+      params: ["3", "25:00:00"]
+    expect: error
+    sqlstate: "22008"
+    comment: the bound text fails time input
+  - exec_params:
+      sql: |
+        SELECT count(*), count(t) FROM tm
+      params: []
+    expect: rows
+  - close:
+      statement: ins

@@ -1,0 +1,33 @@
+# A domain with NOT NULL rejects NULL, and its varchar(15) base rejects a 16-character value; 15 characters fit.
+id: copy2.domain-not-null-varchar-length
+title: Domain NOT NULL and varchar length limits on insert
+family: copy2
+tier: extended
+feature_ids: [domains, not-null, varchar, errors]
+required_capabilities: [create-table, insert, select, domains, not-null]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE DOMAIN dcheck_len AS varchar(15) NOT NULL;
+  CREATE TABLE dtab (n int, l dcheck_len);
+steps:
+  - sql: |
+      INSERT INTO dtab VALUES (1, 'foo')
+    expect: ok
+  - sql: |
+      INSERT INTO dtab VALUES (2, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO dtab VALUES (3, 'abcdefghijklmnop')
+    expect: error
+    sqlstate: "22001"
+  - sql: |
+      INSERT INTO dtab VALUES (4, 'abcdefghijklmno')
+    expect: ok
+  - sql: |
+      SELECT n, l, length(l) AS len FROM dtab ORDER BY n
+    expect: rows
+    order: ordered

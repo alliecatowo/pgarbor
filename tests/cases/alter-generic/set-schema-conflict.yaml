@@ -1,0 +1,26 @@
+# Moving a function into a schema that already holds the same signature fails with duplicate_function.
+id: alter-generic.set-schema-conflict
+title: "ALTER FUNCTION SET SCHEMA into a schema with the same signature raises duplicate_function"
+family: alter-generic
+tier: core
+feature_ids: [alter-function, set-schema, schemas, constraints]
+required_capabilities: [create-schema, create-function, alter-function, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (ALTER FUNCTION alt_func2(int) SET SCHEMA alt_nsp2 -- failed (name conflicts))"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE SCHEMA s2;
+  CREATE FUNCTION s1.f1(int) RETURNS int LANGUAGE sql AS 'SELECT $1 + 1';
+  CREATE FUNCTION s2.f1(int) RETURNS int LANGUAGE sql AS 'SELECT $1 - 1';
+steps:
+  - sql: |
+      ALTER FUNCTION s1.f1(int) SET SCHEMA s2
+    expect: error
+    sqlstate: "42723"
+  - sql: |
+      SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'f1' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: both originals remain in their own schemas

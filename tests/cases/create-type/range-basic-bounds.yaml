@@ -1,0 +1,28 @@
+# Range type over int4: containment, emptiness, bound accessors, constructor, inverted-bounds error.
+id: create-type.range-basic-bounds
+title: "Custom range type: containment, empty ranges, bounds, inverted bounds rejected"
+family: create-type
+tier: core
+feature_ids: [create-type, range-types, select, errors]
+required_capabilities: [create-type, select, errors]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/sql-createtype.html (RANGE); PG18 rangetypes.c error 22000"
+setup: |
+  CREATE TYPE span AS RANGE (subtype = int4);
+steps:
+  - sql: |
+      SELECT '[1,5)'::span @> 3 AS has3, '[1,5)'::span @> 5 AS has5, isempty('(2,2)'::span) AS e
+    expect: rows
+    comment: upper bound exclusive; (2,2) is empty
+  - sql: |
+      SELECT lower('[1,5)'::span) AS lo, upper('[1,5)'::span) AS hi, upper_inc('[1,5)'::span) AS hi_inc, lower('(,5)'::span) IS NULL AS lo_unbounded
+    expect: rows
+  - sql: |
+      SELECT span(1, 5)::text AS constructed
+    expect: rows
+  - sql: |
+      SELECT '[5,1)'::span
+    expect: error
+    sqlstate: "22000"
+    comment: lower bound greater than upper bound

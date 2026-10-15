@@ -1,0 +1,28 @@
+# WITH CASCADED CHECK OPTION also enforces the WHERE clause of an underlying view, so a row the
+# outer view would accept is rejected when the inner view's qualification fails.
+id: updatable-views.cascaded-check-option-underlying-qual
+title: CASCADED check option enforces underlying view qualifications on INSERT
+family: updatable-views
+tier: core
+feature_ids: [updatable-views, create-view, check-option, insert, errors]
+required_capabilities: [create-table, create-view, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/updatable_views.sql (WITH LOCAL/CASCADED CHECK OPTION)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int PRIMARY KEY);
+  CREATE VIEW v1 AS SELECT a FROM t WHERE a > 0;
+  CREATE VIEW v2 AS SELECT a FROM v1 WHERE a < 10 WITH CASCADED CHECK OPTION;
+steps:
+  - sql: |
+      INSERT INTO v2 VALUES (-1)
+    expect: error
+    sqlstate: "44000"
+  - sql: |
+      INSERT INTO v2 VALUES (5)
+    expect: ok
+  - sql: |
+      SELECT a FROM t ORDER BY a
+    expect: rows
+    order: ordered

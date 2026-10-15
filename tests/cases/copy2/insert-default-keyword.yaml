@@ -1,0 +1,32 @@
+# DEFAULT keyword in VALUES applies the column default; an explicit NULL into a NOT NULL column fails even if a default exists.
+id: copy2.insert-default-keyword
+title: DEFAULT keyword in VALUES and NOT NULL violation on explicit NULL despite a default
+family: copy2
+tier: core
+feature_ids: [insert, column-defaults, not-null, timestamps]
+required_capabilities: [create-table, insert, select, column-defaults, not-null]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE dflt (id int4, text_value text NOT NULL DEFAULT 'test', ts_value timestamp NOT NULL DEFAULT '2022-07-05', note text DEFAULT 'n');
+steps:
+  - sql: |
+      INSERT INTO dflt VALUES (1, DEFAULT, DEFAULT, DEFAULT)
+    expect: ok
+  - sql: |
+      INSERT INTO dflt (id, text_value, ts_value, note) VALUES (2, 'value', '2022-07-04', NULL)
+    expect: ok
+  - sql: |
+      SELECT id, text_value, ts_value, note, note IS NULL AS note_null FROM dflt ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO dflt VALUES (4, NULL, DEFAULT, DEFAULT)
+    expect: error
+    sqlstate: "23502"
+    comment: explicit NULL is not replaced by the default
+  - sql: |
+      SELECT count(*) FROM dflt
+    expect: rows

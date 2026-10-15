@@ -1,0 +1,21 @@
+# STRICT versus non-strict procedures behind prefix operators, with NULL and non-NULL inputs.
+id: create-operator.strict-vs-nonstrict-null
+title: Strict procedure yields NULL for NULL input, non-strict procedure sees the NULL
+family: create-operator
+tier: core
+feature_ids: [create-operator, null-semantics, sql-functions]
+required_capabilities: [create-function, create-operator, select]
+provenance:
+  source: hand
+  ref: "PG18 docs: CREATE FUNCTION STRICT; CREATE OPERATOR"
+sessions: [a]
+setup: |
+  CREATE FUNCTION nz(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT coalesce($1, -1) $$;
+  CREATE FUNCTION sx(int8) RETURNS int8 LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT $1 + 1 $$;
+  CREATE OPERATOR ~> (rightarg = int8, procedure = nz);
+  CREATE OPERATOR <~ (rightarg = int8, procedure = sx);
+steps:
+  - sql: |
+      SELECT ~> NULL::int8 AS nonstrict_null, <~ NULL::int8 AS strict_null, ~> 5 AS nonstrict_val, <~ 5 AS strict_val
+    expect: rows
+    order: multiset

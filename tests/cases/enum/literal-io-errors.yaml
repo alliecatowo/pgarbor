@@ -1,0 +1,30 @@
+# Enum input parsing: valid labels, invalid label error with SQLSTATE, and the non-throwing input API.
+id: enum.literal-io-errors
+title: Enum literal input, invalid label error, and pg_input_is_valid and pg_input_error_info
+family: enum
+tier: core
+feature_ids: [enum, create-type, errors, type-io]
+required_capabilities: [enum-type, select, errors]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+steps:
+  - sql: |
+      SELECT 'red'::rainbow
+    expect: rows
+  - sql: |
+      SELECT 'mauve'::rainbow
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT pg_input_is_valid('red', 'rainbow'), pg_input_is_valid('mauve', 'rainbow')
+    expect: rows
+  - sql: |
+      SELECT message, sql_error_code FROM pg_input_error_info('mauve', 'rainbow')
+    expect: rows
+  - sql: |
+      SELECT message, sql_error_code FROM pg_input_error_info(repeat('too_long', 32), 'rainbow')
+    expect: rows

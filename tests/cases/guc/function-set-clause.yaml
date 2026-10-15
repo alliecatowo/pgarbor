@@ -1,0 +1,34 @@
+# SET clause on a SQL function applies only during the call; ALTER FUNCTION ... SET and RESET ALL change it.
+id: guc.function-set-clause
+title: Function-level SET option applies during the call and is changed by ALTER FUNCTION
+family: guc
+tier: extended
+feature_ids: [guc, function-set-option, create-function-sql, alter-function, show]
+required_capabilities: [select, create-function, sql-functions, alter-function, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/guc.sql
+sessions: [a]
+setup: |
+  CREATE FUNCTION fs_report_guc(text) RETURNS text AS $$ SELECT current_setting($1) $$ LANGUAGE sql SET work_mem = '1MB';
+steps:
+  - sql: |
+      SET work_mem = '3MB'
+    expect: ok
+  - sql: |
+      SELECT fs_report_guc('work_mem') AS inside, current_setting('work_mem') AS outside
+    expect: rows
+    comment: inside uses the function SET value, outside the session value
+  - sql: |
+      ALTER FUNCTION fs_report_guc(text) SET work_mem = '2MB'
+    expect: ok
+  - sql: |
+      SELECT fs_report_guc('work_mem') AS inside, current_setting('work_mem') AS outside
+    expect: rows
+  - sql: |
+      ALTER FUNCTION fs_report_guc(text) RESET ALL
+    expect: ok
+  - sql: |
+      SELECT fs_report_guc('work_mem') AS inside, current_setting('work_mem') AS outside
+    expect: rows
+    comment: with no function SET option the session value is seen inside too

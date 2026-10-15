@@ -1,0 +1,36 @@
+# LEAKPROOF attribute toggled by superuser ALTER FUNCTION; STABLE change leaves it alone.
+id: create-function-sql.catalog-leakproof-alter
+title: LEAKPROOF attribute set and cleared by ALTER FUNCTION, unrelated change has no effect
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, alter-function, catalog-introspection]
+required_capabilities: [create-function, alter-function, sql-functions, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE FUNCTION functest_e_1(int) RETURNS bool LANGUAGE sql AS 'SELECT $1 > 100';
+  CREATE FUNCTION functest_e_2(int) RETURNS bool LANGUAGE sql LEAKPROOF AS 'SELECT $1 > 100';
+steps:
+  - sql: |
+      SELECT proname, proleakproof FROM pg_proc
+       WHERE proname IN ('functest_e_1', 'functest_e_2') ORDER BY proname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER FUNCTION functest_e_1(int) LEAKPROOF;
+      ALTER FUNCTION functest_e_2(int) STABLE
+    expect: ok
+  - sql: |
+      SELECT proname, proleakproof FROM pg_proc
+       WHERE proname IN ('functest_e_1', 'functest_e_2') ORDER BY proname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER FUNCTION functest_e_2(int) NOT LEAKPROOF
+    expect: ok
+  - sql: |
+      SELECT proname, proleakproof FROM pg_proc
+       WHERE proname IN ('functest_e_1', 'functest_e_2') ORDER BY proname
+    expect: rows
+    order: ordered

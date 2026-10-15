@@ -1,0 +1,43 @@
+# Polymorphic INOUT and OUT parameters resolve from the actual argument types, including NULL arguments.
+id: create-procedure.polymorphic-inout
+title: CALL with anyelement INOUT and OUT parameters resolves types from integer and numeric arguments
+family: create-procedure
+tier: extended
+feature_ids: [procedures, call, polymorphic-types, inout-parameters, nulls]
+required_capabilities: [create-procedure, call, extended-protocol]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_procedure.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE ptest6a(inout a anyelement, out b anyelement)
+      LANGUAGE SQL
+      AS $$
+      SELECT $1, $1;
+      $$
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE ptest6c(inout a anyelement, inout b anyelement)
+      LANGUAGE SQL
+      AS $$
+      SELECT $1, 1;
+      $$
+    expect: ok
+  - exec_params:
+      sql: |
+        CALL ptest6a($1, $2)
+      params: ["1", null]
+      param_types: [23, 0]
+    expect: rows
+    comment: unnamed-statement Parse with int4 and unknown NULL
+  - sql: |
+      CALL ptest6a(1.1, null)
+    expect: rows
+  - sql: |
+      CALL ptest6c(1, null)
+    expect: rows
+  - sql: |
+      CALL ptest6c(1.1, null)
+    expect: rows

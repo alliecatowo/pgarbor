@@ -1,0 +1,23 @@
+# Infix operator over text: empty string is not NULL, and a NULL inside the procedure propagates.
+id: create-operator.infix-text-concat-null
+title: Infix text operator distinguishes empty string from NULL
+family: create-operator
+tier: core
+feature_ids: [create-operator, text, null-semantics]
+required_capabilities: [create-function, create-operator, select]
+provenance:
+  source: hand
+  ref: "PG18 docs: CREATE OPERATOR; string concatenation ||"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cat_pipe(text, text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT $1 || '|' || $2 $$;
+  CREATE OPERATOR <+> (leftarg = text, rightarg = text, procedure = cat_pipe);
+steps:
+  - sql: |
+      SELECT 'a' <+> 'b' AS ab, '' <+> 'x' AS empty_left, 'x' <+> NULL::text AS null_right, NULL::text <+> 'x' AS null_left
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT s, s <+> 'z' AS joined, s IS NULL AS is_null FROM (VALUES (''), (NULL::text)) AS v(s) ORDER BY s NULLS LAST
+    expect: rows
+    order: ordered

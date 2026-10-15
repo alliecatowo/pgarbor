@@ -1,0 +1,30 @@
+# Three-way FULL JOIN USING with a column-aliased partitioned table; the count across the chain is compared.
+id: partition-join.three-way-full-join-using
+title: Three-way FULL JOIN USING chain with column-renaming aliases over partitioned tables
+family: partition-join
+tier: extended
+feature_ids: [joins, outer-join, full-join, using, table-aliases, partitioning, select]
+required_capabilities: [create-table, insert, select, partitioning, joins]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/partition_join.sql (3-way full join section)"
+sessions: [a]
+setup: |
+  CREATE TABLE prt1 (a int, b int, c varchar) PARTITION BY RANGE(a);
+  CREATE TABLE prt1_p1 PARTITION OF prt1 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE prt1_p2 PARTITION OF prt1 FOR VALUES FROM (10) TO (20);
+  INSERT INTO prt1 VALUES (0, 0, 'a0'), (2, 2, 'a2'), (11, 1, 'a11');
+  CREATE TABLE prt2 (a int, b int, c varchar) PARTITION BY RANGE(b);
+  CREATE TABLE prt2_p1 PARTITION OF prt2 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE prt2_p2 PARTITION OF prt2 FOR VALUES FROM (10) TO (20);
+  INSERT INTO prt2 VALUES (0, 0, 'b0'), (2, 5, 'b5'), (11, 11, 'b11');
+steps:
+  - sql: |
+      SELECT COUNT(*) FROM prt1 FULL JOIN prt2 p2(b, a, c) USING (a, b) FULL JOIN prt2 p3(b, a, c) USING (a, b) WHERE a BETWEEN 0 AND 11
+    expect: rows
+    order: multiset
+    comment: column aliases p2(b, a, c) swap the meaning of a and b for the USING match
+  - sql: |
+      SELECT a, b FROM prt1 FULL JOIN prt2 p2(b, a, c) USING (a, b) ORDER BY 1 NULLS LAST, 2 NULLS LAST
+    expect: rows
+    order: ordered

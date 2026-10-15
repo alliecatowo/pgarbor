@@ -1,0 +1,31 @@
+# Correlated IN and NOT EXISTS subqueries that reference the outer table alias.
+id: subselect.correlated-in-exists
+title: Correlated IN and NOT EXISTS subqueries referencing the outer alias
+family: subselect
+tier: core
+feature_ids: [select, subqueries, correlated-subquery, exists, in-subquery]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/subselect.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE sc (f1 int4, f2 int4, f3 float8);
+  INSERT INTO sc VALUES (1, 2, 3), (2, 3, 4), (3, 4, 5), (1, 1, 1), (2, 2, 2), (3, 3, 3), (6, 7, 8), (8, 9, NULL);
+steps:
+  - sql: |
+      SELECT upper.f1 AS cf, upper.f2 AS sf FROM sc upper WHERE upper.f1 IN (SELECT inner_t.f2 FROM sc inner_t WHERE inner_t.f1 = upper.f1) ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT upper.f1, upper.f3 FROM sc upper WHERE upper.f1 IN (SELECT inner_t.f2 FROM sc inner_t WHERE CAST(upper.f2 AS float8) = inner_t.f3) ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT upper.f1, upper.f3 FROM sc upper WHERE upper.f3 IN (SELECT upper.f1 + inner_t.f2 FROM sc inner_t WHERE inner_t.f2 = CAST(inner_t.f3 AS integer)) ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT o.f1, o.f2 FROM sc o WHERE NOT EXISTS (SELECT 1 FROM sc i WHERE i.f1 = o.f1 AND i.f2 = o.f2 + 1) ORDER BY 1, 2
+    expect: rows
+    order: ordered

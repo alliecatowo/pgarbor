@@ -1,0 +1,39 @@
+# Malformed input and out-of-range timestamptz values raise SQLSTATE 22007 and 22008; boundary values are accepted.
+id: timestamptz.input-errors-sqlstate
+title: timestamptz malformed and out-of-range input with SQLSTATE and input validity functions
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, errors, input-validation]
+required_capabilities: [select, date-type, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamptz.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 'garbage'::timestamptz
+    expect: error
+    sqlstate: "22007"
+  - sql: |
+      SELECT '4714-11-23 23:59:59+00 BC'::timestamptz
+    expect: error
+    sqlstate: "22008"
+  - sql: |
+      SELECT '294277-01-01 00:00:00+00'::timestamptz
+    expect: error
+    sqlstate: "22008"
+  - sql: |
+      SELECT '294276-12-31 23:59:59+00'::timestamptz AS max_value
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT '2001-01-01 00:00 Nehwon/Lankhmar'::timestamptz
+    expect: error
+  - sql: |
+      SELECT pg_input_is_valid('garbage', 'timestamptz') AS bad_valid, pg_input_is_valid('2001-01-01 00:00+00', 'timestamptz') AS good_valid
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT sql_error_code FROM pg_input_error_info('garbage', 'timestamptz')
+    expect: rows
+    order: multiset

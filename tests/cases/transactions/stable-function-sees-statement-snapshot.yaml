@@ -1,0 +1,35 @@
+# A STABLE SQL function called from an UPDATE does not see that UPDATE's partial results.
+id: transactions.stable-function-sees-statement-snapshot
+title: STABLE function used in UPDATE sees the pre-statement snapshot, not partial updates
+family: transactions
+tier: extended
+feature_ids: [transactions, sql-functions, stable-volatility, update, select]
+required_capabilities: [create-table, insert, select, update, transactions, sql-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE xacttest (a smallint);
+  INSERT INTO xacttest VALUES (56), (100), (0), (42), (777);
+  CREATE FUNCTION max_xacttest() RETURNS smallint LANGUAGE sql AS $$ SELECT max(a) FROM xacttest $$ STABLE;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE xacttest SET a = max_xacttest() + 10 WHERE a > 0
+    expect: ok
+  - sql: |
+      SELECT a FROM xacttest ORDER BY a
+    expect: rows
+    order: ordered
+    comment: every positive row received the same max computed before the statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT a FROM xacttest ORDER BY a
+    expect: rows
+    order: ordered

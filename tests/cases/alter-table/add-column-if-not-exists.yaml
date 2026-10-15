@@ -1,0 +1,35 @@
+# IF NOT EXISTS, IF EXISTS and DROP CONSTRAINT IF EXISTS skip silently with a notice instead of failing.
+id: alter-table.add-column-if-not-exists
+title: ALTER TABLE IF [NOT] EXISTS variants skip with a notice; missing table without IF raises 42P01
+family: alter-table
+tier: extended
+feature_ids: [alter-table, add-column, if-exists, errors]
+required_capabilities: [create-table, alter-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (ALTER TABLE IF EXISTS / ADD COLUMN IF NOT EXISTS)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4);
+  INSERT INTO t VALUES (1);
+steps:
+  - sql: |
+      ALTER TABLE t ADD COLUMN IF NOT EXISTS a int4
+    expect: notice
+    comment: column already exists, skipping
+  - sql: |
+      ALTER TABLE nope ADD COLUMN x int4
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER TABLE IF EXISTS nope ADD COLUMN x int4
+    expect: notice
+    comment: table does not exist, skipping
+  - sql: |
+      ALTER TABLE t DROP CONSTRAINT IF EXISTS no_such_constraint
+    expect: notice
+  - sql: |
+      SELECT a FROM t
+    expect: rows
+    order: multiset

@@ -1,0 +1,46 @@
+# Derived from PG18 partition_prune.sql setup patterns; the error text is the classic routing failure
+# for rows that match no partition (no DEFAULT partition, no NULL partition).
+id: partition-prune.error-no-partition-for-row
+title: Insert rows that match no partition of a list or range table fails with 23514
+family: partition-prune
+tier: core
+feature_ids: [partitioning, list-partitioning, range-partitioning, errors, constraints]
+required_capabilities: [create-table, insert, select, partitioning, errors, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE lp2 (a char) PARTITION BY LIST (a);
+  CREATE TABLE lp2_ab PARTITION OF lp2 FOR VALUES IN ('a', 'b');
+  CREATE TABLE r2 (a int) PARTITION BY RANGE (a);
+  CREATE TABLE r2_1 PARTITION OF r2 FOR VALUES FROM (1) TO (10);
+steps:
+  - sql: |
+      INSERT INTO lp2 VALUES ('a'), ('b')
+    expect: ok
+  - sql: |
+      INSERT INTO lp2 VALUES ('c')
+    expect: error
+    sqlstate: "23514"
+    comment: no partition of lp2 accepts 'c'
+  - sql: |
+      INSERT INTO lp2 VALUES (NULL)
+    expect: error
+    sqlstate: "23514"
+    comment: NULL matches no list partition and there is no default
+  - sql: |
+      SELECT a FROM lp2 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the failed statements inserted nothing
+  - sql: |
+      INSERT INTO r2 VALUES (1), (10)
+    expect: error
+    sqlstate: "23514"
+    comment: upper bound 10 is exclusive, so the whole multi-row insert fails
+  - sql: |
+      SELECT a FROM r2 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the statement was atomic, so no row was kept

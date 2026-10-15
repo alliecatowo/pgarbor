@@ -1,0 +1,45 @@
+# Derived from PG18 partition_prune.sql (IN lists on a range-partitioned table with a DEFAULT partition).
+id: partition-prune.range-default-in-list
+title: IN list on a range-partitioned table with a default partition and NULL keys
+family: partition-prune
+tier: core
+feature_ids: [partitioning, range-partitioning, partition-pruning, in-list, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE rangepart (a int) PARTITION BY RANGE (a);
+  CREATE TABLE rangepart1 PARTITION OF rangepart FOR VALUES FROM (0) TO (10);
+  CREATE TABLE rangepart2 PARTITION OF rangepart FOR VALUES FROM (10) TO (20);
+  CREATE TABLE rangepart_def PARTITION OF rangepart DEFAULT;
+  INSERT INTO rangepart VALUES (-1), (0), (5), (10), (15), (20), (21), (NULL);
+steps:
+  - sql: |
+      SELECT a FROM rangepart WHERE a IN (5, 15) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM rangepart WHERE a IN (20, 21) ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only values that live in the default partition
+  - sql: |
+      SELECT a FROM rangepart WHERE a IN (-1, 20) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM rangepart WHERE a IS NOT NULL AND a IN (-1, 5, 15, 20) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM rangepart WHERE a IN (NULL, 5) ORDER BY a
+    expect: rows
+    order: ordered
+    comment: NULL in an IN list never matches
+  - sql: |
+      SELECT a FROM rangepart ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: the NULL key row is stored in the default partition

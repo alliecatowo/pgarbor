@@ -1,0 +1,35 @@
+# ALTER TYPE ... ADD VALUE with BEFORE/AFTER placement, duplicate label and unknown neighbor errors.
+id: create-type.enum-add-value
+title: "ALTER TYPE ADD VALUE placement, duplicate label and unknown neighbor"
+family: create-type
+tier: extended
+feature_ids: [create-type, enum-types, alter-type, errors]
+required_capabilities: [create-type, select, errors, alter-type]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/sql-altertype.html"
+setup: |
+  CREATE TYPE grade AS ENUM ('b', 'd');
+steps:
+  - sql: |
+      ALTER TYPE grade ADD VALUE 'c' BEFORE 'd'
+    expect: ok
+  - sql: |
+      ALTER TYPE grade ADD VALUE 'a' BEFORE 'b'
+    expect: ok
+  - sql: |
+      SELECT enum_range(NULL::grade)::text AS labels
+    expect: rows
+  - sql: |
+      ALTER TYPE grade ADD VALUE 'b'
+    expect: error
+    sqlstate: "42710"
+    comment: label already exists
+  - sql: |
+      ALTER TYPE grade ADD VALUE 'z' AFTER 'nope'
+    expect: error
+    sqlstate: "42704"
+    comment: neighbor label does not exist
+  - sql: |
+      SELECT 'a'::grade < 'c'::grade AS lt, 'd'::grade > 'c'::grade AS gt
+    expect: rows

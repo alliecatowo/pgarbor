@@ -1,0 +1,42 @@
+# One ALTER OPERATOR statement may set RESTRICT and JOIN together, and NONE for both clears both.
+id: alter-operator.set-restrict-join-custom-function
+title: ALTER OPERATOR sets a custom RESTRICT estimator and JOIN in one statement, then clears both
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, restrict-selectivity, join-selectivity, internal-functions]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE FUNCTION customcontsel(internal, oid, internal, integer)
+  RETURNS float8 AS 'contsel' LANGUAGE internal STABLE STRICT;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn,
+      RESTRICT = contsel,
+      JOIN = contjoinsel
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = customcontsel, JOIN = contjoinsel)
+    expect: ok
+  - sql: |
+      SELECT oprrest::regproc::text AS restrict_fn, oprjoin::regproc::text AS join_fn
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE, JOIN = NONE)
+    expect: ok
+  - sql: |
+      SELECT oprrest IS NULL AS rest_null, oprjoin IS NULL AS join_null
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset

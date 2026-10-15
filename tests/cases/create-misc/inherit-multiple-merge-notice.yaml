@@ -1,0 +1,33 @@
+# Diamond-style multiple inheritance merges same-named columns and emits a NOTICE.
+id: create-misc.inherit-multiple-merge-notice
+title: Multiple inheritance merges duplicate columns with a notice
+family: create-misc
+tier: core
+feature_ids: [inheritance, create-table, notices]
+required_capabilities: [create-table, insert, select, inheritance]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_misc.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE a_star (class char, a int4);
+  CREATE TABLE b_star (b text) INHERITS (a_star);
+  CREATE TABLE c_star (c name) INHERITS (a_star);
+steps:
+  - sql: |
+      CREATE TABLE d_star (d float8) INHERITS (b_star, c_star)
+    expect: notice
+    comment: NOTICE merging multiple inherited definitions of columns class and a
+  - sql: |
+      SELECT column_name, data_type FROM information_schema.columns
+      WHERE table_name = 'd_star' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+    comment: column order is class, a, b, c, d, each inherited column appears once
+  - sql: |
+      INSERT INTO d_star (class, a, b, c, d) VALUES ('d', 7, 'g', 'hi', 0.5)
+    expect: ok
+  - sql: |
+      SELECT class, a, b, c, d FROM d_star ORDER BY a
+    expect: rows
+    order: ordered

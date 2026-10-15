@@ -1,0 +1,33 @@
+# After a failed FETCH the transaction block is aborted, so the next FETCH fails with 25P02.
+id: portals.aborted-txn-fetch-25p02
+title: FETCH in an aborted transaction block fails with 25P02 until ROLLBACK
+family: portals
+tier: core
+feature_ids: [cursors, errors, transactions, no-scroll]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/portals.sql (FETCH BACKWARD on NO SCROLL cursor) + PG18 errcodes 25P02"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n int4);
+  INSERT INTO t VALUES (1), (2);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c NO SCROLL CURSOR FOR SELECT n FROM t ORDER BY n
+    expect: ok
+  - sql: |
+      FETCH BACKWARD 1 FROM c
+    expect: error
+    sqlstate: "55000"
+  - sql: |
+      FETCH FROM c
+    expect: error
+    sqlstate: "25P02"
+    comment: current transaction is aborted
+  - sql: |
+      ROLLBACK
+    expect: ok

@@ -1,0 +1,34 @@
+# Identity is not inherited, but NOT NULL is; a child can declare its own identity column over a parent column.
+id: identity.inheritance-not-inherited
+title: Identity property is not inherited by INHERITS children; NOT NULL is
+family: identity
+tier: extended
+feature_ids: [identity-columns, inheritance, constraints, errors]
+required_capabilities: [create-table, insert, select, identity, inheritance, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/identity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE itest7 (a int GENERATED ALWAYS AS IDENTITY);
+  INSERT INTO itest7 DEFAULT VALUES;
+  CREATE TABLE itest7a (b text) INHERITS (itest7);
+  CREATE TABLE itest7b (a int);
+  CREATE TABLE itest7c (a int GENERATED ALWAYS AS IDENTITY) INHERITS (itest7b);
+steps:
+  - sql: |
+      INSERT INTO itest7a (b) VALUES ('x')
+    expect: error
+    sqlstate: "23502"
+    comment: the inherited column is NOT NULL but the identity default is not inherited
+  - sql: |
+      INSERT INTO itest7c DEFAULT VALUES
+    expect: ok
+  - sql: |
+      SELECT a FROM itest7c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM itest7 ORDER BY a
+    expect: rows
+    order: ordered

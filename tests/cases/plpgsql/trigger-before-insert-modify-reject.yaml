@@ -1,0 +1,32 @@
+# BEFORE INSERT trigger in PL/pgSQL edits NEW and rejects a row with RAISE EXCEPTION (default P0001); the rejected row is absent.
+id: plpgsql.trigger-before-insert-modify-reject
+title: BEFORE INSERT plpgsql trigger fills a NULL column and rejects negative ids
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, triggers, insert, null-handling, errors]
+required_capabilities: [plpgsql, create-function, create-table, create-trigger, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE tt (id int, code text);
+  CREATE FUNCTION pl_tt_bi() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF NEW.code IS NULL THEN NEW.code := 'none'; END IF;
+    IF NEW.id < 0 THEN RAISE EXCEPTION 'negative id %', NEW.id; END IF;
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER tt_bi BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION pl_tt_bi();
+steps:
+  - sql: |
+      INSERT INTO tt VALUES (1, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO tt VALUES (-1, 'x')
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      SELECT id, code FROM tt ORDER BY id
+    expect: rows
+    order: ordered

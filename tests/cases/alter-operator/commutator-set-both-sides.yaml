@@ -1,0 +1,41 @@
+# Setting COMMUTATOR on an existing operator links the operator and the commutator in both directions.
+id: alter-operator.commutator-set-both-sides
+title: ALTER OPERATOR SET COMMUTATOR links both operators to each other
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, commutator, catalog-introspection]
+required_capabilities: [alter-operator, create-function-sql, create-operator, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn_bool_real(boolean, real)
+  RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE FUNCTION alter_op_test_fn_real_bool(real, boolean)
+  RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = real,
+      PROCEDURE = alter_op_test_fn_bool_real
+  );
+  CREATE OPERATOR ==== (
+      LEFTARG = real,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn_real_bool
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (COMMUTATOR = ====)
+    expect: ok
+  - sql: |
+      SELECT op.oprname AS operator_name,
+             com.oprname AS commutator_name,
+             op.oprcom = com.oid AS op_points_to_com,
+             com.oprcom = op.oid AS com_points_back
+      FROM pg_operator op
+      INNER JOIN pg_operator com ON op.oprcom = com.oid
+      WHERE op.oprname = '===' AND op.oprleft = 'boolean'::regtype AND op.oprright = 'real'::regtype
+    expect: rows
+    order: multiset

@@ -1,0 +1,51 @@
+# SET LOCAL survives RELEASE SAVEPOINT but is undone by ROLLBACK TO SAVEPOINT of a savepoint taken before it.
+id: guc.set-local-savepoints
+title: SET LOCAL interaction with RELEASE SAVEPOINT and ROLLBACK TO SAVEPOINT
+family: guc
+tier: extended
+feature_ids: [guc, set-local, savepoints, transactions, show]
+required_capabilities: [select, transactions, savepoints, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/guc.sql
+sessions: [a]
+steps:
+  - sql: |
+      SET work_mem = '3MB'
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT sp
+    expect: ok
+  - sql: |
+      SET LOCAL work_mem = '5MB'
+    expect: ok
+  - sql: |
+      RELEASE SAVEPOINT sp
+    expect: ok
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    comment: SET LOCAL persists through RELEASE
+  - sql: |
+      SAVEPOINT sp2
+    expect: ok
+  - sql: |
+      SET LOCAL work_mem = '6MB'
+    expect: ok
+  - sql: |
+      ROLLBACK TO sp2
+    expect: ok
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    comment: the SET LOCAL made after sp2 is undone, the earlier one is kept
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    comment: after ROLLBACK the session value is 3MB

@@ -1,0 +1,29 @@
+# NOT MATCHED INSERT that collides with an existing primary key fails the whole MERGE.
+id: merge.unique-violation-on-insert
+title: MERGE insert violating a primary key raises unique_violation and leaves target unchanged
+family: merge
+tier: extended
+feature_ids: [merge, errors, constraints, primary-key]
+required_capabilities: [create-table, insert, select, merge, constraints]
+provenance:
+  source: hand
+  ref: "PG18 sql-merge.html; errcodes 23505 unique_violation"
+setup: |
+  CREATE TABLE target (tid integer PRIMARY KEY, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10);
+  INSERT INTO source VALUES (7, 10), (1, 99);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source s
+      ON t.balance = s.delta
+      WHEN NOT MATCHED THEN
+        INSERT VALUES (s.sid, s.delta)
+    expect: error
+    sqlstate: "23505"
+    comment: source (7,10) matches target balance 10 so it is matched; source (1,99) is unmatched and collides with pk 1
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered

@@ -1,0 +1,36 @@
+# A view defined with SELECT * captures the column list at creation time; a later ALTER TABLE ADD COLUMN
+# does not appear through the view.
+id: create-view.star-frozen-columns
+title: SELECT star view keeps its creation-time column list
+family: create-view
+tier: core
+feature_ids: [create-view, alter-table, select, errors]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_view.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE sf (a int);
+  INSERT INTO sf VALUES (1), (2);
+steps:
+  - sql: |
+      CREATE VIEW vsf AS SELECT * FROM sf
+    expect: ok
+  - sql: |
+      ALTER TABLE sf ADD COLUMN b int DEFAULT 7
+    expect: ok
+  - sql: |
+      SELECT * FROM vsf ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only column a is visible
+  - sql: |
+      SELECT b FROM vsf
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      SELECT a, b FROM sf ORDER BY a
+    expect: rows
+    order: ordered

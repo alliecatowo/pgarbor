@@ -1,0 +1,29 @@
+# time(2) typmod rounds fractional seconds on store; the fractional-second input rounds at parse time.
+id: timetz.fractional-precision
+title: "timetz fractional seconds rounded by time(2) typmod and by input parsing"
+family: timetz
+tier: core
+feature_ids: [timetz, typmod, rounding]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timetz.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE TIMETZ_TBL (f1 time(2) with time zone);
+steps:
+  - sql: |
+      INSERT INTO TIMETZ_TBL VALUES ('11:59:59.99 PM PDT'), ('12:00:00.126 PDT'), ('12:00:00.124 PDT')
+    expect: ok
+  - sql: |
+      SELECT f1 FROM TIMETZ_TBL ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: stored values are rounded to two fractional digits
+  - sql: |
+      SELECT '23:59:59.999999 PDT'::timetz AS us_precision
+    expect: rows
+  - sql: |
+      SELECT '23:59:59.9999999 PDT'::timetz AS rounds_up
+    expect: rows
+    comment: seven fractional digits round up past midnight and wrap

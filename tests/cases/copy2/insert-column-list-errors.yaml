@@ -1,0 +1,40 @@
+# INSERT column-list and VALUES arity errors are rejected without consuming a serial value or writing a row.
+id: copy2.insert-column-list-errors
+title: INSERT rejects duplicate, unknown and mismatched column lists without writing rows
+family: copy2
+tier: core
+feature_ids: [insert, column-list, errors, serial]
+required_capabilities: [create-table, insert, select, serial, errors]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE x (a serial, b int, c text NOT NULL DEFAULT 'stuff', d text, e text);
+steps:
+  - sql: |
+      INSERT INTO x (a, a) VALUES (1, 2)
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      INSERT INTO x (xyz) VALUES (1)
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      INSERT INTO x (b, d) VALUES (1, 'a', 'b')
+    expect: error
+    sqlstate: "42601"
+    comment: more expressions than target columns
+  - sql: |
+      INSERT INTO x (b, c, d) VALUES (1, 'a')
+    expect: error
+    sqlstate: "42601"
+    comment: more target columns than expressions
+  - sql: |
+      INSERT INTO x (b, d) VALUES (1, 'ok')
+    expect: ok
+  - sql: |
+      SELECT a, b, c, d, e FROM x ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only one row, and the serial is 1 because failed statements did not consume it

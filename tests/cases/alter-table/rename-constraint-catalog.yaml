@@ -1,0 +1,35 @@
+# RENAME CONSTRAINT changes the catalog name; renaming a primary key constraint also renames its index; missing names raise 42704.
+id: alter-table.rename-constraint-catalog
+title: RENAME CONSTRAINT updates pg_constraint and the backing index; unknown constraint raises 42704
+family: alter-table
+tier: core
+feature_ids: [alter-table, rename-constraint, check-constraint, primary-key, catalog-introspection, errors]
+required_capabilities: [create-table, alter-table, select, catalog-introspection, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (renaming constraint should rename index as well)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE rc (a int4, b int4, CONSTRAINT chk_a CHECK (a > 0), PRIMARY KEY (a));
+steps:
+  - sql: |
+      ALTER TABLE rc RENAME CONSTRAINT chk_a TO chk_a_new
+    expect: ok
+  - sql: |
+      ALTER TABLE rc RENAME CONSTRAINT rc_pkey TO rc_pk_new
+    expect: ok
+  - sql: |
+      ALTER TABLE rc RENAME CONSTRAINT chk_a TO chk_again
+    expect: error
+    sqlstate: "42704"
+    comment: the old name no longer exists
+  - sql: |
+      SELECT conname, contype FROM pg_constraint WHERE conrelid = 'rc'::regclass ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx FROM pg_index WHERE indrelid = 'rc'::regclass AND indisprimary
+    expect: rows
+    order: multiset
+    comment: primary key index name follows the renamed constraint

@@ -1,0 +1,38 @@
+# ALTER FUNCTION OWNER TO requires membership in the new owner role; a role the session is a member of succeeds.
+id: alter-generic.role-owner-membership
+title: "ALTER FUNCTION OWNER TO needs role membership and then transfers ownership"
+family: alter-generic
+tier: extended
+feature_ids: [alter-function, owner, roles, privileges, catalog-introspection]
+required_capabilities: [roles, create-function, alter-function, set-session-authorization, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (ALTER FUNCTION alt_func2(int) OWNER TO regress_alter_generic_user2 -- failed (no role membership))"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS ag_own_a;
+  DROP ROLE IF EXISTS ag_own_b;
+  DROP ROLE IF EXISTS ag_own_c;
+  CREATE ROLE ag_own_c;
+  CREATE ROLE ag_own_b;
+  CREATE ROLE ag_own_a IN ROLE ag_own_b;
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION ag_own_a;
+      CREATE FUNCTION ag_fn1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+    expect: ok
+  - sql: |
+      ALTER FUNCTION ag_fn1(int) OWNER TO ag_own_c
+    expect: error
+    sqlstate: "42501"
+    comment: ag_own_a is not a member of ag_own_c
+  - sql: |
+      ALTER FUNCTION ag_fn1(int) OWNER TO ag_own_b
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT proname, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname = 'ag_fn1'
+    expect: rows
+    order: ordered

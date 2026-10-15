@@ -1,0 +1,31 @@
+# Explicit BEGIN/COMMIT: rows written inside a block are visible to the same session after COMMIT.
+id: slice-txn.begin-commit
+title: BEGIN, insert rows including an empty string and NULL, COMMIT, then read back
+family: slice-txn
+tier: core
+feature_ids: [transactions, insert, select, create-table, primary-key, null-handling]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-begin.html, sql-commit.html"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, note text);
+  INSERT INTO t VALUES (1, NULL);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2, ''), (3, 'x')
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, note IS NULL AS note_null, note = '' AS note_empty FROM t ORDER BY id
+    expect: rows
+    order: ordered

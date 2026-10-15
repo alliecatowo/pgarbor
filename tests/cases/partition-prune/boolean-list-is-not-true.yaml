@@ -1,0 +1,48 @@
+# Derived from PG18 partition_prune.sql (boolean list partitioning, IS [NOT] TRUE / FALSE / UNKNOWN).
+id: partition-prune.boolean-list-is-not-true
+title: Boolean list partitions with IS NOT TRUE, IS UNKNOWN and IN over a default partition
+family: partition-prune
+tier: core
+feature_ids: [partitioning, list-partitioning, boolean, partition-pruning, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE boolpart (a bool) PARTITION BY LIST (a);
+  CREATE TABLE boolpart_default PARTITION OF boolpart DEFAULT;
+  CREATE TABLE boolpart_t PARTITION OF boolpart FOR VALUES IN ('true');
+  CREATE TABLE boolpart_f PARTITION OF boolpart FOR VALUES IN ('false');
+  INSERT INTO boolpart VALUES (true), (false), (NULL);
+steps:
+  - sql: |
+      SELECT a FROM boolpart WHERE a IN (true, false) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM boolpart WHERE a = false ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM boolpart WHERE NOT a = false ORDER BY a
+    expect: rows
+    order: ordered
+    comment: NOT of a NULL comparison is NULL and is excluded
+  - sql: |
+      SELECT a FROM boolpart WHERE a IS NOT TRUE ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: IS NOT TRUE keeps false and NULL
+  - sql: |
+      SELECT a FROM boolpart WHERE a IS NOT TRUE AND a IS NOT FALSE ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM boolpart WHERE a IS UNKNOWN
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT a FROM boolpart WHERE a IS NOT UNKNOWN ORDER BY a
+    expect: rows
+    order: ordered

@@ -1,0 +1,32 @@
+# WHEN clauses are evaluated in order and only the first qualifying action runs for each row.
+id: merge.when-clause-order
+title: First qualifying WHEN MATCHED clause wins; conditions may reference source and target
+family: merge
+tier: core
+feature_ids: [merge, conditional-actions, update, delete]
+required_capabilities: [create-table, insert, update, delete, select, merge]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/merge.sql (multiple actions; conditions in MATCHED clause can refer to both source and target)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (2, 20), (3, 30);
+  INSERT INTO source VALUES (1, -10), (2, 5), (3, 0);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source s
+      ON t.tid = s.sid
+      WHEN MATCHED AND t.balance + s.delta = 0 THEN
+        DELETE
+      WHEN MATCHED AND s.delta > 0 THEN
+        UPDATE SET balance = t.balance + s.delta
+      WHEN MATCHED THEN
+        UPDATE SET balance = -1
+    expect: ok
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect (2,25), (3,-1); tid 1 deleted by the first clause

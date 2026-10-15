@@ -1,0 +1,45 @@
+# Access to objects in a schema requires USAGE on the schema; CREATE in the schema needs CREATE privilege.
+id: privileges.schema-usage-denied
+title: Schema USAGE gates table access and CREATE privilege gates DDL inside the schema
+family: privileges
+tier: core
+feature_ids: [schemas, usage, create-schema, grant, privileges, errors]
+required_capabilities: [create-schema, create-table, insert, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_sc_r;
+  CREATE SCHEMA pv_sc;
+  CREATE TABLE pv_sc.t (id int4);
+  INSERT INTO pv_sc.t VALUES (3);
+steps:
+  - sql: |
+      SET ROLE pv_sc_r
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_sc.t
+    expect: error
+    sqlstate: "42501"
+    comment: no USAGE on schema pv_sc
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT USAGE ON SCHEMA pv_sc TO pv_sc_r
+    expect: ok
+  - sql: |
+      SET ROLE pv_sc_r
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_sc.t
+    expect: rows
+  - sql: |
+      CREATE TABLE pv_sc.t2 (id int4)
+    expect: error
+    sqlstate: "42501"
+    comment: USAGE alone does not allow CREATE in the schema
+  - sql: |
+      RESET ROLE
+    expect: ok

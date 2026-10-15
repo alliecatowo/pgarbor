@@ -1,0 +1,38 @@
+# pg_advisory_xact_lock is released at COMMIT, so a waiting-free try from another session succeeds afterwards.
+id: orm-sqlx.advisory-xact-lock-released-on-commit
+title: Transaction-scoped advisory lock is released on commit
+family: orm-sqlx
+tier: core
+feature_ids: [advisory-locks, transactions, multi-session]
+required_capabilities: [select, advisory-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT pg_advisory_xact_lock(7)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS got
+    expect: rows
+    comment: still held by a's open transaction, so false
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS got
+    expect: rows
+    comment: released at commit, so true
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock(7)
+    expect: rows

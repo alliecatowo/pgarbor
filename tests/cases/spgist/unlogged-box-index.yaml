@@ -1,0 +1,27 @@
+# An unlogged table with an SP-GiST box index; data written in-session is queryable through the index.
+id: spgist.unlogged-box-index
+title: Unlogged table with SP-GiST box index answers overlap queries
+family: spgist
+tier: extended
+feature_ids: [spgist, create-index, unlogged-tables, box, serial]
+required_capabilities: [create-table, create-index, insert, select, spgist, box, unlogged-tables]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/spgist.sql (spgist_unlogged_tbl)"
+sessions: [a]
+setup: |
+  CREATE UNLOGGED TABLE sp_unl (id serial, b box);
+  CREATE INDEX sp_unl_idx ON sp_unl USING spgist (b);
+steps:
+  - sql: |
+      INSERT INTO sp_unl (b)
+        SELECT box(point(i, j)) FROM generate_series(1, 100, 5) i, generate_series(1, 10, 5) j
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM sp_unl
+    expect: rows
+    comment: 20 * 2 = 40 rows
+  - sql: |
+      SELECT count(*) FROM sp_unl WHERE b && box '((1,1),(1,1))'
+    expect: rows
+    comment: the point (1,1) is a degenerate box; only the box at (1,1) overlaps it

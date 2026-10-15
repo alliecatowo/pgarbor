@@ -1,0 +1,25 @@
+# Renaming one overload leaves the other overload under the old name in place.
+id: alter-generic.rename-function-overload
+title: "ALTER FUNCTION RENAME targets one overload and leaves the other overload alone"
+family: alter-generic
+tier: core
+feature_ids: [alter-function, rename, create-function, overloading, catalog-introspection]
+required_capabilities: [create-function, alter-function, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (function signature identifies the object)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION g(int) RETURNS int LANGUAGE sql AS 'SELECT $1 * 2';
+  CREATE FUNCTION g(text) RETURNS text LANGUAGE sql AS 'SELECT $1 || $1';
+steps:
+  - sql: |
+      ALTER FUNCTION g(int) RENAME TO h
+    expect: ok
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname IN ('g', 'h') AND pronamespace = 'public'::regnamespace ORDER BY proname, args
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT h(21), g('ab')
+    expect: rows

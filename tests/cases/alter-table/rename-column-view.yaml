@@ -1,0 +1,32 @@
+# RENAME COLUMN collides with an existing name (42701); a successful rename keeps dependent views readable under their old output name.
+id: alter-table.rename-column-view
+title: RENAME COLUMN duplicate raises 42701; dependent view keeps working after a column rename
+family: alter-table
+tier: extended
+feature_ids: [alter-table, rename-column, views, errors]
+required_capabilities: [create-table, alter-table, views, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 sql-altertable.html RENAME COLUMN; errcode 42701"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4, b int4);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  CREATE VIEW v AS SELECT a FROM t;
+steps:
+  - sql: |
+      ALTER TABLE t RENAME COLUMN a TO b
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      ALTER TABLE t RENAME COLUMN a TO renamed
+    expect: ok
+  - sql: |
+      SELECT a FROM v ORDER BY a
+    expect: rows
+    order: ordered
+    comment: views reference columns by attnum, so the view still works and keeps the old output name a
+  - sql: |
+      SELECT renamed, b FROM t ORDER BY renamed
+    expect: rows
+    order: ordered

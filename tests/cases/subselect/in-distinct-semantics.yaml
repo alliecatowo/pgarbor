@@ -1,0 +1,41 @@
+# IN over subqueries that use DISTINCT, DISTINCT ON, GROUP BY and UNION must not change the answer.
+id: subselect.in-distinct-semantics
+title: IN over DISTINCT, GROUP BY and UNION subqueries preserves semantics
+family: subselect
+tier: extended
+feature_ids: [select, subqueries, in-subquery, distinct, group-by, union]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/subselect.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE foo (id int4);
+  CREATE TABLE bar (id1 int4, id2 int4);
+  INSERT INTO foo VALUES (1);
+  INSERT INTO bar VALUES (1, 1), (2, 2), (3, 1);
+steps:
+  - sql: |
+      SELECT * FROM foo WHERE id IN (SELECT id2 FROM (SELECT DISTINCT id1, id2 FROM bar) AS s)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM foo WHERE id IN (SELECT id2 FROM (SELECT id1, id2 FROM bar GROUP BY id1, id2) AS s)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM foo WHERE id IN (SELECT id2 FROM (SELECT id1, id2 FROM bar UNION SELECT id1, id2 FROM bar) AS s)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM foo WHERE id IN (SELECT id2 FROM (SELECT DISTINCT ON (id2) id1, id2 FROM bar) AS s)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM foo WHERE id IN (SELECT id2 FROM (SELECT id2 FROM bar GROUP BY id2) AS s)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM foo WHERE id IN (SELECT id2 FROM (SELECT id2 FROM bar UNION SELECT id2 FROM bar) AS s)
+    expect: rows
+    order: multiset

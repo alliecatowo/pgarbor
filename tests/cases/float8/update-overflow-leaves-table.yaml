@@ -1,0 +1,30 @@
+# A single UPDATE that overflows on one row fails as a whole; the autocommit statement leaves every row unchanged.
+id: float8.update-overflow-leaves-table
+title: Overflowing float8 UPDATE aborts the statement and leaves all rows unchanged
+family: float8
+tier: core
+feature_ids: [float8, update, errors, transactions]
+required_capabilities: [select, create-table, insert, update]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/float8.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE f8u (id int4 PRIMARY KEY, f1 float8);
+  INSERT INTO f8u VALUES (1, 0.0), (2, 1004.3), (3, -34.84), (4, 1.2345678901234e+200);
+steps:
+  - sql: |
+      UPDATE f8u SET f1 = f1 * '1e200'
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT id, f1 FROM f8u ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE f8u SET f1 = f1 * -1 WHERE f1 > 0
+    expect: ok
+  - sql: |
+      SELECT id, f1 FROM f8u ORDER BY id
+    expect: rows
+    order: ordered

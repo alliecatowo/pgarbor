@@ -1,0 +1,36 @@
+# jsonb output reorders keys (shorter first, then bytewise), keeps only the last duplicate key,
+# and keeps numeric text as written.
+id: slice-types-io.jsonb-key-order-dedup
+title: "jsonb key ordering, duplicate key removal and numeric preservation"
+family: slice-types-io
+tier: core
+feature_ids: [jsonb, text-output, select, errors]
+required_capabilities: [select, jsonb, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-json.html#JSON-KEYS-ORDER"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '{"b":1,"a":2,"b":3}'::jsonb::text AS dedup, '{"aa":1,"b":2,"a":3}'::jsonb::text AS key_order
+    expect: rows
+    order: multiset
+    comment: "duplicate key keeps the last value; keys sort by length then bytes"
+  - sql: |
+      SELECT '{"o":{"z":1,"y":[{"q":1,"p":2}]}}'::jsonb::text AS nested, '{"a":1.50}'::jsonb::text AS numeric_scale
+    expect: rows
+    order: multiset
+    comment: "object keys in nested objects are reordered; array element order is kept"
+  - sql: |
+      SELECT '{"a":null}'::jsonb ->> 'a' IS NULL AS sql_null_from_json_null, '{"b":"xA"}'::jsonb ->> 'b' AS unicode_escape
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT '{"a": 1}'::jsonb = '{"a":1.0}'::jsonb AS equal_numbers
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT '{"a":1,}'::jsonb
+    expect: error
+    sqlstate: "22P02"
+    comment: "trailing comma is invalid JSON"

@@ -1,0 +1,31 @@
+# CHECK on a whole-row reference passes when the check expression is NULL, and fails when it is false.
+id: copy2.check-constraint-whole-row-null
+title: CHECK constraint with whole-row argument accepts NULL result and rejects false
+family: copy2
+tier: extended
+feature_ids: [check-constraints, sql-functions, whole-row-reference, insert]
+required_capabilities: [create-table, insert, select, check-constraints, sql-functions]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE check_con_tbl (f1 int);
+  CREATE FUNCTION check_con_function(check_con_tbl) RETURNS bool AS $$ SELECT $1.f1 > 0 $$ LANGUAGE sql IMMUTABLE;
+  ALTER TABLE check_con_tbl ADD CHECK (check_con_function(check_con_tbl.*));
+steps:
+  - sql: |
+      INSERT INTO check_con_tbl VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO check_con_tbl VALUES (NULL)
+    expect: ok
+    comment: a CHECK whose expression is NULL passes
+  - sql: |
+      INSERT INTO check_con_tbl VALUES (0)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT f1 FROM check_con_tbl ORDER BY f1 NULLS LAST
+    expect: rows
+    order: ordered

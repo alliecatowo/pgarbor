@@ -1,0 +1,34 @@
+# Column names containing commas and quotes survive DDL; after a drop and re-add the re-added column is last.
+id: copy.header-columns-with-dropped
+title: "Quoted column names and dropped-column ordering in information_schema"
+family: copy
+tier: core
+feature_ids: [copy, create-table, catalog-introspection, alter-table]
+required_capabilities: [create-table, select, alter-table, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/copy.sql (copytest3 and header_copytest sections)"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEMP TABLE cp_h (
+        c1 int4,
+        "col with , comma" text,
+        "col with "" quote" int4)
+    expect: ok
+  - sql: |
+      SELECT column_name, data_type FROM information_schema.columns
+      WHERE table_name = 'cp_h' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE cp_h DROP COLUMN c1;
+      ALTER TABLE cp_h ADD COLUMN c1 text
+    expect: ok
+  - sql: |
+      SELECT column_name, data_type FROM information_schema.columns
+      WHERE table_name = 'cp_h' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+    comment: dropped column is hidden; re-added c1 has the last ordinal position

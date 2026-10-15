@@ -1,0 +1,43 @@
+# Shape of drizzle-orm's migrations table: schema "drizzle", serial id, text hash, bigint created_at.
+id: orm-drizzle.migrations-table-in-drizzle-schema
+title: __drizzle_migrations table lives in schema drizzle and accepts ordered inserts
+family: orm-drizzle
+tier: core
+feature_ids: [create-schema, create-table, serial, insert, select, catalog-introspection]
+required_capabilities: [create-schema, create-table, insert, select, catalog-introspection]
+provenance:
+  source: hand
+  ref: "drizzle-orm pg-core migrator: drizzle.__drizzle_migrations (id serial pk, hash text not null, created_at bigint)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA IF NOT EXISTS drizzle;
+  CREATE TABLE drizzle.__drizzle_migrations (
+    id SERIAL PRIMARY KEY,
+    hash text NOT NULL,
+    created_at bigint
+  );
+steps:
+  - sql: |
+      INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ('h-0001', 1000), ('h-0002', 2000), ('h-0003', NULL)
+    expect: ok
+  - sql: |
+      SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT hash FROM drizzle.__drizzle_migrations WHERE created_at > 1500 OR created_at IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'drizzle' AND table_name = '__drizzle_migrations' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM drizzle.__drizzle_migrations WHERE hash = NULL
+    expect: rows
+    order: multiset
+    comment: comparison with NULL yields no rows
+  - sql: |
+      INSERT INTO drizzle.__drizzle_migrations (hash) VALUES (NULL)
+    expect: error
+    sqlstate: "23502"

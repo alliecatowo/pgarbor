@@ -1,0 +1,29 @@
+# bit varying(n): zero-length and shorter values are stored; longer than n is rejected with 22001.
+id: bit.varbit-store-and-too-long
+title: bit varying(n) stores shorter and empty values and rejects overflow with 22001
+family: bit
+tier: core
+feature_ids: [bit-string, create-table, insert, select, errors]
+required_capabilities: [create-table, insert, select, bit-string]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/bit.sql (VARBIT_TABLE)"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE vb (v bit varying(11));
+steps:
+  - sql: |
+      INSERT INTO vb VALUES (B''), (B'0'), (B'010101'), (B'01010101010'), (NULL)
+    expect: ok
+  - sql: |
+      SELECT v, length(v) AS lv FROM vb ORDER BY v
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO vb VALUES (B'101011111010')
+    expect: error
+    sqlstate: "22001"
+    comment: twelve bits into varbit(11)
+  - sql: |
+      SELECT count(*) AS n FROM vb
+    expect: rows

@@ -1,0 +1,43 @@
+# SET NOT NULL fails 23502 while NULLs exist; after cleanup it succeeds and then enforces on INSERT.
+id: alter-table.set-not-null-violation
+title: SET NOT NULL rejects existing NULLs (23502), then is enforced on INSERT; DROP NOT NULL relaxes it
+family: alter-table
+tier: core
+feature_ids: [alter-table, not-null, null-semantics, errors]
+required_capabilities: [create-table, alter-table, insert, update, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 sql-altertable.html SET/DROP NOT NULL; errcode 23502"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  INSERT INTO t VALUES (1, 'a'), (2, NULL), (3, '');
+steps:
+  - sql: |
+      ALTER TABLE t ALTER COLUMN v SET NOT NULL
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      UPDATE t SET v = 'filled' WHERE v IS NULL
+    expect: ok
+  - sql: |
+      ALTER TABLE t ALTER COLUMN v SET NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (4, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO t VALUES (4, '')
+    expect: ok
+    comment: the empty string is not NULL
+  - sql: |
+      ALTER TABLE t ALTER COLUMN v DROP NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (5, NULL)
+    expect: ok
+  - sql: |
+      SELECT id, v, v IS NULL AS v_null FROM t ORDER BY id
+    expect: rows
+    order: ordered

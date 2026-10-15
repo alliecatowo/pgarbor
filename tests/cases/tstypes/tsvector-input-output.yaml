@@ -1,0 +1,49 @@
+# tsvector text input: bare and quoted lexemes, whitespace, escapes, and output round trip.
+id: tstypes.tsvector-input-output
+title: tsvector text input parsing, quoting, escapes, and output round trip
+family: tstypes
+tier: core
+feature_ids: [tsvector, text-search, tsvector-io]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tstypes.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '1'::tsvector
+    expect: rows
+  - sql: |
+      SELECT ' 1 '::tsvector
+    expect: rows
+  - sql: |
+      SELECT '1 2'::tsvector
+    expect: rows
+  - sql: |
+      SELECT '''1 2'''::tsvector
+    expect: rows
+    comment: quoted lexeme containing a space
+  - sql: |
+      SELECT E'''1 \\''2'''::tsvector
+    expect: rows
+    comment: escaped quote inside a quoted lexeme
+  - sql: |
+      SELECT $$'\\as' ab\c ab\\c AB\\\c ab\\\\c$$::tsvector
+    expect: rows
+    comment: backslashes are literal unless quoted
+  - sql: |
+      SELECT tsvectorin(tsvectorout($$'\\as' ab\c ab\\c AB\\\c ab\\\\c$$::tsvector))
+    expect: rows
+    comment: output of a tsvector parses back to the same value
+  - sql: |
+      SELECT '''w'':4A,3B,2C,1D,5 a:8'::tsvector
+    expect: rows
+    comment: weights and positions, weight letters normalised
+  - sql: |
+      SELECT 'a:3A b:2a'::tsvector || 'ba:1234 a:1B'::tsvector
+    expect: rows
+    comment: concatenation merges positions of shared lexemes
+  - sql: |
+      SELECT ''::tsvector
+    expect: rows
+    comment: empty tsvector is valid

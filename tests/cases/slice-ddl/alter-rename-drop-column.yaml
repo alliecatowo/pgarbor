@@ -1,0 +1,61 @@
+# RENAME and DROP COLUMN, RENAME TABLE; references to old names fail with undefined column/table.
+id: slice-ddl.alter-rename-drop-column
+title: Rename and drop columns and tables; old names become undefined
+family: slice-ddl
+tier: core
+feature_ids: [alter-table, create-table, insert, select, errors]
+required_capabilities: [create-table, insert, select, alter-table, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-altertable.html; errcodes 42703, 42701, 42P01"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE rd (id int4 PRIMARY KEY, old_name text, tmp int4);
+      INSERT INTO rd VALUES (1, 'a', 10), (2, NULL, NULL)
+    expect: ok
+  - sql: |
+      ALTER TABLE rd RENAME COLUMN old_name TO new_name
+    expect: ok
+  - sql: |
+      SELECT id, new_name FROM rd ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT old_name FROM rd
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER TABLE rd RENAME COLUMN old_name TO x
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER TABLE rd RENAME COLUMN id TO new_name
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      ALTER TABLE rd DROP COLUMN tmp
+    expect: ok
+  - sql: |
+      SELECT tmp FROM rd
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER TABLE rd DROP COLUMN IF EXISTS tmp
+    expect: any
+    comment: NOTICE only, column already dropped
+  - sql: |
+      SELECT id, new_name FROM rd ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE rd RENAME TO rd2
+    expect: ok
+  - sql: |
+      SELECT id FROM rd
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT id FROM rd2 ORDER BY id
+    expect: rows
+    order: ordered

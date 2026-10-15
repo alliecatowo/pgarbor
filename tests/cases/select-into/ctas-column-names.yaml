@@ -1,0 +1,39 @@
+# CREATE TABLE AS with a column list: fewer names are allowed, more names fail with 42601.
+id: select-into.ctas-column-names
+title: CREATE TABLE AS column-name list must not exceed the query width
+family: select-into
+tier: core
+feature_ids: [create-table-as, create-table, select, errors]
+required_capabilities: [create-table-as, create-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/select_into.sql (WITH NO DATA and column name consistency)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE ctas_base (i int, j int);
+  INSERT INTO ctas_base VALUES (1, 2);
+steps:
+  - sql: |
+      CREATE TABLE ctas_nodata (ii, jj, kk) AS SELECT i, j FROM ctas_base
+    expect: error
+    sqlstate: "42601"
+    comment: too many column names were specified
+  - sql: |
+      CREATE TABLE ctas_nodata (ii, jj, kk) AS SELECT i, j FROM ctas_base WITH NO DATA
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE TABLE ctas_ok (ii, jj) AS SELECT i, j FROM ctas_base
+    expect: ok
+  - sql: |
+      CREATE TABLE ctas_short (ii) AS SELECT i, j FROM ctas_base WITH NO DATA
+    expect: ok
+    comment: fewer names than columns is allowed, remaining columns keep their names
+  - sql: |
+      SELECT ii, jj FROM ctas_ok
+    expect: rows
+  - sql: |
+      SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ctas_short' ORDER BY ordinal_position
+    expect: rows
+    order: ordered

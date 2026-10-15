@@ -1,0 +1,30 @@
+# A CHECK constraint passes when its expression is NULL; only FALSE violates it (23514).
+id: create-table.check-constraint-null-passes
+title: CHECK constraint accepts NULL result, rejects FALSE with 23514
+family: create-table
+tier: core
+feature_ids: [create-table, check-constraints, insert, errors, null-semantics]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints.html#DDL-CONSTRAINTS-CHECK-CONSTRAINTS"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ck (a int4 CHECK (a > 0), b int4, CONSTRAINT b_small CHECK (b < 10))
+    expect: ok
+  - sql: |
+      INSERT INTO ck VALUES (NULL, NULL), (1, NULL), (NULL, 9)
+    expect: ok
+  - sql: |
+      INSERT INTO ck VALUES (0, 1)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO ck VALUES (1, 10)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT a, b FROM ck ORDER BY a NULLS LAST, b NULLS LAST
+    expect: rows
+    order: ordered

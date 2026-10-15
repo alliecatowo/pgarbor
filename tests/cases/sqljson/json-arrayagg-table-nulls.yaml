@@ -1,0 +1,32 @@
+# JSON_ARRAYAGG over a table with NULLs and a window use, grouped by parity.
+id: sqljson.json-arrayagg-table-nulls
+title: JSON_ARRAYAGG over table rows with NULLs and grouping
+family: sqljson
+tier: extended
+feature_ids: [json-arrayagg, group-by, window-functions, json-null-handling]
+required_capabilities: [create-table, insert, select, json, aggregates, window-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sqljson.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (bar int4);
+  INSERT INTO foo VALUES (NULL), (3), (1), (NULL), (NULL), (5), (2), (4), (NULL);
+steps:
+  - sql: |
+      SELECT JSON_ARRAYAGG(bar ORDER BY bar) FROM foo
+    expect: rows
+    comment: ABSENT ON NULL is the default, so NULL bars are dropped
+  - sql: |
+      SELECT JSON_ARRAYAGG(bar ORDER BY bar NULL ON NULL) FROM foo
+    expect: rows
+    comment: NULLs are kept and sort last
+  - sql: |
+      SELECT bar % 2 AS parity, JSON_ARRAYAGG(bar ORDER BY bar) FILTER (WHERE bar > 2) AS big FROM foo GROUP BY bar % 2 ORDER BY parity NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT bar, JSON_ARRAYAGG(bar) FILTER (WHERE bar > 2) OVER (PARTITION BY bar % 2) FROM foo ORDER BY bar NULLS LAST, 2
+    expect: rows
+    order: ordered

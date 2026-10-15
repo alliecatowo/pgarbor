@@ -1,0 +1,35 @@
+# Grouping by a column becomes valid once it is declared the primary key; NULL sums stay NULL.
+id: functional-deps.pk-added-later-enables-grouping
+title: "GROUP BY becomes valid after ADD PRIMARY KEY and LEFT JOIN sums stay NULL for no sales"
+family: functional-deps
+tier: core
+feature_ids: [group-by, functional-dependencies, joins, primary-key, alter-table, errors]
+required_capabilities: [create-table, insert, select, group-by, joins, alter-table, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE products (product_id int, name text, price numeric);
+  CREATE TABLE sales (product_id int, units int);
+  INSERT INTO products VALUES (1, 'widget', 2.50), (2, 'gadget', 10), (3, 'idle', 1.00);
+  INSERT INTO sales VALUES (1, 4), (1, 6), (2, 1);
+steps:
+  - sql: |
+      SELECT product_id, p.name, (sum(s.units) * p.price) AS sales
+      FROM products p LEFT JOIN sales s USING (product_id)
+      GROUP BY product_id
+    expect: error
+    sqlstate: "42803"
+    comment: "no primary key yet, so p.name is not functionally dependent"
+  - sql: |
+      ALTER TABLE products ADD PRIMARY KEY (product_id)
+    expect: ok
+  - sql: |
+      SELECT product_id, p.name, (sum(s.units) * p.price) AS sales
+      FROM products p LEFT JOIN sales s USING (product_id)
+      GROUP BY product_id
+      ORDER BY product_id
+    expect: rows
+    order: ordered
+    comment: "product 3 has no sales, so its sales value is NULL"

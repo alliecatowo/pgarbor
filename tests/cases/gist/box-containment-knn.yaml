@@ -1,0 +1,33 @@
+# GiST index on a box column: containment with <@ and distance ordering with box <-> point.
+id: gist.box-containment-knn
+title: GiST box index supports containment and box-to-point distance ordering
+family: gist
+tier: core
+feature_ids: [gist, create-index, box, geometric-operators, order-by]
+required_capabilities: [create-table, insert, select, create-index, gist-index, box-type, point-type, order-by]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE bx (id int4 PRIMARY KEY, b box);
+  INSERT INTO bx VALUES
+    (1, box(point(1,1), point(2,2))),
+    (2, box(point(3,3), point(4,4))),
+    (3, box(point(5,5), point(6,6))),
+    (4, box(point(4.5,4.5), point(5.5,5.5)));
+  CREATE INDEX bx_b ON bx USING gist (b);
+steps:
+  - sql: |
+      SELECT id FROM bx WHERE b <@ box(point(0,0), point(4.5,4.5)) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM bx WHERE b <@ box(point(4,4), point(7,7)) ORDER BY b <-> point(5.2,5.91), id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM bx WHERE b <@ box(point(4,4), point(7,7)) ORDER BY point(5.2,5.91) <-> b, id
+    expect: rows
+    order: ordered
+    comment: commuted distance operand must give the same order

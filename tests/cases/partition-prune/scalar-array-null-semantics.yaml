@@ -1,0 +1,57 @@
+# Derived from PG18 partition_prune.sql (scalar-to-array operators ANY/ALL on a varchar list partition key).
+id: partition-prune.scalar-array-null-semantics
+title: ANY and ALL over text arrays with NULL elements on a list-partitioned varchar key
+family: partition-prune
+tier: extended
+feature_ids: [partitioning, list-partitioning, scalar-array-operators, null-semantics, select]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE coercepart (a varchar) PARTITION BY LIST (a);
+  CREATE TABLE coercepart_ab PARTITION OF coercepart FOR VALUES IN ('ab');
+  CREATE TABLE coercepart_bc PARTITION OF coercepart FOR VALUES IN ('bc');
+  CREATE TABLE coercepart_cd PARTITION OF coercepart FOR VALUES IN ('cd');
+  CREATE TABLE coercepart_null PARTITION OF coercepart FOR VALUES IN (NULL);
+  INSERT INTO coercepart VALUES ('ab'), ('bc'), ('cd'), (NULL);
+steps:
+  - sql: |
+      SELECT a FROM coercepart WHERE a IN ('ab', to_char(125, '999')) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM coercepart WHERE a = ANY ('{ab,bc}') ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM coercepart WHERE a = ANY ('{ab,NULL}') ORDER BY a
+    expect: rows
+    order: ordered
+    comment: a NULL array element can only produce NULL, never TRUE
+  - sql: |
+      SELECT a FROM coercepart WHERE a = ANY (NULL::text[]) ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM coercepart WHERE a = ALL ('{ab}') ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM coercepart WHERE a = ALL ('{ab,bc}') ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM coercepart WHERE a = ALL ('{ab,NULL}') ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM coercepart WHERE a !~ ALL ('{ab,bc}') ORDER BY a
+    expect: rows
+    order: ordered
+    comment: regex operators with ALL, NULL row excluded
+  - sql: |
+      SELECT a FROM coercepart WHERE a ~ ANY ('{ab,bc}') ORDER BY a
+    expect: rows
+    order: ordered

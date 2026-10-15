@@ -1,0 +1,52 @@
+# TRUNCATE inside a transaction is undone by ROLLBACK TO SAVEPOINT; the earlier truncate and inserts survive and COMMIT persists them.
+id: copy2.savepoint-truncate-rollback
+title: TRUNCATE and insert rolled back to a savepoint inside one transaction
+family: copy2
+tier: core
+feature_ids: [transactions, savepoints, truncate, insert]
+required_capabilities: [create-table, insert, select, truncate, transactions, savepoints]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE vistest (col1 text);
+  INSERT INTO vistest VALUES ('committed0');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      TRUNCATE vistest
+    expect: ok
+  - sql: |
+      INSERT INTO vistest VALUES ('a1'), ('b')
+    expect: ok
+  - sql: |
+      SAVEPOINT s1
+    expect: ok
+  - sql: |
+      TRUNCATE vistest
+    expect: ok
+  - sql: |
+      INSERT INTO vistest VALUES ('d1'), ('e')
+    expect: ok
+  - sql: |
+      SELECT col1 FROM vistest ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: inside the savepoint only d1 and e are visible
+  - sql: |
+      ROLLBACK TO SAVEPOINT s1
+    expect: ok
+  - sql: |
+      SELECT col1 FROM vistest ORDER BY col1
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT col1 FROM vistest ORDER BY col1
+    expect: rows
+    order: ordered

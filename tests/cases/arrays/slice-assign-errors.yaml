@@ -1,0 +1,30 @@
+# Slice assignment that does not fit (source array too small) and assignment into a NULL array.
+id: arrays.slice-assign-errors
+title: Open-ended slice assignment fails when the source is too small or the target is NULL
+family: arrays
+tier: core
+feature_ids: [arrays, array-slices, update, errors]
+required_capabilities: [create-table, insert, select, update, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/arrays.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (id int4 PRIMARY KEY, a int4[]);
+  INSERT INTO st VALUES (1, '{1,2,3,4,5}');
+  INSERT INTO st VALUES (2, NULL);
+steps:
+  - sql: |
+      UPDATE st SET a[:] = '{23, 24, 25}' WHERE id = 1
+    expect: error
+    sqlstate: "2202E"
+    comment: source array too small for the existing slice
+  - sql: |
+      UPDATE st SET a[:] = '{11, 12, 13, 14, 15}' WHERE id = 2
+    expect: error
+    comment: no sqlstate asserted; slice assignment into a NULL array is rejected by PG
+  - sql: |
+      SELECT id, a FROM st ORDER BY id
+    expect: rows
+    order: ordered

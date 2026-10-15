@@ -1,0 +1,33 @@
+# DROP ROLE on a missing role errors; IF EXISTS only notices; a multi-name DROP is all-or-nothing.
+id: create-role.drop-missing-role
+title: DROP ROLE of a missing role errors, IF EXISTS notices, and a failing multi-name drop removes nothing
+family: create-role
+tier: core
+feature_ids: [roles, drop-role, errors]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql; expected output 'role ... does not exist'"
+sessions: [a]
+steps:
+  - sql: |
+      DROP ROLE rm_nosuch
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP ROLE IF EXISTS rm_nosuch
+    expect: notice
+  - sql: |
+      CREATE ROLE rm_a
+    expect: ok
+  - sql: |
+      DROP ROLE rm_a, rm_nosuch
+    expect: error
+    sqlstate: "42704"
+    comment: the whole statement aborts, so rm_a must still exist afterwards
+  - sql: |
+      SELECT rolname FROM pg_roles WHERE rolname IN ('rm_a', 'rm_nosuch')
+    expect: rows
+  - sql: |
+      DROP ROLE rm_a
+    expect: ok

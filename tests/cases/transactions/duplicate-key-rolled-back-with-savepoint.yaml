@@ -1,0 +1,48 @@
+# Unique violation inside a savepoint; ROLLBACK TO removes the table created after the savepoint, then it is recreated.
+id: transactions.duplicate-key-rolled-back-with-savepoint
+title: CREATE TABLE and unique violations are undone by ROLLBACK TO SAVEPOINT and ROLLBACK
+family: transactions
+tier: core
+feature_ids: [transactions, savepoints, create-table, constraints, unique, errors]
+required_capabilities: [create-table, insert, select, transactions, savepoints, constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT x
+    expect: ok
+  - sql: |
+      CREATE TABLE koju (a INT UNIQUE)
+    expect: ok
+  - sql: |
+      INSERT INTO koju VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO koju VALUES (1)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      ROLLBACK TO x
+    expect: ok
+  - sql: |
+      CREATE TABLE koju (a INT UNIQUE)
+    expect: ok
+  - sql: |
+      INSERT INTO koju VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO koju VALUES (1)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT to_regclass('koju') IS NULL AS table_gone
+    expect: rows

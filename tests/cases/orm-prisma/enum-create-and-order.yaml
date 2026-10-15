@@ -1,0 +1,40 @@
+# CREATE TYPE ... AS ENUM with a quoted mixed-case name; sort and comparison follow declaration order.
+id: orm-prisma.enum-create-and-order
+title: CREATE TYPE AS ENUM with mixed-case name; ORDER BY and comparison use declaration order
+family: orm-prisma
+tier: core
+feature_ids: [enum, create-type, create-table, insert, select, order-by, default-values]
+required_capabilities: [create-type, create-table, insert, select, enum]
+provenance:
+  source: research
+  ref: "Prisma enum mapping for PostgreSQL (CREATE TYPE ... AS ENUM); PG18 docs datatype-enum.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TYPE "Role" AS ENUM ('USER', 'ADMIN', 'OWNER')
+    expect: ok
+  - sql: |
+      CREATE TABLE "Account" (
+        "id" integer PRIMARY KEY,
+        "role" "Role" NOT NULL DEFAULT 'USER'
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO "Account" ("id", "role") VALUES (1, 'OWNER'), (2, DEFAULT), (3, 'ADMIN')
+    expect: ok
+  - sql: |
+      SELECT "id", "role"::text AS role FROM "Account" ORDER BY "role", "id"
+    expect: rows
+    order: ordered
+    comment: sorts by declaration order USER < ADMIN < OWNER, not alphabetically
+  - sql: |
+      SELECT "id" FROM "Account" WHERE "role" > 'USER' ORDER BY "id"
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT e.enumlabel
+      FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+      WHERE t.typname = 'Role'
+      ORDER BY e.enumsortorder
+    expect: rows
+    order: ordered

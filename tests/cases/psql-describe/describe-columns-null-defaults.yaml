@@ -1,0 +1,26 @@
+# Columns without a default yield NULL from the default-expression subquery, not an empty string.
+id: psql-describe.describe-null-defaults
+title: Columns without defaults produce NULL default expressions in the describe query
+family: psql-describe
+tier: core
+feature_ids: [catalog-introspection, create-table, insert, psql-describe]
+required_capabilities: [create-table, insert, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 catalog pg_attrdef; src/bin/psql/describe.c column query"
+sessions: [a]
+setup: |
+  CREATE TABLE nd (a int4, b text DEFAULT NULL, c text DEFAULT '');
+  INSERT INTO nd VALUES (1, NULL, '');
+steps:
+  - sql: |
+      SELECT a.attname,
+        (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true)
+           FROM pg_catalog.pg_attrdef d
+           WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) IS NULL AS no_default
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid = 'nd'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+      ORDER BY a.attnum
+    expect: rows
+    order: ordered
+    comment: a has no default (NULL); b DEFAULT NULL is still a stored default

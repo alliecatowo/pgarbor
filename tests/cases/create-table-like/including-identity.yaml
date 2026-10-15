@@ -1,0 +1,33 @@
+# Identity is copied only with INCLUDING IDENTITY; NOT NULL is copied either way.
+id: create-table-like.including-identity
+title: Identity columns are copied only with INCLUDING IDENTITY
+family: create-table-like
+tier: extended
+feature_ids: [create-table, create-table-like, identity, insert, select, not-null, errors]
+required_capabilities: [create-table, insert, select, identity]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE src (id int8 GENERATED ALWAYS AS IDENTITY, v text);
+  CREATE TABLE plain (LIKE src);
+  CREATE TABLE ident (LIKE src INCLUDING IDENTITY);
+steps:
+  - sql: |
+      INSERT INTO plain (v) VALUES ('p1')
+    expect: error
+    sqlstate: "23502"
+    comment: identity was not copied, but the NOT NULL on id was
+  - sql: |
+      INSERT INTO ident (v) VALUES ('i1'), ('i2')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM ident ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO ident (id, v) VALUES (10, 'x')
+    expect: error
+    sqlstate: "428C9"
+    comment: GENERATED ALWAYS identity rejects an explicit value

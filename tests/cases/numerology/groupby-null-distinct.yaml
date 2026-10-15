@@ -1,0 +1,30 @@
+# NULL is one DISTINCT and one GROUP BY group; count(*) and count(col) differ on NULLs; equality with NULL matches nothing.
+id: numerology.groupby-null-distinct
+title: DISTINCT and GROUP BY treat NULL as a single group
+family: numerology
+tier: core
+feature_ids: [group-by, distinct, null-semantics, aggregates]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/numerology.sql"
+  license: "PostgreSQL License"
+setup: |
+  CREATE TABLE t (a int4, b text);
+  INSERT INTO t VALUES (1, 'x'), (1, 'x'), (NULL, 'y'), (NULL, NULL), (2, NULL);
+steps:
+  - sql: |
+      SELECT DISTINCT a FROM t ORDER BY a NULLS FIRST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, count(*) AS n, count(b) AS nb FROM t GROUP BY a ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(DISTINCT a) AS distinct_a, count(*) AS total FROM t
+    expect: rows
+  - sql: |
+      SELECT a FROM t WHERE a = NULL
+    expect: rows
+    order: multiset

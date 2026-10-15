@@ -1,0 +1,29 @@
+# UPDATE ... FROM where the SET CASE reads the joined table's columns.
+id: case.update-from-join-case
+title: UPDATE FROM with CASE reading joined-table columns
+family: case
+tier: extended
+feature_ids: [update, joins, case-expression]
+required_capabilities: [create-table, insert, update, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/case.sql"
+  license: PostgreSQL License
+notes: From case.sql lines 167-173. The join key j = -i matches at most one row per target row, so the result is deterministic.
+sessions: [a]
+setup: |
+  CREATE TABLE case_tbl (i int4, f float8);
+  CREATE TABLE case2_tbl (i int4, j int4);
+  INSERT INTO case_tbl VALUES (1, 10.1), (2, 20.2), (3, -30.3), (4, NULL);
+  INSERT INTO case2_tbl VALUES (1, -1), (2, -2), (3, -3), (2, -4), (1, NULL), (NULL, -6);
+steps:
+  - sql: |
+      UPDATE case_tbl
+         SET i = CASE WHEN b.i >= 2 THEN (2 * b.j) ELSE (3 * b.j) END
+        FROM case2_tbl b
+       WHERE b.j = -case_tbl.i
+    expect: ok
+  - sql: |
+      SELECT i FROM case_tbl ORDER BY i
+    expect: rows
+    order: ordered

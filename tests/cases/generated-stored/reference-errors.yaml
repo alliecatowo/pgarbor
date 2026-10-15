@@ -1,0 +1,39 @@
+# Invalid generation expressions: self or forward references, unknown columns, duplicate generation clauses.
+id: generated-stored.reference-errors
+title: Invalid generation expressions are rejected at CREATE TABLE time
+family: generated-stored
+tier: core
+feature_ids: [generated-columns, create-table, errors]
+required_capabilities: [create-table, select, generated-columns]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_stored.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE g6a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (b * 2) STORED)
+    expect: error
+    sqlstate: "42P17"
+    comment: self-reference is not allowed
+  - sql: |
+      CREATE TABLE g6b (a int PRIMARY KEY, b int GENERATED ALWAYS AS (c * 2) STORED)
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column in generation expression
+  - sql: |
+      CREATE TABLE g6c (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED, c int GENERATED ALWAYS AS (b * 3) STORED)
+    expect: error
+    sqlstate: "42P17"
+    comment: reference to another generated column is not allowed
+  - sql: |
+      CREATE TABLE g6d (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED GENERATED ALWAYS AS (a * 3) STORED)
+    expect: error
+    sqlstate: "42601"
+    comment: multiple generation clauses for one column
+  - sql: |
+      SELECT to_regclass('g6a') IS NULL AS a_absent, to_regclass('g6b') IS NULL AS b_absent
+    expect: rows
+    comment: failed CREATE TABLE statements must not leave tables behind
+  - sql: |
+      CREATE TABLE g6ok (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED)
+    expect: ok

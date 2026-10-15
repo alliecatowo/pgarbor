@@ -1,0 +1,35 @@
+# A view over a temporary table is itself temporary; after reconnect the view is gone.
+id: create-view.temp-after-reconnect
+title: View over a temp table is temporary and disappears after reconnect
+family: create-view
+tier: extended
+feature_ids: [create-view, temp-tables, transactions, catalog-introspection]
+required_capabilities: [create-table, insert, select, temp-tables]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_view.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEMP TABLE temp_t (a int, id int);
+      INSERT INTO temp_t VALUES (1, 1);
+      CREATE VIEW v_tmp AS SELECT * FROM temp_t
+    expect: ok
+    compare_message: false
+    comment: server emits a NOTICE that the view will be temporary
+  - sql: |
+      SELECT relpersistence = 't' AS is_temp FROM pg_class WHERE relname = 'v_tmp'
+    expect: rows
+  - sql: |
+      SELECT a, id FROM v_tmp
+    expect: rows
+    order: multiset
+  - reconnect: true
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname = 'v_tmp'
+    expect: rows
+  - sql: |
+      SELECT a FROM v_tmp
+    expect: error
+    sqlstate: "42P01"

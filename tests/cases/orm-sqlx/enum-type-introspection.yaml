@@ -1,0 +1,27 @@
+# sqlx resolves enum labels by joining pg_type with pg_enum to learn variant names and order.
+id: orm-sqlx.enum-type-introspection
+title: Enum type labels and sort order via pg_type and pg_enum join
+family: orm-sqlx
+tier: core
+feature_ids: [enum-types, catalog-introspection, create-type]
+required_capabilities: [enum-types, catalog-introspection]
+provenance:
+  source: research
+  ref: "sqlx-postgres type_info enum lookup; PG18 catalog-pg-enum.html"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+steps:
+  - sql: |
+      SELECT t.typname, t.typtype, e.enumlabel, e.enumsortorder
+      FROM pg_type t
+      JOIN pg_enum e ON e.enumtypid = t.oid
+      WHERE t.typname = 'mood'
+      ORDER BY e.enumsortorder
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = 'mood' AND e.enumlabel > 'ok' ORDER BY enumlabel
+    expect: rows
+    order: ordered
+    comment: label comparison uses collation of the enum label text; deterministic for ascii

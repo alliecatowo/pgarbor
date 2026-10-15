@@ -1,0 +1,62 @@
+# Two transactions lock rows in opposite order; the first waiter detects the cycle after deadlock_timeout and gets 40P01.
+id: slice-txn.deadlock-40p01
+title: Opposite-order row locks deadlock; the detecting waiter gets 40P01 and its work is rolled back
+family: slice-txn
+tier: extended
+feature_ids: [transactions, row-locks, deadlock, errors, multi-session, update]
+required_capabilities: [create-table, insert, update, select, transactions, multi-session, row-locks, deadlock-detection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/explicit-locking.html#LOCKING-DEADLOCKS; errcodes 40P01"
+sessions: [a, b]
+setup: |
+  CREATE TABLE r (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO r VALUES (1, 10), (2, 20);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE r SET v = v + 1 WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE r SET v = v + 1 WHERE id = 2
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE r SET v = v + 1 WHERE id = 2
+    async: true
+    expect_blocked: true
+    comment: a waits for b, which holds row 2
+  - session: b
+    sql: |
+      UPDATE r SET v = v + 1 WHERE id = 1
+    expect: ok
+    comment: a is the first waiter, so a is the process that detects the cycle and is aborted; b proceeds
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    wait: true
+    expect: error
+    sqlstate: "40P01"
+    compare_message: false
+    comment: DETAIL names backend pids, so the message is not compared
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM r ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect 11 and 21 (only b's committed updates)

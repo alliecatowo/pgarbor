@@ -1,0 +1,29 @@
+# ROLLBACK destroys a WITH HOLD cursor declared inside the rolled-back block.
+id: portals.hold-cursor-closed-on-rollback
+title: WITH HOLD cursor declared in a rolled-back transaction does not exist afterwards
+family: portals
+tier: core
+feature_ids: [cursors, hold-cursor, errors, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/portals.sql (ROLLBACK should close holdable cursors; should fail)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n int4);
+  INSERT INTO t VALUES (1), (2);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE h CURSOR WITH HOLD FOR SELECT n FROM t
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      FETCH FROM h
+    expect: error
+    sqlstate: "34000"
+    comment: cursor "h" does not exist

@@ -1,0 +1,32 @@
+# Volatility is recorded in pg_proc and changed by ALTER FUNCTION; COST changes procost only.
+id: create-function-sql.catalog-volatility-alter
+title: Volatility category in pg_proc before and after ALTER FUNCTION, unrelated COST change
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, alter-function, catalog-introspection]
+required_capabilities: [create-function, alter-function, sql-functions, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE FUNCTION functest_b_1(int) RETURNS bool LANGUAGE sql AS 'SELECT $1 > 0';
+  CREATE FUNCTION functest_b_2(int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 > 0';
+  CREATE FUNCTION functest_b_3(int) RETURNS bool LANGUAGE sql STABLE AS 'SELECT $1 = 0';
+  CREATE FUNCTION functest_b_4(int) RETURNS bool LANGUAGE sql VOLATILE AS 'SELECT $1 < 0';
+steps:
+  - sql: |
+      SELECT proname, provolatile, procost FROM pg_proc
+       WHERE proname IN ('functest_b_1', 'functest_b_2', 'functest_b_3', 'functest_b_4')
+       ORDER BY proname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER FUNCTION functest_b_2(int) VOLATILE;
+      ALTER FUNCTION functest_b_3(int) COST 100
+    expect: ok
+  - sql: |
+      SELECT proname, provolatile, procost FROM pg_proc
+       WHERE proname IN ('functest_b_1', 'functest_b_2', 'functest_b_3', 'functest_b_4')
+       ORDER BY proname
+    expect: rows
+    order: ordered

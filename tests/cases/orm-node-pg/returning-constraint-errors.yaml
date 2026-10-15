@@ -1,0 +1,35 @@
+# Constraint violations from parameterized INSERT ... RETURNING carry the expected SQLSTATE.
+id: orm-node-pg.returning-constraint-errors
+title: "NOT NULL and UNIQUE violations from parameterized INSERT ... RETURNING"
+family: orm-node-pg
+tier: core
+feature_ids: [returning, parameterized-queries, constraints, errors]
+required_capabilities: [create-table, insert, select, extended-protocol, errors]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 23502 not_null_violation, 23505 unique_violation"
+sessions: [a]
+setup: |
+  CREATE TABLE person2 (id int4 PRIMARY KEY, name text NOT NULL);
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO person2 (id, name) VALUES ($1, $2) RETURNING id
+      params: ["1", null]
+    expect: error
+    sqlstate: "23502"
+  - exec_params:
+      sql: |
+        INSERT INTO person2 (id, name) VALUES ($1, $2) RETURNING id, name
+      params: ["1", "x"]
+    expect: rows
+  - exec_params:
+      sql: |
+        INSERT INTO person2 (id, name) VALUES ($1, $2) RETURNING id
+      params: ["1", "y"]
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT id, name FROM person2 ORDER BY id
+    expect: rows
+    order: ordered

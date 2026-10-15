@@ -1,0 +1,37 @@
+# INSERT through a view: a DO INSTEAD rule without RETURNING cannot serve INSERT ... RETURNING (0A000); after the rule gains RETURNING it can.
+id: returning.insert-view-rule-returning
+title: INSERT RETURNING through a view needs an unconditional DO INSTEAD rule with RETURNING
+family: returning
+tier: extended
+feature_ids: [returning, insert, views, rules, errors]
+required_capabilities: [create-table, create-view, create-rule, insert, select, returning]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (f1 int, f2 text);
+  CREATE VIEW voo AS SELECT f1, f2 FROM foo;
+  CREATE RULE voo_i AS ON INSERT TO voo DO INSTEAD INSERT INTO foo VALUES (new.f1, new.f2)
+steps:
+  - sql: |
+      INSERT INTO voo VALUES (11, 'zit')
+    expect: ok
+  - sql: |
+      INSERT INTO voo VALUES (12, 'zoo') RETURNING *, f1 * 2
+    expect: error
+    sqlstate: "0A000"
+    comment: the rule has no RETURNING clause
+  - sql: |
+      CREATE OR REPLACE RULE voo_i AS ON INSERT TO voo DO INSTEAD
+        INSERT INTO foo VALUES (new.f1, new.f2) RETURNING f1, f2
+    expect: ok
+  - sql: |
+      INSERT INTO voo VALUES (14, 'zoo2') RETURNING f1, f2
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, f2 FROM foo ORDER BY f1
+    expect: rows
+    order: ordered

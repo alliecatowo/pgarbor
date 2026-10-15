@@ -1,0 +1,28 @@
+# A set-returning SQL function on the inner side of a LEFT JOIN is materialized once: nextval runs once per function row.
+id: rangefuncs.sequence-rescan-left-join
+title: "Set-returning SQL function with nextval on the inner side of a LEFT JOIN is evaluated once"
+family: rangefuncs
+tier: extended
+feature_ids: [sequences, set-returning-functions, sql-functions, outer-joins, rescan]
+required_capabilities: [create-function, sql-functions, sequences, set-returning-functions, select, join]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (rescan tests: invokes ExecReScanFunctionScan, materialize once)"
+setup: |
+  CREATE TEMPORARY SEQUENCE rngfunc_rescan_seq1;
+  CREATE TYPE rngfunc_rescan_t AS (i integer, s bigint);
+  CREATE FUNCTION rngfunc_sql(int,int) RETURNS setof rngfunc_rescan_t AS 'SELECT i, nextval(''rngfunc_rescan_seq1'') FROM generate_series($1,$2) i;' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT setval('rngfunc_rescan_seq1', 1, false)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN rngfunc_sql(11,13) ON (r+i) < 100
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT last_value, is_called FROM rngfunc_rescan_seq1
+    expect: rows
+    order: ordered
+    comment: "three nextval calls in total: the function output is not re-run per outer row"

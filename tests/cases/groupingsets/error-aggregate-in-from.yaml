@@ -1,0 +1,21 @@
+# An aggregate's own FROM-clause set-returning function may not reference the same query level.
+id: groupingsets.error-aggregate-in-from
+title: Lateral set-returning function with outer reference inside grouped subquery is rejected
+family: groupingsets
+tier: extended
+feature_ids: [grouping-sets, lateral, errors, set-returning-functions]
+required_capabilities: [select, group-by, grouping-sets, lateral, set-returning-functions, sql-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/groupingsets.sql line 678-680 aggregate functions are not allowed in FROM clause"
+sessions: [a]
+setup: |
+  CREATE FUNCTION gs_data(v integer, OUT a integer, OUT b integer)
+    RETURNS SETOF record
+    AS $f$ SELECT v, i FROM generate_series(1,3) i $f$ LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM (VALUES (1),(2)) v(x),
+        LATERAL (SELECT a, b, sum(v.x) FROM gs_data(v.x) GROUP BY ROLLUP (a,b)) s
+    expect: error
+    sqlstate: "42803"

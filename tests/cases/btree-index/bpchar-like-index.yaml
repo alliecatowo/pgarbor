@@ -1,0 +1,37 @@
+# Derived from PG18 btree_index.sql LIKE cases with text and bpchar casts; checks result correctness only, not plan choice.
+id: btree-index.bpchar-like-index
+title: LIKE over a text column and over a bpchar cast returns the same prefix and exact matches on a C-collation index
+family: btree-index
+tier: extended
+feature_ids: [like, create-index, btree-index, text, bpchar, collation, select]
+required_capabilities: [create-table, insert, select, create-index, collation-c]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (btree_bpchar LIKE with bpchar_ops)"
+setup: |
+  CREATE TABLE bp (f1 text COLLATE "C");
+  CREATE INDEX bp_idx ON bp (f1 text_ops) WITH (deduplicate_items=on);
+  INSERT INTO bp VALUES ('foo'), ('fool'), ('bar'), ('quux');
+steps:
+  - sql: |
+      SELECT f1 FROM bp WHERE f1 LIKE 'foo' ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: exact match, no wildcard
+  - sql: |
+      SELECT f1 FROM bp WHERE f1 LIKE 'foo%' ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1 FROM bp WHERE f1::bpchar LIKE 'foo%' ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1 FROM bp WHERE f1::bpchar LIKE 'foo' ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1 FROM bp WHERE f1 LIKE '' ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: empty pattern matches nothing here

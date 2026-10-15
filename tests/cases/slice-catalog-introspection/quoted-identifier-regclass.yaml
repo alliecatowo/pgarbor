@@ -1,0 +1,33 @@
+# Case folding of unquoted identifiers versus quoted mixed-case names in regclass casts, to_regclass and rename visibility.
+id: slice-catalog-introspection.quoted-identifier-regclass
+title: Quoted mixed-case identifiers versus folded names in regclass casts and after rename
+family: slice-catalog-introspection
+tier: extended
+feature_ids: [catalog-introspection, create-table, identifiers, alter-table]
+required_capabilities: [create-table, alter-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS"
+sessions: [a]
+setup: |
+  CREATE TABLE "MixedCase" (x int4);
+  CREATE TABLE plain_name (y int4);
+steps:
+  - sql: |
+      SELECT '"MixedCase"'::regclass::text AS quoted, to_regclass('"MixedCase"') IS NOT NULL AS quoted_found, to_regclass('MixedCase') IS NULL AS folded_missing
+    expect: rows
+  - sql: |
+      SELECT 'MixedCase'::regclass
+    expect: error
+    sqlstate: "42P01"
+    comment: unquoted name folds to mixedcase, which does not exist
+  - sql: |
+      ALTER TABLE plain_name RENAME TO renamed_name
+    expect: ok
+  - sql: |
+      SELECT 'plain_name'::regclass
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT to_regclass('renamed_name')::text AS renamed, to_regclass('plain_name') IS NULL AS old_gone
+    expect: rows

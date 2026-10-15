@@ -1,0 +1,27 @@
+# \d on a mixed-case, quoted-identifier table: regclass lookup of quoted name and format_type output.
+id: psql-describe.describe-quoted-identifiers
+title: Describing a quoted mixed-case table resolves the exact name and keeps the case in output
+family: psql-describe
+tier: extended
+feature_ids: [catalog-introspection, create-table, psql-describe]
+required_capabilities: [create-table, catalog-introspection]
+provenance:
+  source: hand
+  ref: "src/bin/psql/describe.c (quoted identifiers via PQescapeStringConn); PG18 identifiers doc"
+sessions: [a]
+setup: |
+  CREATE TABLE "MixedCase" ("Id" int4, "value With Space" text);
+steps:
+  - sql: |
+      SELECT c.relname, a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type
+      FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+      WHERE c.oid = '"MixedCase"'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+      ORDER BY a.attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'mixedcase'::regclass
+    expect: error
+    sqlstate: "42P01"
+    comment: unquoted name folds to lowercase, which does not exist

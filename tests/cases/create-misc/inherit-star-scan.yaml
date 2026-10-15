@@ -1,0 +1,35 @@
+# Inheritance: FROM parent* includes child rows, FROM ONLY parent excludes them.
+id: create-misc.inherit-star-scan
+title: Scan a parent with and without the inheritance star
+family: create-misc
+tier: core
+feature_ids: [inheritance, select, null-handling]
+required_capabilities: [create-table, insert, select, inheritance]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_misc.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE a_star (class char, a int4);
+  CREATE TABLE b_star (b text) INHERITS (a_star);
+  INSERT INTO a_star (class, a) VALUES ('a', 1), ('a', 2), ('a', NULL);
+  INSERT INTO b_star (class, a, b) VALUES ('b', 3, 'mumble'), ('b', 4, NULL), ('b', NULL, 'bumble');
+steps:
+  - sql: |
+      SELECT class, a FROM ONLY a_star ORDER BY a NULLS LAST, class
+    expect: rows
+    order: ordered
+    comment: ONLY excludes the child rows, so three parent rows
+  - sql: |
+      SELECT class, a FROM a_star* ORDER BY a NULLS LAST, class
+    expect: rows
+    order: ordered
+    comment: star includes child rows, six rows total with NULLs last
+  - sql: |
+      SELECT class, a, b FROM ONLY b_star ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM a_star* WHERE a IS NULL
+    expect: rows
+    order: multiset

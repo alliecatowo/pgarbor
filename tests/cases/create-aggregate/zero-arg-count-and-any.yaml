@@ -1,0 +1,29 @@
+# Zero-argument aggregate counts all rows including NULL-argument rows; an ("any") aggregate
+# using a non-strict transition function also counts NULL inputs, unlike count(column).
+id: create-aggregate.zero-arg-count-and-any
+title: "Zero-argument aggregate counts all rows; ANY-argument aggregate counts NULL inputs"
+family: create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, nulls, count]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (newcnt (*), newcnt (\"any\"))"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE c (x int4);
+  INSERT INTO c VALUES (1), (NULL), (NULL);
+  CREATE AGGREGATE newcnt (*) (sfunc = int8inc, stype = int8, initcond = '0', parallel = safe);
+  CREATE AGGREGATE cnt_any ("any") (sfunc = int8inc_any, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      SELECT newcnt(*), cnt_any(x), count(x) FROM c
+    expect: rows
+    comment: 3 rows, 3 for the non-strict ANY aggregate, 1 for count(column)
+  - sql: |
+      SELECT newcnt(*) FROM c WHERE false
+    expect: rows
+    comment: empty input returns the initcond 0
+  - sql: |
+      SELECT newcnt(*), cnt_any(x) FROM c WHERE x IS NULL
+    expect: rows

@@ -1,0 +1,44 @@
+# int4 gcd() and lcm() return non-negative results and handle zero; results that cannot be
+# represented in int4, including gcd or lcm involving INT_MIN, raise 22003.
+id: int4.gcd-lcm
+title: int4 gcd and lcm with zero, negative and INT_MIN inputs; unrepresentable results raise 22003
+family: int4
+tier: extended
+feature_ids: [int4, math-functions, gcd, lcm, errors, sqlstate]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/int4.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT a, b, gcd(a, b), gcd(a, -b), gcd(b, a), gcd(-b, a)
+      FROM (VALUES (0::int4, 0::int4),
+                   (0::int4, 6410818::int4),
+                   ((-2147483648)::int4, 1::int4),
+                   ((-2147483648)::int4, 1073741824::int4)) AS v(a, b)
+      ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b, lcm(a, b), lcm(a, -b), lcm(b, a), lcm(-b, a)
+      FROM (VALUES (0::int4, 0::int4),
+                   (0::int4, 42::int4),
+                   (42::int4, 42::int4),
+                   (330::int4, 462::int4),
+                   (-330::int4, 462::int4)) AS v(a, b)
+      ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT gcd((-2147483648)::int4, 0::int4)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT lcm((-2147483648)::int4, 1::int4)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT lcm(2147483647::int4, 2147483646::int4)
+    expect: error
+    sqlstate: "22003"

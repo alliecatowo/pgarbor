@@ -1,0 +1,37 @@
+# NOT ENFORCED skips checks on insert; switching back to ENFORCED validates existing rows.
+id: foreign-key.not-enforced-then-enforce
+title: "NOT ENFORCED foreign keys accept violations until re-enforced"
+family: foreign-key
+tier: extended
+feature_ids: [foreign-keys, alter-table, insert, delete, constraints, catalog-introspection]
+required_capabilities: [create-table, insert, delete, alter-table, foreign-keys, constraints, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4 CONSTRAINT fk_ne REFERENCES pk (id) NOT ENFORCED);
+steps:
+  - sql: |
+      INSERT INTO fk VALUES (1, 100)
+    expect: ok
+    comment: no check while NOT ENFORCED
+  - sql: |
+      SELECT conenforced FROM pg_constraint WHERE conname = 'fk_ne'
+    expect: rows
+  - sql: |
+      ALTER TABLE fk ALTER CONSTRAINT fk_ne ENFORCED
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM fk WHERE id = 1
+    expect: ok
+  - sql: |
+      ALTER TABLE fk ALTER CONSTRAINT fk_ne ENFORCED
+    expect: ok
+  - sql: |
+      INSERT INTO fk VALUES (2, 100)
+    expect: error
+    sqlstate: "23503"

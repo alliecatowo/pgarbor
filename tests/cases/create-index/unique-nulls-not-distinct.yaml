@@ -1,0 +1,41 @@
+# NULLS NOT DISTINCT unique index: build fails while duplicate NULL keys exist, then enforces uniqueness on NULLs.
+id: create-index.unique-nulls-not-distinct
+title: NULLS NOT DISTINCT unique index fails to build over duplicate NULLs then rejects a second NULL key
+family: create-index
+tier: extended
+feature_ids: [create-index, unique-index, nulls-not-distinct, errors]
+required_capabilities: [create-table, insert, delete, select, create-index, unique-constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (unique null behavior section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE unique_tbl (i int, t text)
+    expect: ok
+  - sql: |
+      INSERT INTO unique_tbl VALUES (1, 'one'), (NULL, 'a'), (NULL, 'b')
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX unique_idx2 ON unique_tbl (i) NULLS NOT DISTINCT
+    expect: error
+    sqlstate: "23505"
+    comment: build scans existing rows and finds two NULL keys
+  - sql: |
+      DELETE FROM unique_tbl WHERE t = 'b'
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX unique_idx2 ON unique_tbl (i) NULLS NOT DISTINCT
+    expect: ok
+  - sql: |
+      INSERT INTO unique_tbl (t) VALUES ('c')
+    expect: error
+    sqlstate: "23505"
+    comment: a second NULL key is a duplicate under NULLS NOT DISTINCT
+  - sql: |
+      INSERT INTO unique_tbl VALUES (2, 'two')
+    expect: ok
+  - sql: |
+      SELECT i, t FROM unique_tbl ORDER BY t
+    expect: rows
+    order: ordered

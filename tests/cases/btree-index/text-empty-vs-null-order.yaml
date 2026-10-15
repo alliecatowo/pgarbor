@@ -1,0 +1,33 @@
+# Derived from PG18 btree_index.sql text/name index cases; empty string vs NULL distinction under a C collation.
+id: btree-index.text-empty-vs-null-order
+title: Text btree index separates empty string from NULL and orders with the C collation
+family: btree-index
+tier: core
+feature_ids: [select, create-index, btree-index, text, collation, nulls, order-by]
+required_capabilities: [create-table, insert, select, create-index, collation-c]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (bt_txt_index with text_ops); PG18 collation C"
+setup: |
+  CREATE TABLE txt (seqno text COLLATE "C", rnd int4);
+  INSERT INTO txt VALUES ('', 1), (NULL, 2), ('a', 3), ('B', 4), ('ab', 5), ('a b', 6);
+  CREATE INDEX txt_idx ON txt USING btree (seqno text_ops);
+steps:
+  - sql: |
+      SELECT seqno, rnd FROM txt ORDER BY seqno, rnd
+    expect: rows
+    order: ordered
+    comment: empty string sorts before other text; NULL sorts last under ASC
+  - sql: |
+      SELECT rnd FROM txt WHERE seqno = ''
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT rnd FROM txt WHERE seqno IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT rnd FROM txt WHERE seqno >= 'a' ORDER BY seqno, rnd
+    expect: rows
+    order: ordered
+    comment: C collation puts uppercase B before lowercase a, so it is excluded from the range

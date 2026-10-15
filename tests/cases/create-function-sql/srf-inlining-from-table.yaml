@@ -1,0 +1,37 @@
+# SQL set-returning functions over a table, in both quoted and SQL-standard body forms.
+id: create-function-sql.srf-inlining-from-table
+title: Set-returning SQL functions reading a table, quoted body and BEGIN ATOMIC body
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, set-returning-functions, sql-standard-function-body, aggregates]
+required_capabilities: [create-function, sql-functions, sql-standard-function-body, set-returning-functions, create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE TABLE functest3 (a int);
+  INSERT INTO functest3 VALUES (1), (2), (3);
+  CREATE FUNCTION functest_sri1() RETURNS SETOF int
+  LANGUAGE SQL
+  STABLE
+  AS '
+      SELECT * FROM functest3;
+  ';
+  CREATE FUNCTION functest_sri2() RETURNS SETOF int
+  LANGUAGE SQL
+  STABLE
+  BEGIN ATOMIC
+      SELECT * FROM functest3;
+  END;
+steps:
+  - sql: |
+      SELECT * FROM functest_sri1() ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM functest_sri2() ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sum(x) AS total FROM functest_sri1() AS x
+    expect: rows

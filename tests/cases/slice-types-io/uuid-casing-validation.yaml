@@ -1,0 +1,37 @@
+# uuid text output is lowercase hyphenated regardless of input casing; duplicate values differing
+# only by case violate a primary key; invalid hex is rejected.
+id: slice-types-io.uuid-casing-validation
+title: "uuid output is lowercase and case-insensitive for uniqueness"
+family: slice-types-io
+tier: core
+feature_ids: [uuid, text-output, constraints, create-table, insert, select, errors]
+required_capabilities: [create-table, insert, select, uuid, constraints, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-uuid.html"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11'::uuid::text AS upper_in, 'a0eebc999c0b4ef8bb6d6bb9bd380a11'::uuid::text AS nohyphen, '{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}'::uuid::text AS braces, (NULL::uuid)::text IS NULL AS n
+    expect: rows
+    order: multiset
+  - sql: |
+      CREATE TABLE ids (id uuid PRIMARY KEY, label text)
+    expect: ok
+  - sql: |
+      INSERT INTO ids VALUES ('A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 'a')
+    expect: ok
+  - sql: |
+      INSERT INTO ids VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'b')
+    expect: error
+    sqlstate: "23505"
+    comment: "same uuid value in different casing is a duplicate key"
+  - sql: |
+      SELECT id::text AS id_txt, label FROM ids ORDER BY label
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A1G'::uuid
+    expect: error
+    sqlstate: "22P02"
+    comment: "G is not a hex digit"

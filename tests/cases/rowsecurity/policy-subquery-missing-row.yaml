@@ -1,0 +1,52 @@
+# A policy whose scalar subquery finds no row (or a NULL value) evaluates to NULL and hides every row.
+id: rowsecurity.policy-subquery-missing-row
+title: "Policy subquery returning no row or NULL hides all rows"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, subqueries, guc, nulls]
+required_capabilities: [create-table, insert, select, rls, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE uaccount (pguser text PRIMARY KEY, seclv int4);
+  INSERT INTO uaccount VALUES ('alice', 99), ('bob', 1), ('carol', NULL);
+  CREATE TABLE document (did int4 PRIMARY KEY, dlevel int4 NOT NULL, dtitle text);
+  INSERT INTO document VALUES (1, 1, 'a'), (2, 2, 'b'), (3, 3, 'c');
+  CREATE POLICY p1 ON document AS PERMISSIVE FOR SELECT USING (dlevel <= (SELECT seclv FROM uaccount WHERE pguser = current_setting('app.uid', true)));
+  ALTER TABLE document ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE document FORCE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SET app.uid = 'alice'
+    expect: ok
+  - sql: |
+      SELECT did FROM document ORDER BY did
+    expect: rows
+    order: ordered
+    comment: level 99 sees all three rows
+  - sql: |
+      SET app.uid = 'bob'
+    expect: ok
+  - sql: |
+      SELECT did FROM document ORDER BY did
+    expect: rows
+    order: ordered
+    comment: level 1 sees only row 1
+  - sql: |
+      SET app.uid = 'carol'
+    expect: ok
+  - sql: |
+      SELECT did FROM document ORDER BY did
+    expect: rows
+    order: ordered
+    comment: seclv is NULL, so the comparison is NULL and no rows are visible
+  - sql: |
+      SET app.uid = 'mallory'
+    expect: ok
+  - sql: |
+      SELECT did FROM document ORDER BY did
+    expect: rows
+    order: ordered
+    comment: the subquery returns no row, so the comparison is NULL and no rows are visible

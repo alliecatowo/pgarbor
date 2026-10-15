@@ -1,0 +1,40 @@
+# Changing GiST fillfactor with ALTER INDEX, then REINDEX; invalid buffering on ALTER is refused.
+id: gist.alter-reindex-gist
+title: ALTER INDEX SET fillfactor and REINDEX keep GiST query results; bad options refused
+family: gist
+tier: core
+feature_ids: [gist, alter-index, reindex, index-options, errors, point]
+required_capabilities: [create-table, insert, select, create-index, gist-index, point-type, alter-index, reindex, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE ar (id int4, p point);
+  INSERT INTO ar SELECT g, point(g, g) FROM generate_series(1, 300) g;
+  CREATE INDEX ar_p ON ar USING gist (p);
+steps:
+  - sql: |
+      ALTER INDEX ar_p SET (fillfactor = 40)
+    expect: ok
+  - sql: |
+      REINDEX INDEX ar_p
+    expect: ok
+  - sql: |
+      SELECT id FROM ar WHERE p <@ box(point(10,10), point(12,12)) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX ar_p RESET (fillfactor)
+    expect: ok
+  - sql: |
+      REINDEX TABLE ar
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM ar WHERE p <@ box(point(1,1), point(300,300))
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER INDEX ar_p SET (buffering = invalid_value)
+    expect: error
+    sqlstate: "22023"

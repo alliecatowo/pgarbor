@@ -1,0 +1,30 @@
+# Empty input: grouped aggregate over an impossible predicate returns zero rows, while an
+# ungrouped aggregate over an empty set returns exactly one row (count 0, the rest NULL).
+id: partition-aggregate.empty-input
+title: Aggregates over empty partitioned input return zero rows or one NULL row
+family: partition-aggregate
+tier: core
+feature_ids: [partitioning, group-by, aggregates, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_empty (a int, c text) PARTITION BY LIST (c);
+  CREATE TABLE pagg_empty_p1 PARTITION OF pagg_empty FOR VALUES IN ('x');
+  CREATE TABLE pagg_empty_p2 PARTITION OF pagg_empty FOR VALUES IN ('y');
+  INSERT INTO pagg_empty VALUES (1, 'x'), (2, 'y');
+steps:
+  - sql: |
+      SELECT c, sum(a) FROM pagg_empty WHERE 1 = 2 GROUP BY c ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*), sum(a), avg(a), min(a), max(c) FROM pagg_empty WHERE a > 100
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c, sum(a) FROM pagg_empty WHERE c = 'z' GROUP BY c
+    expect: rows
+    order: multiset

@@ -1,0 +1,39 @@
+# BEFORE INSERT row trigger rewrites NEW; AFTER INSERT row trigger returns NULL and updates matching rows.
+id: copy2.trigger-before-after-row
+title: BEFORE and AFTER row triggers on insert with self-update in the AFTER trigger
+family: copy2
+tier: extended
+feature_ids: [triggers, plpgsql, insert, update]
+required_capabilities: [create-table, insert, select, update, triggers, plpgsql]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE trg_x (a serial, b int, c text NOT NULL DEFAULT 'stuff', d text, e text);
+  CREATE FUNCTION fn_trg_before() RETURNS trigger AS $$
+  BEGIN
+    NEW.e := 'before trigger fired';
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION fn_trg_after() RETURNS trigger AS $$
+  BEGIN
+    UPDATE trg_x SET e = 'after trigger fired' WHERE c = 'stuff';
+    RETURN NULL;
+  END;
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER trg_x_before BEFORE INSERT ON trg_x FOR EACH ROW EXECUTE FUNCTION fn_trg_before();
+  CREATE TRIGGER trg_x_after AFTER INSERT ON trg_x FOR EACH ROW EXECUTE FUNCTION fn_trg_after();
+steps:
+  - sql: |
+      INSERT INTO trg_x (b, d) VALUES (1, 'row one')
+    expect: ok
+  - sql: |
+      INSERT INTO trg_x (b, c, d) VALUES (2, 'other', 'row two')
+    expect: ok
+  - sql: |
+      SELECT a, b, c, d, e FROM trg_x ORDER BY a
+    expect: rows
+    order: ordered
+    comment: row one ends with the after-trigger value, row two keeps the before-trigger value

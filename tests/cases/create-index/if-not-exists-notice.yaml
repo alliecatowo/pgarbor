@@ -1,0 +1,35 @@
+# Duplicate index names: error without IF NOT EXISTS, a notice with it; IF NOT EXISTS without a name is a syntax error.
+id: create-index.if-not-exists-notice
+title: Duplicate index name errors without IF NOT EXISTS and only emits a notice with it
+family: create-index
+tier: core
+feature_ids: [create-index, if-not-exists, errors, notices, catalog-introspection]
+required_capabilities: [create-table, select, create-index, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (BTREE section, IF NOT EXISTS statements)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE idx_ine (a int)
+    expect: ok
+  - sql: |
+      CREATE INDEX idx_ine_a ON idx_ine (a)
+    expect: ok
+  - sql: |
+      CREATE INDEX idx_ine_a ON idx_ine (a)
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      CREATE INDEX IF NOT EXISTS idx_ine_a ON idx_ine (a)
+    expect: notice
+    comment: a notice is raised and no second index is created
+  - sql: |
+      CREATE INDEX IF NOT EXISTS ON idx_ine (a)
+    expect: error
+    sqlstate: "42601"
+    comment: the index name is required even with IF NOT EXISTS
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'idx_ine' ORDER BY indexname
+    expect: rows
+    order: ordered

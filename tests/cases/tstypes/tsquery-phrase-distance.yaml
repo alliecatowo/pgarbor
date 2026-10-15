@@ -1,0 +1,37 @@
+# Phrase operators <-> and <N> against tsvector positions, including tsquery_phrase.
+id: tstypes.tsquery-phrase-distance
+title: Phrase operators <-> and <N> match tsvector positions
+family: tstypes
+tier: core
+feature_ids: [tsquery, text-search, phrase-search]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tstypes.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 'a:1 b:2'::tsvector @@ 'a <-> b'::tsquery AS result
+    expect: rows
+    comment: adjacent positions match
+  - sql: |
+      SELECT 'a:1 b:2'::tsvector @@ 'a <0> b'::tsquery AS result
+    expect: rows
+    comment: distance zero never matches distinct lexemes
+  - sql: |
+      SELECT 'a:1 b:2'::tsvector @@ 'a <2> b'::tsquery AS result
+    expect: rows
+  - sql: |
+      SELECT 'a:1 b:3'::tsvector @@ 'a <2> b'::tsquery AS result
+    expect: rows
+  - sql: |
+      SELECT 'a:1 b:3'::tsvector @@ 'a <0> a:*'::tsquery AS result
+    expect: rows
+    comment: distance zero matches a lexeme prefix at the same position
+  - sql: |
+      SELECT tsquery_phrase('a <3> g', 'b & d', 10)::text AS q
+    expect: rows
+    comment: phrase of two queries with explicit distance
+  - sql: |
+      SELECT 'a <-> b'::tsquery <-> 'c'::tsquery AS q
+    expect: rows

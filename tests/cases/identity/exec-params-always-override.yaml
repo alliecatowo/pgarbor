@@ -1,0 +1,45 @@
+# Extended protocol: a parameter bound into a GENERATED ALWAYS column is rejected at Parse time; DEFAULT-style inserts still work.
+id: identity.exec-params-always-override
+title: Parameterized explicit value for GENERATED ALWAYS is rejected at parse time
+family: identity
+tier: extended
+feature_ids: [identity-columns, extended-protocol, prepared-statements, errors]
+required_capabilities: [create-table, insert, select, identity, extended-protocol]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY; errcodes 428C9"
+sessions: [a]
+setup: |
+  CREATE TABLE itest2 (a bigint GENERATED ALWAYS AS IDENTITY, b text);
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO itest2 (a, b) VALUES ($1, $2)
+      params: ["5", "x"]
+      param_types: [20, 25]
+    expect: error
+    sqlstate: "428C9"
+    comment: the check applies to any non-DEFAULT expression, including a bind parameter
+  - exec_params:
+      sql: |
+        INSERT INTO itest2 (b) VALUES ($1)
+      params: ["ok"]
+      param_types: [25]
+    expect: ok
+  - parse:
+      name: ins
+      sql: |
+        INSERT INTO itest2 (b) VALUES ($1)
+      param_types: [25]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["again"]
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT a, b FROM itest2 ORDER BY a
+    expect: rows
+    order: ordered
+  - close:
+      statement: ins

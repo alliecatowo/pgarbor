@@ -1,0 +1,37 @@
+# Unique index with INCLUDE columns: only the key columns are enforced for uniqueness; included columns are payload.
+id: create-index.covering-include-unique
+title: Unique index with INCLUDE columns enforces uniqueness on key columns only
+family: create-index
+tier: extended
+feature_ids: [create-index, include-columns, unique-index, errors]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (unique index with included columns section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE cov (f1 int, f2 int, f3 text)
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX cov_idx ON cov (f1, f2) INCLUDE (f3)
+    expect: ok
+  - sql: |
+      INSERT INTO cov VALUES (1, 1, 'AAA'), (1, 2, 'AAA')
+    expect: ok
+  - sql: |
+      INSERT INTO cov VALUES (1, 2, 'BBB')
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate key on (f1, f2) despite different f3
+  - sql: |
+      INSERT INTO cov VALUES (1, 4, 'AAA')
+    expect: ok
+  - sql: |
+      INSERT INTO cov VALUES (1, 1, 'ZZZ')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT f1, f2, f3 FROM cov ORDER BY f1, f2
+    expect: rows
+    order: ordered

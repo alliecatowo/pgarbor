@@ -1,0 +1,38 @@
+# A view and a table cannot share a name in one schema, and CREATE OR REPLACE VIEW keeps the
+# relation while changing its definition.
+id: namespace.view-table-name-clash
+title: Table and view name collision within one schema, and CREATE OR REPLACE VIEW
+family: namespace
+tier: extended
+feature_ids: [create-view, create-table, errors]
+required_capabilities: [create-table, create-view, errors, select]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-createview.html"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA vc_schema;
+  CREATE TABLE vc_schema.base (n int4);
+  INSERT INTO vc_schema.base VALUES (1), (NULL);
+steps:
+  - sql: |
+      CREATE VIEW vc_schema.base AS SELECT n FROM vc_schema.base
+    expect: error
+    sqlstate: "42P07"
+    comment: name already used by a table in this schema
+  - sql: |
+      CREATE VIEW vc_schema.v AS SELECT n FROM vc_schema.base
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE VIEW vc_schema.v AS SELECT n * 10 AS n FROM vc_schema.base
+    expect: ok
+  - sql: |
+      SELECT n FROM vc_schema.v ORDER BY n
+    expect: rows
+    order: ordered
+    comment: NULL stays NULL through multiplication
+  - sql: |
+      CREATE OR REPLACE VIEW vc_schema.v AS SELECT n AS renamed FROM vc_schema.base
+    expect: error
+    sqlstate: "42P16"
+    comment: CREATE OR REPLACE cannot rename existing view columns

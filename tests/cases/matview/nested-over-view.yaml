@@ -1,0 +1,43 @@
+id: matview.nested-over-view
+title: Materialized view over a view over a table is stale until refreshed and blocks dropping the view
+family: matview
+tier: extended
+feature_ids: [materialized-views, create-view, group-by, aggregates, dependency, errors]
+required_capabilities: [create-table, insert, select, create-view, create-materialized-view, group-by, aggregates, dependency, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE nb (id int4, amt int4);
+  INSERT INTO nb VALUES (1, 10), (2, 20), (1, 5);
+  CREATE VIEW nv AS SELECT id, sum(amt) AS tot FROM nb GROUP BY id;
+  CREATE MATERIALIZED VIEW nmv AS SELECT id, tot FROM nv;
+steps:
+  - sql: |
+      SELECT id, tot FROM nmv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO nb VALUES (2, 1)
+    expect: ok
+  - sql: |
+      SELECT id, tot FROM nv ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the plain view is live
+  - sql: |
+      SELECT id, tot FROM nmv ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the materialized view is still stale
+  - sql: |
+      REFRESH MATERIALIZED VIEW nmv
+    expect: ok
+  - sql: |
+      SELECT id, tot FROM nmv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP VIEW nv
+    expect: error
+    sqlstate: "2BP01"

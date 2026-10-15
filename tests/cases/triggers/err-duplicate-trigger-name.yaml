@@ -1,0 +1,26 @@
+# Creating a second trigger with an existing name on the same table is rejected with 42710.
+id: triggers.err-duplicate-trigger-name
+title: Duplicate trigger name on the same table fails with duplicate_object
+family: triggers
+tier: extended
+feature_ids: [triggers, plpgsql, errors, catalog-introspection]
+required_capabilities: [create-table, select, plpgsql, triggers, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (CREATE TRIGGER name collision); errcodes 42710"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int);
+  CREATE FUNCTION noop_trig() RETURNS trigger AS $$
+  BEGIN RETURN NEW; END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER dup_t AFTER INSERT ON t FOR EACH ROW EXECUTE PROCEDURE noop_trig();
+steps:
+  - sql: |
+      CREATE TRIGGER dup_t BEFORE INSERT ON t FOR EACH ROW EXECUTE PROCEDURE noop_trig()
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT tgname, tgtype & 2 = 2 AS is_before FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

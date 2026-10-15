@@ -1,0 +1,32 @@
+# GIN on int4[] answers array containment; NULL array rows never match; empty array matches nothing via @> with a non-empty query.
+id: gin.array-contains-basic
+title: GIN index on int4[] answers array containment (@>) and <@
+family: gin
+tier: core
+feature_ids: [gin-index, arrays, array-containment]
+required_capabilities: [create-table, create-index, gin-index, insert, select, arrays]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_t (id int4 PRIMARY KEY, i int4[]);
+  CREATE INDEX gin_t_idx ON gin_t USING gin (i);
+  INSERT INTO gin_t VALUES (1, '{1,2,3}'), (2, '{1,3}'), (3, '{2}'), (4, '{1,2,3,4}'), (5, '{}'), (6, NULL);
+steps:
+  - sql: |
+      SELECT id FROM gin_t WHERE i @> '{1,3}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_t WHERE i @> '{1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_t WHERE i @> ARRAY[9] ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_t WHERE i <@ '{1,2,3,4}' ORDER BY id
+    expect: rows
+    order: ordered

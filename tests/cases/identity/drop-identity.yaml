@@ -1,0 +1,45 @@
+# DROP IDENTITY keeps the data and NOT NULL, removes the sequence, and is not idempotent without IF EXISTS.
+id: identity.drop-identity
+title: DROP IDENTITY keeps rows, leaves NOT NULL in place, removes the sequence
+family: identity
+tier: core
+feature_ids: [identity-columns, alter-table, sequences, constraints, errors]
+required_capabilities: [create-table, insert, select, alter-table, identity, sequences, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/identity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE itest4 (a int NOT NULL GENERATED ALWAYS AS IDENTITY, b text);
+  INSERT INTO itest4 DEFAULT VALUES;
+  INSERT INTO itest4 DEFAULT VALUES;
+steps:
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a DROP IDENTITY
+    expect: ok
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a DROP IDENTITY
+    expect: error
+    comment: the column is no longer an identity column
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a DROP IDENTITY IF EXISTS
+    expect: any
+    comment: IF EXISTS is a no-op (a notice is allowed)
+  - sql: |
+      INSERT INTO itest4 DEFAULT VALUES
+    expect: error
+    sqlstate: "23502"
+    comment: NOT NULL is not dropped with the identity, and no default exists
+  - sql: |
+      ALTER TABLE itest4 ALTER COLUMN a DROP NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO itest4 DEFAULT VALUES
+    expect: ok
+  - sql: |
+      SELECT a, b FROM itest4 ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_regclass('itest4_a_seq') IS NULL AS seq_gone
+    expect: rows

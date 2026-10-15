@@ -1,0 +1,30 @@
+# to_regclass returns NULL for missing names; the ::regclass cast raises 42P01; schema-qualified and unqualified names resolve via search_path.
+id: slice-catalog-introspection.regclass-to-regclass
+title: to_regclass returns NULL for unknown names while the regclass cast raises undefined_table
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, schemas, create-table, regclass]
+required_capabilities: [create-table, create-schema, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/functions-info.html; https://www.postgresql.org/docs/18/datatype-oid.html"
+sessions: [a]
+setup: |
+  CREATE SCHEMA app;
+  CREATE TABLE app.items (id int4);
+  CREATE TABLE public.items (id int4);
+steps:
+  - sql: |
+      SELECT to_regclass('app.items')::text AS app_items, to_regclass('public.items')::text AS public_items, to_regclass('items')::text AS unqualified
+    expect: rows
+  - sql: |
+      SELECT to_regclass('app.missing') IS NULL AS missing_is_null, to_regclass('nosuch_schema.items') IS NULL AS bad_schema_is_null, to_regtype('no_such_type') IS NULL AS missing_type_is_null
+    expect: rows
+  - sql: |
+      SELECT 'app.missing'::regclass
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT 'app.items'::regclass::text
+    expect: rows
+    comment: regclass output is the name qualified only when needed for the search_path

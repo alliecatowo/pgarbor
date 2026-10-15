@@ -1,0 +1,39 @@
+# Horizontal and vertical predicates over a table with NULL points: NULL in, NULL out, filtered out by WHERE.
+id: geometry.point-table-null-predicates
+title: Horizontal and vertical point predicates over a table containing NULLs
+family: geometry
+tier: core
+feature_ids: [geometric-types, point, point-predicates, create-table, insert, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/geometry.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pts (id int4 PRIMARY KEY, f1 point);
+  INSERT INTO pts VALUES (1, '(0,0)'), (2, '(5.1,0)'), (3, '(5.1,34.5)'), (4, NULL), (5, '(-3,34.5)');
+steps:
+  - sql: |
+      SELECT id FROM pts WHERE ishorizontal(f1, point '(0,0)') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: ishorizontal true when y coordinates equal; NULL row excluded
+  - sql: |
+      SELECT id FROM pts WHERE f1 ?- point '(0,0)' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: ?- operator must agree with ishorizontal
+  - sql: |
+      SELECT id FROM pts WHERE isvertical(f1, point '(5.1,34.5)') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM pts WHERE f1 ?| point '(5.1,34.5)' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, ishorizontal(f1, point '(0,0)') IS NULL AS null_result FROM pts WHERE id = 4
+    expect: rows
+    order: ordered
+    comment: NULL argument gives NULL result, not false

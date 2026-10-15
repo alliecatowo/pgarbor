@@ -1,0 +1,36 @@
+# READ COMMITTED takes a fresh snapshot per statement: a concurrent commit is seen by the next statement.
+id: mvcc.read-committed-statement-snapshot
+title: READ COMMITTED second statement sees a concurrent autocommitted update
+family: mvcc
+tier: core
+feature_ids: [transactions, read-committed, update, select]
+required_capabilities: [create-table, insert, update, select, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql; PG18 docs transaction-iso.html#XACT-READ-COMMITTED"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'old');
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      SELECT v FROM t WHERE id = 1
+    expect: rows
+  - session: b
+    sql: |
+      UPDATE t SET v = 'new' WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      SELECT v FROM t WHERE id = 1
+    expect: rows
+    comment: a's next statement takes a new snapshot and sees 'new'
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

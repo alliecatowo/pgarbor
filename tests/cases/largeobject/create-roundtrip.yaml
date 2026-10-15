@@ -1,0 +1,34 @@
+# Create an object, open it read-write inside a transaction, write, close, commit, read back.
+id: largeobject.create-roundtrip
+title: Create a large object, write through a descriptor, commit, read back
+family: largeobject
+tier: core
+feature_ids: [large-objects, lo-write, lo-read, transactions, create-table]
+required_capabilities: [large-objects, create-table, insert, update, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (loid oid, fd integer);
+  INSERT INTO st (loid) SELECT lo_create(42);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT lowrite(fd, 'Hello, large object!') FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_close(fd) FROM st
+    expect: rows
+  - sql: |
+      END
+    expect: ok
+  - sql: |
+      SELECT encode(lo_get(loid), 'escape') FROM st
+    expect: rows

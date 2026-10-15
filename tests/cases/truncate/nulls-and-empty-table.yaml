@@ -1,0 +1,39 @@
+# Truncating a table full of NULLs, a table that is already empty, and several tables in one statement.
+id: truncate.nulls-and-empty-table
+title: "TRUNCATE handles NULL-filled rows, already-empty tables, and multi-table lists"
+family: truncate
+tier: core
+feature_ids: [truncate, nulls, insert, select, numeric]
+required_capabilities: [create-table, insert, select, numeric, truncate, transactions]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE tn (a int4, b text, c numeric(5,2));
+  CREATE TABLE te (a int4);
+  INSERT INTO tn VALUES (NULL, NULL, NULL), (1, '', 2.50), (NULL, 'x', NULL);
+steps:
+  - sql: |
+      SELECT count(*) AS all_rows, count(a) AS a_nonnull, count(b) AS b_nonnull, count(c) AS c_nonnull FROM tn
+    expect: rows
+  - sql: |
+      TRUNCATE tn
+    expect: ok
+  - sql: |
+      SELECT count(*) AS all_rows, count(a) AS a_nonnull, count(b) AS b_nonnull, count(c) AS c_nonnull FROM tn
+    expect: rows
+  - sql: |
+      TRUNCATE te
+    expect: ok
+    comment: "truncating an already empty table is not an error"
+  - sql: |
+      INSERT INTO te VALUES (5)
+    expect: ok
+  - sql: |
+      TRUNCATE tn, te
+    expect: ok
+    comment: "one statement can list several tables"
+  - sql: |
+      SELECT (SELECT count(*) FROM tn) AS tn_rows, (SELECT count(*) FROM te) AS te_rows
+    expect: rows

@@ -1,0 +1,40 @@
+# WITH HOLD cursor outlives the transaction that declared it and resumes at its position.
+id: portals.hold-cursor-survives-commit
+title: WITH HOLD cursor keeps its position across COMMIT
+family: portals
+tier: core
+feature_ids: [cursors, hold-cursor, fetch, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/portals.sql (DECLARE foo25 SCROLL CURSOR WITH HOLD ... COMMIT; FETCH FROM foo25)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n int4);
+  INSERT INTO t VALUES (1), (2), (3), (4);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE h SCROLL CURSOR WITH HOLD FOR SELECT n FROM t ORDER BY n
+    expect: ok
+  - sql: |
+      FETCH 2 FROM h
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      FETCH FROM h
+    expect: rows
+    order: ordered
+    comment: resumes after row 2
+  - sql: |
+      FETCH BACKWARD FROM h
+    expect: rows
+    order: ordered
+  - sql: |
+      CLOSE h
+    expect: ok

@@ -1,0 +1,36 @@
+# TRIM forms, SUBSTRING FROM/FOR, and SQL-style negative start handling.
+id: strings.trim-substring
+title: TRIM LEADING/TRAILING/BOTH and SUBSTRING FROM/FOR with boundary starts
+family: strings
+tier: core
+feature_ids: [trim, substring, string-functions]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/strings.sql"
+steps:
+  - sql: |
+      SELECT TRIM(BOTH FROM '  bunch o blanks  ') AS both_ws,
+             TRIM(LEADING FROM '  bunch o blanks  ') AS lead_ws,
+             TRIM(TRAILING FROM '  bunch o blanks  ') AS trail_ws,
+             TRIM(BOTH 'x' FROM 'xxxxxsome Xsxxxxx') AS both_x
+    expect: rows
+  - sql: |
+      SELECT SUBSTRING('1234567890' FROM 3) AS from_only,
+             SUBSTRING('1234567890' FROM 4 FOR 3) AS from_for
+    expect: rows
+  - sql: |
+      SELECT SUBSTRING('string' FROM 2 FOR 2147483646) AS big_len,
+             SUBSTRING('string' FROM -10 FOR 2147483646) AS neg_start,
+             SUBSTRING('string' FROM 99) AS past_end,
+             SUBSTRING('string' FROM 0 FOR 2) AS zero_start
+    expect: rows
+    comment: negative start consumes characters from the virtual prefix, so the result is the whole string
+  - sql: |
+      SELECT SUBSTRING(NULL::text FROM 2) IS NULL AS null_str,
+             SUBSTRING('abc' FROM NULL::int) IS NULL AS null_start,
+             TRIM(BOTH FROM CAST(NULL AS text)) IS NULL AS null_trim
+    expect: rows
+  - sql: |
+      SELECT TRIM(BOTH '' FROM 'abc') AS empty_chars
+    expect: rows

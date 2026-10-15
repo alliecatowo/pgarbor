@@ -1,0 +1,44 @@
+# NOT MATCHED BY SOURCE actions: target rows with no source row are updated, then deleted by a condition.
+id: merge.not-matched-by-source
+title: WHEN NOT MATCHED BY SOURCE updates and conditionally deletes target-only rows
+family: merge
+tier: core
+feature_ids: [merge, update, delete, select]
+required_capabilities: [create-table, insert, update, delete, select, merge]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/merge.sql (DELETE/INSERT not matched by source/target; NOT MATCHED BY SOURCE conditions)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (2, 20), (3, 30);
+  INSERT INTO source VALUES (2, 5), (4, 40);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source AS s
+      ON t.tid = s.sid
+      WHEN MATCHED THEN
+        UPDATE SET balance = t.balance + s.delta
+      WHEN NOT MATCHED BY SOURCE THEN
+        UPDATE SET balance = 0
+      WHEN NOT MATCHED BY TARGET THEN
+        INSERT VALUES (s.sid, s.delta)
+    expect: ok
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect (1,0), (2,25), (3,0), (4,40)
+  - sql: |
+      MERGE INTO target t
+      USING source AS s
+      ON t.tid = s.sid
+      WHEN NOT MATCHED BY SOURCE AND t.balance = 0 THEN
+        DELETE
+    expect: ok
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect (2,25), (4,40); the source-less rows with balance 0 are deleted

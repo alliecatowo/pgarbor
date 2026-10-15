@@ -1,0 +1,25 @@
+# Two timetz values naming the same UTC instant but with different offsets are ordered by offset, not equal.
+id: timetz.equality-same-instant
+title: "timetz equality for the same UTC instant with different offsets"
+family: timetz
+tier: core
+feature_ids: [timetz, comparison, distinct]
+required_capabilities: [create-table, insert, select, distinct]
+provenance:
+  source: hand
+  ref: "PG18 datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE; timetz_cmp in src/backend/utils/adt/date.c"
+setup: |
+  CREATE TABLE tz_eq (f1 timetz);
+  INSERT INTO tz_eq VALUES ('12:00+00'), ('13:00+01'), ('12:00+00'), ('07:00-05'), ('19:00+07');
+steps:
+  - sql: |
+      SELECT f1 FROM tz_eq ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(DISTINCT f1) FROM tz_eq
+    expect: rows
+  - sql: |
+      SELECT '12:00+00'::timetz = '13:00+01'::timetz AS same_instant_eq, '12:00+00'::timetz < '13:00+01'::timetz AS lt
+    expect: rows
+    comment: both values are 12:00 UTC; the comparison falls back to the zone offset for ties

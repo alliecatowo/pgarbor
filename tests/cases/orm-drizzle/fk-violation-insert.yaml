@@ -1,0 +1,31 @@
+# Inserting a child row with no matching parent fails with foreign_key_violation.
+id: orm-drizzle.fk-violation-insert
+title: Child insert with a missing parent key raises 23503 and leaves no row behind
+family: orm-drizzle
+tier: core
+feature_ids: [foreign-key, insert, errors]
+required_capabilities: [create-table, insert, select, foreign-key, errors]
+provenance:
+  source: hand
+  ref: "PG18 errcodes-appendix.html class 23 foreign_key_violation"
+sessions: [a]
+setup: |
+  CREATE TABLE owners (id integer PRIMARY KEY);
+  CREATE TABLE pets (
+    id integer PRIMARY KEY,
+    owner_id integer REFERENCES owners (id) ON DELETE CASCADE
+  );
+  INSERT INTO owners VALUES (1);
+steps:
+  - sql: |
+      INSERT INTO pets VALUES (1, 1), (2, NULL)
+    expect: ok
+    comment: NULL foreign key values are not checked
+  - sql: |
+      INSERT INTO pets VALUES (3, 99)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      SELECT id, owner_id FROM pets ORDER BY id
+    expect: rows
+    order: ordered

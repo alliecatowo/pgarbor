@@ -1,0 +1,28 @@
+# Basic reference check: child rows must name an existing parent key unless the FK column is NULL.
+id: foreign-key.insert-references-parent
+title: "Insert into a referencing table succeeds only for existing parent keys or NULL"
+family: foreign-key
+tier: slice
+feature_ids: [foreign-keys, insert, select, create-table, constraints]
+required_capabilities: [create-table, insert, select, foreign-keys, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY, label text);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4 REFERENCES pk (id));
+  INSERT INTO pk VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      INSERT INTO fk VALUES (10, 1), (11, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO fk VALUES (12, 3)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      SELECT id, pid FROM fk ORDER BY id
+    expect: rows
+    order: ordered

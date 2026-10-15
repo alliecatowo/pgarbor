@@ -1,0 +1,36 @@
+# A domain over int[] is checked on the finished array value, so each subscript-assignment row that violates the check fails with 23514 and inserts nothing.
+id: insert.domain-array-subscript-check
+title: Domain check on subscript-assigned array column rejects violating rows atomically
+family: insert
+tier: extended
+feature_ids: [insert, domains, arrays, constraints]
+required_capabilities: [create-table, insert, select, domains]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN ins_pos_ints AS int4[] CHECK (VALUE[1] > 0);
+  CREATE TABLE dat (f1 int4, f2 ins_pos_ints);
+steps:
+  - sql: |
+      INSERT INTO dat (f2[1], f2[2]) VALUES (1, 2)
+    expect: ok
+  - sql: |
+      INSERT INTO dat (f2[1], f2[2]) VALUES (3, 4), (5, 6)
+    expect: ok
+  - sql: |
+      INSERT INTO dat (f2[1], f2[2]) SELECT 7, 8
+    expect: ok
+  - sql: |
+      INSERT INTO dat (f2[1], f2[2]) VALUES (0, 2)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO dat (f2[1], f2[2]) VALUES (3, 4), (0, 6)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT f1, f2 FROM dat
+    expect: rows
+    order: multiset

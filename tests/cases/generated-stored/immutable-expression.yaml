@@ -1,0 +1,26 @@
+# Generation expressions must be immutable. A cast-free int || text expression is immutable and accepted.
+id: generated-stored.immutable-expression
+title: random() in a generation expression is rejected while int concatenation is accepted
+family: generated-stored
+tier: core
+feature_ids: [generated-columns, create-table, text, errors]
+required_capabilities: [create-table, insert, select, generated-columns]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_stored.sql"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE g7 (a int PRIMARY KEY, b double precision GENERATED ALWAYS AS (random()) STORED)
+    expect: error
+    comment: volatile function is not allowed; SQLSTATE intentionally not pinned
+  - sql: |
+      CREATE TABLE g7t (a int, b text GENERATED ALWAYS AS (a || ' sec') STORED)
+    expect: ok
+  - sql: |
+      INSERT INTO g7t (a) VALUES (7), (NULL)
+    expect: ok
+  - sql: |
+      SELECT a, b, b IS NULL AS b_null FROM g7t ORDER BY a
+    expect: rows
+    order: ordered

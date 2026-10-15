@@ -1,0 +1,56 @@
+# Seek with SEEK_SET, SEEK_CUR and SEEK_END, read, overwrite in the middle, read past EOF.
+id: largeobject.seek-tell-read
+title: lo_lseek whence modes, lo_tell, loread short reads and in-place lowrite
+family: largeobject
+tier: core
+feature_ids: [large-objects, lo-seek, lo-tell, lo-read, lo-write, transactions]
+required_capabilities: [large-objects, create-table, insert, update, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (loid oid, fd integer);
+  INSERT INTO st (loid) SELECT lo_from_bytea(0, convert_to('abcdefghijklmnopqrstuvwxyz', 'UTF8'));
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT lo_lseek(fd, 10, 0) FROM st
+    expect: rows
+  - sql: |
+      SELECT encode(loread(fd, 5), 'escape') FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_tell(fd) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_lseek(fd, -3, 1) FROM st
+    expect: rows
+  - sql: |
+      SELECT lowrite(fd, 'XY') FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_lseek(fd, -5, 2) FROM st
+    expect: rows
+  - sql: |
+      SELECT encode(loread(fd, 5), 'escape') FROM st
+    expect: rows
+  - sql: |
+      SELECT encode(loread(fd, 100), 'escape') FROM st
+    expect: rows
+    comment: at EOF, loread returns an empty bytea
+  - sql: |
+      SELECT lo_close(fd) FROM st
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT encode(lo_get(loid), 'escape') FROM st
+    expect: rows

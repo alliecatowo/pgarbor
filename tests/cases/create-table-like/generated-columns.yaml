@@ -1,0 +1,36 @@
+# Generated columns are copied as plain columns by default, and as generated expressions with INCLUDING GENERATED.
+id: create-table-like.generated-columns
+title: LIKE copies generated columns as plain columns unless INCLUDING GENERATED
+family: create-table-like
+tier: extended
+feature_ids: [create-table, create-table-like, generated-columns, insert, select, errors]
+required_capabilities: [create-table, insert, select, generated-columns]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE src (a int4, b int4 GENERATED ALWAYS AS (a * 2) STORED);
+  CREATE TABLE plain (LIKE src);
+  CREATE TABLE gen (LIKE src INCLUDING GENERATED);
+steps:
+  - sql: |
+      INSERT INTO plain (a) VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO gen (a) VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT a, b IS NULL AS b_null FROM plain ORDER BY a
+    expect: rows
+    order: ordered
+    comment: plain b is an ordinary nullable column, not computed
+  - sql: |
+      SELECT a, b FROM gen ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO gen (a, b) VALUES (4, 1)
+    expect: error
+    sqlstate: "428C9"
+    comment: explicit value for a generated column is rejected

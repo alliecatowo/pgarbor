@@ -1,0 +1,52 @@
+# Table SELECT is denied to a role without the privilege, allowed after GRANT, denied again after REVOKE.
+id: privileges.select-denied-then-granted
+title: SELECT denied without privilege, allowed after GRANT, denied again after REVOKE
+family: privileges
+tier: core
+feature_ids: [select, grant, revoke, roles, privileges]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_sel_r;
+  CREATE TABLE pv_sel_t (id int4, name text);
+  INSERT INTO pv_sel_t VALUES (1, 'one'), (2, NULL);
+steps:
+  - sql: |
+      SET ROLE pv_sel_r
+    expect: ok
+  - sql: |
+      SELECT id, name FROM pv_sel_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT SELECT ON pv_sel_t TO pv_sel_r
+    expect: ok
+  - sql: |
+      SET ROLE pv_sel_r
+    expect: ok
+  - sql: |
+      SELECT id, name FROM pv_sel_t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE SELECT ON pv_sel_t FROM pv_sel_r
+    expect: ok
+  - sql: |
+      SET ROLE pv_sel_r
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pv_sel_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

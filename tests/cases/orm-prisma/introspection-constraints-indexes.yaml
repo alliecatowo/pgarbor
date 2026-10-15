@@ -1,0 +1,57 @@
+# Prisma-style key/index introspection over pg_constraint and pg_index, plus enforcement of what is introspected.
+id: orm-prisma.introspection-constraints-indexes
+title: Introspect constraints and indexes via pg_constraint and pg_index; enforce unique, not-null, and FK rules
+family: orm-prisma
+tier: extended
+feature_ids: [catalog-introspection, constraints, foreign-key, unique-index, create-index, create-table, errors]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection, foreign-key, check-constraint]
+provenance:
+  source: research
+  ref: "Prisma introspection of PK/unique/FK/index; PG18 docs catalog-pg-constraint.html, catalog-pg-index.html"
+sessions: [a]
+setup: |
+  CREATE TABLE "Member" ("id" integer PRIMARY KEY, "email" text NOT NULL);
+  INSERT INTO "Member" VALUES (1, 'm@example.com');
+  CREATE TABLE "Team" (
+    "id" integer PRIMARY KEY,
+    "slug" text NOT NULL,
+    "ownerId" integer,
+    CONSTRAINT "Team_slug_key" UNIQUE ("slug"),
+    CONSTRAINT "Team_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "Member" ("id") ON DELETE SET NULL,
+    CONSTRAINT "Team_slug_len" CHECK (length("slug") > 0)
+  );
+  CREATE UNIQUE INDEX "Team_lower_slug_key" ON "Team" (lower("slug"));
+  CREATE INDEX "Team_ownerId_idx" ON "Team" ("ownerId");
+steps:
+  - sql: |
+      SELECT conname, contype, pg_get_constraintdef(oid) AS def
+      FROM pg_constraint
+      WHERE conrelid = '"Team"'::regclass
+      ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT i.relname, x.indisunique, x.indisprimary, pg_get_indexdef(x.indexrelid) AS def
+      FROM pg_index x
+      JOIN pg_class i ON i.oid = x.indexrelid
+      WHERE x.indrelid = '"Team"'::regclass
+      ORDER BY i.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO "Team" ("id", "slug", "ownerId") VALUES (1, 'Alpha', 1)
+    expect: ok
+  - sql: |
+      INSERT INTO "Team" ("id", "slug", "ownerId") VALUES (2, 'alpha', NULL)
+    expect: error
+    sqlstate: "23505"
+    comment: the lower(slug) unique index rejects a case-only variant
+  - sql: |
+      INSERT INTO "Team" ("id", "slug", "ownerId") VALUES (3, NULL, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO "Team" ("id", "slug", "ownerId") VALUES (4, 'Beta', 99)
+    expect: error
+    sqlstate: "23503"
+    comment: no Member with id 99

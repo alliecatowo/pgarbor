@@ -1,0 +1,29 @@
+# A table whose foreign key references itself can be truncated without CASCADE; NULL FK values are fine.
+id: truncate.self-referencing-fk
+title: "Self-referencing foreign key table truncates without CASCADE, NULL references allowed"
+family: truncate
+tier: core
+feature_ids: [truncate, foreign-key, self-reference, insert, select, nulls]
+required_capabilities: [create-table, insert, select, foreign-key, transactions, truncate]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE tree (id int4 PRIMARY KEY, parent int4 REFERENCES tree (id));
+  INSERT INTO tree VALUES (1, NULL), (2, 1), (3, 2);
+steps:
+  - sql: |
+      TRUNCATE TABLE tree
+    expect: ok
+    comment: "the only referencing table is the truncated table itself"
+  - sql: |
+      SELECT count(*) FROM tree
+    expect: rows
+  - sql: |
+      INSERT INTO tree VALUES (10, NULL), (11, 10)
+    expect: ok
+  - sql: |
+      SELECT id, parent, parent IS NULL AS parent_null FROM tree ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,29 @@
+# COMMENT ON CONSTRAINT with an unknown name fails with undefined_object; the real name works.
+id: foreign-key.comment-constraint-missing-name
+title: "COMMENT ON CONSTRAINT on a foreign key checks the constraint name"
+family: foreign-key
+tier: extended
+feature_ids: [foreign-keys, comments, create-table, constraints, catalog-introspection, errors]
+required_capabilities: [create-table, foreign-keys, comments, constraints, catalog-introspection, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (a int4, b int4, PRIMARY KEY (a, b));
+  CREATE TABLE fk (x int4, y int4, CONSTRAINT constrname FOREIGN KEY (x, y) REFERENCES pk MATCH FULL);
+steps:
+  - sql: |
+      COMMENT ON CONSTRAINT constrname_wrong ON fk IS 'fk constraint comment'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON CONSTRAINT constrname ON fk IS 'fk constraint comment'
+    expect: ok
+  - sql: |
+      SELECT obj_description(oid, 'pg_constraint') FROM pg_constraint WHERE conname = 'constrname'
+    expect: rows
+  - sql: |
+      COMMENT ON CONSTRAINT constrname ON fk IS NULL
+    expect: ok

@@ -1,0 +1,28 @@
+# Attaching a table without indexes to a partitioned table creates matching partition indexes;
+# nothing is duplicated and indexes are linked to the parent's indexes.
+id: indexing.attach-partition-builds-index
+title: ATTACH PARTITION creates matching indexes on the attached table
+family: indexing
+tier: core
+feature_ids: [create-index, partitioning, alter-table, catalog-introspection]
+required_capabilities: [create-table, create-index, partitioning, alter-table, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/indexing.sql"
+setup: |
+  CREATE TABLE idxpart (a int, b int, c text) PARTITION BY RANGE (a);
+  CREATE INDEX idxparti ON idxpart (a);
+  CREATE INDEX idxparti2 ON idxpart (b, c);
+  CREATE TABLE idxpart1 (LIKE idxpart);
+steps:
+  - sql: |
+      ALTER TABLE idxpart ATTACH PARTITION idxpart1 FOR VALUES FROM (0) TO (10)
+    expect: ok
+  - sql: |
+      SELECT c.relname, c.relkind, inh.inhparent::regclass::text AS parent
+      FROM pg_class c
+      LEFT JOIN pg_inherits inh ON inh.inhrelid = c.oid
+      WHERE c.relname LIKE 'idxpart%' AND c.relkind IN ('i', 'I')
+      ORDER BY c.relname COLLATE "C"
+    expect: rows
+    order: ordered

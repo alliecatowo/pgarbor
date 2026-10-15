@@ -1,0 +1,32 @@
+# NULL bind parameters are SQL NULL; the empty string is a distinct, non-null value.
+id: orm-node-pg.param-null-and-empty
+title: "NULL versus empty-string bind parameters in INSERT and WHERE"
+family: orm-node-pg
+tier: core
+feature_ids: [parameterized-queries, insert, select, nulls]
+required_capabilities: [create-table, insert, select, extended-protocol]
+provenance:
+  source: hand
+  ref: "node-postgres: JS null in values array is sent as SQL NULL"
+sessions: [a]
+setup: |
+  CREATE TABLE note (id int4 PRIMARY KEY, body text);
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO note (id, body) VALUES ($1, $2), ($3, $4)
+      params: ["1", null, "2", ""]
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT id, body IS NULL AS is_null, body = '' AS is_empty, coalesce(body, 'x') AS c
+        FROM note WHERE body IS NULL OR body = $1 ORDER BY id
+      params: [""]
+    expect: rows
+    order: ordered
+  - exec_params:
+      sql: |
+        SELECT count(*) FROM note WHERE body = $1
+      params: [null]
+    expect: rows
+    comment: equality with NULL matches nothing

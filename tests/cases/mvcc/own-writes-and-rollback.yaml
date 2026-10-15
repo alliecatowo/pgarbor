@@ -1,0 +1,40 @@
+# Writes inside a transaction are visible to the same transaction and vanish on ROLLBACK.
+id: mvcc.own-writes-and-rollback
+title: Own uncommitted INSERT, UPDATE and DELETE are visible in-transaction and undone by ROLLBACK
+family: mvcc
+tier: core
+feature_ids: [transactions, insert, update, delete, select]
+required_capabilities: [create-table, insert, update, delete, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (transactional wrapper); PG18 docs mvcc.html"
+sessions: [a]
+setup: |
+  CREATE TABLE t (k int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3, 30)
+    expect: ok
+  - sql: |
+      UPDATE t SET v = v + 1 WHERE k = 1
+    expect: ok
+  - sql: |
+      DELETE FROM t WHERE k = 2
+    expect: ok
+  - sql: |
+      SELECT k, v FROM t ORDER BY k
+    expect: rows
+    order: ordered
+    comment: own writes are visible to the same transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT k, v FROM t ORDER BY k
+    expect: rows
+    order: ordered
+    comment: all four writes are undone

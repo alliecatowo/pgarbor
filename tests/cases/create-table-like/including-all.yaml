@@ -1,0 +1,34 @@
+# INCLUDING ALL copies defaults, CHECKs, primary key, generated columns and comments together.
+id: create-table-like.including-all
+title: LIKE INCLUDING ALL copies defaults, checks, primary key, generated columns and comments
+family: create-table-like
+tier: extended
+feature_ids: [create-table, create-table-like, defaults, check-constraints, indexes, generated-columns, comments, insert, select, errors]
+required_capabilities: [create-table, insert, select, generated-columns, indexes, comments]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE src (a int4 PRIMARY KEY, b text NOT NULL DEFAULT 'd' CHECK (length(b) < 10), g int4 GENERATED ALWAYS AS (a + 100) STORED);
+  COMMENT ON COLUMN src.b IS 'bee';
+  CREATE TABLE copy_all (LIKE src INCLUDING ALL);
+steps:
+  - sql: |
+      INSERT INTO copy_all (a, b) VALUES (1, DEFAULT)
+    expect: ok
+    comment: default 'd' is copied
+  - sql: |
+      INSERT INTO copy_all (a, b) VALUES (1, 'x')
+    expect: error
+    sqlstate: "23505"
+    comment: primary key copied
+  - sql: |
+      INSERT INTO copy_all (a, b) VALUES (2, 'this is too long')
+    expect: error
+    sqlstate: "23514"
+    comment: CHECK copied
+  - sql: |
+      SELECT a, b, g, col_description('copy_all'::regclass, 2) AS b_comment FROM copy_all ORDER BY a
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# SQL functions returning a scalar, setof int, or setof text, called in FROM with and without ordinality.
+id: rangefuncs.scalar-setof-sql-functions
+title: "Scalar and setof SQL functions in FROM, with and without WITH ORDINALITY"
+family: rangefuncs
+tier: core
+feature_ids: [sql-functions, set-returning-functions, with-ordinality, scalar-result]
+required_capabilities: [create-table, insert, create-function, sql-functions, set-returning-functions, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (sql, proretset = f/t, prorettype = b)"
+setup: |
+  CREATE TABLE rngfunc (rngfuncid int, rngfuncsubid int, rngfuncname text, primary key(rngfuncid,rngfuncsubid));
+  INSERT INTO rngfunc VALUES (1,1,'Joe'), (1,2,'Ed'), (2,1,'Mary');
+  CREATE FUNCTION getrngfunc1(int) RETURNS int AS 'SELECT $1;' LANGUAGE sql;
+  CREATE FUNCTION getrngfunc2(int) RETURNS setof int AS 'SELECT rngfuncid FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE sql;
+  CREATE FUNCTION getrngfunc3(int) RETURNS setof text AS 'SELECT rngfuncname FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM getrngfunc1(1) AS t1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM getrngfunc1(1) WITH ORDINALITY AS t1(v,o)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM getrngfunc2(1) WITH ORDINALITY AS t1(v,o) ORDER BY o
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM getrngfunc3(1) WITH ORDINALITY AS t1(v,o) ORDER BY o
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM getrngfunc3(9) WITH ORDINALITY AS t1(v,o)
+    expect: rows
+    order: multiset
+    comment: "no matching rows: zero output rows, no ordinality values"

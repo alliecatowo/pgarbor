@@ -1,0 +1,38 @@
+# Labels created by CREATE TYPE are usable in the same transaction even after the type is renamed; ADD VALUE on the renamed type is not.
+id: enum.rename-type-in-transaction
+title: Renamed enum type in a transaction keeps CREATE TYPE labels usable, and ADD VALUE stays unsafe
+family: enum
+tier: extended
+feature_ids: [enum, create-type, alter-type, transactions, errors]
+required_capabilities: [enum-type, alter-type, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE TYPE bogus AS ENUM ('good', 'bad', 'ugly')
+    expect: ok
+  - sql: |
+      ALTER TYPE bogus RENAME TO bogon
+    expect: ok
+  - sql: |
+      SELECT enum_range(NULL::bogon)
+    expect: rows
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER TYPE bogus RENAME TO bogon
+    expect: error
+    sqlstate: "42704"
+    comment: type bogus does not exist after rollback
+  - sql: |
+      ROLLBACK
+    expect: ok

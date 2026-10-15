@@ -1,0 +1,36 @@
+# SECURITY DEFINER / INVOKER is recorded in pg_proc.prosecdef and can be flipped by ALTER FUNCTION.
+id: create-function-sql.catalog-security-definer-alter
+title: SECURITY DEFINER and INVOKER recorded in pg_proc and toggled by ALTER FUNCTION
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, alter-function, security, catalog-introspection]
+required_capabilities: [create-function, alter-function, sql-functions, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE FUNCTION functest_c_1(int) RETURNS bool LANGUAGE sql AS 'SELECT $1 > 0';
+  CREATE FUNCTION functest_c_2(int) RETURNS bool LANGUAGE sql SECURITY DEFINER AS 'SELECT $1 = 0';
+  CREATE FUNCTION functest_c_3(int) RETURNS bool LANGUAGE sql SECURITY INVOKER AS 'SELECT $1 < 0';
+steps:
+  - sql: |
+      SELECT proname, prosecdef FROM pg_proc
+       WHERE proname IN ('functest_c_1', 'functest_c_2', 'functest_c_3')
+       ORDER BY proname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER FUNCTION functest_c_1(int) IMMUTABLE;
+      ALTER FUNCTION functest_c_2(int) SECURITY INVOKER;
+      ALTER FUNCTION functest_c_3(int) SECURITY DEFINER
+    expect: ok
+  - sql: |
+      SELECT proname, prosecdef FROM pg_proc
+       WHERE proname IN ('functest_c_1', 'functest_c_2', 'functest_c_3')
+       ORDER BY proname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT functest_c_1(1) AS a, functest_c_2(0) AS b, functest_c_3(-1) AS c
+    expect: rows
+    comment: results are unaffected by the security attribute

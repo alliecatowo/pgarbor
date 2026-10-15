@@ -1,0 +1,31 @@
+# TRUNCATE ... CASCADE follows foreign keys transitively through a three-table chain.
+id: truncate.cascade-chain
+title: "TRUNCATE CASCADE truncates the whole chain of referencing tables"
+family: truncate
+tier: core
+feature_ids: [truncate, foreign-key, constraints, errors, insert, select]
+required_capabilities: [create-table, insert, select, foreign-key, transactions, truncate]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 REFERENCES p);
+  CREATE TABLE g (id int4 PRIMARY KEY, cid int4 REFERENCES c);
+  INSERT INTO p VALUES (1);
+  INSERT INTO c VALUES (10, 1);
+  INSERT INTO g VALUES (100, 10);
+steps:
+  - sql: |
+      TRUNCATE TABLE p
+    expect: error
+    sqlstate: "0A000"
+    comment: "without CASCADE the referencing table c blocks the truncate"
+  - sql: |
+      TRUNCATE TABLE p CASCADE
+    expect: ok
+    comment: "CASCADE also truncates c and, transitively, g"
+  - sql: |
+      SELECT (SELECT count(*) FROM p) AS p_rows, (SELECT count(*) FROM c) AS c_rows, (SELECT count(*) FROM g) AS g_rows
+    expect: rows

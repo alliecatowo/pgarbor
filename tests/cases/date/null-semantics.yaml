@@ -1,0 +1,50 @@
+# NULL handling for date columns: comparison, ordering, aggregates, arithmetic, and constraints.
+id: date.null-semantics
+title: NULL dates in comparisons, ordering, aggregates, arithmetic and NOT NULL keys
+family: date
+tier: core
+feature_ids: [date-type, nulls, aggregates, order-by, constraints]
+required_capabilities: [create-table, insert, select, date-type, constraints]
+provenance:
+  source: hand
+  ref: "PG18 docs functions-comparison.html (IS NULL, IS DISTINCT FROM); sql-select.html (NULLS ordering)"
+sessions: [a]
+setup: |
+  CREATE TABLE nd (id int4 PRIMARY KEY, f date);
+  INSERT INTO nd VALUES (1, '2001-05-06'), (2, NULL), (3, '1999-12-31'), (4, NULL);
+steps:
+  - sql: |
+      SELECT id FROM nd WHERE f = NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: equality with NULL matches nothing
+  - sql: |
+      SELECT id FROM nd WHERE f IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS all_rows, count(f) AS non_null, min(f) AS lo, max(f) AS hi FROM nd
+    expect: rows
+  - sql: |
+      SELECT id, f FROM nd ORDER BY f, id
+    expect: rows
+    order: ordered
+    comment: ascending order puts NULLs last
+  - sql: |
+      SELECT id, f FROM nd ORDER BY f DESC, id
+    expect: rows
+    order: ordered
+    comment: descending order puts NULLs first
+  - sql: |
+      SELECT DISTINCT f FROM nd ORDER BY f
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT NULL::date - date '2000-01-01' AS a, date '2000-01-01' + NULL::int AS b,
+             (NULL::date IS DISTINCT FROM date '2000-01-01') AS dist
+    expect: rows
+  - sql: |
+      INSERT INTO nd VALUES (NULL, '2000-01-01')
+    expect: error
+    sqlstate: "23502"
+    comment: primary key column cannot be NULL

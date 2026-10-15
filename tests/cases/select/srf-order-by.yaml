@@ -1,0 +1,28 @@
+# ORDER BY on a constant needs no sort; ORDER BY on a set-returning SQL function does.
+id: select.srf-order-by
+title: ORDER BY over a constant and over rows produced by a set-returning SQL function
+family: select
+tier: core
+feature_ids: [select, order-by, set-returning-functions, create-function-sql]
+required_capabilities: [select, create-function-sql]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/select.sql (corner cases that confuse the planner, sillysrf)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION sillysrf(int) RETURNS SETOF int AS
+    'VALUES (1),(10),(2),($1)' LANGUAGE sql IMMUTABLE;
+steps:
+  - sql: |
+      SELECT 1 AS x ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sillysrf(42)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT sillysrf(-1) ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: values are -1, 1, 2, 10

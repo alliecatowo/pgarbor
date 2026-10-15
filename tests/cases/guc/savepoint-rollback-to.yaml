@@ -1,0 +1,41 @@
+# ROLLBACK TO SAVEPOINT undoes only the SET made after the savepoint; the outer SET survives.
+id: guc.savepoint-rollback-to
+title: ROLLBACK TO SAVEPOINT reverts only SET issued after the savepoint
+family: guc
+tier: core
+feature_ids: [guc, set, savepoints, transactions, show]
+required_capabilities: [select, transactions, savepoints, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/guc.sql
+sessions: [a]
+steps:
+  - sql: |
+      SET work_mem = '3MB'
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET work_mem = '5MB'
+    expect: ok
+  - sql: |
+      SAVEPOINT first_sp
+    expect: ok
+  - sql: |
+      SET work_mem = '6MB'
+    expect: ok
+  - sql: |
+      ROLLBACK TO first_sp
+    expect: ok
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    comment: must be the 5MB set before the savepoint
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    comment: the committed session value is 5MB

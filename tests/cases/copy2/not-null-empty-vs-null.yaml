@@ -1,0 +1,35 @@
+# NOT NULL rejects explicit NULL in a column list; the empty string is a distinct non-null value.
+id: copy2.not-null-empty-vs-null
+title: NOT NULL rejects explicit NULL while empty string and unlisted nullable columns are accepted
+family: copy2
+tier: core
+feature_ids: [insert, not-null, null-semantics, column-list]
+required_capabilities: [create-table, insert, select, not-null]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE forcetest (a int NOT NULL, b text NOT NULL, c text, d text, e text);
+steps:
+  - sql: |
+      INSERT INTO forcetest (a, b, c) VALUES (1, '', NULL)
+    expect: ok
+  - sql: |
+      SELECT a, b = '' AS b_empty, b IS NULL AS b_null, c IS NULL AS c_null FROM forcetest ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO forcetest (a, b, c) VALUES (3, NULL, '')
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO forcetest (a, b, c) VALUES (NULL, 'x', 'y')
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO forcetest (a, b, c, d) VALUES (4, 'b', NULL, DEFAULT)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM forcetest
+    expect: rows

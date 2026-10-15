@@ -1,0 +1,24 @@
+# information_schema.table_constraints joined to key_column_usage for composite PK and FK; a FK to a non-unique target raises 42830.
+id: slice-catalog-introspection.table-constraints-key-usage
+title: information_schema table_constraints and key_column_usage for composite keys, invalid FK target error
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, primary-key, foreign-key, information-schema, constraints]
+required_capabilities: [create-table, alter-table, catalog-introspection, constraints]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/infoschema-table-constraints.html; https://www.postgresql.org/docs/18/infoschema-key-column-usage.html"
+sessions: [a]
+setup: |
+  CREATE TABLE tc_parent (k1 int4, k2 int4, PRIMARY KEY (k1, k2));
+  CREATE TABLE tc_child (id int4 PRIMARY KEY, p1 int4, p2 int4, FOREIGN KEY (p1, p2) REFERENCES tc_parent (k1, k2));
+steps:
+  - sql: |
+      SELECT tc.table_name, tc.constraint_name, tc.constraint_type, kcu.column_name, kcu.ordinal_position FROM information_schema.table_constraints tc LEFT JOIN information_schema.key_column_usage kcu ON kcu.constraint_schema = tc.constraint_schema AND kcu.constraint_name = tc.constraint_name AND kcu.table_name = tc.table_name WHERE tc.table_schema = 'public' AND tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE tc_child ADD CONSTRAINT bad_fk FOREIGN KEY (p1) REFERENCES tc_parent (k1)
+    expect: error
+    sqlstate: "42830"
+    comment: k1 alone is not unique in tc_parent

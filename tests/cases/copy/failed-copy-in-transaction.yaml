@@ -1,0 +1,32 @@
+# A failed COPY aborts the surrounding transaction; the next statement gets 25P02 and ROLLBACK leaves the table empty.
+id: copy.failed-copy-in-transaction
+title: "A failed COPY aborts its transaction block and leaves no rows"
+family: copy
+tier: core
+feature_ids: [copy, transactions, errors]
+required_capabilities: [create-table, select, copy, transactions, errors]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 25P02 in_failed_sql_transaction; sql-copy.html"
+sessions: [a]
+setup: |
+  CREATE TABLE cp_t (a int4 PRIMARY KEY, b text);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      COPY cp_t (a, nosuch) FROM STDIN
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM cp_t
+    expect: rows
+    order: ordered

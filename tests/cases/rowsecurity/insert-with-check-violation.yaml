@@ -1,0 +1,35 @@
+# INSERT WITH CHECK failure rejects the whole statement with 42501; a NULL check result is a failure too.
+id: rowsecurity.insert-with-check-violation
+title: "INSERT WITH CHECK rejects the whole statement, including NULL check results"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, insert, errors, nulls]
+required_capabilities: [create-table, insert, select, rls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, lvl int4 NOT NULL, owner text);
+  CREATE POLICY ins_low ON t FOR INSERT WITH CHECK (lvl <= 2);
+  CREATE POLICY sel_all ON t FOR SELECT USING (true);
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE t FORCE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 1, 'alice'), (2, 2, 'alice')
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3, 1, 'alice'), (4, 3, 'alice')
+    expect: error
+    sqlstate: "42501"
+    comment: row 4 fails WITH CHECK, so row 3 is not inserted either
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO t VALUES (5, NULL, 'alice')
+    expect: error
+    sqlstate: "42501"
+    comment: NULL check result fails; RLS is checked before the NOT NULL constraint per the regress comment

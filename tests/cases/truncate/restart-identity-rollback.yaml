@@ -1,0 +1,44 @@
+# A TRUNCATE ... RESTART IDENTITY inside a transaction that is rolled back must not stick.
+id: truncate.restart-identity-rollback
+title: "Rolled-back TRUNCATE RESTART IDENTITY leaves the identity sequence untouched"
+family: truncate
+tier: extended
+feature_ids: [truncate, identity, transactions, insert, select, sequence]
+required_capabilities: [create-table, insert, select, identity, truncate, transactions]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE tid (id int4 GENERATED ALWAYS AS IDENTITY (START WITH 44), v text);
+  INSERT INTO tid (v) VALUES ('a'), ('b');
+steps:
+  - sql: |
+      SELECT id, v FROM tid ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      TRUNCATE tid RESTART IDENTITY
+    expect: ok
+  - sql: |
+      INSERT INTO tid (v) VALUES ('x')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM tid ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "inside the transaction the new row sees the restarted identity"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      INSERT INTO tid (v) VALUES ('y')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM tid ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "the old rows are back; the identity value of the new row is whatever the rolled-back sequence state yields"

@@ -1,0 +1,36 @@
+# Polygon containment and overlap over a small table; a NULL polygon yields NULL, not false.
+id: geometry.polygon-containment-table
+title: Polygon containment and overlap over a table with a NULL polygon
+family: geometry
+tier: core
+feature_ids: [geometric-types, polygon, containment, create-table, insert, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/geometry.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE polys (id int4 PRIMARY KEY, poly polygon);
+  INSERT INTO polys VALUES
+    (1, '((0,0),(0,4),(4,4),(4,0))'),
+    (2, '((10,10),(10,12),(12,12),(12,10))'),
+    (3, NULL);
+  CREATE TABLE probe (id int4 PRIMARY KEY, p point);
+  INSERT INTO probe VALUES (1, '(2,2)'), (2, '(5,5)');
+steps:
+  - sql: |
+      SELECT pr.id AS probe_id, po.id AS poly_id, po.poly @> pr.p AS contains
+      FROM polys po CROSS JOIN probe pr
+      ORDER BY po.id, pr.id
+    expect: rows
+    order: ordered
+    comment: NULL polygon row gives NULL contains values
+  - sql: |
+      SELECT id FROM polys WHERE poly && polygon '((1,1),(1,3),(3,3),(3,1))' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM polys WHERE poly IS NULL
+    expect: rows
+    order: ordered

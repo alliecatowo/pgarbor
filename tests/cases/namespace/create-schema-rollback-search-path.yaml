@@ -1,0 +1,34 @@
+# A SET search_path inside a transaction that is rolled back must not leak out.
+id: namespace.rollback-search-path
+title: search_path set inside a rolled-back transaction is restored
+family: namespace
+tier: core
+feature_ids: [search-path, transactions, create-schema]
+required_capabilities: [search-path, transactions, create-schema]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/namespace.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA rb_one;
+steps:
+  - sql: |
+      SET search_path TO public
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET search_path TO public, rb_one
+    expect: ok
+  - sql: |
+      SELECT current_setting('search_path') AS sp
+    expect: rows
+    comment: inside the transaction the new path is visible
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT current_setting('search_path') AS sp
+    expect: rows
+    comment: after rollback the earlier path is back

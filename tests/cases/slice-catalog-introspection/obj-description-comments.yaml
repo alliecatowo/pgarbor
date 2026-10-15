@@ -1,0 +1,35 @@
+# obj_description and col_description read COMMENT ON values; NULL when no comment; pg_description listing; COMMENT on a missing object errors.
+id: slice-catalog-introspection.obj-description-comments
+title: obj_description and col_description read comments, NULL after removal, error on missing object
+family: slice-catalog-introspection
+tier: extended
+feature_ids: [catalog-introspection, comments, create-table, create-index]
+required_capabilities: [create-table, create-index, comments, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-COMMENT-TABLE; https://www.postgresql.org/docs/18/sql-comment.html"
+sessions: [a]
+setup: |
+  CREATE TABLE doc_t (id int4, body text);
+  COMMENT ON TABLE doc_t IS 'documented table';
+  COMMENT ON COLUMN doc_t.body IS 'free text';
+  CREATE INDEX doc_t_id_idx ON doc_t (id);
+  COMMENT ON INDEX doc_t_id_idx IS 'index note';
+steps:
+  - sql: |
+      SELECT obj_description('doc_t'::regclass, 'pg_class') AS tbl_comment, col_description('doc_t'::regclass, 2) AS body_comment, col_description('doc_t'::regclass, 1) AS id_comment, obj_description('doc_t_id_idx'::regclass, 'pg_class') AS idx_comment
+    expect: rows
+  - sql: |
+      SELECT c.relname, d.description FROM pg_description d JOIN pg_class c ON c.oid = d.objoid AND d.classoid = 'pg_class'::regclass AND d.objsubid = 0 WHERE c.relnamespace = 'public'::regnamespace ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMENT ON TABLE doc_t IS NULL
+    expect: ok
+  - sql: |
+      SELECT obj_description('doc_t'::regclass, 'pg_class') IS NULL AS tbl_comment_gone
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE no_such_table IS 'x'
+    expect: error
+    sqlstate: "42P01"

@@ -1,0 +1,48 @@
+# Containment with bound int4[] parameters over both unnamed and named prepared statements, including a NULL parameter.
+id: gin.prepared-containment-extended
+title: GIN containment through bound int4[] parameters and named prepared statements
+family: gin
+tier: core
+feature_ids: [gin-index, arrays, extended-protocol, prepared-statements]
+required_capabilities: [create-table, create-index, gin-index, insert, select, arrays, extended-protocol]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_p (id int4 PRIMARY KEY, i int4[]);
+  CREATE INDEX gin_p_idx ON gin_p USING gin (i);
+  INSERT INTO gin_p VALUES (1, '{1,2}'), (2, '{3}'), (3, NULL), (4, '{1,3}');
+steps:
+  - exec_params:
+      sql: |
+        SELECT id FROM gin_p WHERE i @> $1 ORDER BY id
+      params: ["{1}"]
+      param_types: [1007]
+    expect: rows
+    order: ordered
+  - exec_params:
+      sql: |
+        SELECT id FROM gin_p WHERE i @> $1 ORDER BY id
+      params: [null]
+      param_types: [1007]
+    expect: rows
+    order: ordered
+  - parse:
+      name: q_overlap
+      sql: |
+        SELECT id FROM gin_p WHERE i && $1 ORDER BY id
+      param_types: [1007]
+    expect: ok
+  - execute:
+      statement: q_overlap
+      params: ["{3}"]
+    expect: rows
+    order: ordered
+  - execute:
+      statement: q_overlap
+      params: ["{}"]
+    expect: rows
+    order: ordered
+  - close:
+      statement: q_overlap

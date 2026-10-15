@@ -1,0 +1,44 @@
+# timestamptz values are stored as absolute instants; text output follows the session TimeZone.
+id: slice-types-io.timestamptz-utc-output
+title: "timestamptz text output in UTC and in a named zone"
+family: slice-types-io
+tier: core
+feature_ids: [timestamptz, timezone, text-output, create-table, insert, select]
+required_capabilities: [create-table, insert, select, timestamptz, guc]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-datetime.html#DATATYPE-DATETIME-TIME-ZONE-TABLE"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      CREATE TABLE tz (id int4 PRIMARY KEY, ts timestamptz)
+    expect: ok
+  - sql: |
+      INSERT INTO tz VALUES (1, '2024-03-10 12:34:56.5+02'), (2, '2024-01-01 00:00:00 UTC'), (3, '1999-12-31 23:59:59.999999-05'), (4, NULL)
+    expect: ok
+  - sql: |
+      SELECT id, ts::text AS txt, ts IS NULL AS is_null FROM tz ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "in UTC the offset is printed as +00"
+  - sql: |
+      SET TIME ZONE 'America/New_York'
+    expect: ok
+  - sql: |
+      SELECT id, ts::text AS txt FROM tz ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "same instants, rendered in New York local time"
+  - sql: |
+      SELECT extract(epoch FROM ts)::int8 AS epoch_s FROM tz WHERE id = 2
+    expect: rows
+    order: multiset
+    comment: "epoch of 2024-01-01 00:00:00 UTC is independent of session zone"
+  - sql: |
+      SELECT '2024-02-30 00:00:00 UTC'::timestamptz AS bad
+    expect: error
+    sqlstate: "22008"
+    comment: "February 30 is not a valid date"

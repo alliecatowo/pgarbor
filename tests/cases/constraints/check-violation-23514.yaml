@@ -1,0 +1,38 @@
+# A multi-column CHECK that evaluates to FALSE for one column combination is rejected with 23514 and writes nothing.
+id: constraints.check-violation-23514
+title: Table CHECK over several columns rejects violating row with 23514 and keeps earlier rows
+family: constraints
+tier: core
+feature_ids: [check-constraints, insert, errors, select]
+required_capabilities: [create-table, insert, select, extended-protocol]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE c2 (x int, y text, z int,
+    CONSTRAINT seq_con CHECK (x > 3 AND y <> 'check failed' AND z < 8));
+steps:
+  - sql: |
+      INSERT INTO c2 VALUES (4, 'check ok', -2)
+    expect: ok
+  - sql: |
+      INSERT INTO c2 VALUES (1, 'x check failed', -2)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO c2 VALUES (5, 'z check failed', 10)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO c2 VALUES (7, 'check ok', 7)
+    expect: ok
+  - sql: |
+      INSERT INTO c2 VALUES (7, 'ok', 7), (6, 'check failed', 11)
+    expect: error
+    sqlstate: "23514"
+    comment: a multi-row INSERT is atomic, so the valid first row is not kept
+  - sql: |
+      SELECT x, y, z FROM c2 ORDER BY x
+    expect: rows
+    order: ordered

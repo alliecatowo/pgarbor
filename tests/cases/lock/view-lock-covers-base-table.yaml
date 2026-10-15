@@ -1,0 +1,41 @@
+# Locking a view locks the tables it reads, so a concurrent INSERT into the base table waits.
+id: lock.view-locks-base-table
+title: LOCK TABLE on a view also locks its base table
+family: lock
+tier: core
+feature_ids: [lock-table, views, transactions, multi-session, insert]
+required_capabilities: [create-table, create-view, insert, lock-table, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql (lock_view1 locks lock_tbl1)"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE lock_tbl1 (a BIGINT);
+  CREATE VIEW lock_view1 AS SELECT * FROM lock_tbl1;
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE lock_view1 IN EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO lock_tbl1 VALUES (1)
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT a FROM lock_tbl1
+    expect: rows
+    order: multiset

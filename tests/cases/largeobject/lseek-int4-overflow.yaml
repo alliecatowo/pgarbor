@@ -1,0 +1,35 @@
+# lo_lseek returns int4 and rejects a position above 2^31-1; lo_lseek64 accepts it.
+id: largeobject.lseek-int4-overflow
+title: lo_lseek int4 result overflow raises numeric out of range
+family: largeobject
+tier: extended
+feature_ids: [large-objects, lo-seek, errors, lo-seek64]
+required_capabilities: [large-objects, create-table, insert, update, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (loid oid, fd integer);
+  INSERT INTO st (loid) SELECT lo_create(52);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT lo_lseek(fd, 2147483647, 0) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_lseek(fd, 1, 1) FROM st
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT lo_lseek64(fd, 2147483648, 0) FROM st
+    expect: rows
+  - sql: |
+      ROLLBACK
+    expect: ok

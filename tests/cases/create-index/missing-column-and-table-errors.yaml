@@ -1,0 +1,41 @@
+# CREATE INDEX on a missing column or table fails with the undefined-object SQLSTATEs; duplicate definitions on the same column are allowed.
+id: create-index.missing-column-and-table-errors
+title: CREATE INDEX on a missing column or table fails and duplicate definitions on one column succeed
+family: create-index
+tier: core
+feature_ids: [create-index, errors, catalog-introspection]
+required_capabilities: [create-table, select, create-index, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (BTREE section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE miss_t (a int)
+    expect: ok
+  - sql: |
+      CREATE INDEX miss_t_b ON miss_t (b)
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      CREATE INDEX miss_nope ON no_such_table (a)
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      CREATE INDEX miss_t_a ON miss_t (a)
+    expect: ok
+  - sql: |
+      CREATE INDEX miss_t_a2 ON miss_t (a)
+    expect: ok
+    comment: a second index on the same column is allowed
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'miss_t' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP INDEX miss_t_a
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'miss_t' ORDER BY indexname
+    expect: rows
+    order: ordered

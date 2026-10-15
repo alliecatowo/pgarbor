@@ -1,0 +1,35 @@
+# Strict transition function with NULL initcond: the first non-null input becomes the state,
+# NULL inputs are skipped, and an all-NULL or empty input yields NULL.
+id: create-aggregate.strict-null-initcond-max
+title: "Strict transition with NULL initcond: first non-null input seeds state, all-NULL and empty give NULL"
+family: create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, nulls, null-semantics]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (strict sfunc, no initcond)"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE m (x int4);
+  INSERT INTO m VALUES (NULL), (5), (NULL), (2);
+  CREATE TABLE m_empty (x int4);
+  CREATE TABLE m_nulls (x int4);
+  INSERT INTO m_nulls VALUES (NULL), (NULL);
+  CREATE AGGREGATE mymax (int4) (sfunc = int4larger, stype = int4);
+steps:
+  - sql: |
+      SELECT mymax(x) FROM m
+    expect: rows
+    comment: the first non-null value 5 seeds the state, 2 does not replace it
+  - sql: |
+      SELECT mymax(x) FROM m_nulls
+    expect: rows
+    comment: only NULL inputs, so the state stays NULL
+  - sql: |
+      SELECT mymax(x) FROM m_empty
+    expect: rows
+    comment: empty input with NULL initcond returns NULL
+  - sql: |
+      SELECT mymax(x) FROM m WHERE x IS NOT NULL
+    expect: rows

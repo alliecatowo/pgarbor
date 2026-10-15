@@ -1,0 +1,29 @@
+# All SET expressions read the pre-update row, so a swap of two columns is a true swap.
+id: update.swap-columns-old-values
+title: Assignments in one UPDATE see the old row values, so columns swap cleanly
+family: update
+tier: core
+feature_ids: [update, expressions, null-semantics]
+required_capabilities: [create-table, insert, select, update]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-update.html (expressions reference the old row values)"
+sessions: [a]
+setup: |
+  CREATE TABLE sw (x INT, y INT, z TEXT);
+  INSERT INTO sw VALUES (1, 2, 'p'), (NULL, 7, 'q'), (8, NULL, NULL);
+steps:
+  - sql: |
+      UPDATE sw SET x = y, y = x, z = coalesce(z, 'none')
+    expect: ok
+  - sql: |
+      SELECT x, y, z FROM sw ORDER BY z NULLS LAST, x NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE sw SET x = x + 1 WHERE x = NULL
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n, count(x) AS nonnull_x FROM sw
+    expect: rows
+    order: ordered

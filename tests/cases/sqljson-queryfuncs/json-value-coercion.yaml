@@ -1,0 +1,31 @@
+# JSON_VALUE scalar extraction and RETURNING coercion, with default NULL ON ERROR suppressing coercion errors.
+id: sqljson-queryfuncs.json-value-coercion
+title: JSON_VALUE RETURNING coercion for scalars and silent NULL on coercion failure
+family: sqljson-queryfuncs
+tier: core
+feature_ids: [sql-json, json-value, jsonb, numeric, boolean, text]
+required_capabilities: [select, jsonb, numeric]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sqljson_queryfuncs.sql (JSON_VALUE section)"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT JSON_VALUE(NULL::jsonb, '$') AS null_input,
+             JSON_VALUE(jsonb 'null', '$') AS json_null,
+             JSON_VALUE(jsonb 'true', '$') AS bool_text,
+             JSON_VALUE(jsonb 'true', '$' RETURNING bool) AS bool_typed
+    expect: rows
+  - sql: |
+      SELECT JSON_VALUE(jsonb '123', '$' RETURNING int) + 234 AS int_math,
+             JSON_VALUE(jsonb '123', '$' RETURNING text) AS as_text,
+             JSON_VALUE(jsonb '1.23', '$' RETURNING int) AS rounded_int,
+             JSON_VALUE(jsonb '"1.23"', '$' RETURNING numeric) AS quoted_numeric
+    expect: rows
+  - sql: |
+      SELECT JSON_VALUE(jsonb '"aaa"', '$' RETURNING int) AS silent_null,
+             JSON_VALUE(jsonb '"aaa"', '$' RETURNING int DEFAULT 111 ON ERROR) AS on_error_default,
+             JSON_VALUE(jsonb '"2017-02-20"', '$' RETURNING date) + 9 AS date_math
+    expect: rows
+    comment: coercion failure with default NULL ON ERROR yields NULL, not an error

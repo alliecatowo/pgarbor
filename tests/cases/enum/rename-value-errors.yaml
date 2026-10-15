@@ -1,0 +1,34 @@
+# ALTER TYPE RENAME VALUE succeeds for an existing label, and fails for a missing label or a clashing target.
+id: enum.rename-value-errors
+title: RENAME VALUE renames a label; missing source and existing target are errors
+family: enum
+tier: extended
+feature_ids: [enum, alter-type, errors, catalog-introspection]
+required_capabilities: [enum-type, alter-type, select, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+steps:
+  - sql: |
+      ALTER TYPE rainbow RENAME VALUE 'red' TO 'crimson'
+    expect: ok
+  - sql: |
+      SELECT enumlabel FROM pg_enum WHERE enumtypid = 'rainbow'::regtype ORDER BY enumsortorder
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TYPE rainbow RENAME VALUE 'red' TO 'crimson'
+    expect: error
+    sqlstate: "42704"
+    comment: source label no longer exists
+  - sql: |
+      ALTER TYPE rainbow RENAME VALUE 'blue' TO 'green'
+    expect: error
+    sqlstate: "42710"
+    comment: target label already exists
+  - sql: |
+      SELECT 'crimson'::rainbow
+    expect: rows

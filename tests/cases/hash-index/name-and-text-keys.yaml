@@ -1,0 +1,42 @@
+# Hash index on name and text keys: trailing spaces, empty string, NULL and a long text key.
+id: hash-index.name-and-text-keys
+title: Hash lookups on name and text keys respect empty strings, trailing spaces and NULL
+family: hash-index
+tier: core
+feature_ids: [hash-index, text, name-type, select]
+required_capabilities: [create-table, create-index, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+setup: |
+  CREATE TABLE nt (seqno int4, nm name, tx text);
+  CREATE INDEX nt_nm ON nt USING hash (nm);
+  CREATE INDEX nt_tx ON nt USING hash (tx);
+  INSERT INTO nt VALUES
+    (1, 'abc', 'abc'),
+    (2, 'abc ', 'abc '),
+    (3, '', ''),
+    (4, NULL, NULL),
+    (5, 'x', repeat('0123456789', 5));
+steps:
+  - sql: |
+      SELECT seqno FROM nt WHERE tx = 'abc' ORDER BY seqno
+    expect: rows
+    order: ordered
+    comment: trailing space makes 'abc ' a different text key
+  - sql: |
+      SELECT seqno FROM nt WHERE tx = '' ORDER BY seqno
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT seqno FROM nt WHERE tx IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT seqno FROM nt WHERE tx = repeat('0123456789', 5)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT seqno FROM nt WHERE nm = 'x'::name
+    expect: rows
+    order: multiset

@@ -1,0 +1,37 @@
+# DROP ROLE is refused while the role owns a table; DROP OWNED BY clears the dependency and then the role can be dropped.
+id: create-role.drop-role-with-owned-objects
+title: DROP ROLE fails with dependent_objects_still_exist while the role owns a table; DROP OWNED BY unblocks it
+family: create-role
+tier: core
+feature_ids: [roles, drop-role, drop-owned, create-table, alter-table, errors]
+required_capabilities: [roles, catalog-introspection, create-table, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql (DROP ROLE with dependent objects)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rdep_tenant
+    expect: ok
+  - sql: |
+      CREATE TABLE rdep_t (i int4)
+    expect: ok
+  - sql: |
+      ALTER TABLE rdep_t OWNER TO rdep_tenant
+    expect: ok
+  - sql: |
+      DROP ROLE rdep_tenant
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = 'rdep_t'
+    expect: rows
+  - sql: |
+      DROP OWNED BY rdep_tenant
+    expect: ok
+  - sql: |
+      SELECT to_regclass('rdep_t') IS NULL AS table_gone
+    expect: rows
+  - sql: |
+      DROP ROLE rdep_tenant
+    expect: ok

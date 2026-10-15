@@ -1,0 +1,28 @@
+# NULL money values propagate through operators and cashlarger, while aggregates skip them.
+id: money.null-propagation
+title: NULL money propagates through operators and skips in aggregates
+family: money
+tier: core
+feature_ids: [money, nulls, aggregates]
+required_capabilities: [create-table, insert, select, money, guc]
+provenance:
+  source: hand
+  ref: "PG18 datatype-money.html; NULL semantics of strict functions and aggregates"
+sessions: [a]
+setup: |
+  CREATE TABLE money_data (id int4 PRIMARY KEY, m money);
+  INSERT INTO money_data VALUES (1, '$5.00'), (2, NULL);
+steps:
+  - sql: |
+      SET lc_monetary TO 'C'
+    expect: ok
+  - sql: |
+      SELECT id, m + '1'::money AS plus, m * 2 AS dbl, m = '$5.00' AS eq,
+             m IS NULL AS is_null, cashlarger(m, '$4.00') AS big
+      FROM money_data ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sum(m) AS total, count(m) AS n_money, count(*) AS n_rows FROM money_data
+    expect: rows
+    order: multiset

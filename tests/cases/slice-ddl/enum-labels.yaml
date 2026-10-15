@@ -1,0 +1,54 @@
+# enum type: declaration-order sorting, invalid labels, NULL rejection through NOT NULL, ADD VALUE placement.
+id: slice-ddl.enum-labels
+title: enum columns sort by declaration order, reject unknown labels and accept added labels
+family: slice-ddl
+tier: extended
+feature_ids: [create-type, create-table, insert, select, enum, not-null, defaults, errors]
+required_capabilities: [create-type, create-table, insert, select, enum, not-null, defaults, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-enum.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy')
+    expect: ok
+  - sql: |
+      CREATE TABLE feel (id int4 PRIMARY KEY, m mood NOT NULL DEFAULT 'ok')
+    expect: ok
+  - sql: |
+      INSERT INTO feel VALUES (1, 'happy'), (2, DEFAULT), (3, 'sad')
+    expect: ok
+  - sql: |
+      INSERT INTO feel VALUES (4, 'meh')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      INSERT INTO feel VALUES (5, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT id, m FROM feel ORDER BY m, id
+    expect: rows
+    order: ordered
+    comment: sorts by declaration order sad < ok < happy, not alphabetically
+  - sql: |
+      SELECT id FROM feel WHERE m > 'ok' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT enum_range(NULL::mood) AS labels
+    expect: rows
+  - sql: |
+      ALTER TYPE mood ADD VALUE 'meh' BEFORE 'sad'
+    expect: ok
+  - sql: |
+      SELECT enum_range(NULL::mood) AS labels
+    expect: rows
+  - sql: |
+      INSERT INTO feel VALUES (4, 'meh')
+    expect: ok
+  - sql: |
+      SELECT id, m FROM feel ORDER BY m, id
+    expect: rows
+    order: ordered

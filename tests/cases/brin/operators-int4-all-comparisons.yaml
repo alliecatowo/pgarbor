@@ -1,0 +1,41 @@
+# Each btree-style comparison operator that brin minmax supports for int4 must agree with the
+# equivalent count computed without the index (regress brinopers int4 table, reduced).
+id: brin.operators-int4-all-comparisons
+title: BRIN minmax counts for every int4 comparison operator match the reference counts
+family: brin
+tier: core
+feature_ids: [brin, create-index, select, comparison-operators]
+required_capabilities: [create-table, insert, select, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (brinopers, colname int4col, typ int4)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4);
+  INSERT INTO t SELECT (g * 7919) % 2000 FROM generate_series(1, 1000) g;
+  CREATE INDEX t_a_brin ON t USING brin (a) WITH (pages_per_range = 1);
+steps:
+  - sql: |
+      SELECT
+        count(*) FILTER (WHERE a > 1000)  AS gt,
+        count(*) FILTER (WHERE a >= 1000) AS ge,
+        count(*) FILTER (WHERE a = 1000)  AS eq,
+        count(*) FILTER (WHERE a <= 1000) AS le,
+        count(*) FILTER (WHERE a < 1000)  AS lt
+      FROM t
+    expect: rows
+    order: multiset
+    comment: unindexed reference counts over the whole table
+  - sql: |
+      SELECT count(*) FILTER (WHERE a > 1000) AS gt,
+             count(*) FILTER (WHERE a >= 1000) AS ge,
+             count(*) FILTER (WHERE a = 1000) AS eq,
+             count(*) FILTER (WHERE a <= 1000) AS le,
+             count(*) FILTER (WHERE a < 1000) AS lt
+      FROM t WHERE a BETWEEN -1 AND 2000
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE a = 0 OR a = 1
+    expect: rows
+    order: multiset

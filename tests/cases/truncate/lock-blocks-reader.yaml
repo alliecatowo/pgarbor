@@ -1,0 +1,37 @@
+# TRUNCATE takes ACCESS EXCLUSIVE; a concurrent reader waits until the truncating transaction commits.
+id: truncate.lock-blocks-reader
+title: "Uncommitted TRUNCATE blocks a concurrent SELECT until COMMIT, then the reader sees empty table"
+family: truncate
+tier: extended
+feature_ids: [truncate, locks, multi-session, transactions, insert, select]
+required_capabilities: [create-table, insert, select, truncate, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a, b]
+setup: |
+  CREATE TABLE lk (id int4 PRIMARY KEY);
+  INSERT INTO lk VALUES (1), (2);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      TRUNCATE lk
+    expect: ok
+    comment: "takes ACCESS EXCLUSIVE, held until the transaction ends"
+  - session: b
+    sql: |
+      SELECT count(*) FROM lk
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    comment: "the waiting reader resumes and sees the committed empty table"

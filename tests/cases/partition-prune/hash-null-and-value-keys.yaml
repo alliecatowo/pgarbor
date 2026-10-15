@@ -1,0 +1,54 @@
+# Derived from PG18 partition_prune.sql (hash partitioning, IS NULL and equality on each key).
+# Uses the default hash operator classes (no test_setup helpers); only row results are compared.
+id: partition-prune.hash-null-and-value-keys
+title: Hash partitioning on two keys with equality, IS NULL and partial-key predicates
+family: partition-prune
+tier: extended
+feature_ids: [partitioning, hash-partitioning, partition-pruning, null-semantics, select]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE hp (a int, b text, c int) PARTITION BY HASH (a, b);
+  CREATE TABLE hp0 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 0);
+  CREATE TABLE hp1 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+  CREATE TABLE hp2 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+  CREATE TABLE hp3 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 3);
+  INSERT INTO hp VALUES (NULL, NULL, 0), (1, NULL, 1), (1, 'xxx', 2), (NULL, 'xxx', 3), (2, 'xxx', 4), (1, 'abcde', 5);
+steps:
+  - sql: |
+      SELECT c FROM hp WHERE a = 1 ORDER BY c
+    expect: rows
+    order: ordered
+    comment: partial key, no pruning possible; rows from every partition
+  - sql: |
+      SELECT c FROM hp WHERE b = 'xxx' ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c FROM hp WHERE a IS NULL AND b IS NULL ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c FROM hp WHERE a = 1 AND b IS NULL ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c FROM hp WHERE a IS NULL AND b = 'xxx' ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c FROM hp WHERE a = 1 AND b = 'xxx' ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c FROM hp WHERE a <> 1 AND b = 'yyy' ORDER BY c
+    expect: rows
+    order: ordered
+    comment: non-equality on one key, empty result
+  - sql: |
+      SELECT c FROM hp WHERE (a = 1 AND b = 'abcde') OR (a = 2 AND b = 'xxx') OR (a IS NULL AND b IS NULL) ORDER BY c
+    expect: rows
+    order: ordered

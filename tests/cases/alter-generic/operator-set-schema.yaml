@@ -1,0 +1,28 @@
+# ALTER OPERATOR SET SCHEMA moves the operator; looking up a signature that does not exist fails with undefined_function.
+id: alter-generic.operator-set-schema
+title: "ALTER OPERATOR SET SCHEMA moves the operator and unknown signatures fail"
+family: alter-generic
+tier: core
+feature_ids: [alter-operator, set-schema, operators, errors]
+required_capabilities: [create-schema, create-function, create-operator, alter-operator, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (Operator: ALTER OPERATOR @-@(int4, int4) SET SCHEMA alt_nsp2)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ag_int_sub(int4, int4) RETURNS int4 LANGUAGE sql AS 'SELECT $1 - $2';
+  CREATE OPERATOR @-@ (leftarg = int4, rightarg = int4, procedure = ag_int_sub);
+  CREATE SCHEMA ag_ops;
+steps:
+  - sql: |
+      ALTER OPERATOR @-@(int4, text) SET SCHEMA ag_ops
+    expect: error
+    sqlstate: "42883"
+    comment: no operator with this argument type combination
+  - sql: |
+      ALTER OPERATOR @-@(int4, int4) SET SCHEMA ag_ops
+    expect: ok
+  - sql: |
+      SELECT n.nspname, o.oprname FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace WHERE o.oprname = '@-@' AND o.oprleft = 'int4'::regtype AND o.oprright = 'int4'::regtype
+    expect: rows
+    order: ordered

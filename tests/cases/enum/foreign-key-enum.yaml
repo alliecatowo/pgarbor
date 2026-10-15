@@ -1,0 +1,36 @@
+# Foreign key over an enum column: child value must exist in parent, and a referenced parent row cannot be deleted.
+id: enum.foreign-key-enum
+title: Foreign key over enum columns rejects unknown child values and referenced parent deletes
+family: enum
+tier: extended
+feature_ids: [enum, foreign-keys, constraints, extended-protocol, errors]
+required_capabilities: [enum-type, create-table, insert, delete, foreign-keys, extended-protocol, errors]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+  CREATE TABLE enumtest_parent (id rainbow PRIMARY KEY);
+  CREATE TABLE enumtest_child (parent rainbow REFERENCES enumtest_parent);
+  INSERT INTO enumtest_parent VALUES ('red');
+steps:
+  - sql: |
+      INSERT INTO enumtest_child VALUES ('red')
+    expect: ok
+  - sql: |
+      INSERT INTO enumtest_child VALUES ('blue')
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM enumtest_parent
+    expect: error
+    sqlstate: "23503"
+  - exec_params:
+      sql: |
+        SELECT parent FROM enumtest_child WHERE parent = $1
+      params: ["red"]
+    expect: rows
+  - sql: |
+      SELECT id FROM enumtest_parent ORDER BY id
+    expect: rows

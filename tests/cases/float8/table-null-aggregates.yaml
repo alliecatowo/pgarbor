@@ -1,0 +1,29 @@
+# NULL float8 values are skipped by aggregates and propagate through arithmetic and comparison.
+id: float8.table-null-aggregates
+title: NULL float8 values propagate through arithmetic and are skipped by aggregates
+family: float8
+tier: core
+feature_ids: [float8, null-handling, aggregates, arithmetic]
+required_capabilities: [select, create-table, insert]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/float8.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE f8n (id int4 PRIMARY KEY, f1 float8);
+  INSERT INTO f8n VALUES (1, 2.5), (2, NULL), (3, -4.0), (4, 0.0);
+steps:
+  - sql: |
+      SELECT count(*) AS all_rows, count(f1) AS non_null, sum(f1) AS total, avg(f1) AS mean, max(f1) AS hi, min(f1) AS lo
+      FROM f8n
+    expect: rows
+  - sql: |
+      SELECT id, f1 + 1 AS plus_one, f1 = 0 AS is_zero, f1 IS NULL AS is_null
+      FROM f8n ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM f8n WHERE f1 <> 0 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows with NULL f1 are excluded because NULL <> 0 is unknown

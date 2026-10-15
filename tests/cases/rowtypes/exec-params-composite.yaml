@@ -1,0 +1,40 @@
+# Composite values bound as text parameters over the unnamed-statement extended protocol.
+id: rowtypes.exec-params-composite
+title: Bind composite values as text parameters and read them back
+family: rowtypes
+tier: core
+feature_ids: [composite-types, extended-protocol, prepared-statements, nulls, errors]
+required_capabilities: [create-type, create-table, insert, select, extended-protocol, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowtypes.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TYPE fullname AS (first text, last text);
+  CREATE TABLE people (fn fullname, bd date);
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO people (fn, bd) VALUES ($1::fullname, $2::date)
+      params: ['(Joe,"von Blow")', '1984-01-10']
+      param_types: [25, 25]
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT (fn).first, (fn).last FROM people WHERE (fn).last = $1
+      params: ["von Blow"]
+      param_types: [25]
+    expect: rows
+  - exec_params:
+      sql: |
+        SELECT ($1::fullname) IS NULL AS null_param
+      params: [null]
+      param_types: [25]
+    expect: rows
+  - exec_params:
+      sql: |
+        SELECT $1::fullname AS f
+      params: ["(Joe)"]
+      param_types: [25]
+    expect: error
+    sqlstate: "22P02"

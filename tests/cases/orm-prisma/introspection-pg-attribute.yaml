@@ -1,0 +1,43 @@
+# Prisma-style column introspection over pg_attribute / pg_class / pg_attrdef, skipping a dropped column.
+id: orm-prisma.introspection-pg-attribute
+title: Column introspection via pg_attribute with format_type, defaults, and a dropped column skipped
+family: orm-prisma
+tier: core
+feature_ids: [catalog-introspection, create-table, alter-table, select, format-type, joins]
+required_capabilities: [create-table, alter-table, select, catalog-introspection, numeric, arrays, timestamp]
+provenance:
+  source: research
+  ref: "Prisma introspection SELECTs over pg_attribute/pg_class/pg_attrdef; PG18 docs catalog-pg-attribute.html"
+sessions: [a]
+setup: |
+  CREATE TABLE "Member" (
+    "id" integer NOT NULL PRIMARY KEY,
+    "displayName" text NOT NULL,
+    "score" numeric(10,2),
+    "joined" timestamp(3),
+    "tags" text[],
+    "role" varchar(20) DEFAULT 'x'
+  );
+  ALTER TABLE "Member" DROP COLUMN "score";
+steps:
+  - sql: |
+      SELECT a.attnum, a.attname, format_type(a.atttypid, a.atttypmod) AS data_type,
+             a.attnotnull, pg_get_expr(d.adbin, d.adrelid) AS default_expr
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+      WHERE n.nspname = current_schema()
+        AND c.relname = 'Member'
+        AND a.attnum > 0
+        AND NOT a.attisdropped
+      ORDER BY a.attnum
+    expect: rows
+    order: ordered
+    comment: attnum 3 is skipped because the dropped column is marked attisdropped
+  - sql: |
+      SELECT a.attname
+      FROM pg_attribute a
+      WHERE a.attrelid = '"Missing"'::regclass
+    expect: error
+    sqlstate: "42P01"

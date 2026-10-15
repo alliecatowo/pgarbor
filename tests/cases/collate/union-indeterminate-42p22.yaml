@@ -1,0 +1,29 @@
+# UNION of columns with different implicit collations: UNION ALL works, sorting the result fails,
+# an explicit COLLATE on one arm makes the result sortable.
+id: collate.union-indeterminate-42p22
+title: "UNION of differently-collated text columns: sort fails unless one side is explicit"
+family: collate
+tier: core
+feature_ids: [collation, union, order-by, errors]
+required_capabilities: [create-table, insert, select, collation, set-operations]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/collate.sql"
+setup: |
+  CREATE TABLE collate_test1 (a int, b text COLLATE "C");
+  CREATE TABLE collate_test2 (a int, b text COLLATE "POSIX");
+  INSERT INTO collate_test1 VALUES (1, 'abc'), (2, 'Abc'), (3, 'bbc'), (4, 'ABD');
+  INSERT INTO collate_test2 SELECT * FROM collate_test1;
+steps:
+  - sql: |
+      SELECT a, b FROM collate_test1 UNION ALL SELECT a, b FROM collate_test2
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT a, b FROM collate_test1 UNION ALL SELECT a, b FROM collate_test2 ORDER BY 2
+    expect: error
+    sqlstate: "42p22"
+  - sql: |
+      SELECT a, b COLLATE "C" FROM collate_test1 UNION SELECT a, b FROM collate_test2 ORDER BY 2
+    expect: rows
+    order: ordered

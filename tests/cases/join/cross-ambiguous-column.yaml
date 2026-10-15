@@ -1,0 +1,32 @@
+# CROSS JOIN produces an unqualified inner join; an unqualified shared column name is ambiguous.
+id: join.cross-ambiguous-column
+title: CROSS JOIN with an unqualified shared column name raises 42702 and qualification fixes it
+family: join
+tier: core
+feature_ids: [joins, cross-join, name-resolution, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/join.sql (CROSS JOIN section)"
+sessions: [a]
+setup: |
+  CREATE TABLE j1 (i integer, j integer, t text);
+  CREATE TABLE j2 (i integer, k integer);
+  INSERT INTO j1 VALUES (1, 4, 'one'), (2, 3, 'two'), (NULL, NULL, 'null');
+  INSERT INTO j2 VALUES (1, -1), (2, 2), (3, -3);
+steps:
+  - sql: |
+      SELECT count(*) FROM j1 CROSS JOIN j2
+    expect: rows
+    order: multiset
+    comment: 3 x 3 rows, no qualification needed for a count
+  - sql: |
+      SELECT i, k, t FROM j1 CROSS JOIN j2
+    expect: error
+    sqlstate: "42702"
+    comment: column reference "i" is ambiguous
+  - sql: |
+      SELECT t1.i, k, t FROM j1 t1 CROSS JOIN j2 t2
+    expect: rows
+    order: multiset
+    comment: qualifying the ambiguous column resolves the error

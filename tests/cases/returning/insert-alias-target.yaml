@@ -1,0 +1,36 @@
+# INSERT INTO table AS alias: RETURNING may use the alias, and the base table name is an error.
+id: returning.insert-alias-target
+title: RETURNING resolves against the INSERT target alias and rejects the base table name
+family: returning
+tier: core
+feature_ids: [returning, insert, table-alias, errors]
+required_capabilities: [create-table, insert, select, returning, serial]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (f1 serial, f2 text, f3 int DEFAULT 42)
+steps:
+  - sql: |
+      INSERT INTO foo AS bar DEFAULT VALUES RETURNING *
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO foo AS bar DEFAULT VALUES RETURNING bar.*
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO foo AS bar DEFAULT VALUES RETURNING bar.f3
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO foo AS bar DEFAULT VALUES RETURNING foo.*
+    expect: error
+    sqlstate: "42P01"
+    comment: base table name is hidden once aliased
+  - sql: |
+      SELECT count(*) FROM foo
+    expect: rows
+    comment: the failed statement inserted nothing, so 3 rows exist

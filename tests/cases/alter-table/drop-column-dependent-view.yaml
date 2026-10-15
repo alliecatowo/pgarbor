@@ -1,0 +1,37 @@
+# DROP COLUMN blocked by a dependent view (2BP01); CASCADE drops the view too.
+id: alter-table.drop-column-dependent-view
+title: DROP COLUMN with a dependent view fails 2BP01 and CASCADE removes the view
+family: alter-table
+tier: core
+feature_ids: [alter-table, drop-column, views, cascade, errors]
+required_capabilities: [create-table, alter-table, views, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 sql-altertable.html DROP COLUMN; errcode 2BP01 dependent_objects_still_exist"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4, b text, c int4);
+  INSERT INTO t VALUES (1, 'x', 10), (2, NULL, 20);
+  CREATE VIEW v AS SELECT a, b FROM t;
+steps:
+  - sql: |
+      ALTER TABLE t DROP COLUMN b
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT a, b FROM v ORDER BY a
+    expect: rows
+    order: ordered
+    comment: view still works after the failed drop
+  - sql: |
+      ALTER TABLE t DROP COLUMN b CASCADE
+    expect: ok
+  - sql: |
+      SELECT * FROM t ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM v
+    expect: error
+    sqlstate: "42P01"
+    comment: view was dropped by CASCADE

@@ -1,0 +1,30 @@
+# Renaming an inherited column is refused on the child but recurses from the parent.
+id: create-misc.inherit-rename-inherited-column
+title: Inherited column cannot be renamed on the child but renames recursively from parent
+family: create-misc
+tier: core
+feature_ids: [inheritance, alter-table, errors]
+required_capabilities: [create-table, insert, select, alter-table, inheritance]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_misc.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE p (a int4);
+  CREATE TABLE ch (b text) INHERITS (p);
+  INSERT INTO p VALUES (1);
+  INSERT INTO ch (a, b) VALUES (2, 'x');
+steps:
+  - sql: |
+      ALTER TABLE ch RENAME COLUMN a TO aa
+    expect: error
+    sqlstate: "42P16"
+    comment: cannot rename inherited column from the child
+  - sql: |
+      ALTER TABLE p RENAME COLUMN a TO aa
+    expect: ok
+    comment: rename recurses into children
+  - sql: |
+      SELECT tableoid::regclass::text AS src, aa, b FROM p* ORDER BY aa
+    expect: rows
+    order: ordered

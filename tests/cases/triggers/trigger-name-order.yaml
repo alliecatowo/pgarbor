@@ -1,0 +1,30 @@
+# Multiple BEFORE row triggers on one table fire in alphabetical order by trigger name, not creation order.
+id: triggers.trigger-name-order
+title: BEFORE row triggers fire in alphabetical name order regardless of creation order
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, insert, select]
+required_capabilities: [create-table, insert, select, plpgsql, triggers]
+provenance:
+  source: hand
+  ref: "PG18 docs: CREATE TRIGGER (multiple triggers of the same kind fire in alphabetical order by name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int, s text);
+  CREATE FUNCTION add_tag() RETURNS trigger AS $$
+  BEGIN
+    NEW.s := coalesce(NEW.s, '') || TG_ARGV[0];
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER trig_b BEFORE INSERT ON t FOR EACH ROW EXECUTE PROCEDURE add_tag('B');
+  CREATE TRIGGER trig_a BEFORE INSERT ON t FOR EACH ROW EXECUTE PROCEDURE add_tag('A');
+  CREATE TRIGGER trig_c BEFORE INSERT ON t FOR EACH ROW EXECUTE PROCEDURE add_tag('C');
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, NULL), (2, 'x')
+    expect: ok
+  - sql: |
+      SELECT id, s FROM t ORDER BY id
+    expect: rows
+    order: ordered

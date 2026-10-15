@@ -1,0 +1,39 @@
+# Shared advisory locks coexist with each other but conflict with an exclusive request from another session.
+id: advisory-lock.shared-lock-compatibility
+title: "Shared advisory locks are compatible with each other and not with exclusive requests"
+family: advisory-lock
+tier: extended
+feature_ids: [advisory-locks, multi-session]
+required_capabilities: [advisory-locks, multi-session, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/advisory_lock.sql"
+  license: "PostgreSQL License"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT pg_advisory_lock_shared(2)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock_shared(2)
+    expect: rows
+    comment: shared with shared, expected to be granted
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(2)
+    expect: rows
+    comment: exclusive against a shared holder in another session, expected to be refused
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock_shared(2)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock_shared(2)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(2), pg_advisory_unlock(2)
+    expect: rows

@@ -1,0 +1,57 @@
+# PostgreSQL 18 regression create_cast.sql, rewritten as a self-contained case.
+id: create-cast.drop-function-dependency
+title: "A cast depends on its function: plain DROP FUNCTION is refused, CASCADE removes the cast"
+family: create-cast
+tier: core
+feature_ids: [create-cast, errors, drop-cast, dependencies]
+required_capabilities: [create-type, create-cast, create-function-sql, create-function-internal, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_cast.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TYPE casttesttype;
+  CREATE FUNCTION casttesttype_in(cstring)
+     RETURNS casttesttype
+     AS 'textin'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION casttesttype_out(casttesttype)
+     RETURNS cstring
+     AS 'textout'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE TYPE casttesttype (
+     internallength = variable,
+     input = casttesttype_in,
+     output = casttesttype_out,
+     alignment = int4
+  );
+  CREATE FUNCTION casttestfunc(casttesttype) RETURNS int4 LANGUAGE SQL AS
+  $$ SELECT 1; $$;
+steps:
+  - sql: |
+      CREATE FUNCTION int4_casttesttype(int4) RETURNS casttesttype LANGUAGE SQL AS
+      $$ SELECT ('foo'::text || $1::text)::casttesttype; $$;
+    expect: ok
+  - sql: |
+      CREATE CAST (int4 AS casttesttype) WITH FUNCTION int4_casttesttype(int4) AS IMPLICIT;
+    expect: ok
+  - sql: |
+      DROP FUNCTION int4_casttesttype(int4);
+    expect: error
+    sqlstate: "2BP01"
+    comment: "dependent_objects_still_exist"
+  - sql: |
+      SELECT 1234::int4::casttesttype AS v;
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP FUNCTION int4_casttesttype(int4) CASCADE;
+    expect: any
+  - sql: |
+      SELECT 1234::int4::casttesttype;
+    expect: error
+    sqlstate: "42846"
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE casttarget = 'casttesttype'::regtype;
+    expect: rows
+    order: multiset

@@ -1,0 +1,24 @@
+# A RESTRICTIVE policy is ANDed with the permissive set; a NULL result from the restrictive predicate hides the row.
+id: rowsecurity.restrictive-and-permissive
+title: "Restrictive policy narrows a permissive policy and hides NULL-predicate rows"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, nulls]
+required_capabilities: [create-table, insert, select, rls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, cid int4);
+  INSERT INTO t VALUES (1, 11), (2, 22), (3, 44), (4, 33), (5, 44), (6, 11), (7, NULL);
+  CREATE POLICY p_all ON t AS PERMISSIVE FOR SELECT USING (true);
+  CREATE POLICY r_not_44 ON t AS RESTRICTIVE FOR SELECT USING (cid <> 44);
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE t FORCE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows 3 and 5 fail the restrictive predicate; row 7 yields NULL and is hidden

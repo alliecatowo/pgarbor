@@ -1,0 +1,33 @@
+# Column-list INSERT leaves omitted columns to their defaults (serial, NOT NULL default, nullable);
+# an explicit serial value does not advance the sequence.
+id: copy2.insert-column-list-defaults
+title: Column-list insert fills serial and default columns, explicit serial value does not advance sequence
+family: copy2
+tier: core
+feature_ids: [insert, column-list, column-defaults, serial]
+required_capabilities: [create-table, insert, select, serial, column-defaults]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/copy2.sql
+  license: PostgreSQL
+setup: |
+  CREATE TABLE x (a serial, b int, c text NOT NULL DEFAULT 'stuff', d text, e text);
+steps:
+  - sql: |
+      INSERT INTO x (b, d) VALUES (1, 'test_1'), (2, 'test_2')
+    expect: ok
+  - sql: |
+      SELECT a, b, c, d, e FROM x ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO x (a, b, c, d, e) VALUES (9999, NULL, '\N', '\\N', NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO x (b, d) VALUES (3, 'test_3')
+    expect: ok
+    comment: explicit a=9999 does not advance the sequence, so this gets a=3
+  - sql: |
+      SELECT a, b, c, d, e, b IS NULL AS b_null, e IS NULL AS e_null FROM x ORDER BY a
+    expect: rows
+    order: ordered

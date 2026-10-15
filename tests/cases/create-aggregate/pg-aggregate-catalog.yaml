@@ -1,0 +1,30 @@
+# pg_aggregate records the transition type, transition/final functions and aggregate kind for
+# a normal aggregate; read back through a join to pg_proc.
+id: create-aggregate.pg-aggregate-catalog
+title: "pg_aggregate catalog row for a normal aggregate with init condition and final function"
+family: create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, catalog-introspection]
+required_capabilities: [aggregates, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (SELECT ... FROM pg_aggregate WHERE aggfnoid)"
+  license: PostgreSQL
+setup: |
+  CREATE AGGREGATE newavg (int4) (
+    sfunc = int4_avg_accum, stype = _int8,
+    finalfunc = int8_avg, initcond = '{0,0}'
+  );
+steps:
+  - sql: |
+      SELECT p.proname, a.aggkind, a.aggnumdirectargs, a.aggtranstype::regtype::text AS transtype,
+             a.aggtransfn::regproc::text AS transfn, a.aggfinalfn::regproc::text AS finalfn,
+             a.aggcombinefn::regproc::text AS combinefn
+      FROM pg_aggregate a JOIN pg_proc p ON p.oid = a.aggfnoid
+      WHERE p.proname = 'newavg'
+    expect: rows
+    comment: normal aggregate kind, transition type _int8 (bigint[]), no combine function
+  - sql: |
+      SELECT p.proname, p.prokind, p.pronargs
+      FROM pg_proc p WHERE p.proname = 'newavg'
+    expect: rows

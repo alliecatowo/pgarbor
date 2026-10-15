@@ -1,0 +1,46 @@
+# Provenance: pg-regress misc_functions.sql, pg_read_file / pg_ls_dir missing_ok and
+# include_dot_dirs sections.
+id: misc-functions.file-functions-missing-ok
+title: pg_read_file and pg_ls_dir missing_ok and include_dot_dirs arguments on a missing path
+family: misc-functions
+tier: extended
+feature_ids: [pg-read-file, pg-ls-dir, errors, null-semantics]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/misc_functions.sql"
+sessions: [a]
+notes: >-
+  Requires a superuser (or pg_read_server_files) on the oracle; paths are relative to the data
+  directory. The target only matches if it exposes an equivalent data-directory file API, so a
+  mismatch here is informative, not automatically a bug. The missing path is used deliberately.
+steps:
+  - sql: |
+      SELECT pg_read_file('misc_fn_does_not_exist', true) IS NULL AS missing_ok
+    expect: rows
+    comment: missing_ok true returns NULL
+  - sql: |
+      SELECT pg_read_file('misc_fn_does_not_exist')
+    expect: error
+    sqlstate: "58P01"
+    comment: missing file without missing_ok is undefined_file
+  - sql: |
+      SELECT pg_ls_dir('misc_fn_does_not_exist', true, false)
+    expect: rows
+    comment: missing_ok true yields an empty set
+  - sql: |
+      SELECT pg_ls_dir('misc_fn_does_not_exist', false, false)
+    expect: error
+    sqlstate: "58P01"
+  - sql: |
+      SELECT count(*) = 1 AS dot_found FROM pg_ls_dir('.', false, true) AS ls WHERE ls = '.'
+    expect: rows
+    comment: include_dot_dirs true lists the current directory entry
+  - sql: |
+      SELECT count(*) = 1 AS dot_found FROM pg_ls_dir('.', false, false) AS ls WHERE ls = '.'
+    expect: rows
+    comment: include_dot_dirs false omits it
+  - sql: |
+      SELECT pg_read_file('misc_fn_does_not_exist', 0, -1, true)
+    expect: error
+    comment: negative length is invalid even with missing_ok

@@ -1,0 +1,39 @@
+# COMMENT ON LARGE OBJECT is visible in pg_description, and unlink removes catalog rows.
+id: largeobject.comment-catalog
+title: Large object comments, owner in pg_largeobject_metadata, and catalog cleanup on unlink
+family: largeobject
+tier: extended
+feature_ids: [large-objects, comments, catalog-introspection, lo-unlink]
+required_capabilities: [large-objects, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  SELECT lo_create(51);
+steps:
+  - sql: |
+      COMMENT ON LARGE OBJECT 51 IS 'answer'
+    expect: ok
+  - sql: |
+      SELECT obj_description(51, 'pg_largeobject')
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_largeobject_metadata WHERE oid = 51
+    expect: rows
+  - sql: |
+      SELECT lomowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) FROM pg_largeobject_metadata WHERE oid = 51
+    expect: rows
+  - sql: |
+      COMMENT ON LARGE OBJECT 51 IS NULL
+    expect: ok
+  - sql: |
+      SELECT obj_description(51, 'pg_largeobject') IS NULL
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(51)
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_largeobject_metadata WHERE oid = 51
+    expect: rows

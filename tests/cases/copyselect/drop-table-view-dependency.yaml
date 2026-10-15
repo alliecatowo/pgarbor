@@ -1,0 +1,27 @@
+# Derived from pg-regress copyselect: dropping a table that a view depends on is refused.
+id: copyselect.drop-table-view-dependency
+title: DROP TABLE refused while a view depends on it, then succeeds after the view is dropped
+family: copyselect
+tier: extended
+feature_ids: [create-view, drop, errors, catalog-dependencies]
+required_capabilities: [create-table, insert, select, create-view, drop-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/copyselect.sql (drop everything: drop table test1 with v_test1 present)"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (id serial, t text);
+  INSERT INTO test1 (t) VALUES ('a');
+  CREATE VIEW v_test1 AS SELECT 'v_' || t FROM test1;
+steps:
+  - sql: |
+      DROP TABLE test1
+    expect: error
+    sqlstate: "2BP01"
+    comment: the view still depends on test1, so the drop is refused
+  - sql: |
+      SELECT * FROM v_test1
+    expect: rows
+  - sql: |
+      DROP VIEW v_test1; DROP TABLE test1
+    expect: ok

@@ -1,0 +1,31 @@
+# TRUNCATE ONLY is refused on a partitioned table; a plain TRUNCATE empties every partition.
+id: truncate.partitioned-only-error
+title: "TRUNCATE ONLY on a partitioned table fails; plain TRUNCATE empties all partitions"
+family: truncate
+tier: extended
+feature_ids: [truncate, partitioning, errors, insert, select]
+required_capabilities: [create-table, insert, select, partitioning, truncate, transactions]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE tp (a int4, b text) PARTITION BY LIST (a);
+  CREATE TABLE tp1 PARTITION OF tp FOR VALUES IN (1);
+  CREATE TABLE tp2 PARTITION OF tp FOR VALUES IN (2);
+  INSERT INTO tp VALUES (1, 'x'), (2, 'y');
+steps:
+  - sql: |
+      TRUNCATE ONLY tp
+    expect: error
+    sqlstate: "42809"
+    comment: "a partitioned table has no storage of its own to truncate with ONLY"
+  - sql: |
+      SELECT count(*) FROM tp
+    expect: rows
+  - sql: |
+      TRUNCATE tp
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM tp) AS parent_rows, (SELECT count(*) FROM tp1) AS tp1_rows, (SELECT count(*) FROM tp2) AS tp2_rows
+    expect: rows

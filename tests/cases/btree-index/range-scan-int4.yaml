@@ -1,0 +1,38 @@
+# Adapted from PG18 regress btree_index.sql (bt_i4_index min/max/equality probes), rewritten self-contained.
+id: btree-index.range-scan-int4
+title: Range, equality and boundary scans over an int4 btree index return correct ordered rows
+family: btree-index
+tier: slice
+feature_ids: [select, create-index, btree-index, where-range, order-by]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (bt_i4_index min/max and equality probes)"
+setup: |
+  CREATE TABLE bt_i4 (seqno int4, rnd int4);
+  INSERT INTO bt_i4 SELECT 10001 - i, i * 7 % 13 FROM generate_series(1, 10000) i;
+  CREATE INDEX bt_i4_index ON bt_i4 USING btree (seqno int4_ops);
+  ANALYZE bt_i4;
+steps:
+  - sql: |
+      SELECT seqno FROM bt_i4 WHERE seqno < 3 ORDER BY seqno
+    expect: rows
+    order: ordered
+    comment: lower boundary, rows below the minimum-side probe
+  - sql: |
+      SELECT seqno FROM bt_i4 WHERE seqno >= 9999 ORDER BY seqno
+    expect: rows
+    order: ordered
+    comment: upper boundary, last keys of the index
+  - sql: |
+      SELECT seqno, rnd FROM bt_i4 WHERE seqno = 4500 ORDER BY seqno, rnd
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM bt_i4 WHERE seqno BETWEEN 100 AND 199
+    expect: rows
+  - sql: |
+      SELECT seqno FROM bt_i4 WHERE seqno > 10001 OR seqno < 0
+    expect: rows
+    order: multiset
+    comment: outside the key domain, expect an empty result set

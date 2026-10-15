@@ -1,0 +1,27 @@
+# A composite unique index (key, fruit) is inferred only when the target covers all of its columns, in any order.
+id: insert-conflict.composite-key-inference
+title: ON CONFLICT with composite unique index requires all columns in any order
+family: insert-conflict
+tier: core
+feature_ids: [insert, on-conflict, unique-index, composite-key, errors]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert_conflict.sql (Composite key tests)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (key int4, fruit text);
+  CREATE UNIQUE INDEX t_comp ON t (key, fruit);
+  INSERT INTO t VALUES (7, 'Raspberry');
+steps:
+  - sql: |
+      INSERT INTO t VALUES (7, 'Raspberry') ON CONFLICT (fruit, key) DO UPDATE SET fruit = excluded.fruit
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (9, 'Banana') ON CONFLICT (key) DO UPDATE SET fruit = excluded.fruit
+    expect: error
+    sqlstate: "42P10"
+  - sql: |
+      SELECT key, fruit FROM t ORDER BY key
+    expect: rows
+    order: ordered

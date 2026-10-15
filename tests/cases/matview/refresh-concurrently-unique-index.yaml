@@ -1,0 +1,31 @@
+id: matview.refresh-concurrently-unique-index
+title: REFRESH CONCURRENTLY with a unique index applies inserts, updates, deletes and NULL values
+family: matview
+tier: core
+feature_ids: [materialized-views, unique-index, refresh-concurrently, nulls]
+required_capabilities: [create-table, insert, update, delete, select, create-index, unique-index, create-materialized-view]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE src (id int4, v text);
+  INSERT INTO src VALUES (1, 'x'), (2, 'y'), (3, NULL);
+steps:
+  - sql: |
+      CREATE MATERIALIZED VIEW src_mv AS SELECT id, v FROM src
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX src_mv_id ON src_mv (id)
+    expect: ok
+  - sql: |
+      UPDATE src SET v = 'z' WHERE id = 2;
+      DELETE FROM src WHERE id = 3;
+      INSERT INTO src VALUES (4, 'w')
+    expect: ok
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY src_mv
+    expect: ok
+  - sql: |
+      SELECT id, v FROM src_mv ORDER BY id
+    expect: rows
+    order: ordered

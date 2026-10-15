@@ -1,0 +1,35 @@
+# Composite type as a column: ROW construction, field access, NULL fields versus NULL composite, field update.
+id: create-type.composite-basic
+title: "Composite type column: row construction, field access, field update"
+family: create-type
+tier: core
+feature_ids: [create-type, composite-types, insert, select, update, errors]
+required_capabilities: [create-type, create-table, insert, select, update, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_type.sql (stand-alone composite type section, rewritten)"
+setup: |
+  CREATE TYPE pair AS (a int4, b text);
+  CREATE TABLE pt (id int4 PRIMARY KEY, p pair);
+steps:
+  - sql: |
+      INSERT INTO pt VALUES (1, ROW(10, 'ten')), (2, ROW(NULL, '')), (3, NULL)
+    expect: ok
+  - sql: |
+      SELECT id, (p).a AS a, (p).b AS b, (p).b IS NULL AS b_null FROM pt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a NULL field differs from empty string; a NULL composite gives NULL fields
+  - sql: |
+      SELECT id, p::text AS txt, p IS NULL AS p_null FROM pt ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE pt SET p.a = 99 WHERE id = 1 RETURNING p::text AS txt
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT (p).c FROM pt
+    expect: error
+    sqlstate: "42703"
+    comment: no such field on the composite

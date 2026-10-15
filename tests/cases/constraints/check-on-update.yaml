@@ -1,0 +1,31 @@
+# CHECK constraints are re-evaluated on UPDATE against the new row; swapping columns is evaluated per row.
+id: constraints.check-on-update
+title: CHECK is enforced on UPDATE against the new row values
+family: constraints
+tier: core
+feature_ids: [check-constraints, update, errors, select]
+required_capabilities: [create-table, insert, update, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE cu (x int, z int, CHECK (x + z = 0));
+  INSERT INTO cu VALUES (2, -2), (7, -7);
+steps:
+  - sql: |
+      UPDATE cu SET x = -z, z = -x
+    expect: ok
+    comment: new values (2,-2) and (7,-7) still satisfy x + z = 0
+  - sql: |
+      UPDATE cu SET x = 9 WHERE x = 2
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      UPDATE cu SET x = NULL, z = NULL WHERE x = 7
+    expect: ok
+    comment: NULL result is not a violation
+  - sql: |
+      SELECT x, z FROM cu ORDER BY x NULLS LAST, z NULLS LAST
+    expect: rows
+    order: ordered

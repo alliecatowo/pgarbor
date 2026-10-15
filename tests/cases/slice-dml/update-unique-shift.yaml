@@ -1,0 +1,28 @@
+# UPDATE that shifts every key by one trips a non-deferrable UNIQUE check row by row (23505);
+# the statement is rolled back and a non-conflicting update succeeds.
+id: slice-dml.update-unique-shift
+title: Row-by-row UNIQUE check rejects a key-shifting UPDATE; statement is atomic
+family: slice-dml
+tier: core
+feature_ids: [update, unique-constraint, constraints, returning, errors]
+required_capabilities: [create-table, insert, update, select, returning, unique-constraint]
+provenance:
+  source: hand
+  ref: "https://www.postgresql.org/docs/18/ddl-constraints.html#DDL-CONSTRAINTS-UNIQUE-CONSTRAINTS"
+sessions: [a]
+setup: |
+  CREATE TABLE slot (pos int4 UNIQUE, name text);
+  INSERT INTO slot VALUES (1, 'a'), (2, 'b'), (3, 'c');
+steps:
+  - sql: |
+      UPDATE slot SET pos = pos + 1
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT pos, name FROM slot ORDER BY pos
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE slot SET pos = pos + 10 WHERE pos > 1 RETURNING pos, name
+    expect: rows
+    order: multiset

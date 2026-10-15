@@ -1,0 +1,33 @@
+# With row_security = off, a query against a forced RLS table raises 42501 instead of silently filtering.
+id: rowsecurity.row-security-off-raises
+title: "row_security off raises an error for a forced RLS table"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, guc, errors]
+required_capabilities: [create-table, insert, select, rls, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'shown'), (2, 'hidden');
+  CREATE POLICY sel_not_hidden ON t FOR SELECT USING (v <> 'hidden');
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE t FORCE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SET row_security = off
+    expect: ok
+  - sql: |
+      SELECT id FROM t
+    expect: error
+    sqlstate: "42501"
+    comment: the query would be affected by the policy, so it is refused rather than filtered
+  - sql: |
+      SET row_security = on
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

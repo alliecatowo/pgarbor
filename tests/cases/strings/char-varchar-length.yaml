@@ -1,0 +1,34 @@
+# Explicit casts truncate silently for char(n) and text, but an explicit varchar(n) cast of too-long text is an error.
+id: strings.char-varchar-length
+title: Explicit casts between text, char(n) and varchar(n) with truncation and blank-padding semantics
+family: strings
+tier: core
+feature_ids: [char-types, varchar-types, text, casts]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/strings.sql"
+setup: |
+  CREATE TABLE text_tbl (f1 text);
+  INSERT INTO text_tbl VALUES ('doh!'), ('hi de ho neighbor');
+steps:
+  - sql: |
+      SELECT CAST(f1 AS char(10)) AS c10 FROM text_tbl ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: explicit cast truncates without error
+  - sql: |
+      SELECT CAST(name 'namefield' AS char(10)) AS c_name, CAST(f1 AS varchar) AS v_text FROM text_tbl ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT CAST('ab   '::char(5) AS text) AS trimmed, length('ab   '::char(5)) AS len_char, octet_length('ab   '::char(5)) AS octets
+    expect: rows
+    comment: trailing blanks in char(n) are not significant for text conversion or length()
+  - sql: |
+      SELECT CAST('hello world' AS varchar(5)) AS too_long
+    expect: error
+    sqlstate: "22001"
+  - sql: |
+      SELECT CAST('hello' AS varchar(5)) AS exact_fit
+    expect: rows

@@ -1,0 +1,39 @@
+# Basic foreign key with default NO ACTION: NULL referencing values allowed, dangling references and referenced-row deletes rejected.
+id: slice-ddl.foreign-key-basic
+title: Foreign key rejects dangling references and deletes of referenced parent rows, allows NULL
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, update, delete, foreign-key, errors, joins]
+required_capabilities: [create-table, insert, select, update, delete, foreign-key, errors, joins]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints.html#DDL-CONSTRAINTS-FK"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE parent (id int4 PRIMARY KEY);
+      CREATE TABLE child (id int4 PRIMARY KEY, parent_id int4 REFERENCES parent (id))
+    expect: ok
+  - sql: |
+      INSERT INTO parent VALUES (1), (2)
+    expect: ok
+  - sql: |
+      INSERT INTO child VALUES (10, 1), (11, NULL)
+    expect: ok
+    comment: a NULL foreign key value is not checked (MATCH SIMPLE)
+  - sql: |
+      INSERT INTO child VALUES (12, 3)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      UPDATE child SET parent_id = 9 WHERE id = 10
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM parent WHERE id = 1
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      SELECT c.id, c.parent_id, p.id AS parent_found FROM child c LEFT JOIN parent p ON p.id = c.parent_id ORDER BY c.id
+    expect: rows
+    order: ordered

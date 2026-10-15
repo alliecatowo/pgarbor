@@ -1,0 +1,53 @@
+# Adding a foreign key over orphan rows fails 23503; NOT VALID defers the check until VALIDATE; NULL referencing values are not checked.
+id: alter-table.fk-add-validate
+title: ADD FOREIGN KEY fails on orphan rows (23503); NOT VALID then VALIDATE after cleanup
+family: alter-table
+tier: core
+feature_ids: [alter-table, foreign-key, not-valid, validate-constraint, null-semantics, errors]
+required_capabilities: [create-table, alter-table, insert, delete, select, constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (FOREIGN KEY CONSTRAINT adding TEST)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE attmp2 (a int4 PRIMARY KEY);
+  INSERT INTO attmp2 VALUES (1), (2), (3), (4);
+  CREATE TABLE attmp3 (a int4, b int4);
+  INSERT INTO attmp3 VALUES (1, 10), (1, 20), (5, 50), (NULL, 60);
+steps:
+  - sql: |
+      ALTER TABLE attmp3 ADD CONSTRAINT attmpconstr FOREIGN KEY (a) REFERENCES attmp2 MATCH FULL
+    expect: error
+    sqlstate: "23503"
+    comment: a=5 has no referenced row
+  - sql: |
+      DELETE FROM attmp3 WHERE a = 5
+    expect: ok
+  - sql: |
+      ALTER TABLE attmp3 ADD CONSTRAINT attmpconstr FOREIGN KEY (a) REFERENCES attmp2 MATCH FULL
+    expect: ok
+  - sql: |
+      ALTER TABLE attmp3 DROP CONSTRAINT attmpconstr
+    expect: ok
+  - sql: |
+      INSERT INTO attmp3 VALUES (5, 50)
+    expect: ok
+  - sql: |
+      ALTER TABLE attmp3 ADD CONSTRAINT attmpconstr FOREIGN KEY (a) REFERENCES attmp2 MATCH FULL NOT VALID
+    expect: ok
+  - sql: |
+      ALTER TABLE attmp3 VALIDATE CONSTRAINT attmpconstr
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM attmp3 WHERE a = 5
+    expect: ok
+  - sql: |
+      ALTER TABLE attmp3 VALIDATE CONSTRAINT attmpconstr
+    expect: ok
+  - sql: |
+      SELECT a, b FROM attmp3 ORDER BY b
+    expect: rows
+    order: ordered
+    comment: the NULL-keyed row remains; MATCH FULL allows a NULL key only when all columns are NULL

@@ -1,0 +1,26 @@
+# GROUP BY on the list partition key over a list-partitioned table; results must match the
+# non-partitionwise answer regardless of how the planner splits the aggregation.
+id: partition-aggregate.basic-list-group
+title: GROUP BY partition key over a list-partitioned table with HAVING
+family: partition-aggregate
+tier: slice
+feature_ids: [partitioning, group-by, aggregates, having]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_tab (a int, b int, c text, d int) PARTITION BY LIST (c);
+  CREATE TABLE pagg_tab_p1 PARTITION OF pagg_tab FOR VALUES IN ('0000', '0001');
+  CREATE TABLE pagg_tab_p2 PARTITION OF pagg_tab FOR VALUES IN ('0002', '0003', '0004');
+  INSERT INTO pagg_tab SELECT i % 20, i % 30, to_char(i % 5, 'FM0000'), i % 30 FROM generate_series(0, 99) i;
+steps:
+  - sql: |
+      SELECT c, sum(a), avg(b), count(*), min(a), max(b) FROM pagg_tab GROUP BY c HAVING avg(d) < 15 ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c, count(*) FROM pagg_tab GROUP BY c ORDER BY c
+    expect: rows
+    order: ordered

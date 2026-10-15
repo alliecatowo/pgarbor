@@ -1,0 +1,38 @@
+# lo_put and lo_get at explicit offsets, including a write past EOF that zero-fills the gap.
+id: largeobject.put-get-offsets
+title: lo_put and lo_get with offsets, sparse writes past EOF zero-fill
+family: largeobject
+tier: core
+feature_ids: [large-objects, lo-put, lo-get]
+required_capabilities: [large-objects, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  SELECT lo_create(44);
+steps:
+  - sql: |
+      SELECT lo_put(44, 0, '0123456789'::bytea)
+    expect: rows
+  - sql: |
+      SELECT encode(lo_get(44, 2, 4), 'escape')
+    expect: rows
+  - sql: |
+      SELECT lo_put(44, 4, 'XY'::bytea)
+    expect: rows
+  - sql: |
+      SELECT encode(lo_get(44), 'escape')
+    expect: rows
+  - sql: |
+      SELECT lo_put(44, 14, 'Z'::bytea)
+    expect: rows
+  - sql: |
+      SELECT length(lo_get(44)), get_byte(lo_get(44), 10), get_byte(lo_get(44), 14)
+    expect: rows
+    comment: bytes 10..13 are zero-filled, 'Z' is 90
+  - sql: |
+      SELECT length(lo_get(44, 100, 10))
+    expect: rows
+    comment: offset past EOF yields an empty result

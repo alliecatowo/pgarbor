@@ -1,0 +1,44 @@
+# With check_function_bodies off, a SQL function body may CREATE and ALTER a table that later statements in the body use.
+id: create-function-sql.ddl-in-sql-function-check-bodies-off
+title: DDL inside a SQL function body is visible to later body statements when check_function_bodies is off
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, create-table, alter-table, insert, numeric, guc-check-function-bodies]
+required_capabilities: [create-function, sql-functions, create-table, alter-table, insert, select, numeric]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+steps:
+  - sql: |
+      SET check_function_bodies TO off
+    expect: ok
+  - sql: |
+      CREATE FUNCTION create_and_insert() RETURNS VOID LANGUAGE sql AS $$
+        create table ddl_test (f1 int);
+        insert into ddl_test values (1.2);
+      $$
+    expect: ok
+  - sql: |
+      SELECT create_and_insert()
+    expect: rows
+  - sql: |
+      SELECT f1 FROM ddl_test ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: 1.2 is assigned to int4 and rounds to 1
+  - sql: |
+      CREATE FUNCTION alter_and_insert() RETURNS VOID LANGUAGE sql AS $$
+        alter table ddl_test alter column f1 type numeric;
+        insert into ddl_test values (1.2);
+      $$
+    expect: ok
+  - sql: |
+      SELECT alter_and_insert()
+    expect: rows
+  - sql: |
+      SELECT f1 FROM ddl_test ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET check_function_bodies
+    expect: ok

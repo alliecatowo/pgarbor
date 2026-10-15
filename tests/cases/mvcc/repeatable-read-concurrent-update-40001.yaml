@@ -1,0 +1,42 @@
+# Under REPEATABLE READ, updating a row that a concurrent transaction already updated and committed fails with 40001.
+id: mvcc.repeatable-read-concurrent-update-40001
+title: REPEATABLE READ write to a row updated by a concurrent committed transaction raises serialization failure
+family: mvcc
+tier: core
+feature_ids: [transactions, repeatable-read, update, errors]
+required_capabilities: [create-table, insert, update, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/transaction-iso.html#XACT-REPEATABLE-READ; errcodes 40001"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acc (k int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO acc VALUES (1, 100);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT v FROM acc WHERE k = 1
+    expect: rows
+  - session: b
+    sql: |
+      UPDATE acc SET v = v + 1 WHERE k = 1
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE acc SET v = v + 10 WHERE k = 1
+    expect: error
+    sqlstate: "40001"
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      SELECT k, v FROM acc ORDER BY k
+    expect: rows
+    order: ordered
+    comment: only b's update survives (101)

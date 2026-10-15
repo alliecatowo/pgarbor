@@ -1,0 +1,32 @@
+# UPDATE ... FROM with a join condition: unmatched rows untouched, NULL source handled via COALESCE.
+id: slice-dml.update-from-join
+title: UPDATE FROM a second table, RETURNING qualified columns, unmatched and NULL sources
+family: slice-dml
+tier: core
+feature_ids: [update, update-from, returning, null-handling]
+required_capabilities: [create-table, insert, update, select, returning]
+provenance:
+  source: hand
+  ref: "https://www.postgresql.org/docs/18/sql-update.html"
+sessions: [a]
+setup: |
+  CREATE TABLE stock (sku text PRIMARY KEY, qty int4 NOT NULL);
+  CREATE TABLE delivery (sku text NOT NULL, received int4);
+  INSERT INTO stock VALUES ('a', 1), ('b', 2), ('c', 3);
+  INSERT INTO delivery VALUES ('a', 10), ('c', NULL), ('z', 99);
+steps:
+  - sql: |
+      UPDATE stock AS s SET qty = s.qty + COALESCE(d.received, 0) FROM delivery AS d WHERE d.sku = s.sku RETURNING s.sku, s.qty
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT sku, qty FROM stock ORDER BY sku
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE stock AS s SET qty = d.received FROM delivery AS d WHERE d.sku = s.sku AND d.received IS NULL
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT count(*) FROM stock WHERE qty IS NULL
+    expect: rows

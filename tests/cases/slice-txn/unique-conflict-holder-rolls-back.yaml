@@ -1,0 +1,41 @@
+# Same duplicate-key race, but the holder rolls back: the waiting insert then succeeds.
+id: slice-txn.unique-conflict-holder-rolls-back
+title: Duplicate-key insert waiting on an uncommitted holder succeeds after the holder rolls back
+family: slice-txn
+tier: core
+feature_ids: [transactions, insert, primary-key, unique-constraints, multi-session, null-handling]
+required_capabilities: [create-table, insert, select, transactions, constraints, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/index-unique-checks.html"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (k int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (2, NULL);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO t VALUES (1, 'a')
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (1, 'b')
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT k, v FROM t ORDER BY k
+    expect: rows
+    order: ordered
+    comment: expect (1,'b') and the NULL row for 2

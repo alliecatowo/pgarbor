@@ -1,0 +1,32 @@
+# Infinity, negative infinity and epoch order around ordinary values and sort NULL last.
+id: timestamptz.special-values
+title: infinity -infinity and epoch order correctly and compare with NULL as unknown
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, insert, select, order-by, null-handling]
+required_capabilities: [create-table, insert, select, date-type, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamptz.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE tz_special (id int4, d timestamptz);
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      INSERT INTO tz_special VALUES (1, 'infinity'), (2, '-infinity'), (3, 'epoch'), (4, NULL), (5, '2000-01-01 00:00:00+00')
+    expect: ok
+  - sql: |
+      SELECT id, d::text AS d_text FROM tz_special ORDER BY d, id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, d > timestamptz 'epoch' AS after_epoch, d IS NULL AS is_null FROM tz_special ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT timestamptz 'infinity' = timestamptz 'infinity' AS inf_eq, timestamptz '-infinity' < timestamptz 'epoch' AS neg_lt
+    expect: rows
+    order: multiset

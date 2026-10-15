@@ -1,0 +1,34 @@
+# COMMENT ON TRIGGER for a trigger that does not exist fails with 42704; a real comment round-trips and NULL removes it.
+id: triggers.err-comment-missing-trigger
+title: COMMENT ON an unknown trigger fails with undefined_object, comment set and cleared
+family: triggers
+tier: extended
+feature_ids: [triggers, plpgsql, comments, errors, catalog-introspection]
+required_capabilities: [create-table, select, plpgsql, triggers, comments, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (Test comments on triggers); errcodes 42704"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int);
+  CREATE FUNCTION noop6() RETURNS trigger AS $$
+  BEGIN RETURN NEW; END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_real BEFORE INSERT ON t FOR EACH ROW EXECUTE PROCEDURE noop6();
+steps:
+  - sql: |
+      COMMENT ON TRIGGER no_such_trigger ON t IS 'wrong'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON TRIGGER t_real ON t IS 'right'
+    expect: ok
+  - sql: |
+      SELECT d.description FROM pg_description d JOIN pg_trigger g ON g.oid = d.objoid AND d.classoid = 'pg_trigger'::regclass WHERE g.tgname = 't_real'
+    expect: rows
+  - sql: |
+      COMMENT ON TRIGGER t_real ON t IS NULL
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_description d JOIN pg_trigger g ON g.oid = d.objoid AND d.classoid = 'pg_trigger'::regclass WHERE g.tgname = 't_real'
+    expect: rows

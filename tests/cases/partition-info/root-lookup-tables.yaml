@@ -1,0 +1,27 @@
+# Table partition tree: pg_partition_root from root, intermediate, leaf, and empty partitioned tables.
+id: partition-info.root-lookup-tables
+title: pg_partition_root resolves every table in a multi-level range and list partition tree to the top root
+family: partition-info
+tier: core
+feature_ids: [partitioning, partition-tree-functions, create-table]
+required_capabilities: [create-table, select, catalog-introspection, partitioning]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_test (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_test0 PARTITION OF ptif_test FOR VALUES FROM (MINVALUE) TO (0) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test01 PARTITION OF ptif_test0 FOR VALUES IN (1);
+  CREATE TABLE ptif_test1 PARTITION OF ptif_test FOR VALUES FROM (0) TO (100) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test11 PARTITION OF ptif_test1 FOR VALUES IN (1);
+  CREATE TABLE ptif_test2 PARTITION OF ptif_test FOR VALUES FROM (100) TO (200);
+  CREATE TABLE ptif_test3 PARTITION OF ptif_test FOR VALUES FROM (200) TO (MAXVALUE) PARTITION BY LIST (b);
+steps:
+  - sql: |
+      SELECT rel, pg_partition_root(rel::regclass)::text AS root
+      FROM (VALUES ('ptif_test'), ('ptif_test0'), ('ptif_test01'), ('ptif_test1'), ('ptif_test11'), ('ptif_test2'), ('ptif_test3')) AS v(rel)
+      ORDER BY rel
+    expect: rows
+    order: ordered
+    comment: every member, including the root itself and the partitioned table with no partitions, maps to ptif_test

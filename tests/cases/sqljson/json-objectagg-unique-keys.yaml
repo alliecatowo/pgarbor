@@ -1,0 +1,30 @@
+# JSON_OBJECTAGG duplicate-key detection with WITH UNIQUE KEYS, and NULL key rejection.
+id: sqljson.json-objectagg-unique-keys
+title: JSON_OBJECTAGG WITH UNIQUE KEYS duplicate and null key errors
+family: sqljson
+tier: core
+feature_ids: [json-objectagg, unique-keys, errors, aggregates]
+required_capabilities: [select, json, errors, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sqljson.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT JSON_OBJECTAGG(k: v WITH UNIQUE KEYS) FROM (VALUES (1, 1), (1, NULL), (2, 2)) foo(k, v)
+    expect: error
+    sqlstate: "22030"
+    comment: key 1 appears twice even though one value is NULL
+  - sql: |
+      SELECT JSON_OBJECTAGG(k: v ABSENT ON NULL WITH UNIQUE KEYS) FROM (VALUES (1, 1), (1, NULL), (2, 2)) foo(k, v)
+    expect: rows
+    comment: the NULL-valued duplicate is absent so keys stay unique
+  - sql: |
+      SELECT JSON_OBJECTAGG(NULL: 1)
+    expect: error
+    sqlstate: "22004"
+  - sql: |
+      SELECT JSON_OBJECTAGG('key': 1) IS NULL FROM generate_series(1, 0) i WHERE FALSE
+    expect: rows
+    comment: no input rows gives SQL NULL

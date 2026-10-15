@@ -1,0 +1,39 @@
+# SET NOT NULL on a virtual generated column is enforced against its computed value, including NULL.
+id: generated-virtual.not-null-on-virtual
+title: NOT NULL on a virtual generated column rejects computed NULLs with 23502
+family: generated-virtual
+tier: core
+feature_ids: [generated-columns, not-null, alter-table, errors]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest21b (a int, b int GENERATED ALWAYS AS (nullif(a, 0)) VIRTUAL);
+steps:
+  - sql: |
+      ALTER TABLE gtest21b ALTER COLUMN b SET NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO gtest21b (a) VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO gtest21b (a) VALUES (2), (0)
+    expect: error
+    sqlstate: "23502"
+    comment: the whole multi-row insert fails
+  - sql: |
+      INSERT INTO gtest21b (a) VALUES (NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      ALTER TABLE gtest21b ALTER COLUMN b DROP NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO gtest21b (a) VALUES (0)
+    expect: ok
+  - sql: |
+      SELECT a, b, b IS NULL AS b_null FROM gtest21b ORDER BY a
+    expect: rows
+    order: ordered

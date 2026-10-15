@@ -1,0 +1,53 @@
+# Uncommitted GIN index entries are invisible to another session; after rollback they never appear.
+id: gin.rollback-visibility-multi-session
+title: GIN containment reads respect MVCC across two sessions and a rollback
+family: gin
+tier: core
+feature_ids: [gin-index, transactions, multi-session, arrays]
+required_capabilities: [create-table, create-index, gin-index, insert, select, transactions, multi-session, arrays]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a, b]
+setup: |
+  CREATE TABLE gin_mvcc (id int4 PRIMARY KEY, i int4[]);
+  CREATE INDEX gin_mvcc_idx ON gin_mvcc USING gin (i);
+  INSERT INTO gin_mvcc VALUES (1, '{1}');
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO gin_mvcc VALUES (2, '{1,2}')
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM gin_mvcc WHERE i @> '{1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      SELECT id FROM gin_mvcc WHERE i @> '{1}' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: b must not see a's uncommitted row
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id FROM gin_mvcc WHERE i @> '{1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      INSERT INTO gin_mvcc VALUES (3, '{1}')
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id FROM gin_mvcc WHERE i @> '{1}' ORDER BY id
+    expect: rows
+    order: ordered

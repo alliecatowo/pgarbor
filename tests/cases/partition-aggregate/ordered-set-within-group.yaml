@@ -1,0 +1,26 @@
+# Ordered-set and ordered aggregates computed per partition-key group: aggregate ORDER BY and
+# WITHIN GROUP must be applied inside each group, not across partitions.
+id: partition-aggregate.ordered-set-within-group
+title: Aggregate ORDER BY and WITHIN GROUP evaluated per group across partitions
+family: partition-aggregate
+tier: extended
+feature_ids: [partitioning, group-by, aggregates, ordered-set-aggregates]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_os (a int, b int, c text) PARTITION BY LIST (c);
+  CREATE TABLE pagg_os_p1 PARTITION OF pagg_os FOR VALUES IN ('0000', '0001');
+  CREATE TABLE pagg_os_p2 PARTITION OF pagg_os FOR VALUES IN ('0002');
+  INSERT INTO pagg_os VALUES (3, 10, '0000'), (1, 30, '0000'), (2, 20, '0001'), (5, 40, '0002'), (4, 50, '0002'), (6, 15, '0002');
+steps:
+  - sql: |
+      SELECT c, sum(b ORDER BY a), percentile_disc(0.5) WITHIN GROUP (ORDER BY b), percentile_disc(0.25) WITHIN GROUP (ORDER BY b) FROM pagg_os GROUP BY c ORDER BY c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT string_agg(b::text, ',' ORDER BY a) FROM pagg_os WHERE c = '0002'
+    expect: rows
+    order: multiset

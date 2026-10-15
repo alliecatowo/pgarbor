@@ -1,0 +1,56 @@
+# Nested savepoints: ROLLBACK TO keeps the savepoint and destroys later ones; RELEASE keeps the work.
+id: slice-txn.savepoint-partial-rollback
+title: Nested SAVEPOINT, ROLLBACK TO, RELEASE and COMMIT keep only the surviving rows
+family: slice-txn
+tier: core
+feature_ids: [transactions, savepoints, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/sql-rollback-to.html; sql-release-savepoint.html"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 'a')
+    expect: ok
+  - sql: |
+      SAVEPOINT s1
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2, 'b')
+    expect: ok
+  - sql: |
+      SAVEPOINT s2
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3, 'c')
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT s2
+    expect: ok
+    comment: removes row 3, keeps s2
+  - sql: |
+      INSERT INTO t VALUES (4, 'd')
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT s1
+    expect: ok
+    comment: removes rows 2 and 4 and destroys s2
+  - sql: |
+      INSERT INTO t VALUES (5, 'e')
+    expect: ok
+  - sql: |
+      RELEASE SAVEPOINT s1
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,42 @@
+# PRIMARY KEY implies NOT NULL and uniqueness; composite keys are unique over the tuple.
+id: constraints.primary-key-not-null
+title: PRIMARY KEY rejects NULL with 23502 and duplicates with 23505; composite key checks the tuple
+family: constraints
+tier: core
+feature_ids: [primary-key, not-null, insert, errors, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE pk1 (i int PRIMARY KEY, t text);
+  CREATE TABLE pk2 (i int, t text, PRIMARY KEY (i, t));
+steps:
+  - sql: |
+      INSERT INTO pk1 VALUES (1, 'one'), (2, 'two')
+    expect: ok
+  - sql: |
+      INSERT INTO pk1 VALUES (1, 'three')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO pk1 (t) VALUES ('six')
+    expect: error
+    sqlstate: "23502"
+    comment: primary key column is implicitly NOT NULL
+  - sql: |
+      INSERT INTO pk2 VALUES (1, 'one'), (1, 'three'), (4, 'three'), (5, 'one')
+    expect: ok
+  - sql: |
+      INSERT INTO pk2 VALUES (1, 'one')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT i, t FROM pk1 ORDER BY i
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT i, t FROM pk2 ORDER BY i, t
+    expect: rows
+    order: ordered

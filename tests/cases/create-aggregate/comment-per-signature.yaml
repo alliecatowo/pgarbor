@@ -1,0 +1,40 @@
+# COMMENT ON AGGREGATE is per signature: (*) and ("any") overloads carry independent comments in
+# pg_description (classoid pg_proc). A missing signature fails with undefined_function.
+id: create-aggregate.comment-per-signature
+title: "COMMENT ON AGGREGATE attaches per signature; missing signature fails with undefined_function"
+family: create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, comments, catalog-introspection, errors]
+required_capabilities: [aggregates, comments, catalog-introspection, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (test comments)"
+  license: PostgreSQL
+setup: |
+  CREATE AGGREGATE newcnt (*) (sfunc = int8inc, stype = int8, initcond = '0');
+  CREATE AGGREGATE newcnt ("any") (sfunc = int8inc_any, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      COMMENT ON AGGREGATE newcnt (*) IS 'an agg(*) comment'
+    expect: ok
+  - sql: |
+      COMMENT ON AGGREGATE newcnt ("any") IS 'an agg(any) comment'
+    expect: ok
+  - sql: |
+      SELECT p.pronargs, d.description
+      FROM pg_proc p JOIN pg_description d ON d.objoid = p.oid AND d.classoid = 'pg_proc'::regclass
+      WHERE p.proname = 'newcnt'
+      ORDER BY p.pronargs
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMENT ON AGGREGATE newcnt (int4) IS 'no such signature'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      COMMENT ON AGGREGATE newcnt ("any") IS NULL
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_proc p JOIN pg_description d ON d.objoid = p.oid AND d.classoid = 'pg_proc'::regclass WHERE p.proname = 'newcnt'
+    expect: rows
+    comment: only the (*) comment remains

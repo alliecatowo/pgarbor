@@ -1,0 +1,34 @@
+# char(n) pads on storage and drops trailing spaces on output and comparison; over-length INSERT fails,
+# while an explicit cast truncates silently.
+id: slice-types-io.char-n-padding
+title: "char(n) padding, length semantics, and over-length insert"
+family: slice-types-io
+tier: core
+feature_ids: [char, text-output, create-table, insert, select, errors]
+required_capabilities: [create-table, insert, select, char, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-character.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE cp (id int4 PRIMARY KEY, c char(4))
+    expect: ok
+  - sql: |
+      INSERT INTO cp VALUES (1, 'ab'), (2, 'abcd'), (3, 'ab  '), (4, NULL)
+    expect: ok
+  - sql: |
+      SELECT id, c::text AS txt, length(c) AS len, octet_length(c) AS olen, c = 'ab' AS eq, c IS NULL AS n FROM cp ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "length ignores trailing spaces, octet_length counts the padding"
+  - sql: |
+      INSERT INTO cp VALUES (5, 'abcde')
+    expect: error
+    sqlstate: "22001"
+    comment: "assignment to char(4) of a longer non-space string is string_data_right_truncation"
+  - sql: |
+      SELECT 'abcde'::char(4)::text AS explicit_cast_truncates
+    expect: rows
+    order: multiset
+    comment: "explicit cast truncates without error"

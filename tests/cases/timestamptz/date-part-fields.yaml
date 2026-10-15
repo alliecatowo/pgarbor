@@ -1,0 +1,44 @@
+# date_part fields over a fixed timestamptz value, first under UTC then under a zone with a negative offset.
+id: timestamptz.date-part-fields
+title: date_part extracts calendar and zone fields in the session time zone
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, date-functions, time-zones]
+required_capabilities: [select, date-type, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamptz.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT
+        date_part('year', ts) AS yr,
+        date_part('month', ts) AS mon,
+        date_part('day', ts) AS dy,
+        date_part('hour', ts) AS hr,
+        date_part('minute', ts) AS mi,
+        date_part('second', ts) AS sec,
+        date_part('quarter', ts) AS qtr,
+        date_part('doy', ts) AS doy,
+        date_part('dow', ts) AS dow,
+        date_part('isodow', ts) AS isodow,
+        date_part('week', ts) AS iso_week,
+        date_part('epoch', ts) AS epoch,
+        date_part('timezone', ts) AS tz_secs,
+        date_part('timezone_hour', ts) AS tz_hour,
+        date_part('timezone_minute', ts) AS tz_min
+      FROM (SELECT timestamptz '1997-02-10 17:32:01.5-08' AS ts) s
+    expect: rows
+    order: multiset
+  - sql: |
+      SET TIME ZONE 'America/Los_Angeles'
+    expect: ok
+  - sql: |
+      SELECT date_part('hour', ts) AS hr, date_part('day', ts) AS dy, date_part('timezone', ts) AS tz_secs
+      FROM (SELECT timestamptz '1997-02-10 17:32:01.5-08' AS ts) s
+    expect: rows
+    order: multiset
+    comment: 17:32 local in Los Angeles in February, which is PST at -08

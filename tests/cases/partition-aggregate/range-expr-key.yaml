@@ -1,0 +1,27 @@
+# Range partitioning on a multi-column key with an expression component; GROUP BY on the
+# leading key and on the expression must both return the same groups as a plain scan.
+id: partition-aggregate.range-expr-key
+title: Aggregation over a range partition keyed by (a, (a+b)/2)
+family: partition-aggregate
+tier: extended
+feature_ids: [partitioning, range-partitioning, group-by, aggregates, having]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_tab_m (a int, b int, c int) PARTITION BY RANGE (a, ((a + b) / 2));
+  CREATE TABLE pagg_tab_m_p1 PARTITION OF pagg_tab_m FOR VALUES FROM (0, 0) TO (12, 12);
+  CREATE TABLE pagg_tab_m_p2 PARTITION OF pagg_tab_m FOR VALUES FROM (12, 12) TO (22, 22);
+  CREATE TABLE pagg_tab_m_p3 PARTITION OF pagg_tab_m FOR VALUES FROM (22, 22) TO (30, 30);
+  INSERT INTO pagg_tab_m SELECT i % 30, i % 40, i % 50 FROM generate_series(0, 299) i;
+steps:
+  - sql: |
+      SELECT a, sum(b), avg(c), count(*) FROM pagg_tab_m GROUP BY a HAVING avg(c) < 22 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, (a + b) / 2 AS k, sum(b), count(*) FROM pagg_tab_m GROUP BY a, (a + b) / 2 HAVING sum(b) < 50 ORDER BY 1, 2
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# Aggregate with a non-null initcond: NULL inputs are skipped by the strict transition function,
+# an empty input yields the initcond, and DISTINCT / GROUP BY apply to the aggregate.
+id: create-aggregate.initcond-sum-empty-distinct
+title: "Aggregate with non-null initcond: NULLs skipped, empty input yields initcond, DISTINCT and GROUP BY"
+family: create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, group-by, distinct, nulls]
+required_capabilities: [create-table, insert, select, aggregates, group-by, distinct]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (newavg/newsum initcond pattern)"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1, 1), (1, 1), (1, NULL), (2, 5), (2, 7);
+  CREATE TABLE empty_t (x int4);
+  CREATE AGGREGATE newsum (int4) (sfunc = int4pl, stype = int4, initcond = '0');
+steps:
+  - sql: |
+      SELECT newsum(x) FROM t
+    expect: rows
+    comment: NULL input is skipped by strict int4pl, so 1+1+5+7
+  - sql: |
+      SELECT newsum(x) FROM empty_t
+    expect: rows
+    comment: no input rows still returns the initcond 0
+  - sql: |
+      SELECT newsum(DISTINCT x) FROM t
+    expect: rows
+    comment: distinct non-null values 1,5,7
+  - sql: |
+      SELECT g, newsum(x) FROM t GROUP BY g ORDER BY g
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT g, newsum(x) FROM empty_t GROUP BY g
+    expect: rows
+    comment: GROUP BY over no input rows yields no groups

@@ -1,0 +1,29 @@
+# FOR over a query with CONTINUE WHEN and EXIT WHEN, including a boundary at 0 that exits on the first row.
+id: plpgsql.for-query-continue-exit-when
+title: FOR record loop over a query with CONTINUE WHEN and EXIT WHEN
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, control-flow, loops, select]
+required_capabilities: [plpgsql, create-function, create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE nums (n int);
+  INSERT INTO nums VALUES (1), (2), (3), (4), (5), (6);
+  CREATE FUNCTION pl_odd_sum_until(limit_n int) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE r record; total int := 0;
+  BEGIN
+    FOR r IN SELECT n FROM nums ORDER BY n LOOP
+      CONTINUE WHEN r.n % 2 = 0;
+      EXIT WHEN r.n > limit_n;
+      total := total + r.n;
+    END LOOP;
+    RETURN total;
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_odd_sum_until(4) AS a, pl_odd_sum_until(10) AS b, pl_odd_sum_until(0) AS c
+    expect: rows
+    comment: a=1+3=4, b=1+3+5=9, c=0 (exits on the first odd row)

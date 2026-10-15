@@ -1,0 +1,38 @@
+# Composite primary key: duplicate tuple, NULL in key column, duplicate via UPDATE.
+id: slice-ddl.primary-key-violations
+title: Composite primary key rejects duplicate tuples and NULL key columns
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, update, primary-key, not-null, errors]
+required_capabilities: [create-table, insert, select, update, primary-key, not-null, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE pk (a int4, b text, PRIMARY KEY (a, b))
+    expect: ok
+  - sql: |
+      INSERT INTO pk VALUES (1, 'x')
+    expect: ok
+  - sql: |
+      INSERT INTO pk VALUES (1, 'y')
+    expect: ok
+    comment: same first column, different second column is a different key
+  - sql: |
+      INSERT INTO pk VALUES (1, 'x')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO pk VALUES (NULL, 'z')
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      UPDATE pk SET b = 'x' WHERE b = 'y'
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT a, b FROM pk ORDER BY a, b
+    expect: rows
+    order: ordered

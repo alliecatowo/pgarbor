@@ -1,0 +1,28 @@
+# A BEFORE INSERT row trigger that returns NULL silently skips that row; empty string is not NULL.
+id: triggers.before-row-null-skips-row
+title: BEFORE row trigger returning NULL skips the row, empty string is kept
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, insert, select, null-semantics]
+required_capabilities: [create-table, insert, select, plpgsql, triggers]
+provenance:
+  source: hand
+  ref: "PG18 docs: CREATE TRIGGER, trigger return value (BEFORE row: returning NULL skips the row operation)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int, v text);
+  CREATE FUNCTION skip_null_v() RETURNS trigger AS $$
+  BEGIN
+    IF NEW.v IS NULL THEN RETURN NULL; END IF;
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_skip BEFORE INSERT ON t FOR EACH ROW EXECUTE PROCEDURE skip_null_v();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 'a'), (2, NULL), (3, '')
+    expect: ok
+  - sql: |
+      SELECT id, v, v IS NULL AS v_null FROM t ORDER BY id
+    expect: rows
+    order: ordered

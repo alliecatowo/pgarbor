@@ -1,0 +1,30 @@
+# Two-argument aggregates ignore rows where either argument is NULL.
+id: aggregates.regr-covar-null-pairs
+title: regr_* and covar_* aggregates skip rows where either argument is NULL
+family: aggregates
+tier: extended
+feature_ids: [aggregates, regr, covariance, correlation, nulls, float8]
+required_capabilities: [create-table, insert, select, aggregates, float]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/aggregates.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE xy (x float8, y float8);
+  INSERT INTO xy VALUES (1, 2), (2, 4), (NULL, 5), (4, NULL), (5, 10);
+steps:
+  - sql: |
+      SELECT regr_count(y, x), covar_pop(y, x), covar_samp(y, x), regr_slope(y, x), regr_intercept(y, x) FROM xy
+    expect: rows
+    comment: only the three complete pairs (1,2), (2,4), (5,10) count
+  - sql: |
+      SELECT regr_avgx(y, x), regr_avgy(y, x), regr_sxx(y, x), regr_syy(y, x), regr_sxy(y, x) FROM xy
+    expect: rows
+  - sql: |
+      SELECT corr(y, x) FROM xy WHERE x IS NULL
+    expect: rows
+    comment: no complete pairs gives NULL
+  - sql: |
+      SELECT covar_pop(1::float8, 2::float8), covar_samp(3::float8, 4::float8)
+    expect: rows
+    comment: single pair, population covariance 0, sample covariance NULL

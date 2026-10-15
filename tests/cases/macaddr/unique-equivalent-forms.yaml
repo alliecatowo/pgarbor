@@ -1,0 +1,33 @@
+# Different input spellings of one MAC address collide on a primary key (23505); ON CONFLICT sees them as equal.
+id: macaddr.unique-equivalent-forms
+title: "Equivalent macaddr spellings violate a primary key (unique_violation 23505)"
+family: macaddr
+tier: core
+feature_ids: [macaddr, constraints, errors, insert-conflict]
+required_capabilities: [create-table, insert, select, constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/macaddr.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE u (b macaddr PRIMARY KEY, label text);
+  INSERT INTO u VALUES ('08:00:2b:01:02:03', 'first');
+steps:
+  - sql: |
+      INSERT INTO u VALUES ('08-00-2b-01-02-03', 'dash form')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO u VALUES ('08002b010203', 'bare hex form')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO u VALUES ('0800.2b01.0203', 'dot form') ON CONFLICT DO NOTHING
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES ('08:00:2b:01:02:04', 'second')
+    expect: ok
+  - sql: |
+      SELECT b::text AS b, label FROM u ORDER BY b
+    expect: rows
+    order: ordered

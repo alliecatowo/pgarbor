@@ -1,0 +1,44 @@
+# CHECK and NOT NULL constraints apply to generated values, including on ALTER SET EXPRESSION.
+id: generated-stored.check-and-not-null
+title: CHECK and NOT NULL constraints are enforced on generated column values
+family: generated-stored
+tier: core
+feature_ids: [generated-columns, constraints, check-constraints, not-null, alter-table, errors]
+required_capabilities: [create-table, insert, select, alter-table, generated-columns, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_stored.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE g8 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) STORED CHECK (b < 50));
+steps:
+  - sql: |
+      INSERT INTO g8 (a) VALUES (10)
+    expect: ok
+  - sql: |
+      INSERT INTO g8 (a) VALUES (30)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      ALTER TABLE g8 ALTER COLUMN b SET EXPRESSION AS (a * 100)
+    expect: error
+    sqlstate: "23514"
+    comment: existing row would violate the CHECK after the expression change
+  - sql: |
+      ALTER TABLE g8 ALTER COLUMN b SET EXPRESSION AS (a * 3)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM g8 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE g8n (a int PRIMARY KEY, b int GENERATED ALWAYS AS (nullif(a, 0)) STORED NOT NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO g8n (a) VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO g8n (a) VALUES (0)
+    expect: error
+    sqlstate: "23502"
+    comment: generated value is NULL and violates NOT NULL

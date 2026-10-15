@@ -1,0 +1,39 @@
+# Foreign data wrapper and foreign server renames: conflicts raise duplicate_object; a free name succeeds.
+id: alter-generic.fdw-server-rename
+title: "ALTER FOREIGN DATA WRAPPER and SERVER RENAME conflict on existing names and otherwise succeed"
+family: alter-generic
+tier: extended
+feature_ids: [alter-foreign-data-wrapper, alter-server, rename, foreign-data, errors]
+required_capabilities: [foreign-data-wrappers, alter-foreign-data-wrapper, alter-server, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_generic.sql (Foreign Data Wrapper and Foreign Server: RENAME)"
+sessions: [a]
+setup: |
+  CREATE FOREIGN DATA WRAPPER fdw1;
+  CREATE FOREIGN DATA WRAPPER fdw2;
+  CREATE SERVER srv1 FOREIGN DATA WRAPPER fdw1;
+  CREATE SERVER srv2 FOREIGN DATA WRAPPER fdw2;
+steps:
+  - sql: |
+      ALTER FOREIGN DATA WRAPPER fdw1 RENAME TO fdw2
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      ALTER FOREIGN DATA WRAPPER fdw1 RENAME TO fdw3
+    expect: ok
+  - sql: |
+      ALTER SERVER srv1 RENAME TO srv2
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      ALTER SERVER srv1 RENAME TO srv3
+    expect: ok
+  - sql: |
+      SELECT fdwname FROM pg_foreign_data_wrapper WHERE fdwname IN ('fdw1', 'fdw2', 'fdw3') ORDER BY fdwname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT srvname FROM pg_foreign_server WHERE srvname IN ('srv1', 'srv2', 'srv3') ORDER BY srvname
+    expect: rows
+    order: ordered

@@ -1,0 +1,31 @@
+# A DELETE through a filtered view only touches rows the view can see; hidden rows survive.
+id: updatable-views.view-delete-only-visible-rows
+title: DELETE through a filtered view removes only rows visible through the view
+family: updatable-views
+tier: core
+feature_ids: [updatable-views, create-view, delete, select, boundaries]
+required_capabilities: [create-table, create-view, insert, delete, select]
+provenance:
+  source: hand
+  ref: "PG18 sql-createview.html (updatable views); pg-regress updatable_views.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int PRIMARY KEY, b text);
+  INSERT INTO t VALUES (-1, 'neg'), (1, 'pos'), (2, 'pos2');
+  CREATE VIEW v AS SELECT a, b FROM t WHERE a > 0;
+steps:
+  - sql: |
+      DELETE FROM v WHERE a = -1
+    expect: ok
+    comment: row -1 is hidden by the view qualification, so nothing is deleted
+  - sql: |
+      SELECT a, b FROM t ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM v WHERE b = 'pos'
+    expect: ok
+  - sql: |
+      SELECT a, b FROM t ORDER BY a
+    expect: rows
+    order: ordered

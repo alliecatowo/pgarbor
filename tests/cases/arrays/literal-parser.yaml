@@ -1,0 +1,48 @@
+# Array literal parser: accepted forms (NULL vs 'null' text) and malformed literals (22P02).
+id: arrays.literal-parser
+title: Array text literal parsing accepts quoted and NULL forms and rejects malformed braces
+family: arrays
+tier: core
+feature_ids: [arrays, array-literals, errors, nulls]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/arrays.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT v, v IS NULL AS is_sql_null FROM unnest('{null,"null",NULL}'::text[]) AS v
+    expect: rows
+    order: multiset
+    comment: unquoted null and NULL are SQL NULL; quoted "null" is text
+  - sql: |
+      SELECT '{ ab\c , "ab\"c" }'::text[] AS escaped
+    expect: rows
+  - sql: |
+      SELECT '{{{1,2,3,4},{2,3,4,5}},{{3,4,5,6},{4,5,6,7}}}'::text[] AS nested
+    expect: rows
+  - sql: |
+      SELECT '{{1,{2}},{2,3}}'::text[]
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '{foo,,bar}'::text[]
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '{{1},{{2}}}'::text[]
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '{{1,},{1}}'::text[]
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '{1,}'::text[]
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT pg_input_is_valid('{1,2,3}', 'integer[]') AS ok_v, pg_input_is_valid('{1,2', 'integer[]') AS trunc_v, pg_input_is_valid('{1,zed}', 'integer[]') AS bad_v
+    expect: rows
+    comment: pg_input_is_valid reports validity without raising

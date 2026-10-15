@@ -1,0 +1,32 @@
+# Updating a partition key moves the row to another partition (DELETE + INSERT under the hood).
+id: update.partition-key-row-movement
+title: UPDATE of the partition key moves the row to the partition that now matches
+family: update
+tier: extended
+feature_ids: [update, partitioning, row-movement]
+required_capabilities: [create-table, insert, select, update, partitioning]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/update.sql (UPDATE with row movement, list partitions)"
+sessions: [a]
+setup: |
+  CREATE TABLE lp (a INT, b INT) PARTITION BY LIST (a);
+  CREATE TABLE lp1 PARTITION OF lp FOR VALUES IN (1);
+  CREATE TABLE lp2 PARTITION OF lp FOR VALUES IN (2);
+  INSERT INTO lp VALUES (1, 100), (2, 200);
+steps:
+  - sql: |
+      UPDATE lp SET a = 2 WHERE a = 1
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, a, b FROM lp ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE lp SET a = 3 WHERE a = 2
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT tableoid::regclass::text AS part, a, b FROM lp ORDER BY a, b
+    expect: rows
+    order: ordered

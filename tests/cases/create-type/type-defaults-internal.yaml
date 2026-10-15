@@ -1,0 +1,32 @@
+# Base types with DEFAULT values, built on internal I/O functions; INSERT ... DEFAULT VALUES uses both defaults.
+id: create-type.type-defaults-internal
+title: "Base type DEFAULT clauses applied by INSERT DEFAULT VALUES"
+family: create-type
+tier: extended
+feature_ids: [create-type, type-defaults, insert, select, errors]
+required_capabilities: [create-type, create-table, insert, select, create-function, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_type.sql (type-related default values section, rewritten)"
+setup: |
+  CREATE TYPE int42;
+  CREATE TYPE text_w_default;
+  CREATE FUNCTION int42_in(cstring) RETURNS int42 AS 'int4in' LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION int42_out(int42) RETURNS cstring AS 'int4out' LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION text_w_default_in(cstring) RETURNS text_w_default AS 'textin' LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION text_w_default_out(text_w_default) RETURNS cstring AS 'textout' LANGUAGE internal STRICT IMMUTABLE;
+  CREATE TYPE int42 (internallength = 4, input = int42_in, output = int42_out, alignment = int4, default = 42, passedbyvalue);
+  CREATE TYPE text_w_default (internallength = variable, input = text_w_default_in, output = text_w_default_out, alignment = int4, default = 'zippo');
+  CREATE TABLE default_test (f1 text_w_default, f2 int42);
+steps:
+  - sql: |
+      INSERT INTO default_test DEFAULT VALUES
+    expect: ok
+  - sql: |
+      SELECT f1::text AS f1, f2::text AS f2 FROM default_test
+    expect: rows
+  - sql: |
+      CREATE TYPE text_w_default
+    expect: error
+    sqlstate: "42710"
+    comment: shell creation for an existing type

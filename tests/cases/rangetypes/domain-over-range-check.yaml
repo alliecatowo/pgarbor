@@ -1,0 +1,39 @@
+# Domains over range types enforce their CHECK on cast; ranges over domains work for containment;
+# dropping a domain that a range type depends on fails with 2BP01 until CASCADE. Mirrors
+# rangetypes.sql lines 465-482.
+id: rangetypes.domain-over-range-check
+title: Domain over int4range enforces CHECK on cast, and range over domain depends on the domain
+family: rangetypes
+tier: extended
+feature_ids: [range-types, domains, constraints, errors, dependencies]
+required_capabilities: [range-types, create-domain, create-type, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangetypes.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN restrictedrange AS int4range CHECK (upper(VALUE) < 10);
+  CREATE DOMAIN mydomain AS int4;
+  CREATE TYPE mydomainrange AS RANGE (subtype = mydomain);
+steps:
+  - sql: |
+      SELECT '[4,5)'::restrictedrange @> 7 AS outside_but_valid
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT '[4,50)'::restrictedrange @> 7
+    expect: error
+    sqlstate: "23514"
+    comment: upper bound 50 violates the domain CHECK
+  - sql: |
+      SELECT '[4,50)'::mydomainrange @> 7::mydomain AS contains_domain_value
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP DOMAIN mydomain
+    expect: error
+    sqlstate: "2BP01"
+    comment: mydomainrange depends on mydomain
+  - sql: |
+      DROP DOMAIN mydomain CASCADE
+    expect: ok

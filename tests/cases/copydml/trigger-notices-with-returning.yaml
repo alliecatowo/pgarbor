@@ -1,0 +1,50 @@
+# BEFORE and AFTER row triggers fire for each INSERT, UPDATE and DELETE ... RETURNING, in order.
+id: copydml.trigger-notices-with-returning
+title: "BEFORE and AFTER row triggers fire around INSERT, UPDATE and DELETE RETURNING"
+family: copydml
+tier: extended
+feature_ids: [insert, update, delete, returning, triggers, plpgsql]
+required_capabilities: [create-table, insert, update, delete, returning, triggers, plpgsql, serial]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/copydml.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE copydml_test (id serial, t text);
+  INSERT INTO copydml_test (t) VALUES ('a'), ('b'), ('c'), ('d'), ('e');
+  CREATE FUNCTION qqq_trig() RETURNS trigger AS $$
+  BEGIN
+  IF tg_op IN ('INSERT', 'UPDATE') THEN
+      RAISE NOTICE '% % %', tg_when, tg_op, new.id;
+      RETURN new;
+  ELSE
+      RAISE NOTICE '% % %', tg_when, tg_op, old.id;
+      RETURN old;
+  END IF;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER qqqbef BEFORE INSERT OR UPDATE OR DELETE ON copydml_test
+      FOR EACH ROW EXECUTE PROCEDURE qqq_trig();
+  CREATE TRIGGER qqqaf AFTER INSERT OR UPDATE OR DELETE ON copydml_test
+      FOR EACH ROW EXECUTE PROCEDURE qqq_trig();
+steps:
+  - sql: |
+      INSERT INTO copydml_test (t) VALUES ('f') RETURNING id
+    expect: rows
+    order: multiset
+    comment: notices BEFORE INSERT then AFTER INSERT with id 6
+  - sql: |
+      UPDATE copydml_test SET t = 'g' WHERE t = 'f' RETURNING id
+    expect: rows
+    order: multiset
+    comment: notices BEFORE UPDATE then AFTER UPDATE
+  - sql: |
+      DELETE FROM copydml_test WHERE t = 'g' RETURNING id
+    expect: rows
+    order: multiset
+    comment: notices BEFORE DELETE then AFTER DELETE
+  - sql: |
+      SELECT id, t FROM copydml_test ORDER BY id
+    expect: rows
+    order: ordered

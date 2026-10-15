@@ -1,0 +1,31 @@
+# pg_get_expr over pg_attrdef.adbin and pg_constraint.conbin, and the effect of stored defaults on an INSERT.
+id: slice-catalog-introspection.pg-get-expr-defaults-checks
+title: pg_get_expr renders stored default and check expressions, and defaults apply on insert
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, create-table, defaults, check-constraints, numeric]
+required_capabilities: [create-table, insert, catalog-introspection, constraints]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/catalog-pg-attrdef.html; https://www.postgresql.org/docs/18/catalog-pg-constraint.html"
+sessions: [a]
+setup: |
+  CREATE TABLE dflt (id int4 DEFAULT 1 + 2, label text DEFAULT 'a' || 'b', flag boolean DEFAULT true, n int4 DEFAULT NULL, score numeric DEFAULT 0.5 CHECK (score BETWEEN 0 AND 1));
+steps:
+  - sql: |
+      SELECT a.attname, pg_get_expr(d.adbin, d.adrelid) AS default_expr FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE d.adrelid = 'dflt'::regclass ORDER BY a.attnum
+    expect: rows
+    order: ordered
+    comment: a column with DEFAULT NULL may have no pg_attrdef row
+  - sql: |
+      SELECT conname, pg_get_expr(conbin, conrelid) AS check_expr FROM pg_constraint WHERE conrelid = 'dflt'::regclass AND contype = 'c' ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO dflt (label) VALUES (DEFAULT) RETURNING id, label, flag, n, score
+    expect: rows
+  - sql: |
+      INSERT INTO dflt (id, score) VALUES (9, 1.5)
+    expect: error
+    sqlstate: "23514"
+    comment: check constraint violated by an explicit value

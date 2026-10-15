@@ -1,0 +1,33 @@
+# LEFT JOIN keeps unmatched left rows and null-extends the right side; anti-join idiom.
+id: join.left-join-null-extension
+title: LEFT JOIN null-extends unmatched left rows and supports the anti-join idiom
+family: join
+tier: core
+feature_ids: [joins, outer-join, left-join, null-semantics, aggregates]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/join.sql (Outer joins section)"
+sessions: [a]
+setup: |
+  CREATE TABLE j1 (i integer, j integer, t text);
+  CREATE TABLE j2 (i integer, k integer);
+  INSERT INTO j1 VALUES (1, 4, 'one'), (2, 3, 'two'), (3, 2, 'three'), (NULL, NULL, 'null');
+  INSERT INTO j2 VALUES (1, -1), (2, 2), (2, 4), (5, -5);
+steps:
+  - sql: |
+      SELECT j1.i, j1.t, j2.k FROM j1 LEFT JOIN j2 ON j1.i = j2.i
+      ORDER BY j1.i NULLS LAST, j2.k NULLS LAST
+    expect: rows
+    order: ordered
+    comment: i=3 and the NULL-key row keep a row with k NULL
+  - sql: |
+      SELECT t FROM j1 LEFT JOIN j2 USING (i) WHERE k IS NULL
+    expect: rows
+    order: multiset
+    comment: anti-join idiom returns the unmatched left rows
+  - sql: |
+      SELECT count(*), count(k) FROM j1 LEFT JOIN j2 USING (i)
+    expect: rows
+    order: multiset
+    comment: count(*) counts null-extended rows, count(k) skips NULL

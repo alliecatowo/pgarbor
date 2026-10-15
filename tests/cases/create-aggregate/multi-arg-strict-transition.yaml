@@ -1,0 +1,35 @@
+# Multi-argument aggregates with a composite-array state: a STRICT transition function skips
+# any row with a NULL argument, while a non-strict one receives every row.
+id: create-aggregate.multi-arg-strict-transition
+title: "Multi-argument aggregate: STRICT transition skips rows with any NULL argument, non-strict does not"
+family: create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, create-type, nulls, arrays, record-types]
+required_capabilities: [create-table, insert, select, create-function, create-type, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (aggfstr, aggfns)"
+  license: PostgreSQL
+setup: |
+  CREATE TYPE aggtype AS (a integer, b integer, c text);
+  CREATE FUNCTION aggf_trans(aggtype[], integer, integer, text) RETURNS aggtype[]
+    AS 'select array_append($1, ROW($2,$3,$4)::aggtype)' LANGUAGE sql STRICT IMMUTABLE;
+  CREATE FUNCTION aggfns_trans(aggtype[], integer, integer, text) RETURNS aggtype[]
+    AS 'select array_append($1, ROW($2,$3,$4)::aggtype)' LANGUAGE sql IMMUTABLE;
+  CREATE AGGREGATE aggfstr(integer, integer, text) (sfunc = aggf_trans, stype = aggtype[], initcond = '{}');
+  CREATE AGGREGATE aggfns(integer, integer, text) (sfunc = aggfns_trans, stype = aggtype[], initcond = '{}');
+  CREATE TABLE mv (id int4, a int4, b int4, c text);
+  INSERT INTO mv VALUES (1, 10, 20, 'x'), (2, NULL, 30, 'y'), (3, 40, NULL, 'z'), (4, 50, 60, NULL);
+steps:
+  - sql: |
+      SELECT aggfstr(a, b, c ORDER BY id) FROM mv
+    expect: rows
+    comment: only row 1 has no NULL argument, so one element is accumulated
+  - sql: |
+      SELECT aggfns(a, b, c ORDER BY id) FROM mv
+    expect: rows
+    comment: non-strict transition receives all four rows, NULL fields included
+  - sql: |
+      SELECT aggfstr(a, b, c ORDER BY id) FROM mv WHERE false
+    expect: rows
+    comment: empty input returns the non-null initcond '{}'

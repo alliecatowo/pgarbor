@@ -1,0 +1,32 @@
+# Snapshots stored in a table expose xmin, xmax and the xip members through accessor functions.
+id: txid.snapshot-table-accessors
+title: txid_snapshot_xmin, xmax and xip read values from stored snapshots
+family: txid
+tier: core
+feature_ids: [txid-snapshot, create-table, insert, select, set-returning-functions]
+required_capabilities: [create-table, insert, select, set-returning-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/txid.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE snapshot_test (nr integer, snap txid_snapshot);
+  INSERT INTO snapshot_test VALUES (1, '12:13:');
+  INSERT INTO snapshot_test VALUES (2, '12:20:13,15,18');
+  INSERT INTO snapshot_test VALUES (3, '100001:100009:100005,100007,100008');
+steps:
+  - sql: |
+      SELECT nr, txid_snapshot_xmin(snap) AS xmin, txid_snapshot_xmax(snap) AS xmax
+      FROM snapshot_test ORDER BY nr
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT nr, txid_snapshot_xip(snap) AS xip
+      FROM snapshot_test ORDER BY nr, xip
+    expect: rows
+    order: ordered
+    comment: rows with an empty xip list contribute no output row
+  - sql: |
+      SELECT txid_snapshot_xmin(NULL::txid_snapshot) IS NULL AS null_xmin
+    expect: rows
+    comment: accessor on a NULL snapshot yields NULL

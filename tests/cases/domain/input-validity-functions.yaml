@@ -1,0 +1,36 @@
+# pg_input_is_valid and pg_input_error_info report domain input validity without raising.
+# Adapted from domain.sql "Test non-error-throwing input".
+id: domain.input-validity-functions
+title: pg_input_is_valid and pg_input_error_info classify domain input without raising
+family: domain
+tier: extended
+feature_ids: [domains, create-domain, catalog-introspection, check-constraint]
+required_capabilities: [create-table, select, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN positiveint int4 CHECK (VALUE > 0);
+steps:
+  - sql: |
+      SELECT pg_input_is_valid('1', 'positiveint') AS good,
+             pg_input_is_valid('junk', 'positiveint') AS syntax_bad,
+             pg_input_is_valid('-1', 'positiveint') AS check_bad
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM pg_input_error_info('junk', 'positiveint')
+    expect: rows
+    order: ordered
+    comment: invalid integer syntax, reported as data not as an error
+  - sql: |
+      SELECT * FROM pg_input_error_info('-1', 'positiveint')
+    expect: rows
+    order: ordered
+    comment: domain CHECK violation reported as data
+  - sql: |
+      SELECT pg_input_is_valid(NULL, 'positiveint') IS NULL AS null_input
+    expect: rows
+    order: ordered
+    comment: pg_input_is_valid is strict in its text argument

@@ -1,0 +1,34 @@
+# CHECK constraints reference the computed value of a virtual generated column.
+id: generated-virtual.check-constraint-on-virtual
+title: CHECK on a virtual generated column is enforced on insert and when adding the constraint
+family: generated-virtual
+tier: core
+feature_ids: [generated-columns, check-constraints, alter-table, errors]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest20 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) VIRTUAL CHECK (b < 50));
+steps:
+  - sql: |
+      INSERT INTO gtest20 (a) VALUES (10)
+    expect: ok
+  - sql: |
+      INSERT INTO gtest20 (a) VALUES (30)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT a, b FROM gtest20 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE gtest20a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
+      INSERT INTO gtest20a (a) VALUES (10), (30)
+    expect: ok
+  - sql: |
+      ALTER TABLE gtest20a ADD CHECK (b < 50)
+    expect: error
+    sqlstate: "23514"
+    comment: fails on an existing row whose computed value violates the check

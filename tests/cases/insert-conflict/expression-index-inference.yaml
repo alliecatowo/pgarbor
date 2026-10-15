@@ -1,0 +1,27 @@
+# Conflict target must match the expression of an expression unique index; the bare column does not infer it.
+id: insert-conflict.expression-index-inference
+title: ON CONFLICT infers an expression unique index only with the same expression
+family: insert-conflict
+tier: extended
+feature_ids: [insert, on-conflict, expression-index, unique-index, errors]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index, expression-index, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert_conflict.sql (Expression index tests)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (key int4, fruit text);
+  CREATE UNIQUE INDEX t_lower ON t (lower(fruit));
+  INSERT INTO t VALUES (20, 'Quince');
+steps:
+  - sql: |
+      INSERT INTO t VALUES (21, 'QUINCE') ON CONFLICT (lower(fruit)) DO UPDATE SET fruit = excluded.fruit
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (22, 'Apricot') ON CONFLICT (fruit) DO UPDATE SET fruit = excluded.fruit
+    expect: error
+    sqlstate: "42P10"
+  - sql: |
+      SELECT key, fruit FROM t ORDER BY key
+    expect: rows
+    order: ordered

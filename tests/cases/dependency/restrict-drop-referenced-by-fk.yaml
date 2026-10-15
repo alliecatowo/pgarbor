@@ -1,0 +1,34 @@
+# A table referenced by a foreign key cannot be dropped under RESTRICT; CASCADE drops only the constraint.
+id: dependency.restrict-drop-referenced-by-fk
+title: DROP TABLE refused when another table's foreign key references it
+family: dependency
+tier: core
+feature_ids: [foreign-keys, drop-table, dependencies]
+required_capabilities: [create-table, insert, select, foreign-keys, drop-table]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints (foreign keys); errcode 2BP01"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY);
+  CREATE TABLE child (id int4, pid int4 REFERENCES parent (id));
+  INSERT INTO parent VALUES (1);
+  INSERT INTO child VALUES (10, 1), (11, NULL);
+steps:
+  - sql: |
+      DROP TABLE parent
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP TABLE parent CASCADE
+    expect: ok
+    order: multiset
+    comment: removes only the FK constraint on child, not child itself
+  - sql: |
+      SELECT id, pid IS NULL AS pid_null FROM child ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM information_schema.table_constraints
+      WHERE table_name = 'child' AND constraint_type = 'FOREIGN KEY'
+    expect: rows

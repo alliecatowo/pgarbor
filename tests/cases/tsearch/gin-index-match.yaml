@@ -1,0 +1,36 @@
+# GIN index on a tsvector column; matches must equal the unindexed result, and NULL rows never match.
+id: tsearch.gin-index-match
+title: GIN-indexed tsvector column matches and skips NULL rows
+family: tsearch
+tier: core
+feature_ids: [tsearch, gin-index, match-operator, create-index]
+required_capabilities: [create-table, create-index, insert, select, text-search]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tsearch.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE docs (id int4 PRIMARY KEY, body text, tsv tsvector);
+  INSERT INTO docs VALUES
+    (1, 'The quick brown fox', to_tsvector('english', 'The quick brown fox')),
+    (2, 'Lazy dogs sleep all day', to_tsvector('english', 'Lazy dogs sleep all day')),
+    (3, 'Foxes and dogs running', to_tsvector('english', 'Foxes and dogs running')),
+    (4, NULL, NULL);
+  CREATE INDEX docs_tsv_idx ON docs USING gin (tsv);
+steps:
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'dog & sleep') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'dog | nosuchword') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM docs WHERE tsv @@ to_tsquery('english', '!fox')
+    expect: rows
+    order: multiset

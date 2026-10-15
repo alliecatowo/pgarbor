@@ -1,0 +1,38 @@
+# New functions are executable by PUBLIC; revoking that default blocks roles until EXECUTE is granted explicitly.
+id: privileges.function-execute-public
+title: EXECUTE on a function is granted to PUBLIC by default and can be revoked per role
+family: privileges
+tier: core
+feature_ids: [functions, execute, grant, revoke, privileges, errors]
+required_capabilities: [create-function-sql, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_fx_r;
+  CREATE FUNCTION pv_fx() RETURNS int4 LANGUAGE sql AS $$ SELECT 42 $$;
+  REVOKE EXECUTE ON FUNCTION pv_fx() FROM PUBLIC;
+steps:
+  - sql: |
+      SET ROLE pv_fx_r
+    expect: ok
+  - sql: |
+      SELECT pv_fx()
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT EXECUTE ON FUNCTION pv_fx() TO pv_fx_r
+    expect: ok
+  - sql: |
+      SET ROLE pv_fx_r
+    expect: ok
+  - sql: |
+      SELECT pv_fx()
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok

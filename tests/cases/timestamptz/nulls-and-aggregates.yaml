@@ -1,0 +1,42 @@
+# NULL timestamptz values: predicates, IS DISTINCT FROM, coalesce, aggregates, and NULLS LAST ordering.
+id: timestamptz.nulls-and-aggregates
+title: NULL timestamptz values in predicates aggregates and ordering
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, null-handling, aggregates, order-by]
+required_capabilities: [create-table, insert, select, date-type, guc]
+provenance:
+  source: hand
+  ref: "PG18 functions-datetime.html; NULL semantics of comparison operators"
+sessions: [a]
+setup: |
+  CREATE TABLE tz_null (id int4, d timestamptz);
+  INSERT INTO tz_null VALUES (1, '2000-01-01 00:00+00'), (2, NULL), (3, '1999-12-31 23:59:59+00'), (4, NULL);
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n_all, count(d) AS n_nonnull, min(d)::text AS min_d, max(d)::text AS max_d FROM tz_null
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id FROM tz_null WHERE d = NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id FROM tz_null WHERE d IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, coalesce(d::text, 'none') AS d_or_none FROM tz_null ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, d IS DISTINCT FROM timestamptz '2000-01-01+00' AS differs FROM tz_null ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM tz_null ORDER BY d NULLS LAST, id
+    expect: rows
+    order: ordered

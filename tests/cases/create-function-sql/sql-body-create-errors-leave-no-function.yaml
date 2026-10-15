@@ -1,0 +1,39 @@
+# Parse-analysis errors for unquoted SQL bodies (duplicate body, polymorphic args, type errors); no function is left behind.
+id: create-function-sql.sql-body-create-errors-leave-no-function
+title: Unquoted SQL body rejects a duplicate body, polymorphic arguments and type errors and creates nothing
+family: create-function-sql
+tier: core
+feature_ids: [create-function, errors, sql-standard-function-body, polymorphism]
+required_capabilities: [create-function, sql-functions, sql-standard-function-body, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+steps:
+  - sql: |
+      CREATE FUNCTION functest_s_xxx(x int) RETURNS int
+          LANGUAGE SQL
+          AS $$ SELECT x * 2 $$
+          RETURN x * 3
+    expect: error
+    sqlstate: "42601"
+    comment: duplicate function body specified
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'functest_s_xxx'
+    expect: rows
+    comment: the failed CREATE must leave no function behind
+  - sql: |
+      CREATE FUNCTION functest_s_xx(x anyarray) RETURNS anyelement
+          LANGUAGE SQL
+          RETURN x[1]
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      CREATE FUNCTION functest_s_xx(x date) RETURNS boolean
+          LANGUAGE SQL
+          RETURN x > 1
+    expect: error
+    sqlstate: "42883"
+    comment: "operator does not exist: date > integer"
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'functest_s_xx'
+    expect: rows

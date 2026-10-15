@@ -1,0 +1,26 @@
+# Redefining an aggregate with an identical signature fails; a different argument type is an overload.
+id: create-aggregate.duplicate-aggregate-signature
+title: "CREATE AGGREGATE with an existing signature fails with duplicate_function; other argument types overload"
+family: create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, errors, overloading]
+required_capabilities: [create-table, insert, select, aggregates, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (newcnt, newcnt(\"any\") overloads)"
+  license: PostgreSQL
+setup: |
+  CREATE AGGREGATE dup_agg (int4) (sfunc = int4pl, stype = int4, initcond = '0');
+steps:
+  - sql: |
+      CREATE AGGREGATE dup_agg (int4) (sfunc = int4pl, stype = int4, initcond = '0')
+    expect: error
+    sqlstate: "42723"
+  - sql: |
+      CREATE AGGREGATE dup_agg (int8) (sfunc = int8pl, stype = int8, initcond = '0')
+    expect: ok
+    comment: different argument type is a new overload
+  - sql: |
+      SELECT dup_agg(x::int4) FROM generate_series(1, 3) AS g(x)
+    expect: rows
+    comment: the int4 overload still resolves for an int4 argument

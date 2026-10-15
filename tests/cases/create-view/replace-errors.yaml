@@ -1,0 +1,40 @@
+# CREATE OR REPLACE VIEW refuses to drop, rename or retype existing output columns (42P16).
+id: create-view.replace-errors
+title: CREATE OR REPLACE VIEW rejects dropped renamed and retyped columns
+family: create-view
+tier: core
+feature_ids: [create-view, create-or-replace, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_view.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE rt2 (a int, b int, c numeric(10,1), d text);
+  INSERT INTO rt2 VALUES (5, 10, 1.1, 'xy'), (10, 15, 2.2, 'xyz');
+  CREATE VIEW rv2 AS SELECT a, b, c, d FROM rt2;
+steps:
+  - sql: |
+      CREATE OR REPLACE VIEW rv2 AS SELECT a, b, c FROM rt2
+    expect: error
+    sqlstate: "42P16"
+    comment: cannot drop columns from view
+  - sql: |
+      CREATE OR REPLACE VIEW rv2 AS SELECT a, b, c, d AS dd FROM rt2
+    expect: error
+    sqlstate: "42P16"
+    comment: cannot change name of view column
+  - sql: |
+      CREATE OR REPLACE VIEW rv2 AS SELECT a, b::numeric, c, d FROM rt2
+    expect: error
+    sqlstate: "42P16"
+    comment: cannot change data type of view column
+  - sql: |
+      CREATE OR REPLACE VIEW rv2 AS SELECT a, b, c, d, 0 AS e FROM rt2
+    expect: ok
+    comment: appending a column is allowed
+  - sql: |
+      SELECT a, b, e FROM rv2 ORDER BY a
+    expect: rows
+    order: ordered

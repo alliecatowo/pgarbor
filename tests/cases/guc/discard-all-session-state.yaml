@@ -1,0 +1,42 @@
+# DISCARD ALL resets session state (SET values, prepared statements); it is rejected inside a transaction block with 25001.
+id: guc.discard-all-session-state
+title: DISCARD ALL resets SET values and prepared statements; rejected inside a transaction
+family: guc
+tier: extended
+feature_ids: [guc, discard, prepared-statements, set, transactions, errors]
+required_capabilities: [select, transactions, errors, prepared-statements, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/guc.sql
+sessions: [a]
+steps:
+  - sql: |
+      SET work_mem = '5MB'
+    expect: ok
+  - sql: |
+      PREPARE da_p AS SELECT 1
+    expect: ok
+  - sql: |
+      SELECT name FROM pg_prepared_statements ORDER BY name
+    expect: rows
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DISCARD ALL
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      DISCARD ALL
+    expect: ok
+  - sql: |
+      SELECT name FROM pg_prepared_statements ORDER BY name
+    expect: rows
+    comment: prepared statements are gone
+  - sql: |
+      SELECT current_setting('work_mem') AS after_discard
+    expect: rows
+    comment: SET value reverted to the boot value

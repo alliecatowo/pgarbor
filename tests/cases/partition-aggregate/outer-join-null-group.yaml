@@ -1,0 +1,30 @@
+# Outer joins between two range-partitioned tables, grouped on the nullable side: unmatched
+# rows form a NULL group, and FULL JOIN keeps unmatched rows from both sides.
+id: partition-aggregate.outer-join-null-group
+title: LEFT and FULL JOIN aggregation grouped on the nullable side
+family: partition-aggregate
+tier: extended
+feature_ids: [partitioning, joins, outer-join, group-by, aggregates, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by, joins]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_j1 (x int, y int) PARTITION BY RANGE (x);
+  CREATE TABLE pagg_j1_p1 PARTITION OF pagg_j1 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE pagg_j1_p2 PARTITION OF pagg_j1 FOR VALUES FROM (10) TO (20);
+  CREATE TABLE pagg_j2 (x int, y int) PARTITION BY RANGE (y);
+  CREATE TABLE pagg_j2_p1 PARTITION OF pagg_j2 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE pagg_j2_p2 PARTITION OF pagg_j2 FOR VALUES FROM (10) TO (20);
+  INSERT INTO pagg_j1 VALUES (1, 1), (2, 3), (12, 5), (15, 7);
+  INSERT INTO pagg_j2 VALUES (1, 1), (3, 15), (4, 12);
+steps:
+  - sql: |
+      SELECT b.y, sum(a.y), count(*) FROM pagg_j1 a LEFT JOIN pagg_j2 b ON a.x = b.y GROUP BY b.y ORDER BY 1 NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a.x, sum(b.x), count(*) FROM pagg_j1 a FULL OUTER JOIN pagg_j2 b ON a.x = b.y GROUP BY a.x ORDER BY 1 NULLS LAST
+    expect: rows
+    order: ordered

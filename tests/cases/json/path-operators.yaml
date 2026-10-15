@@ -1,0 +1,38 @@
+# #> and #>> with text[] paths: nested and array paths, empty path returns the whole value, missing or null path elements give NULL.
+id: json.path-operators
+title: Path extraction operators #> and #>> with empty, nested, array and missing paths
+family: json
+tier: core
+feature_ids: [json, json-access, json-path]
+required_capabilities: [select, json]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/json.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT (j #> array['f4','f6'])::text AS obj_path,
+             j #>> array['f4','f6'] AS obj_path_text,
+             (j #> array['f2','0'])::text AS arr_elem,
+             j #>> array['f2','0'] AS arr_elem_text,
+             (j #> array['f2','1'])::text AS arr_num
+      FROM (VALUES ('{"f2":["f3",1],"f4":{"f5":99,"f6":"stringy"}}'::json)) v(j)
+    expect: rows
+  - sql: |
+      SELECT (j #> '{}')::text AS whole_obj, (j #> array['a','b','c'])::text AS deep
+      FROM (VALUES ('{"a": {"b":{"c": "foo"}}}'::json)) v(j)
+    expect: rows
+  - sql: |
+      SELECT (j #> '{}')::text AS whole_arr FROM (VALUES ('[1,2,3]'::json)) v(j)
+    expect: rows
+  - sql: |
+      SELECT j #>> '{}' AS scalar_text, (j #>> '{}') IS NULL AS json_null_text FROM (VALUES ('"foo"'::json), ('null'::json)) v(j) ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '{"a": {"b":{"c": "foo"}}}'::json #> array['a','z','c'] IS NULL AS missing_mid,
+             '{"a": {"b":{"c": "foo"}}}'::json #> array['a', null] IS NULL AS null_elem,
+             '{"a": {"b":{"c": "foo"}}}'::json #> array['a', ''] IS NULL AS empty_elem,
+             '42'::json #> array['f2'] IS NULL AS scalar_path,
+             '[{"b": "c"}, {"b": null}]'::json #>> array['1','b'] IS NULL AS json_null_leaf
+    expect: rows

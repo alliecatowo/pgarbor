@@ -1,0 +1,39 @@
+# UPDATE ... FROM and DELETE ... USING with RETURNING that mixes target columns and a joined table column.
+id: returning.update-from-join
+title: UPDATE FROM and DELETE USING join rows with RETURNING of target and joined columns
+family: returning
+tier: extended
+feature_ids: [returning, update, delete, joins]
+required_capabilities: [create-table, insert, update, delete, select, returning, joins]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (f1 int, f2 text, f3 int);
+  INSERT INTO foo VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
+  CREATE TABLE int4_tbl (f1 int4);
+  INSERT INTO int4_tbl VALUES (1), (3), (5), (7)
+steps:
+  - sql: |
+      UPDATE foo SET f3 = f3 * 2
+        FROM int4_tbl i
+        WHERE foo.f1 + 2 = i.f1
+        RETURNING foo.*, i.f1 AS "i.f1"
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, f2, f3 FROM foo ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM foo USING int4_tbl i
+        WHERE foo.f1 + 2 = i.f1
+        RETURNING foo.*, i.f1 AS "i.f1"
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, f2, f3 FROM foo ORDER BY f1
+    expect: rows
+    order: ordered

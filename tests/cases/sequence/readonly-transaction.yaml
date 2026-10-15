@@ -1,0 +1,33 @@
+# nextval and setval are writes: they fail with 25006 inside a READ ONLY transaction, and the failure is rolled back.
+id: sequence.readonly-transaction
+title: nextval and setval fail with 25006 in READ ONLY transactions
+family: sequence
+tier: core
+feature_ids: [sequences, transactions, read-only, errors]
+required_capabilities: [create-table, select, errors, sequences, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sequence.sql (read-only transaction section)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE SEQUENCE sq_ro;
+steps:
+  - sql: |
+      START TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT nextval('sq_ro')
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      SELECT setval('sq_ro', 1)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT nextval('sq_ro') AS v
+    expect: rows
+    comment: outside the read-only transaction the first value is 1

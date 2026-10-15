@@ -1,0 +1,42 @@
+# Two concurrent sessions with different identities see different rows; a session without an INSERT policy is refused.
+id: rowsecurity.multi-session-identity
+title: "Concurrent sessions see rows according to their own policy setting"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, insert, multi-session, errors]
+required_capabilities: [create-table, insert, select, rls, guc, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, owner text);
+  INSERT INTO t VALUES (1, 'alice'), (2, 'bob'), (3, 'alice');
+  CREATE POLICY sel_own ON t FOR SELECT USING (owner = current_setting('app.uid', true));
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE t FORCE ROW LEVEL SECURITY;
+steps:
+  - session: a
+    sql: |
+      SET app.uid = 'alice'
+    expect: ok
+  - session: b
+    sql: |
+      SET app.uid = 'bob'
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      INSERT INTO t VALUES (4, 'bob')
+    expect: error
+    sqlstate: "42501"
+    comment: there is no INSERT policy, so the insert is refused for session a

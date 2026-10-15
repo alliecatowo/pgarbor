@@ -1,0 +1,31 @@
+# NaN compares equal to itself and sorts above every other float8, including Infinity.
+id: float8.nan-ordering
+title: NaN equals itself and sorts above Infinity in comparisons and ORDER BY
+family: float8
+tier: core
+feature_ids: [float8, comparison, sorting, special-values]
+required_capabilities: [select, create-table, insert]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/float8.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE f8o (id int4 PRIMARY KEY, f1 float8);
+  INSERT INTO f8o VALUES (1, 'NaN'), (2, 'Infinity'), (3, '-Infinity'), (4, 0), (5, -0.0), (6, 1004.3), (7, 'nan');
+steps:
+  - sql: |
+      SELECT id FROM f8o ORDER BY f1, id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'NaN'::float8 = 'NaN'::float8 AS nan_eq, 'NaN'::float8 > 'Infinity'::float8 AS nan_gt_inf, 'NaN'::float8 < 'Infinity'::float8 AS nan_lt_inf
+    expect: rows
+  - sql: |
+      SELECT f1, count(*) FROM f8o GROUP BY f1 ORDER BY f1
+    expect: rows
+    order: ordered
+    comment: NaN values group together; 0 and -0 are equal
+  - sql: |
+      SELECT id FROM f8o WHERE f1 <> 'NaN'::float8 ORDER BY id
+    expect: rows
+    order: ordered

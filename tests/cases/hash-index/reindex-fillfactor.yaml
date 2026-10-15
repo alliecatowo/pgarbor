@@ -1,0 +1,29 @@
+# Changing a hash index's fillfactor and rebuilding it keeps lookups correct and records the reloption.
+id: hash-index.reindex-fillfactor
+title: ALTER INDEX SET fillfactor and REINDEX keep hash lookups correct
+family: hash-index
+tier: extended
+feature_ids: [hash-index, reindex, reloptions, catalog-introspection, aggregates]
+required_capabilities: [create-table, create-index, insert, select, aggregates, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+setup: |
+  CREATE TABLE rf (k int4);
+  CREATE INDEX rf_k ON rf USING hash (k);
+  INSERT INTO rf SELECT g % 100 FROM generate_series(1, 5000) g;
+steps:
+  - sql: |
+      ALTER INDEX rf_k SET (fillfactor = 10)
+    expect: ok
+  - sql: |
+      REINDEX INDEX rf_k
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM rf WHERE k = 42
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE relname = 'rf_k'
+    expect: rows
+    order: multiset

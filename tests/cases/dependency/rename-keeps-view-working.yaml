@@ -1,0 +1,27 @@
+# Views and foreign keys bind to objects by OID, so renaming the table or column keeps them working.
+id: dependency.rename-keeps-view-working
+title: Renaming a table or column keeps dependent views valid
+family: dependency
+tier: core
+feature_ids: [alter-table, views, dependencies]
+required_capabilities: [create-table, insert, select, views, alter-table]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-altertable.html (RENAME); views are stored by OID dependency"
+sessions: [a]
+setup: |
+  CREATE TABLE r1 (x int4, y text);
+  INSERT INTO r1 VALUES (1, 'one'), (2, NULL);
+  CREATE VIEW rv AS SELECT x, y FROM r1;
+steps:
+  - sql: |
+      ALTER TABLE r1 RENAME TO r2;
+      ALTER TABLE r2 RENAME COLUMN y TO label
+    expect: ok
+  - sql: |
+      SELECT x, label IS NULL AS label_null FROM rv ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_get_viewdef('rv'::regclass) LIKE '%r2%' AS def_mentions_new_name
+    expect: rows

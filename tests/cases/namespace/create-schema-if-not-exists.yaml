@@ -1,0 +1,32 @@
+# CREATE SCHEMA duplicate errors; IF NOT EXISTS only issues a notice; IF NOT EXISTS with
+# schema elements is rejected.
+id: namespace.create-schema-if-not-exists
+title: CREATE SCHEMA duplicate error, IF NOT EXISTS notice, and IF NOT EXISTS with elements rejected
+family: namespace
+tier: core
+feature_ids: [create-schema, errors, create-table]
+required_capabilities: [create-schema, create-table, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/namespace.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA ine_schema;
+steps:
+  - sql: |
+      CREATE SCHEMA ine_schema
+    expect: error
+    sqlstate: "42P06"
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS ine_schema
+    expect: notice
+    comment: succeeds with a NOTICE that the schema already exists
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS ine_schema CREATE TABLE abc (a serial, b int UNIQUE)
+    expect: error
+    sqlstate: "0A000"
+    comment: IF NOT EXISTS cannot be combined with schema elements
+  - sql: |
+      SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'ine_schema'
+    expect: rows
+    comment: the rejected statement created nothing

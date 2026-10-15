@@ -1,0 +1,37 @@
+# proisstrict in pg_proc tracks STRICT / CALLED ON NULL INPUT / RETURNS NULL ON NULL INPUT, including ALTER.
+id: create-function-sql.catalog-strict-alter
+title: proisstrict recorded for each null-input declaration and changed by ALTER FUNCTION
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, alter-function, null-handling, catalog-introspection]
+required_capabilities: [create-function, alter-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE FUNCTION functest_f_1(int) RETURNS bool LANGUAGE sql AS 'SELECT $1 > 50';
+  CREATE FUNCTION functest_f_2(int) RETURNS bool LANGUAGE sql CALLED ON NULL INPUT AS 'SELECT $1 = 50';
+  CREATE FUNCTION functest_f_3(int) RETURNS bool LANGUAGE sql RETURNS NULL ON NULL INPUT AS 'SELECT $1 < 50';
+  CREATE FUNCTION functest_f_4(int) RETURNS bool LANGUAGE sql STRICT AS 'SELECT $1 = 50';
+steps:
+  - sql: |
+      SELECT proname, proisstrict FROM pg_proc
+       WHERE proname IN ('functest_f_1', 'functest_f_2', 'functest_f_3', 'functest_f_4')
+       ORDER BY proname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER FUNCTION functest_f_1(int) IMMUTABLE;
+      ALTER FUNCTION functest_f_2(int) STRICT;
+      ALTER FUNCTION functest_f_3(int) CALLED ON NULL INPUT
+    expect: ok
+  - sql: |
+      SELECT proname, proisstrict FROM pg_proc
+       WHERE proname IN ('functest_f_1', 'functest_f_2', 'functest_f_3', 'functest_f_4')
+       ORDER BY proname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT functest_f_2(NULL::int) AS f2_after_strict
+    expect: rows
+    comment: after ALTER to STRICT the NULL argument short-circuits to NULL

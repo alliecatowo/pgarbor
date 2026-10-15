@@ -1,0 +1,33 @@
+# NULL points are stored in an SP-GiST index and are visible to IS NULL but never match operators.
+id: spgist.point-null-handling
+title: NULL point values are indexed but never match containment or equality
+family: spgist
+tier: core
+feature_ids: [spgist, create-index, point, null-handling, select]
+required_capabilities: [create-table, create-index, insert, select, spgist, point]
+provenance:
+  source: hand
+  ref: "PG18 indexes-types.html (SP-GiST); spgist.sql empty-index and NULL paths"
+sessions: [a]
+setup: |
+  CREATE TABLE sp_null (id int4, p point);
+  CREATE INDEX sp_null_idx ON sp_null USING spgist (p);
+  INSERT INTO sp_null (id, p) VALUES (1, point(1, 1)), (2, NULL), (3, NULL), (4, point(2, 2));
+steps:
+  - sql: |
+      SELECT id FROM sp_null WHERE p IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM sp_null WHERE p <@ box '((0,0),(10,10))' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL rows must not appear in the containment result
+  - sql: |
+      SELECT count(*) AS n, count(p) AS non_null FROM sp_null
+    expect: rows
+    comment: count(*) includes NULL rows, count(p) does not
+  - sql: |
+      SELECT id FROM sp_null WHERE p ~= NULL
+    expect: rows
+    comment: comparing with NULL yields no rows

@@ -1,0 +1,44 @@
+# UPDATE and DELETE without ONLY also touch child rows; ONLY restricts them to the parent.
+id: inherit.update-delete-without-only
+title: UPDATE and DELETE on parent reach child tables unless ONLY is used
+family: inherit
+tier: core
+feature_ids: [inheritance, update, delete]
+required_capabilities: [create-table, insert, update, delete, select, inheritance]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/inherit.sql
+  license: PostgreSQL License
+sessions: [a]
+setup: |
+  CREATE TABLE a (aa TEXT);
+  CREATE TABLE b (bb TEXT) INHERITS (a);
+  CREATE TABLE c (cc TEXT) INHERITS (a);
+  INSERT INTO a(aa) VALUES ('p1'), ('p2');
+  INSERT INTO b(aa) VALUES ('b1'), ('b2');
+  INSERT INTO c(aa) VALUES ('c1'), ('c2');
+steps:
+  - sql: |
+      UPDATE a SET aa = 'zz' WHERE aa = 'b1'
+    expect: ok
+  - sql: |
+      UPDATE ONLY a SET aa = 'yy' WHERE aa = 'p1'
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS relname, aa FROM a ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM ONLY c WHERE aa = 'c1'
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS relname, aa FROM a ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM a
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM a
+    expect: rows
+    order: ordered

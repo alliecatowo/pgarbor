@@ -1,0 +1,29 @@
+# LEFT JOIN against set-returning functions: unmatched outer rows are NULL-extended, empty functions yield NULL rows.
+id: rangefuncs.left-join-srf-null-extension
+title: "LEFT JOIN to generate_series and unnest with ON conditions that drop rows"
+family: rangefuncs
+tier: core
+feature_ids: [outer-joins, set-returning-functions, with-ordinality, generate-series, unnest]
+required_capabilities: [set-returning-functions, select, join, arrays]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (LEFT JOIN on a condition the planner cannot prove; generate_series and unnest inner paths)"
+steps:
+  - sql: |
+      SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN generate_series(11,13) WITH ORDINALITY AS f(i,o) ON (r+i) < 100 ORDER BY r, i
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN unnest(array[10,20,30]) WITH ORDINALITY AS f(i,o) ON (r+i) < 12 ORDER BY r, i
+    expect: rows
+    order: ordered
+    comment: "only r=1 with i=10 satisfies the ON clause; r=2 and r=3 are NULL-extended"
+  - sql: |
+      SELECT * FROM (VALUES (1),(2),(3)) v(r), unnest(array[r*10,r*20,r*30]) WITH ORDINALITY AS f(i,o) ORDER BY r, o
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM (VALUES (1),(2)) v(r) LEFT JOIN generate_series(1, 0) f(i) ON true ORDER BY r
+    expect: rows
+    order: ordered
+    comment: "empty function output is NULL-extended, one row per outer row"

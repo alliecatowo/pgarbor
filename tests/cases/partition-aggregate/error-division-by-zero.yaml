@@ -1,0 +1,26 @@
+# Division by zero inside a grouped aggregate expression fails for the group that triggers it;
+# guarding with NULLIF yields NULL for that group instead.
+id: partition-aggregate.error-division-by-zero
+title: Division by zero in a per-group aggregate expression with NULLIF guard
+family: partition-aggregate
+tier: extended
+feature_ids: [partitioning, group-by, aggregates, numeric, errors, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_dz (a int, c text) PARTITION BY LIST (c);
+  CREATE TABLE pagg_dz_p1 PARTITION OF pagg_dz FOR VALUES IN ('0000');
+  CREATE TABLE pagg_dz_p2 PARTITION OF pagg_dz FOR VALUES IN ('0001');
+  INSERT INTO pagg_dz VALUES (1, '0000'), (2, '0001'), (3, '0001');
+steps:
+  - sql: |
+      SELECT c, sum(a) / (count(*) - 2) FROM pagg_dz GROUP BY c ORDER BY c
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SELECT c, sum(a) / NULLIF(count(*) - 2, 0) FROM pagg_dz GROUP BY c ORDER BY c
+    expect: rows
+    order: ordered

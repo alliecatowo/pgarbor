@@ -1,0 +1,35 @@
+# Bound varchar parameters over the extended protocol obey the same length limit.
+id: varchar.extended-protocol-length
+title: Prepared varchar(3) parameter that is too long fails with 22001, the statement remains usable
+family: varchar
+tier: core
+feature_ids: [varchar, extended-protocol, prepared-statements, errors]
+required_capabilities: [create-table, insert, select, extended-protocol]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/varchar.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE vt (f1 varchar(3));
+steps:
+  - parse:
+      name: ins
+      sql: |
+        INSERT INTO vt (f1) VALUES ($1)
+      param_types: [1043]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["abcdef"]
+    expect: error
+    sqlstate: "22001"
+  - execute:
+      statement: ins
+      params: ["abc"]
+    expect: ok
+  - sql: |
+      SELECT f1, length(f1) AS len FROM vt
+    expect: rows
+    order: multiset
+  - close:
+      statement: ins

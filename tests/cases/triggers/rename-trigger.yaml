@@ -1,0 +1,36 @@
+# ALTER TRIGGER ... RENAME keeps the trigger working under its new name and removes the old name.
+id: triggers.rename-trigger
+title: ALTER TRIGGER RENAME replaces the trigger name in the catalog
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, alter-table, catalog-introspection, insert, select]
+required_capabilities: [create-table, insert, select, alter-table, plpgsql, triggers]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (Test RENAME TRIGGER)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int);
+  CREATE TABLE trig_log (msg text);
+  CREATE FUNCTION log_ins() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER modified_a AFTER INSERT ON t FOR EACH ROW EXECUTE PROCEDURE log_ins();
+steps:
+  - sql: |
+      ALTER TRIGGER modified_a ON t RENAME TO modified_modified_a
+    expect: ok
+  - sql: |
+      SELECT tgname FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log
+    expect: rows
+    order: ordered

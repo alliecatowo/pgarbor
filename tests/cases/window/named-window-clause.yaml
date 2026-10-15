@@ -1,0 +1,41 @@
+id: window.named-window-clause
+title: WINDOW clause definitions, reuse by name, and duplicate window name error
+family: window
+tier: core
+feature_ids: [window-functions, window-clause, partition-by, order-by]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/window.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE emp (depname text, empno int8 PRIMARY KEY, salary int4);
+  INSERT INTO emp VALUES
+    ('develop', 10, 5200), ('sales', 1, 5000), ('personnel', 5, 3500),
+    ('sales', 4, 4800), ('personnel', 2, 3900), ('develop', 7, 4200),
+    ('sales', 3, 4800), ('develop', 8, 6000);
+steps:
+  - sql: |
+      SELECT depname, empno, salary, sum(salary) OVER w AS total
+      FROM emp WINDOW w AS (PARTITION BY depname)
+      ORDER BY depname, empno
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT empno, rank() OVER w AS r
+      FROM emp WINDOW w AS (PARTITION BY depname ORDER BY salary)
+      ORDER BY rank() OVER w, empno
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sum(salary) OVER w1 AS s, count(*) OVER w2 AS c
+      FROM emp WINDOW w1 AS (ORDER BY salary), w2 AS (ORDER BY salary)
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sum(salary) OVER w FROM emp
+      WINDOW w AS (PARTITION BY depname), w AS (ORDER BY salary)
+    expect: error
+    sqlstate: "42P20"
+    comment: duplicate window name in WINDOW clause

@@ -1,0 +1,40 @@
+# A table referenced by a foreign key cannot be truncated alone; the referencing table must be included.
+id: truncate.fk-referenced-parent-error
+title: "TRUNCATE of a FK-referenced table fails; the referencing table must be listed too"
+family: truncate
+tier: core
+feature_ids: [truncate, foreign-key, constraints, errors, insert, select]
+required_capabilities: [create-table, insert, select, foreign-key, transactions, truncate]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (pid int4 REFERENCES p);
+  INSERT INTO p VALUES (1), (2);
+  INSERT INTO c VALUES (1);
+steps:
+  - sql: |
+      TRUNCATE TABLE p
+    expect: error
+    sqlstate: "0A000"
+    comment: "c references p and is not in the truncate list"
+  - sql: |
+      SELECT count(*) FROM p
+    expect: rows
+    comment: "failed TRUNCATE leaves p unchanged"
+  - sql: |
+      TRUNCATE TABLE c
+    expect: ok
+    comment: "truncating only the referencing table is allowed"
+  - sql: |
+      SELECT count(*) FROM c
+    expect: rows
+  - sql: |
+      TRUNCATE TABLE p, c
+    expect: ok
+    comment: "listing both tables satisfies the foreign key check"
+  - sql: |
+      SELECT (SELECT count(*) FROM p) AS p_rows, (SELECT count(*) FROM c) AS c_rows
+    expect: rows

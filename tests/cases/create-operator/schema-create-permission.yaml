@@ -1,0 +1,34 @@
+# A role without CREATE on the target schema cannot create an operator there.
+id: create-operator.schema-create-permission
+title: CREATE OPERATOR in a schema the current role cannot create in is denied
+family: create-operator
+tier: extended
+feature_ids: [create-operator, roles-privileges, schemas, errors]
+required_capabilities: [create-function, create-operator, roles-privileges, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_operator.sql (schema USAGE permission case, adapted)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION dbl(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 2 $$;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE SCHEMA pga_op_s1
+    expect: ok
+  - sql: |
+      CREATE ROLE pga_op_r1
+    expect: ok
+  - sql: |
+      SET ROLE pga_op_r1
+    expect: ok
+  - sql: |
+      CREATE OPERATOR pga_op_s1.#*# (rightarg = int8, procedure = dbl)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      ROLLBACK
+    expect: ok

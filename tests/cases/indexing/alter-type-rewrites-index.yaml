@@ -1,0 +1,26 @@
+# Changing the type of an indexed column rewrites the index; lookups and aggregates still agree.
+id: indexing.alter-type-rewrites-index
+title: ALTER COLUMN TYPE on an indexed partitioned column keeps the index usable
+family: indexing
+tier: extended
+feature_ids: [create-index, alter-table, partitioning, numeric, aggregates]
+required_capabilities: [create-table, create-index, alter-table, partitioning, numeric, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/indexing.sql"
+setup: |
+  CREATE TABLE idxpart (a INT, b TEXT, c INT) PARTITION BY RANGE (a);
+  CREATE TABLE idxpart1 PARTITION OF idxpart FOR VALUES FROM (MINVALUE) TO (MAXVALUE);
+  CREATE INDEX partidx_abc_idx ON idxpart (a, b, c);
+  INSERT INTO idxpart (a, b, c) SELECT i, i::text, i FROM generate_series(1, 50) i;
+steps:
+  - sql: |
+      ALTER TABLE idxpart ALTER COLUMN c TYPE numeric
+    expect: ok
+  - sql: |
+      SELECT count(*), sum(c) FROM idxpart
+    expect: rows
+  - sql: |
+      SELECT a FROM idxpart WHERE a = 7 AND b = '7' AND c = 7
+    expect: rows
+    order: multiset

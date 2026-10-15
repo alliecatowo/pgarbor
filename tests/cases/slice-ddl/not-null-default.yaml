@@ -1,0 +1,46 @@
+# NOT NULL and DEFAULT interaction; NULL rejection on insert and on SET NOT NULL.
+id: slice-ddl.not-null-default
+title: NOT NULL rejects explicit NULL, DEFAULT fills omitted columns, SET NOT NULL validates existing rows
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, not-null, defaults, alter-table, errors]
+required_capabilities: [create-table, insert, select, not-null, defaults, alter-table, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints.html#DDL-CONSTRAINTS-NOT-NULL"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE nn (id int4 PRIMARY KEY, name text NOT NULL DEFAULT 'anon', note text)
+    expect: ok
+  - sql: |
+      INSERT INTO nn (id) VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO nn (id, name) VALUES (2, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO nn (id, name, note) VALUES (3, '', NULL)
+    expect: ok
+    comment: the empty string is not NULL
+  - sql: |
+      SELECT id, name, note IS NULL AS note_null FROM nn ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE nn ALTER COLUMN note SET NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: row 1 has note NULL, so validation fails
+  - sql: |
+      UPDATE nn SET note = '' WHERE note IS NULL
+    expect: ok
+  - sql: |
+      ALTER TABLE nn ALTER COLUMN note SET NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO nn (id) VALUES (4)
+    expect: error
+    sqlstate: "23502"
+    comment: note has no default, so omitting it now yields NULL and is rejected

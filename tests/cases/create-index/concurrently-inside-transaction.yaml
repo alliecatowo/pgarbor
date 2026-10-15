@@ -1,0 +1,32 @@
+# CREATE INDEX CONCURRENTLY cannot run inside a transaction block; outside one it succeeds.
+id: create-index.concurrently-inside-transaction
+title: CREATE INDEX CONCURRENTLY is rejected inside a transaction block and succeeds outside it
+family: create-index
+tier: extended
+feature_ids: [create-index, concurrent-index-build, transactions, errors, catalog-introspection]
+required_capabilities: [create-table, select, create-index, transactions, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (concurrent index builds section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE conc_t (f1 text, f2 int)
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE INDEX CONCURRENTLY conc_t_f2 ON conc_t (f2)
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      CREATE INDEX CONCURRENTLY conc_t_f2 ON conc_t (f2)
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'conc_t' ORDER BY indexname
+    expect: rows
+    order: ordered

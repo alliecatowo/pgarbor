@@ -1,0 +1,35 @@
+# ALTER SEQUENCE AS narrows MAXVALUE/MINVALUE when they fit, and errors when an explicit bound does not fit.
+id: sequence.alter-as-type-adjusts-bounds
+title: ALTER SEQUENCE AS smallint adjusts implicit bounds, rejects explicit out-of-range bounds
+family: sequence
+tier: extended
+feature_ids: [sequences, alter-sequence, data-types, errors]
+required_capabilities: [create-table, select, errors, sequences, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sequence.sql (sequence_test5/8/10 AS smallint)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE SEQUENCE sq_t5 AS integer;
+  CREATE SEQUENCE sq_t8 AS integer MAXVALUE 100000;
+steps:
+  - sql: |
+      ALTER SEQUENCE sq_t5 AS smallint
+    expect: ok
+    comment: implicit max is adjusted down to smallint max
+  - sql: |
+      SELECT max_value FROM pg_sequences WHERE sequencename = 'sq_t5'
+    expect: rows
+  - sql: |
+      ALTER SEQUENCE sq_t8 AS smallint
+    expect: error
+    sqlstate: "22023"
+    comment: explicit MAXVALUE 100000 does not fit smallint, so it is not adjusted
+  - sql: |
+      ALTER SEQUENCE sq_t8 AS smallint MAXVALUE 20000
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE sq_bad_t AS smallint MAXVALUE 100000
+    expect: error
+    sqlstate: "22023"

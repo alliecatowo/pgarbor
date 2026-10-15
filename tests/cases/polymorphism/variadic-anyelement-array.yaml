@@ -1,0 +1,36 @@
+# VARIADIC anyarray with a leading anyelement: expansion of trailing args versus passing an array.
+id: polymorphism.variadic-anyelement-array
+title: VARIADIC anyarray expands trailing arguments; passing an array without VARIADIC fails
+family: polymorphism
+tier: core
+feature_ids: [polymorphic-types, variadic-functions, arrays, errors]
+required_capabilities: [create-function, select, arrays]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/polymorphism.sql"
+setup: |
+  CREATE FUNCTION formarray(anyelement, VARIADIC anyarray) RETURNS anyarray
+  AS 'SELECT array_prepend($1, $2);' LANGUAGE sql IMMUTABLE STRICT;
+steps:
+  - sql: |
+      SELECT formarray(1, 2, 3, 4, 5) AS expanded
+    expect: rows
+  - sql: |
+      SELECT formarray(1.1, VARIADIC array[1.2, 55.5]) AS explicit_variadic
+    expect: rows
+  - sql: |
+      SELECT formarray(1.1, VARIADIC ARRAY[]::numeric[]) AS no_elems
+    expect: rows
+  - sql: |
+      SELECT formarray(NULL::int, VARIADIC ARRAY[]::int[]) AS null_first
+    expect: rows
+    comment: STRICT returns NULL when any argument is NULL
+  - sql: |
+      SELECT formarray(1.1, array[1.2, 55.5])
+    expect: error
+    comment: without VARIADIC the array is not expanded; no matching function
+  - sql: |
+      SELECT formarray(1, 'x'::text)
+    expect: error
+    sqlstate: "42883"
+    comment: text is not an array and cannot match VARIADIC anyarray

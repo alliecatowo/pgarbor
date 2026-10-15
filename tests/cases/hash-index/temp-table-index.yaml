@@ -1,0 +1,31 @@
+# Hash index on a temporary table: lookups work in-session and DROP TABLE ... CASCADE removes the index.
+id: hash-index.temp-table-index
+title: Hash index on a temp table serves lookups and is dropped with its table
+family: hash-index
+tier: core
+feature_ids: [hash-index, temp-tables, drop-table, catalog-introspection]
+required_capabilities: [create-table, create-index, insert, select, drop-table, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+steps:
+  - sql: |
+      CREATE TEMP TABLE ht (x int, y int)
+    expect: ok
+  - sql: |
+      INSERT INTO ht VALUES (1, 1), (2, 2), (1, 3)
+    expect: ok
+  - sql: |
+      CREATE INDEX ht_x ON ht USING hash (x)
+    expect: ok
+  - sql: |
+      SELECT y FROM ht WHERE x = 1 ORDER BY y
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE ht CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname = 'ht_x'
+    expect: rows
+    order: multiset

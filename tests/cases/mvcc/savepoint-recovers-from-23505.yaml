@@ -1,0 +1,43 @@
+# A unique violation inside a savepoint poisons only the savepoint once rolled back; the outer transaction recovers.
+id: mvcc.savepoint-recovers-from-23505
+title: Unique violation inside SAVEPOINT aborts the block until ROLLBACK TO SAVEPOINT, then the transaction commits
+family: mvcc
+tier: core
+feature_ids: [transactions, savepoints, constraints, errors, insert]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (subtransaction error handling); PG18 errcodes 23505, 25P02"
+sessions: [a]
+setup: |
+  CREATE TABLE u (k int4 PRIMARY KEY, note text);
+  INSERT INTO u VALUES (1, 'seed');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT s
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES (1, 'dup')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+    comment: block is aborted until rolled back to the savepoint
+  - sql: |
+      ROLLBACK TO SAVEPOINT s
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES (2, 'fresh')
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT k, note FROM u ORDER BY k
+    expect: rows
+    order: ordered

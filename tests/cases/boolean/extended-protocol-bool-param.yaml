@@ -1,0 +1,50 @@
+# Boolean bind parameters over the extended protocol, in text and binary format.
+id: boolean.extended-protocol-bool-param
+title: Boolean bind parameters in text and binary format through prepared statements
+family: boolean
+tier: extended
+feature_ids: [boolean-type, extended-protocol, prepared-statements, binary-format]
+required_capabilities: [create-table, insert, select, extended-protocol]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/boolean.sql; PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY"
+  license: PostgreSQL License
+sessions: [a]
+setup: |
+  CREATE TABLE flag_p (id int4, b bool);
+steps:
+  - parse:
+      name: ins
+      sql: |
+        INSERT INTO flag_p (id, b) VALUES ($1, $2)
+      param_types: [23, 16]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["1", "t"]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["2", "f"]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["3", null]
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT id FROM flag_p WHERE b = $1 ORDER BY id
+      params: ["t"]
+      param_types: [16]
+    expect: rows
+    order: ordered
+  - exec_params:
+      sql: |
+        SELECT id FROM flag_p WHERE b = $1 ORDER BY id
+      params: ["01"]
+      param_types: [16]
+      param_formats: [binary]
+    expect: rows
+    order: ordered
+  - close:
+      statement: ins

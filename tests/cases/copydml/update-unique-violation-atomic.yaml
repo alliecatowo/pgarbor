@@ -1,0 +1,25 @@
+# A multi-row UPDATE that violates a unique key changes no rows (statement-level atomicity).
+id: copydml.update-unique-violation-atomic
+title: "Multi-row UPDATE hitting a unique violation leaves every row unchanged"
+family: copydml
+tier: core
+feature_ids: [update, returning, constraints, unique, errors]
+required_capabilities: [create-table, insert, update, returning, constraints, select]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 23505 unique_violation; sql-update.html"
+  license: CC0
+sessions: [a]
+setup: |
+  CREATE TABLE copydml_test (id int4 PRIMARY KEY, t text UNIQUE);
+  INSERT INTO copydml_test VALUES (1, 'a'), (2, 'b'), (3, 'c');
+steps:
+  - sql: |
+      UPDATE copydml_test SET t = 'z' WHERE id IN (1, 2) RETURNING id
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT id, t FROM copydml_test ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no row changed, because the failed statement is rolled back

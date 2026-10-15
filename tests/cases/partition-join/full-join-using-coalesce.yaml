@@ -1,0 +1,31 @@
+# FULL JOIN USING between partitioned tables: the merged join column is COALESCE-like and NULL keys never match.
+id: partition-join.full-join-using-coalesce
+title: FULL JOIN USING merges join columns and keeps unmatched rows from both sides
+family: partition-join
+tier: core
+feature_ids: [joins, outer-join, full-join, using, partitioning, nulls, select]
+required_capabilities: [create-table, insert, select, partitioning, joins]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/partition_join.sql (full outer join section, USING form)"
+sessions: [a]
+setup: |
+  CREATE TABLE prt1 (a int, b int, c varchar) PARTITION BY RANGE(a);
+  CREATE TABLE prt1_p1 PARTITION OF prt1 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE prt1_p2 PARTITION OF prt1 FOR VALUES FROM (10) TO (20);
+  INSERT INTO prt1 VALUES (0, 0, 'a0'), (2, 2, 'a2'), (12, 0, 'a12');
+  CREATE TABLE prt2 (a int, b int, c varchar) PARTITION BY RANGE(b);
+  CREATE TABLE prt2_p1 PARTITION OF prt2 FOR VALUES FROM (0) TO (10);
+  CREATE TABLE prt2_p2 PARTITION OF prt2 FOR VALUES FROM (10) TO (20);
+  INSERT INTO prt2 VALUES (0, 0, 'b0'), (5, NULL, 'bnull'), (3, 13, 'b13');
+steps:
+  - sql: |
+      SELECT a, b, t1.c AS c1, prt2.c AS c2 FROM prt1 t1 FULL JOIN prt2 USING (a, b) ORDER BY a NULLS LAST, b NULLS LAST
+    expect: rows
+    order: ordered
+    comment: USING produces single a and b columns; unmatched rows from either side survive
+  - sql: |
+      SELECT count(*) FILTER (WHERE t1.c IS NULL) AS only_right, count(*) FILTER (WHERE prt2.c IS NULL) AS only_left FROM prt1 t1 FULL JOIN prt2 USING (a, b)
+    expect: rows
+    order: multiset
+    comment: a row with NULL join key never matches, so the NULL-key row from prt2 is unmatched

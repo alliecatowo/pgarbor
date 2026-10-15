@@ -1,0 +1,27 @@
+# DROP of a referenced table fails with dependent_objects_still_exist unless CASCADE is given.
+id: foreign-key.drop-referenced-table-requires-cascade
+title: "DROP TABLE on a referenced table needs CASCADE and then removes the constraint"
+family: foreign-key
+tier: extended
+feature_ids: [foreign-keys, drop-table, create-table, constraints, catalog-introspection]
+required_capabilities: [create-table, drop-table, foreign-keys, constraints, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4 REFERENCES pk (id));
+steps:
+  - sql: |
+      DROP TABLE pk
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP TABLE pk CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_constraint WHERE contype = 'f'
+    expect: rows
+    comment: the foreign key constraint is gone, the child table remains

@@ -1,0 +1,34 @@
+# A table rowtype used as a column type in another table: rewriting ALTER is refused, metadata-only ALTER works.
+id: rowtypes.alter-composite-dependency
+title: ALTER of a row type that another table column uses
+family: rowtypes
+tier: extended
+feature_ids: [composite-types, alter-table, dependencies, errors]
+required_capabilities: [create-table, alter-table, insert, update, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowtypes.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE fullname (first text, last text);
+  CREATE TABLE people (fn fullname, bd date);
+  INSERT INTO people VALUES ('(Joe,Blow)', '1984-01-10');
+steps:
+  - sql: |
+      ALTER TABLE fullname ADD COLUMN suffix text DEFAULT ''
+    expect: error
+    sqlstate: "0A000"
+    comment: a rewriting add-column is refused while people.fn depends on the row type
+  - sql: |
+      ALTER TABLE fullname ADD COLUMN suffix text DEFAULT NULL
+    expect: ok
+    comment: a NULL default needs no rewrite, so the dependent column is allowed
+  - sql: |
+      SELECT fn, bd FROM people
+    expect: rows
+  - sql: |
+      UPDATE people SET fn.suffix = 'Jr'
+    expect: ok
+  - sql: |
+      SELECT (fn).first, (fn).last, (fn).suffix, bd FROM people
+    expect: rows

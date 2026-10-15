@@ -1,0 +1,41 @@
+# unnest and tsvector_to_array, array_to_tsvector sorting and de-duplication, and its NULL/empty errors.
+id: tstypes.tsvector-unnest-array
+title: tsvector to array and back, with array_to_tsvector validation errors
+family: tstypes
+tier: core
+feature_ids: [tsvector, text-search, tsvector-array, errors]
+required_capabilities: [select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tstypes.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT lexeme, positions FROM unnest('base:7 hidden:6 rebel:1 spaceship:2,33A,34B,35C,36D strike:3'::tsvector) ORDER BY lexeme
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT lexeme, positions, weights FROM unnest('base hidden rebel'::tsvector) ORDER BY lexeme
+    expect: rows
+    order: ordered
+    comment: lexemes without positions produce empty arrays
+  - sql: |
+      SELECT tsvector_to_array('base:7 hidden:6 rebel:1 spaceship:2,33A,34B,35C,36D strike:3'::tsvector)
+    expect: rows
+  - sql: |
+      SELECT array_to_tsvector(ARRAY['base','hidden','rebel','spaceship','strike'])
+    expect: rows
+  - sql: |
+      SELECT array_to_tsvector(ARRAY['foo','bar','baz','bar'])
+    expect: rows
+    comment: result is sorted and de-duplicated
+  - sql: |
+      SELECT array_to_tsvector(ARRAY['base','hidden','rebel','spaceship', NULL])
+    expect: error
+    sqlstate: "22004"
+    comment: lexeme array may not contain nulls
+  - sql: |
+      SELECT array_to_tsvector(ARRAY['base','hidden','rebel','spaceship', ''])
+    expect: error
+    sqlstate: "2200F"
+    comment: lexeme array may not contain empty strings

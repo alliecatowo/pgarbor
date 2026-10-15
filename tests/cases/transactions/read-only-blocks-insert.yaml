@@ -1,0 +1,38 @@
+# READ ONLY transaction: reads succeed, INSERT fails with 25006 and the block is then aborted.
+id: transactions.read-only-blocks-insert
+title: BEGIN READ ONLY permits SELECT and rejects INSERT with 25006
+family: transactions
+tier: core
+feature_ids: [transactions, read-only-transactions, insert, select, errors]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE writetest (a int4);
+  INSERT INTO writetest VALUES (5);
+steps:
+  - sql: |
+      BEGIN READ ONLY
+    expect: ok
+  - sql: |
+      SELECT a FROM writetest ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO writetest VALUES (1)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SHOW transaction_read_only
+    expect: rows
+    comment: back to the session default, off
+  - sql: |
+      SELECT a FROM writetest ORDER BY a
+    expect: rows
+    order: ordered

@@ -1,0 +1,39 @@
+# range_intersect_agg ignores NULL inputs, yields NULL over no rows, and yields the empty range once
+# one input is empty. Mirrors rangetypes.sql lines 132-134.
+id: rangetypes.intersect-agg-nulls
+title: range_intersect_agg over a column with NULL and empty inputs
+family: rangetypes
+tier: core
+feature_ids: [range-types, range-aggregates, aggregates, nulls]
+required_capabilities: [range-types, aggregates, create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangetypes.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE ir_agg (id int4, r int4range);
+  INSERT INTO ir_agg VALUES (1, int4range(1, 10)), (2, int4range(5, 20)), (3, NULL), (4, int4range(0, 100));
+steps:
+  - sql: |
+      SELECT range_intersect_agg(r) FROM ir_agg
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT range_intersect_agg(r) FROM ir_agg WHERE false
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT range_intersect_agg(r) FROM ir_agg WHERE r @> 7
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO ir_agg VALUES (5, 'empty')
+    expect: ok
+  - sql: |
+      SELECT range_intersect_agg(r) FROM ir_agg
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT range_intersect_agg(r) FROM (VALUES (NULL::int4range), (NULL::int4range)) AS v(r)
+    expect: rows
+    order: multiset

@@ -1,0 +1,44 @@
+# CREATE ROLE ... ROLE adds members without admin option; ADMIN adds members with admin option; self-membership is rejected.
+id: create-role.role-clause-membership
+title: CREATE ROLE ROLE and ADMIN clauses populate pg_auth_members with the right admin_option; self-membership fails
+family: create-role
+tier: core
+feature_ids: [roles, role-membership, create-role, errors, catalog-introspection]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql (ROLE / ADMIN clauses)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rg_u1
+    expect: ok
+  - sql: |
+      CREATE ROLE rg_u2
+    expect: ok
+  - sql: |
+      CREATE ROLE rg_u3
+    expect: ok
+  - sql: |
+      CREATE ROLE rg_group ROLE rg_u1, rg_u2 ADMIN rg_u3
+    expect: ok
+  - sql: |
+      SELECT r.rolname AS role, m.rolname AS member, am.admin_option
+        FROM pg_auth_members am
+        JOIN pg_roles r ON r.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+       WHERE r.rolname = 'rg_group'
+       ORDER BY member
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE ROLE rg_self ROLE rg_self
+    expect: error
+    sqlstate: "0LP01"
+    comment: message is 'role "rg_self" is a member of role "rg_self"'; SQLSTATE per PG source, verify at recording
+  - sql: |
+      SELECT count(*) AS rg_self_exists FROM pg_roles WHERE rolname = 'rg_self'
+    expect: rows
+  - sql: |
+      DROP ROLE rg_group, rg_u1, rg_u2, rg_u3
+    expect: ok

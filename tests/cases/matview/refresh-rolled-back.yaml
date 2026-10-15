@@ -1,0 +1,36 @@
+id: matview.refresh-rolled-back
+title: Non-concurrent REFRESH is transactional and rolls back with the transaction
+family: matview
+tier: core
+feature_ids: [materialized-views, transactions, update]
+required_capabilities: [create-table, insert, update, select, create-materialized-view, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE r11 (k int4, v text);
+  INSERT INTO r11 VALUES (1, 'old');
+steps:
+  - sql: |
+      CREATE MATERIALIZED VIEW mv11 AS SELECT k, v FROM r11
+    expect: ok
+  - sql: |
+      UPDATE r11 SET v = 'new' WHERE k = 1
+    expect: ok
+  - sql: |
+      BEGIN;
+      REFRESH MATERIALIZED VIEW mv11;
+      SELECT v FROM mv11;
+      ROLLBACK
+    expect: any
+    comment: inside the transaction the refreshed value is visible
+  - sql: |
+      SELECT v FROM mv11
+    expect: rows
+    comment: after rollback the old snapshot is back
+  - sql: |
+      REFRESH MATERIALIZED VIEW mv11
+    expect: ok
+  - sql: |
+      SELECT v FROM mv11
+    expect: rows

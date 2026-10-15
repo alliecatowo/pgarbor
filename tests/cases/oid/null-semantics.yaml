@@ -1,0 +1,28 @@
+# NULL oid: equality with NULL yields no rows, IS NULL finds it, and aggregates skip it.
+id: oid.null-semantics
+title: NULL oid values fail equality, match IS NULL, and are skipped by aggregates
+family: oid
+tier: core
+feature_ids: [oid-type, null-semantics, aggregates, select]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-oid.html; NULL semantics"
+sessions: [a]
+setup: |
+  CREATE TABLE oid_tbl (f1 oid);
+  INSERT INTO oid_tbl (f1) VALUES (NULL), ('42'), (NULL);
+steps:
+  - sql: |
+      SELECT f1 FROM oid_tbl WHERE f1 = NULL
+    expect: rows
+    order: multiset
+    comment: no row is returned because NULL = NULL is unknown
+  - sql: |
+      SELECT count(*) AS all_rows, count(f1) AS non_null, count(*) FILTER (WHERE f1 IS NULL) AS nulls FROM oid_tbl
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT max(f1) AS max_oid, min(f1) AS min_oid FROM oid_tbl
+    expect: rows
+    order: multiset

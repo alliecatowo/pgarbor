@@ -1,0 +1,31 @@
+# List partitioning on an expression key: routing by lower(a), NULL key routed to a NULL-list partition, and a non-matching key fails with 23514.
+id: insert.list-partition-routing-null
+title: List-partition routing on lower(a) with NULL-list partition
+family: insert
+tier: extended
+feature_ids: [insert, partitioning, expressions, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE list_parted (a text, b int4) PARTITION BY LIST (lower(a));
+  CREATE TABLE part_aa_bb PARTITION OF list_parted FOR VALUES IN ('aa', 'bb');
+  CREATE TABLE part_cc_dd PARTITION OF list_parted FOR VALUES IN ('cc', 'dd');
+  CREATE TABLE part_null PARTITION OF list_parted FOR VALUES IN (NULL);
+steps:
+  - sql: |
+      INSERT INTO list_parted VALUES ('AAa', 1)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO list_parted VALUES ('cC', 1), (NULL, 0), (NULL, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO list_parted (b) VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, a, b FROM list_parted ORDER BY 1, 2 NULLS LAST, 3 NULLS LAST
+    expect: rows
+    order: ordered

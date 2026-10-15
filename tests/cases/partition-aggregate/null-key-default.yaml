@@ -1,0 +1,30 @@
+# NULL partition key routed to a DEFAULT partition; NULL forms its own group, and count(*)
+# and count(c) must differ exactly by the NULL rows.
+id: partition-aggregate.null-key-default
+title: NULL partition key lands in DEFAULT partition and forms its own group
+family: partition-aggregate
+tier: core
+feature_ids: [partitioning, default-partition, group-by, aggregates, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_null (a int, c text) PARTITION BY LIST (c);
+  CREATE TABLE pagg_null_p1 PARTITION OF pagg_null FOR VALUES IN ('p', 'q');
+  CREATE TABLE pagg_null_def PARTITION OF pagg_null DEFAULT;
+  INSERT INTO pagg_null VALUES (1, 'p'), (2, 'q'), (3, NULL), (4, NULL), (5, 'zz'), (6, 'p');
+steps:
+  - sql: |
+      SELECT c, count(*), sum(a) FROM pagg_null GROUP BY c ORDER BY c NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c IS NULL AS is_null_group, count(*) FROM pagg_null GROUP BY c HAVING count(*) > 1 ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*), count(c) FROM pagg_null
+    expect: rows
+    order: multiset

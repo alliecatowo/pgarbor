@@ -1,0 +1,42 @@
+# UPDATE and DELETE WHERE CURRENT OF a cursor on a table with a virtual generated column.
+id: generated-virtual.cursor-where-current-of
+title: WHERE CURRENT OF updates and deletes through a FOR UPDATE cursor with a virtual generated column
+family: generated-virtual
+tier: extended
+feature_ids: [generated-columns, cursors, transactions, update, delete]
+required_capabilities: [create-table, insert, update, delete, select, cursor, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest_cursor (id int PRIMARY KEY, a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
+  INSERT INTO gtest_cursor VALUES (1, 10), (2, 20), (3, 30);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE curs CURSOR FOR SELECT * FROM gtest_cursor ORDER BY id FOR UPDATE
+    expect: ok
+  - sql: |
+      FETCH 1 FROM curs
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE gtest_cursor SET a = 99 WHERE CURRENT OF curs
+    expect: ok
+  - sql: |
+      SELECT * FROM gtest_cursor ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM gtest_cursor WHERE CURRENT OF curs
+    expect: ok
+  - sql: |
+      SELECT * FROM gtest_cursor ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok

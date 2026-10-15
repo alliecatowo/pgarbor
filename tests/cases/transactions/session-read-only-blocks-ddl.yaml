@@ -1,0 +1,53 @@
+# SET SESSION CHARACTERISTICS READ ONLY: DDL, INSERT and EXECUTE of an UPDATE fail; temp-table DELETE still works.
+id: transactions.session-read-only-blocks-ddl
+title: Session-level READ ONLY rejects DROP, INSERT, prepared UPDATE and CREATE TABLE AS with 25006
+family: transactions
+tier: core
+feature_ids: [transactions, read-only-transactions, temp-tables, prepare, errors]
+required_capabilities: [create-table, insert, update, delete, select, transactions, temp-tables, prepare, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE writetest (a int4);
+  INSERT INTO writetest VALUES (1);
+steps:
+  - sql: |
+      CREATE TEMPORARY TABLE temptest (a int4);
+      INSERT INTO temptest VALUES (1)
+    expect: ok
+    comment: temp table is created in session a, not in setup
+  - sql: |
+      SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      DROP TABLE writetest
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      INSERT INTO writetest VALUES (2)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      SELECT a FROM writetest ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM temptest
+    expect: ok
+  - sql: |
+      PREPARE test AS UPDATE writetest SET a = 0
+    expect: ok
+  - sql: |
+      EXECUTE test
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      CREATE TABLE test_copy AS SELECT * FROM writetest
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE
+    expect: ok

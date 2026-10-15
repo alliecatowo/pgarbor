@@ -1,0 +1,36 @@
+# Relative date shorthands are resolved once per transaction, so each stored value equals its own literal.
+id: timestamptz.shorthand-today-tomorrow
+title: today yesterday tomorrow and zulu shorthands compare equal within one transaction
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, insert, select, transactions, time-zones]
+required_capabilities: [create-table, insert, select, transactions, date-type]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamptz.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE tz_short (d1 timestamp(2) with time zone);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO tz_short VALUES ('today'), ('yesterday'), ('tomorrow'), ('tomorrow EST'), ('tomorrow zulu')
+    expect: ok
+  - sql: |
+      SELECT
+        (SELECT count(*) FROM tz_short WHERE d1 = timestamptz 'today') AS n_today,
+        (SELECT count(*) FROM tz_short WHERE d1 = timestamptz 'yesterday') AS n_yesterday,
+        (SELECT count(*) FROM tz_short WHERE d1 = timestamptz 'tomorrow') AS n_tomorrow,
+        (SELECT count(*) FROM tz_short WHERE d1 = timestamptz 'tomorrow EST') AS n_tomorrow_est,
+        (SELECT count(*) FROM tz_short WHERE d1 = timestamptz 'tomorrow zulu') AS n_tomorrow_zulu
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n_rows, count(DISTINCT d1) AS distinct_values FROM tz_short
+    expect: rows
+    order: multiset
+  - sql: |
+      COMMIT
+    expect: ok

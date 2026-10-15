@@ -1,0 +1,54 @@
+# Enum column with a unique btree index and a hash index: operator results, min/max, duplicate key error.
+id: enum.btree-hash-index
+title: Enum column under btree and hash indexes with duplicate-key error
+family: enum
+tier: core
+feature_ids: [enum, btree-index, hash-index, constraints, errors, aggregates]
+required_capabilities: [enum-type, create-table, insert, select, btree-index, hash-index, errors]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+  CREATE TABLE enumtest (col rainbow);
+  INSERT INTO enumtest VALUES ('red'), ('orange'), ('yellow'), ('green'), ('blue'), ('purple');
+  CREATE UNIQUE INDEX enumtest_btree ON enumtest USING btree (col);
+steps:
+  - sql: |
+      SET enable_seqscan = off;
+      SET enable_bitmapscan = off
+    expect: ok
+  - sql: |
+      SELECT * FROM enumtest WHERE col = 'orange'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM enumtest WHERE col <> 'orange' ORDER BY col
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM enumtest WHERE col >= 'yellow' ORDER BY col
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT min(col), max(col), max(col) FILTER (WHERE col < 'green') FROM enumtest
+    expect: rows
+  - sql: |
+      INSERT INTO enumtest VALUES ('green')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      DROP INDEX enumtest_btree
+    expect: ok
+  - sql: |
+      CREATE INDEX enumtest_hash ON enumtest USING hash (col)
+    expect: ok
+  - sql: |
+      SELECT * FROM enumtest WHERE col = 'orange'
+    expect: rows
+    order: multiset
+  - sql: |
+      RESET enable_seqscan;
+      RESET enable_bitmapscan
+    expect: ok

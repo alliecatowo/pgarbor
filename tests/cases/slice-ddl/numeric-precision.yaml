@@ -1,0 +1,35 @@
+# numeric(p,s): rounding to scale on store, overflow of precision, NULL, arithmetic keeps exact decimals.
+id: slice-ddl.numeric-precision
+title: numeric(4,2) rounds to scale, rejects values that overflow precision after rounding
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, select, numeric, errors]
+required_capabilities: [create-table, insert, select, numeric, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-numeric.html#DATATYPE-NUMERIC-DECIMAL"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE nm (id int4, n numeric(4,2))
+    expect: ok
+  - sql: |
+      INSERT INTO nm VALUES (1, 99.99), (2, 12.345), (3, -99.99), (4, NULL)
+    expect: ok
+    comment: 12.345 is stored as 12.35 (round half away from zero)
+  - sql: |
+      INSERT INTO nm VALUES (5, 100)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      INSERT INTO nm VALUES (6, 99.995)
+    expect: error
+    sqlstate: "22003"
+    comment: rounds to 100.00 which exceeds precision 4
+  - sql: |
+      SELECT id, n, n * 2 AS dbl FROM nm ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sum(n) AS total, count(n) AS non_null FROM nm
+    expect: rows

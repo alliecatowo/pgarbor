@@ -1,0 +1,48 @@
+# Index build and materialized view refresh run user functions with search_path pinned to
+# pg_catalog, pg_temp, so a function defined in a user schema prints that path.
+id: namespace.maintenance-search-path
+title: Expression index and materialized view refresh see search_path as pg_catalog, pg_temp
+family: namespace
+tier: extended
+feature_ids: [search-path, create-index, materialized-view, plpgsql, functions, create-table, insert]
+required_capabilities: [search-path, create-schema, create-table, create-index, materialized-view, plpgsql, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/namespace.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA mp_schema;
+  CREATE FUNCTION mp_schema.fn(INT) RETURNS INT IMMUTABLE LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE NOTICE 'current search_path: %', current_setting('search_path');
+      RETURN $1;
+    END;
+  $$;
+  CREATE TABLE mp_schema.t (i INT);
+  INSERT INTO mp_schema.t VALUES (1), (2);
+steps:
+  - sql: |
+      SET search_path = mp_schema
+    expect: ok
+  - sql: |
+      CREATE INDEX mp_idx ON mp_schema.t (fn(i))
+    expect: ok
+    compare_message: true
+    comment: index build calls fn with pinned search_path
+  - sql: |
+      REINDEX TABLE mp_schema.t
+    expect: ok
+    compare_message: true
+  - sql: |
+      CREATE MATERIALIZED VIEW mp_mv AS SELECT fn(i) AS v FROM mp_schema.t
+    expect: ok
+    compare_message: true
+    comment: user function called from the materialized view query
+  - sql: |
+      REFRESH MATERIALIZED VIEW mp_schema.mp_mv
+    expect: ok
+    compare_message: true
+  - sql: |
+      SELECT v FROM mp_schema.mp_mv ORDER BY v
+    expect: rows
+    order: ordered

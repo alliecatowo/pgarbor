@@ -1,0 +1,29 @@
+# A column may not drop a NOT NULL that its domain declares: writing NULL to a column declared
+# NULL over a NOT NULL domain still fails. Adapted from domain.sql ("NOT NULL in the domain
+# cannot be overridden").
+id: domain.column-null-cannot-override
+title: A column declared NULL cannot override a NOT NULL domain
+family: domain
+tier: core
+feature_ids: [domains, create-domain, not-null, create-table]
+required_capabilities: [create-table, insert, select, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dnotnull varchar(15) NOT NULL;
+  CREATE TABLE override_t (col2 dnotnull NULL, col3 varchar(15) NULL);
+steps:
+  - sql: |
+      INSERT INTO override_t VALUES ('b', 'x')
+    expect: ok
+  - sql: |
+      INSERT INTO override_t VALUES (NULL, 'y')
+    expect: error
+    sqlstate: "23502"
+    comment: NULL keyword on the column does not relax the domain's NOT NULL
+  - sql: |
+      SELECT col2, col3 FROM override_t ORDER BY col2
+    expect: rows
+    order: ordered

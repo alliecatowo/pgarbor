@@ -1,0 +1,42 @@
+# NULL range values versus unbounded and empty ranges. A NULL range is not the same as an empty range
+# or an unbounded range; accessors and operators on NULL return NULL. Adapted from rangetypes.sql
+# lines 53-54, 92-96 and the NULL bound handling in the constructor tests.
+id: rangetypes.null-unbounded-semantics
+title: NULL ranges, empty ranges and NULL bounds produce distinct results
+family: rangetypes
+tier: core
+feature_ids: [range-types, nulls, range-unbounded, range-empty]
+required_capabilities: [range-types, create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangetypes.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE nr_null (id int4, nr int4range);
+  INSERT INTO nr_null VALUES (1, NULL), (2, 'empty'), (3, int4range(1, 5));
+steps:
+  - sql: |
+      SELECT id, nr, nr IS NULL AS is_null, isempty(nr) AS is_empty, lower(nr) AS lo, upper(nr) AS hi
+      FROM nr_null ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM nr_null WHERE nr @> 2 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM nr_null WHERE nr IS NULL OR isempty(nr) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT lower(NULL::int4range) AS lo_null,
+             isempty(NULL::int4range) AS empty_null,
+             NULL::int4range @> 1 AS contains_null,
+             lower_inf(int4range(NULL, 5)) AS lo_unbounded,
+             upper_inf(int4range(NULL, 5)) AS hi_bounded,
+             lower_inc(int4range(NULL, 5)) AS lo_inc_unbounded,
+             int4range(NULL, 5) AS unbounded_low,
+             daterange(NULL, NULL) AS unbounded_both,
+             numrange(3.1, NULL) AS unbounded_high
+    expect: rows
+    order: multiset

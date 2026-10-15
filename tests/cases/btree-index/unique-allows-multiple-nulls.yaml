@@ -1,0 +1,28 @@
+# Derived from PG18 btree_index.sql unique-index checking; NULLs are distinct by default in unique btree indexes.
+id: btree-index.unique-allows-multiple-nulls
+title: Unique btree index accepts repeated NULL keys but rejects a duplicate non-NULL key with 23505
+family: btree-index
+tier: core
+feature_ids: [unique-index, create-index, insert, constraints, errors, nulls]
+required_capabilities: [create-table, insert, select, create-index, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (unique checking); PG18 errcodes 23505"
+setup: |
+  CREATE TABLE uq (a int);
+  CREATE UNIQUE INDEX uq_a ON uq (a);
+steps:
+  - sql: |
+      INSERT INTO uq VALUES (1), (NULL), (NULL), (2)
+    expect: ok
+  - sql: |
+      INSERT INTO uq VALUES (1)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) AS total, count(a) AS non_null FROM uq
+    expect: rows
+    comment: the failed insert must leave no rows behind
+  - sql: |
+      INSERT INTO uq VALUES (NULL)
+    expect: ok

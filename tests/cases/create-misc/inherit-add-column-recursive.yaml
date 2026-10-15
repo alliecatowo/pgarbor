@@ -1,0 +1,35 @@
+# ADD COLUMN on a parent recurses into children and fills existing child rows with NULL.
+id: create-misc.inherit-add-column-recursive
+title: ADD COLUMN on a parent propagates to children with NULL fill and NOT NULL is checked
+family: create-misc
+tier: core
+feature_ids: [inheritance, alter-table, null-handling, errors]
+required_capabilities: [create-table, insert, select, alter-table, inheritance]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_misc.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE p (a int4);
+  CREATE TABLE ch (b text) INHERITS (p);
+  INSERT INTO p VALUES (1);
+  INSERT INTO ch (a, b) VALUES (2, 'x');
+steps:
+  - sql: |
+      ALTER TABLE p ADD COLUMN extra text
+    expect: ok
+  - sql: |
+      SELECT a, b, extra FROM p* ORDER BY a
+    expect: rows
+    order: ordered
+    comment: existing rows get NULL for the new column
+  - sql: |
+      ALTER TABLE p ADD COLUMN req int4 NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: existing rows cannot satisfy NOT NULL without a default
+  - sql: |
+      SELECT count(*) FROM p*
+    expect: rows
+    order: multiset
+    comment: failed ALTER is atomic, two rows remain

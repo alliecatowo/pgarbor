@@ -1,0 +1,44 @@
+id: xml.xmlexists-xpath-exists
+title: xmlexists and xpath_exists as row filters over plain and namespaced documents
+family: xml
+tier: core
+feature_ids: [xml, xmlexists, xpath-exists, where-clause]
+required_capabilities: [xml, create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/xml.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE xmltest (id int4, data xml);
+  INSERT INTO xmltest VALUES
+    (4, '<menu><beers><name>Budvar</name><cost>free</cost><name>Carling</name><cost>lots</cost></beers></menu>'),
+    (5, '<menu><beers><name>Molson</name><cost>free</cost><name>Carling</name><cost>lots</cost></beers></menu>'),
+    (6, '<myns:menu xmlns:myns="http://myns.com"><myns:beers><myns:name>Budvar</myns:name><myns:cost>free</myns:cost></myns:beers></myns:menu>'),
+    (7, '<myns:menu xmlns:myns="http://myns.com"><myns:beers><myns:name>Molson</myns:name><myns:cost>free</myns:cost></myns:beers></myns:menu>');
+steps:
+  - sql: |
+      SELECT xmlexists('//town[text() = ''Cwmbran'']' PASSING BY REF '<towns><town>Bidford-on-Avon</town><town>Cwmbran</town><town>Bristol</town></towns>') AS r
+    expect: rows
+  - sql: |
+      SELECT xmlexists('//town[text() = ''Toronto'']' PASSING BY REF '<towns><town>Bidford-on-Avon</town><town>Cwmbran</town><town>Bristol</town></towns>') AS r
+    expect: rows
+  - sql: |
+      SELECT xpath_exists('//town[text() = ''Cwmbran'']', '<towns><town>Bidford-on-Avon</town><town>Cwmbran</town></towns>'::xml) AS r
+    expect: rows
+  - sql: |
+      SELECT id FROM xmltest WHERE xmlexists('/menu/beers/name[text() = ''Molson'']' PASSING BY REF data) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM xmltest WHERE xpath_exists('/menu/beers', data) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM xmltest WHERE xmlexists('/menu/beer' PASSING data) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no matching element means no rows
+  - sql: |
+      SELECT id FROM xmltest WHERE xpath_exists('/myns:menu/myns:beers/myns:name[text() = ''Molson'']', data, ARRAY[ARRAY['myns', 'http://myns.com']]) ORDER BY id
+    expect: rows
+    order: ordered

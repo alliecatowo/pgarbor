@@ -1,0 +1,36 @@
+# KEEP and OMIT QUOTES on scalar strings, plus the parse-time rule forbidding OMIT QUOTES with WRAPPER.
+id: sqljson-queryfuncs.json-query-quotes
+title: JSON_QUERY KEEP and OMIT QUOTES behavior and the QUOTES-with-WRAPPER parse error
+family: sqljson-queryfuncs
+tier: core
+feature_ids: [sql-json, json-query, jsonb, text, errors]
+required_capabilities: [select, jsonb, numeric]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sqljson_queryfuncs.sql (QUOTES behavior section)"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT JSON_QUERY(jsonb '"aaa"', '$' RETURNING text KEEP QUOTES) AS kept,
+             JSON_QUERY(jsonb '"aaa"', '$' RETURNING text OMIT QUOTES) AS omitted
+    expect: rows
+  - sql: |
+      SELECT JSON_QUERY(jsonb '"123.1"', '$' RETURNING int2 error on error)
+    expect: error
+    sqlstate: "22P02"
+    comment: quoted number with KEEP QUOTES is a string, so int2 input fails
+  - sql: |
+      SELECT JSON_QUERY(jsonb '"123.1"', '$' RETURNING float8 OMIT QUOTES ERROR ON ERROR) AS unquoted_float
+    expect: rows
+  - sql: |
+      SELECT JSON_QUERY(jsonb '[1]', '$' WITH WRAPPER OMIT QUOTES)
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '[1]', '$' WITH CONDITIONAL WRAPPER OMIT QUOTES)
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '["1"]', '$[*]' WITHOUT WRAPPER OMIT QUOTES) AS ok_without
+    expect: rows

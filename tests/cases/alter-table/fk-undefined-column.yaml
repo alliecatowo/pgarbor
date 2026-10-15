@@ -1,0 +1,31 @@
+# Foreign key referencing an unknown local or referenced column fails 42703 and creates nothing.
+id: alter-table.fk-undefined-column
+title: ADD FOREIGN KEY with unknown local or referenced column raises 42703
+family: alter-table
+tier: extended
+feature_ids: [alter-table, foreign-key, errors]
+required_capabilities: [create-table, alter-table, constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (invalid source/destination columns)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE attmp2 (a int4 PRIMARY KEY);
+  CREATE TABLE attmp3 (a int4, b int4);
+steps:
+  - sql: |
+      ALTER TABLE attmp3 ADD CONSTRAINT attmpconstr FOREIGN KEY (c) REFERENCES attmp2
+    expect: error
+    sqlstate: "42703"
+    comment: source column c does not exist
+  - sql: |
+      ALTER TABLE attmp3 ADD CONSTRAINT attmpconstr FOREIGN KEY (a) REFERENCES attmp2 (b)
+    expect: error
+    sqlstate: "42703"
+    comment: destination column b does not exist
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE conrelid = 'attmp3'::regclass ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: no constraint was created by either failed statement

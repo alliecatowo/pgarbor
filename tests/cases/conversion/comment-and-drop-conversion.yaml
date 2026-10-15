@@ -1,0 +1,39 @@
+# COMMENT and DROP on conversions: missing objects raise 42704, and dropped conversions leave the catalog.
+id: conversion.comment-and-drop-conversion
+title: COMMENT and DROP CONVERSION on existing and missing conversions
+family: conversion
+tier: extended
+feature_ids: [create-conversion, comment, drop-conversion, catalog-introspection, error-sqlstate]
+required_capabilities: [create-conversion, drop-conversion, comments, catalog-introspection, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/conversion.sql"
+setup: |
+  CREATE CONVERSION myconv FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+steps:
+  - sql: |
+      COMMENT ON CONVERSION myconv_bad IS 'foo'
+    expect: error
+    sqlstate: "42704"
+    comment: commenting a conversion that does not exist
+  - sql: |
+      COMMENT ON CONVERSION myconv IS 'bar'
+    expect: ok
+  - sql: |
+      SELECT obj_description(c.oid, 'pg_conversion') AS comment
+      FROM pg_conversion c
+      WHERE c.conname = 'myconv'
+    expect: rows
+  - sql: |
+      COMMENT ON CONVERSION myconv IS NULL
+    expect: ok
+  - sql: |
+      DROP CONVERSION myconv
+    expect: ok
+  - sql: |
+      DROP CONVERSION myconv
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_conversion WHERE conname = 'myconv'
+    expect: rows

@@ -1,0 +1,37 @@
+# Enum type: sort follows declaration order, NULL handling, invalid label input (22P02), enum_range.
+id: create-type.enum-ordering-invalid-input
+title: "Enum ordering follows declaration order; invalid label rejected"
+family: create-type
+tier: core
+feature_ids: [create-type, enum-types, select, insert, errors]
+required_capabilities: [create-type, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/datatype-enum.html"
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE TABLE em (id int4 PRIMARY KEY, m mood);
+steps:
+  - sql: |
+      INSERT INTO em VALUES (1, 'happy'), (2, 'sad'), (3, NULL), (4, 'ok')
+    expect: ok
+  - sql: |
+      SELECT id, m::text AS m FROM em ORDER BY m, id
+    expect: rows
+    order: ordered
+    comment: declaration order sad < ok < happy, not alphabetical; NULL sorts last
+  - sql: |
+      SELECT id FROM em WHERE m > 'ok' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'meh'::mood
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      INSERT INTO em VALUES (5, 'meh')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT enum_range(NULL::mood)::text AS labels
+    expect: rows

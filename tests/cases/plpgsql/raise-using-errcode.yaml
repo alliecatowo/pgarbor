@@ -1,0 +1,32 @@
+# RAISE EXCEPTION USING ERRCODE sets the SQLSTATE; the value is taken from a condition name.
+id: plpgsql.raise-using-errcode
+title: RAISE EXCEPTION USING ERRCODE and MESSAGE/DETAIL produce SQLSTATE 22023 for invalid parameter values
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, raise, errors, numeric]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/plpgsql-errors-and-messages.html"
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_check_positive(v int) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    IF v <= 0 THEN
+      RAISE EXCEPTION USING ERRCODE = 'invalid_parameter_value',
+        MESSAGE = 'value must be positive', DETAIL = 'got ' || v;
+    END IF;
+    RETURN v * 2;
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_check_positive(4) AS doubled
+    expect: rows
+  - sql: |
+      SELECT pl_check_positive(0)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT pl_check_positive(-1)
+    expect: error
+    sqlstate: "22023"

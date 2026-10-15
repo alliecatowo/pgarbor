@@ -1,0 +1,35 @@
+# NULL comparisons never match; IS NULL and IS DISTINCT FROM do; aggregates skip NULLs except count(*).
+id: mvcc.null-predicates-and-visibility
+title: NULL predicates in WHERE, UPDATE and aggregates behave per three-valued logic
+family: mvcc
+tier: core
+feature_ids: [select, update, null-semantics, aggregates]
+required_capabilities: [create-table, insert, update, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (NULL-valued rows); PG18 docs functions-comparison.html"
+sessions: [a]
+setup: |
+  CREATE TABLE t (k int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, NULL), (2, 5), (3, NULL);
+steps:
+  - sql: |
+      SELECT k FROM t WHERE v = NULL ORDER BY k
+    expect: rows
+    order: ordered
+    comment: equality with NULL matches nothing
+  - sql: |
+      UPDATE t SET v = 0 WHERE v = NULL
+    expect: ok
+    comment: updates zero rows
+  - sql: |
+      SELECT k FROM t WHERE v IS NULL ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k FROM t WHERE v IS DISTINCT FROM 5 ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS all_rows, count(v) AS non_null, sum(v) AS total FROM t
+    expect: rows

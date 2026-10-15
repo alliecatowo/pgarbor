@@ -1,0 +1,33 @@
+# RETURNS SETOF with RETURN NEXT: rows in loop order, empty set, and a NULL loop bound error.
+id: plpgsql.return-next-setof-empty-and-null-bound
+title: RETURN NEXT builds a set; zero iterations give an empty set; NULL loop bound raises 22004
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, set-returning-functions, return-next, null-handling]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_squares(n int) RETURNS SETOF int LANGUAGE plpgsql AS $$
+  DECLARE i int;
+  BEGIN
+    FOR i IN 1..n LOOP
+      RETURN NEXT i * i;
+    END LOOP;
+    RETURN;
+  END $$;
+steps:
+  - sql: |
+      SELECT x FROM pl_squares(4) AS x ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pl_squares(0)
+    expect: rows
+  - sql: |
+      SELECT x FROM pl_squares(NULL::int) AS x
+    expect: error
+    sqlstate: "22004"
+    comment: upper bound of FOR loop cannot be null

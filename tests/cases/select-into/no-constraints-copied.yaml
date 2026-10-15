@@ -1,0 +1,28 @@
+# SELECT INTO copies only column names and types: no primary key, NOT NULL, or defaults.
+id: select-into.no-constraints-copied
+title: SELECT INTO does not copy primary key or NOT NULL constraints from the source table
+family: select-into
+tier: extended
+feature_ids: [select, select-into, constraints, catalog-introspection]
+required_capabilities: [select, select-into, create-table, insert, constraints, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-selectinto.html (new table is created from the query result, no constraints copied)"
+sessions: [a]
+setup: |
+  CREATE TABLE src (id int4 PRIMARY KEY, name text NOT NULL);
+  INSERT INTO src VALUES (1, 'a'), (2, 'b');
+steps:
+  - sql: |
+      SELECT id, name INTO TABLE nocons FROM src
+    expect: ok
+  - sql: |
+      INSERT INTO nocons VALUES (1, NULL), (1, 'dup')
+    expect: ok
+    comment: duplicate key and NULL accepted because no constraints were copied
+  - sql: |
+      SELECT count(*) AS n FROM nocons
+    expect: rows
+  - sql: |
+      SELECT count(*) AS n FROM pg_index WHERE indrelid = 'nocons'::regclass
+    expect: rows

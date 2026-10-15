@@ -1,0 +1,42 @@
+# json_array_length and json_object_keys: counts, empty containers, and 22023 for wrong container kinds; many keys.
+id: json.array-length-and-keys
+title: json_array_length and json_object_keys over arrays, objects, scalars and wide objects
+family: json
+tier: core
+feature_ids: [json, json-functions, json-array-length, json-object-keys]
+required_capabilities: [select, json]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/json.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT json_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]') AS n, json_array_length('[]') AS empty_n
+    expect: rows
+  - sql: |
+      SELECT json_array_length('{"f1":1,"f2":[5,6]}')
+    expect: error
+    sqlstate: "22023"
+    comment: object is not an array
+  - sql: |
+      SELECT json_array_length('4')
+    expect: error
+    sqlstate: "22023"
+    comment: scalar is not an array
+  - sql: |
+      SELECT json_object_keys('{"a":1,"b":{"c":2},"c":null}') AS k
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT json_object_keys('["zero","one"]')
+    expect: error
+    sqlstate: "22023"
+    comment: array is not an object
+  - sql: |
+      SELECT json_object_keys('"a scalar"')
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT count(*) AS key_count FROM (SELECT json_object_keys(json_object(array_agg(g))) FROM (SELECT unnest(array['f' || n, n::text]) AS g FROM generate_series(1, 300) AS n) x) y
+    expect: rows
+    comment: 600 distinct keys exercises result set growth past the initial size

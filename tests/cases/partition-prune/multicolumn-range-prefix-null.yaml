@@ -1,0 +1,45 @@
+# Derived from PG18 partition_prune.sql (multi-column range key, mc2p section).
+id: partition-prune.multicolumn-range-prefix-null
+title: Multi-column range partition key with prefix comparisons and NULL key columns
+family: partition-prune
+tier: core
+feature_ids: [partitioning, range-partitioning, multi-column-keys, partition-pruning, null-semantics]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE mc2p (a int, b int) PARTITION BY RANGE (a, b);
+  CREATE TABLE mc2p_default PARTITION OF mc2p DEFAULT;
+  CREATE TABLE mc2p0 PARTITION OF mc2p FOR VALUES FROM (MINVALUE, MINVALUE) TO (1, MINVALUE);
+  CREATE TABLE mc2p1 PARTITION OF mc2p FOR VALUES FROM (1, MINVALUE) TO (1, 1);
+  CREATE TABLE mc2p2 PARTITION OF mc2p FOR VALUES FROM (1, 1) TO (2, MINVALUE);
+  CREATE TABLE mc2p3 PARTITION OF mc2p FOR VALUES FROM (2, MINVALUE) TO (2, 1);
+  CREATE TABLE mc2p4 PARTITION OF mc2p FOR VALUES FROM (2, 1) TO (2, MAXVALUE);
+  CREATE TABLE mc2p5 PARTITION OF mc2p FOR VALUES FROM (2, MAXVALUE) TO (MAXVALUE, MAXVALUE);
+  INSERT INTO mc2p VALUES (0, 5), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 5), (3, 3), (NULL, NULL);
+steps:
+  - sql: |
+      SELECT a, b FROM mc2p WHERE a = 1 AND b > 1 ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM mc2p WHERE a < 2 ORDER BY a, b
+    expect: rows
+    order: ordered
+    comment: a prefix-only bound
+  - sql: |
+      SELECT a, b FROM mc2p WHERE a > 1 ORDER BY a, b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM mc2p WHERE a = 1 AND b IS NULL ORDER BY a, b
+    expect: rows
+    order: ordered
+    comment: no row has a = 1 with NULL b
+  - sql: |
+      SELECT a, b FROM mc2p WHERE a IS NULL AND b IS NULL
+    expect: rows
+    order: multiset
+    comment: the all-NULL key row is routed to the default partition

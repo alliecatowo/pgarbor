@@ -1,0 +1,32 @@
+# Column DEFAULT clauses: literal, constant expression, sequence default, explicit NULL override.
+id: constraints.default-values
+title: Column defaults apply for omitted columns and are overridden by explicit values including NULL
+family: constraints
+tier: core
+feature_ids: [create-table, insert, default-values, sequences, select]
+required_capabilities: [create-table, insert, select, sequences]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE dv_seq;
+  CREATE TABLE dv (i int DEFAULT 100 + (200 - 199) * 2, x text DEFAULT 'vadim', f float8 DEFAULT 123.456, s int DEFAULT nextval('dv_seq'));
+steps:
+  - sql: |
+      INSERT INTO dv VALUES (1, 'thomas', 57.0613, 10)
+    expect: ok
+  - sql: |
+      INSERT INTO dv (x) VALUES ('marc')
+    expect: ok
+  - sql: |
+      INSERT INTO dv (i, f) VALUES (2, 987.654)
+    expect: ok
+  - sql: |
+      INSERT INTO dv VALUES (3, NULL, 1.0, NULL)
+    expect: ok
+    comment: explicit NULL overrides the default; it is not replaced by the default
+  - sql: |
+      SELECT i, x, f, s, x IS NULL AS x_null, s IS NULL AS s_null FROM dv ORDER BY i, x NULLS LAST
+    expect: rows
+    order: ordered

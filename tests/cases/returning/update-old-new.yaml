@@ -1,0 +1,30 @@
+# PG18 RETURNING old/new pseudo-relations on UPDATE, both implicit and WITH (OLD AS / NEW AS) forms.
+id: returning.update-old-new
+title: UPDATE RETURNING old and new pseudo-relations with and without WITH aliases
+family: returning
+tier: extended
+feature_ids: [returning, update, returning-old-new]
+required_capabilities: [create-table, insert, update, select, returning, returning-old-new]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/returning.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE foo (f1 int, f2 text, f3 int, f4 int8);
+  INSERT INTO foo VALUES (5, 'five', 1, 10), (6, 'six', 2, 20)
+steps:
+  - sql: |
+      UPDATE foo SET f4 = 100 WHERE f1 = 5
+        RETURNING old.f4, new.f4, old.f4::text || '->' || new.f4::text AS change, old.f2 = new.f2 AS same_f2
+    expect: rows
+    order: multiset
+  - sql: |
+      UPDATE foo SET f2 = 'x' WHERE f1 = 6
+        RETURNING WITH (OLD AS o, NEW AS n) o.f2 AS before_f2, n.f2 AS after_f2
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, f2, f3, f4 FROM foo ORDER BY f1
+    expect: rows
+    order: ordered

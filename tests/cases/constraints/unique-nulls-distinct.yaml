@@ -1,0 +1,41 @@
+# Default UNIQUE treats NULLs as distinct; UNIQUE NULLS NOT DISTINCT allows only one NULL.
+id: constraints.unique-nulls-distinct
+title: UNIQUE allows repeated NULLs by default and rejects them under NULLS NOT DISTINCT
+family: constraints
+tier: core
+feature_ids: [unique-constraints, nulls-not-distinct, insert, null-semantics, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE u_def (i int UNIQUE, t text);
+  CREATE TABLE u_nnd (i int UNIQUE NULLS NOT DISTINCT, t text);
+steps:
+  - sql: |
+      INSERT INTO u_def VALUES (1, 'one'), (NULL, 'a'), (NULL, 'b')
+    expect: ok
+    comment: NULLs are distinct under the default
+  - sql: |
+      INSERT INTO u_def VALUES (1, 'three')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO u_nnd VALUES (1, 'one'), (NULL, 'six')
+    expect: ok
+  - sql: |
+      INSERT INTO u_nnd VALUES (NULL, 'seven')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO u_nnd VALUES (NULL, 'eight') ON CONFLICT DO NOTHING
+    expect: ok
+    comment: conflict target-less DO NOTHING absorbs the second NULL
+  - sql: |
+      SELECT i, t FROM u_nnd ORDER BY i NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM u_def WHERE i IS NULL
+    expect: rows

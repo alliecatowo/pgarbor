@@ -1,0 +1,26 @@
+# A reachable division by zero inside CASE raises 22012 for the row that reaches it.
+id: case.reachable-division-by-zero
+title: Reachable division by zero inside CASE raises 22012 and the session stays usable
+family: case
+tier: core
+feature_ids: [case-expression, errors, constant-folding]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/case.sql"
+  license: PostgreSQL License
+notes: From case.sql line 72 (folding of potentially reachable subexpressions), but with a row that actually reaches the branch.
+sessions: [a]
+setup: |
+  CREATE TABLE ct (i int4);
+  INSERT INTO ct VALUES (1), (0), (3);
+steps:
+  - sql: |
+      SELECT i, CASE WHEN i = 0 THEN 1 / 0 ELSE i END AS r FROM ct ORDER BY i
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SELECT i FROM ct WHERE i <> 0 ORDER BY i
+    expect: rows
+    order: ordered
+    comment: the failed statement does not poison an autocommit session

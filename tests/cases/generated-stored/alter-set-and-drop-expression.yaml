@@ -1,0 +1,47 @@
+# ALTER COLUMN SET EXPRESSION recomputes; DROP EXPRESSION keeps stored values as an ordinary column.
+id: generated-stored.alter-set-and-drop-expression
+title: ALTER COLUMN SET and DROP EXPRESSION on a stored generated column
+family: generated-stored
+tier: core
+feature_ids: [generated-columns, alter-table, errors, notices]
+required_capabilities: [create-table, insert, select, alter-table, generated-columns]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_stored.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE g9 (a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+  INSERT INTO g9 (a) VALUES (3), (4);
+steps:
+  - sql: |
+      ALTER TABLE g9 ALTER COLUMN b SET EXPRESSION AS (a * 3)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM g9 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE g9 ALTER COLUMN a SET EXPRESSION AS (a * 3)
+    expect: error
+    sqlstate: "42809"
+    comment: column a is not a generated column
+  - sql: |
+      ALTER TABLE g9 ALTER COLUMN a DROP EXPRESSION
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ALTER TABLE g9 ALTER COLUMN a DROP EXPRESSION IF EXISTS
+    expect: notice
+  - sql: |
+      ALTER TABLE g9 ALTER COLUMN b DROP EXPRESSION
+    expect: ok
+  - sql: |
+      INSERT INTO g9 (a, b) VALUES (5, 50)
+    expect: ok
+  - sql: |
+      INSERT INTO g9 (a) VALUES (6)
+    expect: ok
+  - sql: |
+      SELECT a, b, b IS NULL AS b_null FROM g9 ORDER BY a
+    expect: rows
+    order: ordered

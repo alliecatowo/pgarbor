@@ -1,0 +1,39 @@
+id: matview.refresh-concurrently-needs-unique-index
+title: REFRESH CONCURRENTLY rejected without a full unique index
+family: matview
+tier: extended
+feature_ids: [materialized-views, refresh-concurrently, unique-index, create-index]
+required_capabilities: [create-table, insert, select, create-index, unique-index, create-materialized-view]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE t4 (a int4, b int4);
+  INSERT INTO t4 VALUES (1, 1);
+steps:
+  - sql: |
+      CREATE MATERIALIZED VIEW mv4 AS SELECT a, b FROM t4
+    expect: ok
+  - sql: |
+      CREATE INDEX mv4_a ON mv4 (a)
+    expect: ok
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv4
+    expect: error
+    sqlstate: "55000"
+    comment: non-unique index is not enough
+  - sql: |
+      CREATE UNIQUE INDEX mv4_partial ON mv4 (a) WHERE a > 0
+    expect: ok
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv4
+    expect: error
+    sqlstate: "55000"
+    comment: partial unique index is not enough
+  - sql: |
+      REFRESH MATERIALIZED VIEW mv4
+    expect: ok
+  - sql: |
+      SELECT a, b FROM mv4 ORDER BY a
+    expect: rows
+    order: ordered

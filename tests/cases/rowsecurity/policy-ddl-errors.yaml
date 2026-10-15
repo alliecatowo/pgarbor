@@ -1,0 +1,38 @@
+# Policy DDL error paths: duplicate name 42710, bad AS keyword 42601, missing policy on DROP 42704.
+id: rowsecurity.policy-ddl-errors
+title: "CREATE and DROP POLICY error paths and their SQLSTATEs"
+family: rowsecurity
+tier: extended
+feature_ids: [rls, policies, ddl, errors, catalog-introspection]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+steps:
+  - sql: |
+      CREATE POLICY p1 ON t USING (v > 0)
+    expect: ok
+    comment: policies can be created before RLS is enabled
+  - sql: |
+      CREATE POLICY p1 ON t USING (v > 1)
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      CREATE POLICY p2 ON t AS UGLY USING (v > 0)
+    expect: error
+    sqlstate: "42601"
+    comment: only PERMISSIVE and RESTRICTIVE are accepted after AS
+  - sql: |
+      DROP POLICY nope ON t
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP POLICY p1 ON t
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_policies WHERE tablename = 't' AND schemaname = 'public'
+    expect: rows
+    comment: no policies remain, so the count is 0

@@ -1,0 +1,31 @@
+# json keeps the input text verbatim; jsonb normalizes it. JSON null differs from SQL NULL under ->>.
+id: orm-node-pg.json-jsonb-text-output
+title: "json versus jsonb text output and JSON null versus SQL NULL through parameters"
+family: orm-node-pg
+tier: core
+feature_ids: [json, jsonb, parameterized-queries, nulls]
+required_capabilities: [select, json, jsonb, extended-protocol, errors]
+provenance:
+  source: hand
+  ref: "PG18 datatype-json.html: json stores exact text, jsonb normalizes; ->> returns SQL NULL for JSON null"
+sessions: [a]
+steps:
+  - exec_params:
+      sql: |
+        SELECT $1::json AS j, $1::jsonb AS jb
+      params: ['{"b":1,"a":[1,2]}']
+    expect: rows
+  - exec_params:
+      sql: |
+        SELECT ($1::jsonb ->> 'a') IS NULL AS sql_null, ($1::jsonb -> 'a')::text AS json_null
+      params: ['{"a":null}']
+    expect: rows
+  - sql: |
+      SELECT '[1, "x"]'::json ->> 1 AS v
+    expect: rows
+  - exec_params:
+      sql: |
+        SELECT $1::json AS j
+      params: ["{bad"]
+    expect: error
+    sqlstate: "22P02"

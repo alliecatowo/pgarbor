@@ -1,0 +1,49 @@
+# PostgreSQL 18 regression create_cast.sql, rewritten as a self-contained case.
+id: create-cast.duplicate-cast-error
+title: "Creating an existing cast fails with duplicate_object"
+family: create-cast
+tier: core
+feature_ids: [create-cast, errors, casts]
+required_capabilities: [create-type, create-cast, create-function-sql, create-function-internal, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_cast.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TYPE casttesttype;
+  CREATE FUNCTION casttesttype_in(cstring)
+     RETURNS casttesttype
+     AS 'textin'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION casttesttype_out(casttesttype)
+     RETURNS cstring
+     AS 'textout'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE TYPE casttesttype (
+     internallength = variable,
+     input = casttesttype_in,
+     output = casttesttype_out,
+     alignment = int4
+  );
+  CREATE FUNCTION casttestfunc(casttesttype) RETURNS int4 LANGUAGE SQL AS
+  $$ SELECT 1; $$;
+steps:
+  - sql: |
+      CREATE CAST (text AS casttesttype) WITHOUT FUNCTION;
+    expect: ok
+  - sql: |
+      CREATE CAST (text AS casttesttype) WITHOUT FUNCTION;
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      CREATE CAST (int4 AS casttesttype) WITH INOUT;
+    expect: ok
+  - sql: |
+      CREATE CAST (int4 AS casttesttype) WITH INOUT;
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE casttarget = 'casttesttype'::regtype;
+    expect: rows
+    order: multiset
+    comment: "two casts survive the failed duplicates"

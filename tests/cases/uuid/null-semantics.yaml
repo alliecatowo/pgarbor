@@ -1,0 +1,36 @@
+# NULL handling for uuid: comparisons yield unknown, IS DISTINCT FROM, count vs count(col), coalesce.
+id: uuid.null-semantics
+title: uuid NULL semantics in comparisons, aggregates and coalesce
+family: uuid
+tier: core
+feature_ids: [uuid, nulls, comparison-operators, aggregates]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/uuid.sql"
+setup: |
+  CREATE TABLE n (id int4 PRIMARY KEY, g uuid);
+  INSERT INTO n VALUES (1, NULL), (2, '11111111-1111-1111-1111-111111111111');
+steps:
+  - sql: |
+      SELECT count(*), count(g) FROM n
+    expect: rows
+  - sql: |
+      SELECT id FROM n WHERE g = NULL
+    expect: rows
+    comment: equality with NULL never matches
+  - sql: |
+      SELECT id FROM n WHERE g <> '11111111-1111-1111-1111-111111111111'
+    expect: rows
+    comment: NULL row is excluded by <>
+  - sql: |
+      SELECT id FROM n WHERE g IS DISTINCT FROM '11111111-1111-1111-1111-111111111111' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, coalesce(g::text, 'none') FROM n ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT NULL::uuid = NULL::uuid AS eq_null, (NULL::uuid IS NULL) AS is_null, uuid_extract_version(NULL::uuid) AS ver
+    expect: rows

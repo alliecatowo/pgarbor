@@ -1,0 +1,35 @@
+# GENERATED ALWAYS AS IDENTITY: default values are assigned, explicit values are rejected unless OVERRIDING is used.
+id: orm-drizzle.identity-column-generated-always
+title: GENERATED ALWAYS identity assigns ids, rejects explicit values, and reports is_identity
+family: orm-drizzle
+tier: core
+feature_ids: [identity, insert, select, catalog-introspection, errors]
+required_capabilities: [create-table, identity, insert, select, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 sql-createtable.html (identity_column_storage / GENERATED ALWAYS); errcodes 428C9"
+sessions: [a]
+setup: |
+  CREATE TABLE jobs (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name text NOT NULL
+  );
+steps:
+  - sql: |
+      INSERT INTO jobs (name) VALUES ('alpha'), ('beta'), ('gamma')
+    expect: ok
+  - sql: |
+      SELECT id, name FROM jobs ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO jobs (id, name) VALUES (100, 'explicit')
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      INSERT INTO jobs (id, name) OVERRIDING SYSTEM VALUE VALUES (100, 'explicit')
+    expect: ok
+  - sql: |
+      SELECT column_name, is_identity, identity_generation FROM information_schema.columns WHERE table_name = 'jobs' ORDER BY ordinal_position
+    expect: rows
+    order: ordered

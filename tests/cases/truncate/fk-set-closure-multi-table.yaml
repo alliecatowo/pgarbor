@@ -1,0 +1,33 @@
+# Every table that references a truncated table must be in the same TRUNCATE; unrelated tables do not help.
+id: truncate.fk-set-closure-multi-table
+title: "Multi-table TRUNCATE must include every referencing table, unrelated tables do not help"
+family: truncate
+tier: core
+feature_ids: [truncate, foreign-key, constraints, errors, insert, select]
+required_capabilities: [create-table, insert, select, foreign-key, transactions, truncate]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (pid int4 REFERENCES p);
+  CREATE TABLE x (v text);
+  INSERT INTO p VALUES (1);
+  INSERT INTO c VALUES (1);
+  INSERT INTO x VALUES ('unrelated');
+steps:
+  - sql: |
+      TRUNCATE TABLE p, x
+    expect: error
+    sqlstate: "0A000"
+    comment: "c is still referencing p and is missing from the list"
+  - sql: |
+      SELECT (SELECT count(*) FROM p) AS p_rows, (SELECT count(*) FROM c) AS c_rows, (SELECT count(*) FROM x) AS x_rows
+    expect: rows
+  - sql: |
+      TRUNCATE TABLE p, c, x
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM p) AS p_rows, (SELECT count(*) FROM c) AS c_rows, (SELECT count(*) FROM x) AS x_rows
+    expect: rows

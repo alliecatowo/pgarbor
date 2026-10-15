@@ -1,0 +1,49 @@
+# IS NULL and IS NOT NULL predicates over a multi-column unique b-tree index, including NULL keys that are distinct.
+id: create-index.null-predicates-with-index
+title: IS NULL and IS NOT NULL counts are correct over a multi-column unique index with NULL keys
+family: create-index
+tier: core
+feature_ids: [create-index, nulls-distinct, null-predicates, unique-index, select, insert]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (Tests for IS NULL/IS NOT NULL with b-tree indexes section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE onek_nn (unique1 int, unique2 int)
+    expect: ok
+  - sql: |
+      INSERT INTO onek_nn VALUES (1, 10), (NULL, -1), (NULL, NULL), (100, NULL), (500, NULL), (2, 2)
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX onek_nn_u ON onek_nn (unique2, unique1)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM onek_nn WHERE unique1 IS NULL
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM onek_nn WHERE unique1 IS NULL AND unique2 IS NULL
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM onek_nn WHERE unique1 IS NOT NULL AND unique1 > 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT unique1, unique2 FROM onek_nn WHERE unique1 IS NULL ORDER BY unique2 NULLS LAST, unique1
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO onek_nn VALUES (NULL, NULL)
+    expect: ok
+    comment: a fully NULL key is distinct from the existing NULL key
+  - sql: |
+      INSERT INTO onek_nn VALUES (2, 2)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) FROM onek_nn WHERE unique1 IS NULL
+    expect: rows
+    order: ordered

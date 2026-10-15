@@ -1,0 +1,54 @@
+# Drupal-style join: grouping by a users primary key lets the query select uid, name and aggregates.
+id: functional-deps.drupal-pk-join-group-subset
+title: "Join with GROUP BY users primary key allows name without grouping it"
+family: functional-deps
+tier: core
+feature_ids: [group-by, functional-dependencies, joins, aggregates, primary-key]
+required_capabilities: [create-table, insert, select, group-by, joins, aggregates, primary-key, unique-constraint]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE node (
+      nid integer NOT NULL,
+      vid integer NOT NULL DEFAULT 0,
+      type varchar(32) NOT NULL DEFAULT '',
+      title varchar(128) NOT NULL DEFAULT '',
+      uid integer NOT NULL DEFAULT 0,
+      status integer NOT NULL DEFAULT 1,
+      created integer NOT NULL DEFAULT 0,
+      PRIMARY KEY (nid, vid)
+  );
+  CREATE TABLE users (
+      uid integer NOT NULL DEFAULT 0,
+      name varchar(60) NOT NULL DEFAULT '',
+      pass varchar(32) NOT NULL DEFAULT '',
+      PRIMARY KEY (uid),
+      UNIQUE (name)
+  );
+  INSERT INTO users VALUES (1, 'alice', 'x'), (2, 'bob', 'y'), (3, 'carol', 'z');
+  INSERT INTO node VALUES
+      (1, 0, 'blog', 't1', 1, 1, 100),
+      (2, 0, 'blog', 't2', 2, 0, 101),
+      (3, 0, 'page', 't3', 3, 1, 102),
+      (4, 0, 'blog', 't4', 1, 1, 103),
+      (5, 0, 'blog', 't5', 3, 1, 104);
+steps:
+  - sql: |
+      SELECT u.uid, u.name FROM node n
+      INNER JOIN users u ON u.uid = n.uid
+      WHERE n.type = 'blog' AND n.status = 1
+      GROUP BY u.uid, u.name
+      ORDER BY u.uid
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT u.uid, u.name, count(*) AS posts FROM node n
+      INNER JOIN users u ON u.uid = n.uid
+      WHERE n.type = 'blog' AND n.status = 1
+      GROUP BY u.uid
+      ORDER BY u.uid
+    expect: rows
+    order: ordered
+    comment: "name is functionally dependent on the users primary key uid"

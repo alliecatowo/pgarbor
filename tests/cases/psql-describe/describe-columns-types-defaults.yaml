@@ -1,0 +1,38 @@
+# \d <table> column section: format_type, default via pg_get_expr, attnotnull, attnum ordering.
+id: psql-describe.describe-columns
+title: \d column listing reports formatted types, defaults and NOT NULL flags in attnum order
+family: psql-describe
+tier: core
+feature_ids: [catalog-introspection, create-table, numeric, psql-describe]
+required_capabilities: [create-table, insert, catalog-introspection, numeric]
+provenance:
+  source: pg-source
+  ref: "src/bin/psql/describe.c describeOneTableDetails() column query"
+sessions: [a]
+setup: |
+  CREATE TABLE items (
+    id int4 NOT NULL,
+    label varchar(20) DEFAULT 'none',
+    price numeric(8,2),
+    active boolean NOT NULL DEFAULT true,
+    note text,
+    qty int8 DEFAULT 1 + 2
+  );
+  ALTER TABLE items DROP COLUMN note;
+  ALTER TABLE items ADD COLUMN note2 text;
+steps:
+  - sql: |
+      SELECT a.attname,
+        pg_catalog.format_type(a.atttypid, a.atttypmod) AS type,
+        (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true)
+           FROM pg_catalog.pg_attrdef d
+           WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) AS default_expr,
+        a.attnotnull,
+        a.attnum
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid = 'items'::regclass
+        AND a.attnum > 0 AND NOT a.attisdropped
+      ORDER BY a.attnum
+    expect: rows
+    order: ordered
+    comment: dropped column 'note' must be excluded; attnum gap must not be renumbered

@@ -1,0 +1,35 @@
+# pg_try_advisory_lock never waits: refused while another session holds the key, granted after release.
+id: advisory-lock.try-lock-contention
+title: "pg_try_advisory_lock refuses while held elsewhere and succeeds after release"
+family: advisory-lock
+tier: core
+feature_ids: [advisory-locks, multi-session]
+required_capabilities: [advisory-locks, multi-session, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/advisory_lock.sql"
+  license: "PostgreSQL License"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT pg_advisory_lock(42)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(42)
+    expect: rows
+    comment: expected false, no waiting
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(42)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(42)
+    expect: rows
+    comment: expected true now
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock_all()
+    expect: rows

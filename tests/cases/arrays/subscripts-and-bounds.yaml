@@ -1,0 +1,30 @@
+# Array subscripting: element access, out-of-range reads, dimensions, explicit lower bounds.
+id: arrays.subscripts-and-bounds
+title: Element access, out-of-range subscripts and array dimension functions
+family: arrays
+tier: core
+feature_ids: [arrays, array-subscripts, array-dims, create-table, insert, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/arrays.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE arrtest (a int2[], b int4[][][], c name[], d text[][]);
+  INSERT INTO arrtest (a, b, c, d) VALUES ('{1,2,3,4,5}', '{{{0,0},{1,2}}}', '{foo,bar}', '{{"elt1","elt2"}}');
+steps:
+  - sql: |
+      SELECT a[1], a[5], a[6], b[1][1][2], c[2], d[1][2] FROM arrtest
+    expect: rows
+    comment: a[6] is out of range and yields NULL, not an error
+  - sql: |
+      SELECT array_dims(a), array_ndims(b), array_dims(b), array_length(d, 2), cardinality(b) FROM arrtest
+    expect: rows
+  - sql: |
+      SELECT a[2:4], b[1:1][1:2][1:2], c[1:2], d[1:1][1:2] FROM arrtest
+    expect: rows
+  - sql: |
+      SELECT array_dims('[0:2]={1,2,3}'::int[]) AS lb0, array_lower('[0:2]={1,2,3}'::int[], 1) AS lo, ('[0:2]={1,2,3}'::int[])[0] AS el0
+    expect: rows
+    comment: explicit lower bound 0 is preserved in array_dims

@@ -1,0 +1,27 @@
+# pg_constraint rows rendered by pg_get_constraintdef: PK, UNIQUE NULLS NOT DISTINCT, FK with actions, CHECK, composite UNIQUE.
+id: slice-catalog-introspection.pg-get-constraintdef
+title: pg_get_constraintdef renders primary, unique, foreign key and check constraints
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, constraints, primary-key, foreign-key, unique-constraints, check-constraints]
+required_capabilities: [create-table, catalog-introspection, constraints]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-CATALOG-TABLE; https://www.postgresql.org/docs/18/catalog-pg-constraint.html"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 CONSTRAINT p_pk PRIMARY KEY, code text CONSTRAINT p_code_uq UNIQUE NULLS NOT DISTINCT);
+  CREATE TABLE c (id int4 CONSTRAINT c_pk PRIMARY KEY, pid int4 CONSTRAINT c_pid_fk REFERENCES p (id) ON DELETE CASCADE ON UPDATE SET NULL, qty int4 CONSTRAINT c_qty_chk CHECK (qty >= 0 AND qty < 1000), tag text, CONSTRAINT c_tag_uq UNIQUE (tag, pid));
+steps:
+  - sql: |
+      SELECT conrelid::regclass::text AS tbl, conname, contype, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND contype IN ('p', 'u', 'f', 'c') ORDER BY tbl, conname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pg_constraint WHERE conrelid = 'c'::regclass AND contype = 'f' AND confdeltype = 'c'
+    expect: rows
+    comment: one cascading delete action on the foreign key
+  - sql: |
+      SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'no_such_constraint'
+    expect: rows
+    comment: no matching row yields zero rows

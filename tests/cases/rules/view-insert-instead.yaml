@@ -1,0 +1,35 @@
+# Auto-updatable view with an unconditional ON INSERT DO INSTEAD rule redirects rows to the base table.
+id: rules.view-insert-instead
+title: INSERT into a view is redirected to its base table by a DO INSTEAD rule
+family: rules
+tier: core
+feature_ids: [rules, views, insert]
+required_capabilities: [create-table, create-view, create-rule, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (rtest_v1_ins, view insert section)"
+sessions: [a]
+setup: |
+  CREATE TABLE rtest_t1 (a int4, b int4);
+  CREATE VIEW rtest_v1 AS SELECT * FROM rtest_t1;
+  CREATE RULE rtest_v1_ins AS ON INSERT TO rtest_v1 DO INSTEAD
+    INSERT INTO rtest_t1 VALUES (NEW.a, NEW.b);
+steps:
+  - sql: |
+      INSERT INTO rtest_v1 VALUES (1, 11), (2, 12)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM rtest_v1 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM rtest_t1 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO rtest_v1 (b, a) VALUES (13, 3)
+    expect: ok
+    comment: target list in a different order than the view columns
+  - sql: |
+      SELECT count(*), sum(a) FROM rtest_t1
+    expect: rows

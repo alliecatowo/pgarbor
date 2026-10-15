@@ -1,0 +1,44 @@
+# Partial unique index: uniqueness is enforced only among rows satisfying the WHERE predicate, on INSERT and UPDATE.
+id: create-index.partial-unique-index
+title: Partial unique index enforces uniqueness only for rows matching its predicate
+family: create-index
+tier: core
+feature_ids: [create-index, partial-index, unique-index, update, errors]
+required_capabilities: [create-table, insert, update, select, create-index, unique-constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (BTREE partial indices section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE jobs (id int4 NOT NULL, slug text, active boolean NOT NULL)
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX jobs_active_slug ON jobs (slug) WHERE active
+    expect: ok
+  - sql: |
+      INSERT INTO jobs VALUES (1, 'x', false), (2, 'x', false), (3, 'x', true)
+    expect: ok
+    comment: inactive duplicates are outside the predicate
+  - sql: |
+      INSERT INTO jobs VALUES (4, 'x', true)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      UPDATE jobs SET active = true WHERE id = 1
+    expect: error
+    sqlstate: "23505"
+    comment: the failed UPDATE must leave row 1 unchanged
+  - sql: |
+      INSERT INTO jobs VALUES (5, 'y', true)
+    expect: ok
+  - sql: |
+      UPDATE jobs SET active = false WHERE id = 3
+    expect: ok
+  - sql: |
+      UPDATE jobs SET active = true WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, slug, active FROM jobs ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,26 @@
+# TABLESAMPLE may only target a table or materialized view: a view or a CTE reference is rejected.
+id: tablesample.wrong-object-error
+title: TABLESAMPLE on a view or a CTE raises wrong_object_type
+family: tablesample
+tier: core
+feature_ids: [tablesample, views, with-queries, errors]
+required_capabilities: [create-table, insert, select, tablesample, views, with-queries, storage-parameters]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tablesample.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE test_tablesample (id int, name text) WITH (fillfactor=10);
+  INSERT INTO test_tablesample SELECT i, repeat(i::text, 200) FROM generate_series(0, 9) s(i);
+  CREATE VIEW test_tablesample_v1 AS SELECT id FROM test_tablesample TABLESAMPLE SYSTEM (10*2) REPEATABLE (2);
+steps:
+  - sql: |
+      SELECT id FROM test_tablesample_v1 TABLESAMPLE BERNOULLI (1)
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      WITH query_select AS (SELECT * FROM test_tablesample)
+      SELECT * FROM query_select TABLESAMPLE BERNOULLI (5.5) REPEATABLE (1)
+    expect: error
+    sqlstate: "42809"

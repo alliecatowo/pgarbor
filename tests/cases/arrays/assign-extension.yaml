@@ -1,0 +1,42 @@
+# Array extension by assignment: growing upward, writing index 0 and negative indices, NULL gap fill.
+id: arrays.assign-extension
+title: Assignment past the end extends the array and fills gaps with NULL
+family: arrays
+tier: core
+feature_ids: [arrays, array-subscripts, array-assignment, update]
+required_capabilities: [create-table, insert, select, update]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/arrays.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE ext (k int4 PRIMARY KEY, i int[], t text[]);
+  INSERT INTO ext VALUES (1, ARRAY[1,2,NULL,4], ARRAY['one','two',NULL,'four']);
+steps:
+  - sql: |
+      UPDATE ext SET i[2] = 22, t[2] = 'twenty-two' WHERE k = 1
+    expect: ok
+  - sql: |
+      UPDATE ext SET i[6] = 6, t[6] = 'six' WHERE k = 1
+    expect: ok
+    comment: index 5 becomes NULL-filled gap
+  - sql: |
+      SELECT k, i, t, array_dims(i), array_dims(t) FROM ext ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE ext SET i[0] = 0, t[-1] = 'minus-one' WHERE k = 1
+    expect: ok
+    comment: index 0 and negative indices extend the lower bound
+  - sql: |
+      SELECT k, i, t, array_dims(i), array_lower(i, 1), array_upper(i, 1) FROM ext ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE ext SET i[0:2] = array[10,11,12], t[0:2] = array['ten','eleven','twelve'] WHERE k = 1
+    expect: ok
+  - sql: |
+      SELECT k, i, t, array_dims(i) FROM ext ORDER BY k
+    expect: rows
+    order: ordered

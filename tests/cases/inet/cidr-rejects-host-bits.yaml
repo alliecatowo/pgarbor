@@ -1,0 +1,39 @@
+# pg-regress inet.sql: cidr refuses values with bits set right of the mask, both on INSERT and on cast.
+id: inet.cidr-rejects-host-bits
+title: cidr rejects host bits set to the right of the netmask and malformed addresses
+family: inet
+tier: core
+feature_ids: [inet, cidr, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/inet.sql"
+setup: |
+  CREATE TABLE inet_tbl (c cidr, i inet);
+steps:
+  - sql: |
+      INSERT INTO inet_tbl (c, i) VALUES ('192.168.1.2/30', '192.168.1.226')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      INSERT INTO inet_tbl (c, i) VALUES ('1234::1234::1234', '::1.2.3.4')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT cidr('192.168.1.2/30')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT cidr('ffff:ffff:ffff:ffff::/24')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT count(*) FROM inet_tbl
+    expect: rows
+  - sql: |
+      INSERT INTO inet_tbl (c, i) VALUES ('192.168.1', '192.168.1.226/24')
+    expect: ok
+  - sql: |
+      SELECT c, i FROM inet_tbl
+    expect: rows
+    order: multiset

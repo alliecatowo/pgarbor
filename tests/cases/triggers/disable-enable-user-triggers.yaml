@@ -1,0 +1,50 @@
+# ALTER TABLE ... DISABLE/ENABLE TRIGGER by name, USER and ALL; disabled triggers do not fire.
+id: triggers.disable-enable-user-triggers
+title: Disable and enable triggers by name, USER and ALL around inserts
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, insert, alter-table, select]
+required_capabilities: [create-table, insert, select, alter-table, plpgsql, triggers]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (enable/disable triggers)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (i int);
+  CREATE TABLE trig_log (msg text);
+  CREATE FUNCTION log_ins() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_ins AFTER INSERT ON t FOR EACH ROW EXECUTE PROCEDURE log_ins();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      ALTER TABLE t DISABLE TRIGGER t_ins
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      ALTER TABLE t ENABLE TRIGGER t_ins
+    expect: ok
+  - sql: |
+      ALTER TABLE t DISABLE TRIGGER USER
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3)
+    expect: ok
+  - sql: |
+      ALTER TABLE t ENABLE TRIGGER ALL
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (4)
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: ordered

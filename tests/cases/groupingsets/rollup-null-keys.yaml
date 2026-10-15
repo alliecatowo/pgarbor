@@ -1,0 +1,27 @@
+# Real NULL grouping keys must stay distinct from NULLs produced by ROLLUP; grouping() tells them apart.
+id: groupingsets.rollup-null-keys
+title: Real NULL key groups are distinguished from rollup NULLs using grouping()
+family: groupingsets
+tier: core
+feature_ids: [grouping-sets, rollup, grouping-function, nulls, aggregates]
+required_capabilities: [create-table, insert, select, group-by, grouping-sets, aggregates]
+provenance:
+  source: hand
+  ref: "PG18 docs queries-table-expressions.html#QUERIES-GROUPING-SETS"
+sessions: [a]
+setup: |
+  CREATE TABLE nk (a integer, v integer);
+  INSERT INTO nk VALUES (1,10),(NULL,20),(NULL,5),(2,1);
+steps:
+  - sql: |
+      SELECT a, grouping(a) AS g, sum(v), count(*)
+        FROM nk GROUP BY ROLLUP (a)
+        ORDER BY grouping(a), a
+    expect: rows
+    order: ordered
+    comment: the data NULL group has grouping 0 and the rollup total has grouping 1
+  - sql: |
+      SELECT a IS NULL AS a_null, grouping(a) = 1 AS is_total, sum(v)
+        FROM nk GROUP BY ROLLUP (a)
+    expect: rows
+    order: multiset

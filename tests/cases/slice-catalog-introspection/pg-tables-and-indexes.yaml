@@ -1,0 +1,32 @@
+# pg_tables / pg_indexes listings and pg_get_indexdef output for plain, partial, expression and INCLUDE indexes.
+id: slice-catalog-introspection.pg-tables-and-indexes
+title: pg_tables and pg_indexes listings with pg_get_indexdef for partial, expression and INCLUDE indexes
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, create-table, create-index, primary-key, unique-constraints]
+required_capabilities: [create-table, create-index, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/view-pg-tables.html; https://www.postgresql.org/docs/18/view-pg-indexes.html; https://www.postgresql.org/docs/18/functions-info.html"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY, code text UNIQUE);
+  CREATE TABLE child (id int8 PRIMARY KEY, parent_id int4 NOT NULL REFERENCES parent (id), label text);
+  CREATE INDEX child_label_idx ON child (lower(label)) WHERE label IS NOT NULL;
+  CREATE UNIQUE INDEX child_parent_label_idx ON child (parent_id, label) INCLUDE (id);
+steps:
+  - sql: |
+      SELECT schemaname, tablename, hasindexes, rowsecurity FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_get_indexdef('child_parent_label_idx'::regclass, 1, false) AS col1, pg_get_indexdef('child_parent_label_idx'::regclass) AS whole
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'nothing_here'
+    expect: rows
+    comment: unknown table yields zero rows, not an error

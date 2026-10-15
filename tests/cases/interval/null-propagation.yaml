@@ -1,0 +1,39 @@
+# NULL handling for interval arithmetic, aggregates and ordering.
+id: interval.null-propagation
+title: NULL intervals propagate through arithmetic and are skipped by aggregates
+family: interval
+tier: core
+feature_ids: [interval, nulls, arithmetic, aggregates]
+required_capabilities: [create-table, insert, select, interval]
+provenance:
+  source: hand
+  ref: "PG18 docs datatype-datetime.html (interval); pg-regress interval.sql avg(interval)"
+sessions: [a]
+setup: |
+  CREATE TABLE iv (id int4 PRIMARY KEY, d interval);
+  INSERT INTO iv VALUES (1, '1 day'), (2, NULL), (3, '2 days 12 hours');
+steps:
+  - sql: |
+      SELECT NULL::interval + interval '1 day' IS NULL AS add_null,
+             interval '1 day' * NULL::float8 IS NULL AS mul_null,
+             -(NULL::interval) IS NULL AS neg_null
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id, d + interval '1 hour' AS shifted FROM iv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS total, count(d) AS non_null, avg(d) AS mean FROM iv
+    expect: rows
+    order: multiset
+    comment: avg skips the NULL row
+  - sql: |
+      SELECT id FROM iv WHERE d IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id FROM iv WHERE d > interval '0' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: comparison with NULL is unknown, so the NULL row is excluded

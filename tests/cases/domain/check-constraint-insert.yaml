@@ -1,0 +1,36 @@
+# A CHECK constraint on a domain is enforced on INSERT; a NULL input passes because a CHECK
+# only rejects when the expression is false. Adapted from domain.sql "positiveint".
+id: domain.check-constraint-insert
+title: Domain CHECK rejects false values on INSERT and accepts NULL
+family: domain
+tier: core
+feature_ids: [domains, create-domain, check-constraint, insert]
+required_capabilities: [create-table, insert, select, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN positiveint int4 CHECK (VALUE > 0);
+  CREATE TABLE pos_t (n positiveint);
+steps:
+  - sql: |
+      INSERT INTO pos_t VALUES (5)
+    expect: ok
+  - sql: |
+      INSERT INTO pos_t VALUES (0)
+    expect: error
+    sqlstate: "23514"
+    comment: check_violation on domain constraint
+  - sql: |
+      INSERT INTO pos_t VALUES (-1)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO pos_t VALUES (NULL)
+    expect: ok
+    comment: a NULL value makes the CHECK expression NULL, which is not a violation
+  - sql: |
+      SELECT n, n IS NULL AS is_null FROM pos_t ORDER BY n NULLS LAST
+    expect: rows
+    order: ordered

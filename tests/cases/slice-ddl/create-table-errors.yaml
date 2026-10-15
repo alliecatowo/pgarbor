@@ -1,0 +1,46 @@
+# CREATE TABLE error paths: duplicate table, IF NOT EXISTS, duplicate column, two primary keys, unknown type, bad default.
+id: slice-ddl.create-table-errors
+title: CREATE TABLE rejects duplicates, unknown types and bad defaults with the right SQLSTATE
+family: slice-ddl
+tier: core
+feature_ids: [create-table, errors, catalog-introspection]
+required_capabilities: [create-table, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-createtable.html; errcodes 42P07, 42701, 42P16, 42704, 22P02"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE dup (id int4)
+    expect: ok
+  - sql: |
+      CREATE TABLE dup (id int4)
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      CREATE TABLE IF NOT EXISTS dup (id text)
+    expect: any
+    comment: NOTICE only; existing table is kept unchanged
+  - sql: |
+      SELECT count(*) FROM dup
+    expect: rows
+  - sql: |
+      CREATE TABLE bad_dupcol (id int4, id text)
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      CREATE TABLE bad_twopk (id int4 PRIMARY KEY, id2 int4 PRIMARY KEY)
+    expect: error
+    sqlstate: "42P16"
+  - sql: |
+      CREATE TABLE bad_type (x nosuchtype)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TABLE bad_default (x int4 DEFAULT 'abc')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT count(*) FROM pg_catalog.pg_class WHERE relname IN ('bad_dupcol', 'bad_twopk', 'bad_type', 'bad_default')
+    expect: rows
+    comment: none of the failed statements leaves a relation behind

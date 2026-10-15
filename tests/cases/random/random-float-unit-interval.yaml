@@ -1,0 +1,26 @@
+# random() lies in [0, 1) and 1000 draws contain no duplicate values.
+id: random.float-unit-interval
+title: random() stays in the half-open unit interval with no duplicates in 1000 draws
+family: random
+tier: core
+feature_ids: [random-function, float8, aggregates]
+required_capabilities: [random-function, float8, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/random.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT count(*) FILTER (WHERE r < 0 OR r >= 1) AS out_of_range,
+             (count(*) FILTER (WHERE r < 0.01)) > 0 AS has_small,
+             (count(*) FILTER (WHERE r > 0.99)) > 0 AS has_large
+      FROM (SELECT random() r FROM generate_series(1, 2000)) ss
+    expect: rows
+    order: ordered
+    comment: 0 out of range is exact; the has_small/has_large flags fail with probability about 1e-9
+  - sql: |
+      SELECT r, count(*) FROM (SELECT random() r FROM generate_series(1, 1000)) ss
+      GROUP BY r HAVING count(*) > 1
+    expect: rows
+    order: multiset
+    comment: expects zero rows

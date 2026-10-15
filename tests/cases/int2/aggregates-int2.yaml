@@ -1,0 +1,26 @@
+# Aggregates over int2: sum widens to bigint so it cannot overflow, avg yields numeric, NULL rows are skipped.
+id: int2.aggregates-int2
+title: "sum over int2 widens to bigint without overflow; avg, min, max and count skip NULLs"
+family: int2
+tier: core
+feature_ids: [int2, aggregates, sum, avg, nulls]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/int2.sql"
+setup: |
+  CREATE TABLE int2_agg (f1 int2);
+  INSERT INTO int2_agg VALUES (32767), (32767), (32767), (1), (2), (NULL);
+steps:
+  - sql: |
+      SELECT sum(f1) AS total, pg_typeof(sum(f1))::text AS sum_type FROM int2_agg
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT round(avg(f1), 2) AS avg2, count(f1) AS n, count(*) AS rows_all, min(f1) AS lo, max(f1) AS hi FROM int2_agg
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1, count(*) AS n FROM int2_agg GROUP BY f1 ORDER BY f1
+    expect: rows
+    order: ordered

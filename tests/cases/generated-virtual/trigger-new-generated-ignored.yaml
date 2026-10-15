@@ -1,0 +1,37 @@
+# A BEFORE trigger that assigns NEW.b for a virtual generated column does not change the stored result.
+id: generated-virtual.trigger-new-generated-ignored
+title: BEFORE trigger assignments to a virtual generated column are not propagated
+family: generated-virtual
+tier: extended
+feature_ids: [generated-columns, triggers, plpgsql, insert, update]
+required_capabilities: [create-table, insert, update, select, triggers, plpgsql]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest26 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
+  CREATE FUNCTION gtest_trigger_func4() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.a = 10;
+    NEW.b = 300;
+    RETURN NEW;
+  END;
+  $$;
+  CREATE TRIGGER gtest12_02 BEFORE INSERT OR UPDATE ON gtest26 FOR EACH ROW EXECUTE PROCEDURE gtest_trigger_func4();
+steps:
+  - sql: |
+      INSERT INTO gtest26 (a) VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM gtest26 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: a is 10 from the trigger, b is recomputed as 20 and ignores NEW.b = 300
+  - sql: |
+      UPDATE gtest26 SET a = 11 WHERE a = 10
+    expect: ok
+  - sql: |
+      SELECT a, b FROM gtest26 ORDER BY a
+    expect: rows
+    order: ordered

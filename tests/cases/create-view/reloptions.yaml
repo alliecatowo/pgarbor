@@ -1,0 +1,39 @@
+# Views accept WITH (security_barrier, security_invoker) reloptions; bad option names and non-boolean values fail with 22023.
+id: create-view.reloptions
+title: View WITH options are stored in reloptions and invalid ones are rejected
+family: create-view
+tier: extended
+feature_ids: [create-view, view-options, catalog-introspection, errors]
+required_capabilities: [create-table, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_view.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE tb1 (a int, b int);
+steps:
+  - sql: |
+      CREATE VIEW sb1 AS SELECT * FROM tb1 WHERE a = 0
+    expect: ok
+  - sql: |
+      CREATE VIEW sb2 WITH (security_barrier=true) AS SELECT * FROM tb1 WHERE a > 0
+    expect: ok
+  - sql: |
+      CREATE VIEW sb3 WITH (security_barrier=false) AS SELECT * FROM tb1 WHERE a < 0
+    expect: ok
+  - sql: |
+      CREATE VIEW sb4 WITH (security_invoker=true) AS SELECT * FROM tb1 WHERE a = 100
+    expect: ok
+  - sql: |
+      CREATE VIEW sbx WITH (invalid_option) AS SELECT * FROM tb1 WHERE a < 100
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      CREATE VIEW sbq WITH (security_barrier=100) AS SELECT * FROM tb1 WHERE a > 100
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT relname, reloptions FROM pg_class WHERE relname IN ('sb1', 'sb2', 'sb3', 'sb4') ORDER BY relname
+    expect: rows
+    order: ordered

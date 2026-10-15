@@ -1,0 +1,31 @@
+# regexp_replace replacement escapes (\1 backrefs, \& whole match), the g flag, and invalid option errors.
+id: strings.regexp-replace-backrefs
+title: regexp_replace with backreferences, whole-match escape, flags, and invalid option error
+family: strings
+tier: extended
+feature_ids: [regexp, regexp-replace, string-functions, errors]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/strings.sql"
+steps:
+  - sql: |
+      SELECT regexp_replace('1112223333', E'(\\d{3})(\\d{3})(\\d{4})', E'(\\1) \\2-\\3') AS phone
+    expect: rows
+  - sql: |
+      SELECT regexp_replace('foobarrbazz', E'(.)\\1', E'X\\&Y', 'g') AS whole_match,
+             regexp_replace('foobarrbazz', E'(.)\\1', E'X\\\\Y', 'g') AS literal_backslash
+    expect: rows
+  - sql: |
+      SELECT regexp_replace('AAA   BBB   CCC   ', E'\\s+', ' ', 'g') AS squeezed,
+             regexp_replace('AAA', '^|$', 'Z', 'g') AS anchors,
+             regexp_replace('AAA aaa', 'A+', 'Z', 'gi') AS case_insens
+    expect: rows
+  - sql: |
+      SELECT regexp_replace('AAA aaa', 'A+', 'Z', 'z') AS err
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT regexp_replace(NULL::text, 'a', 'b') IS NULL AS null_src,
+             regexp_replace('abc', NULL::text, 'b') IS NULL AS null_pat
+    expect: rows

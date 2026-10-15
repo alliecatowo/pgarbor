@@ -1,0 +1,44 @@
+# Provenance: pg-regress misc_functions.sql, generate_series_timestamptz row-estimate section
+# (results only; the EXPLAIN row-estimate checks are not reproduced).
+id: misc-functions.generate-series-timestamptz
+title: generate_series over timestamptz with day and week steps, empty and NULL ranges, zero step error
+family: misc-functions
+tier: core
+feature_ids: [generate-series, timestamptz, datetime, null-semantics, errors]
+required_capabilities: [select, datetime]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/misc_functions.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+    comment: timestamptz output depends on the session time zone
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMPTZ '2024-02-01', TIMESTAMPTZ '2024-02-04', INTERVAL '1 day') AS g(s) ORDER BY s
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMPTZ '2024-02-01', TIMESTAMPTZ '2024-02-10', INTERVAL '7 day') AS g(s) ORDER BY s
+    expect: rows
+    order: ordered
+    comment: step does not divide the range evenly
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMPTZ '2024-03-01', TIMESTAMPTZ '2024-02-27', INTERVAL '-1 day') AS g(s) ORDER BY s
+    expect: rows
+    order: ordered
+    comment: negative step counts down
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMPTZ '2024-03-01', TIMESTAMPTZ '2024-02-01', INTERVAL '1 day') AS g(s)
+    expect: rows
+    comment: start after finish with positive step yields no rows
+  - sql: |
+      SELECT count(*) FROM generate_series(NULL::timestamptz, TIMESTAMPTZ '2024-02-01', INTERVAL '1 day') AS g(s)
+    expect: rows
+    comment: function is strict, so a NULL bound yields no rows
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMPTZ '2024-02-01', TIMESTAMPTZ '2024-03-01', INTERVAL '0 day') AS g(s)
+    expect: error
+    sqlstate: "22023"
+    comment: step size cannot equal zero

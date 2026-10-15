@@ -1,0 +1,26 @@
+# ALTER INDEX ... SET fillfactor followed by REINDEX keeps the SP-GiST index consistent.
+id: spgist.fillfactor-reindex
+title: ALTER INDEX SET fillfactor then REINDEX preserves SP-GiST query results
+family: spgist
+tier: core
+feature_ids: [spgist, create-index, alter-index, reindex]
+required_capabilities: [create-table, create-index, insert, select, spgist, alter-table, reindex]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/spgist.sql (alter index set fillfactor; reindex index)"
+sessions: [a]
+setup: |
+  CREATE TABLE sp_ff (id int4, p point);
+  CREATE INDEX sp_ff_idx ON sp_ff USING spgist (p) WITH (fillfactor = 75);
+  INSERT INTO sp_ff (id, p) SELECT g, point(g*10, g*10) FROM generate_series(1, 30) g;
+steps:
+  - sql: |
+      ALTER INDEX sp_ff_idx SET (fillfactor = 90)
+    expect: ok
+  - sql: |
+      REINDEX INDEX sp_ff_idx
+    expect: ok
+  - sql: |
+      SELECT id FROM sp_ff WHERE p ~= point(150, 150)
+    expect: rows
+    order: multiset

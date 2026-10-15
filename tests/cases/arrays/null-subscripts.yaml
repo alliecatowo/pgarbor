@@ -1,0 +1,40 @@
+# NULL subscripts: NULL on read, error on assignment, NULL array element handling.
+id: arrays.null-subscripts
+title: NULL subscripts read as NULL but fail in assignment with 22004
+family: arrays
+tier: core
+feature_ids: [arrays, array-subscripts, nulls, update, errors]
+required_capabilities: [create-table, insert, select, update, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/arrays.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE nt (id int4 PRIMARY KEY, a int4[]);
+  INSERT INTO nt VALUES (1, '{1,NULL,3}'), (2, NULL);
+steps:
+  - sql: |
+      SELECT ('{{{1},{2},{3}},{{4},{5},{6}}}'::int[])[1][NULL][1] AS n1,
+             ('{{{1},{2},{3}},{{4},{5},{6}}}'::int[])[1][NULL:1][1] AS n2,
+             ('{{{1},{2},{3}},{{4},{5},{6}}}'::int[])[1][1:NULL][1] AS n3
+    expect: rows
+    comment: NULL index in selection yields NULL
+  - sql: |
+      SELECT id, a IS NULL AS arr_null, a[2] IS NULL AS el_null, a[2] FROM nt ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE nt SET a[NULL] = 5 WHERE id = 1
+    expect: error
+    sqlstate: "22004"
+    comment: NULL subscript in assignment is an error
+  - sql: |
+      UPDATE nt SET a[1:NULL] = '{5}' WHERE id = 1
+    expect: error
+    sqlstate: "22004"
+  - sql: |
+      SELECT id, a FROM nt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: failed autocommit statements leave the rows unchanged

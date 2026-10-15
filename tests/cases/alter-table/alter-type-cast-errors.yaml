@@ -1,0 +1,31 @@
+# Type change without USING fails 42804 when no implicit cast exists; a bad USING expression fails 22P02; the column keeps its type.
+id: alter-table.alter-type-cast-errors
+title: ALTER COLUMN TYPE without a valid cast fails 42804; invalid USING input fails 22P02
+family: alter-table
+tier: core
+feature_ids: [alter-table, alter-column-type, using-clause, errors]
+required_capabilities: [create-table, alter-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (type change error cases)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  INSERT INTO t VALUES (1, 'abc'), (2, '5');
+steps:
+  - sql: |
+      ALTER TABLE t ALTER COLUMN v TYPE int4
+    expect: error
+    sqlstate: "42804"
+    comment: no automatic assignment cast from text to integer
+  - sql: |
+      ALTER TABLE t ALTER COLUMN v TYPE int4 USING v::int4
+    expect: error
+    sqlstate: "22P02"
+    comment: value abc is not valid integer input
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both failures leave the column as text

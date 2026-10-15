@@ -1,0 +1,29 @@
+# \d <table> index and constraint section: pg_get_indexdef and pg_get_constraintdef per index.
+id: psql-describe.describe-indexes
+title: \d index section lists primary key and unique index definitions with constraint text
+family: psql-describe
+tier: core
+feature_ids: [catalog-introspection, create-table, btree-index, constraints, psql-describe]
+required_capabilities: [create-table, create-index, catalog-introspection, constraints]
+provenance:
+  source: pg-source
+  ref: "src/bin/psql/describe.c describeOneTableDetails() index query"
+sessions: [a]
+setup: |
+  CREATE TABLE books (id int4 PRIMARY KEY, isbn text UNIQUE, title text);
+  CREATE INDEX books_title_idx ON books (lower(title));
+steps:
+  - sql: |
+      SELECT c2.relname,
+        i.indisprimary, i.indisunique, i.indisvalid,
+        pg_catalog.pg_get_indexdef(i.indexrelid, 0, true) AS indexdef,
+        pg_catalog.pg_get_constraintdef(con.oid, true) AS constraintdef,
+        con.contype
+      FROM pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_index i
+        LEFT JOIN pg_catalog.pg_constraint con
+          ON (con.conrelid = i.indrelid AND con.conindid = i.indexrelid AND con.contype IN ('p', 'u', 'x'))
+      WHERE c.oid = 'books'::regclass
+        AND c.oid = i.indrelid AND i.indexrelid = c2.oid
+      ORDER BY i.indisprimary DESC, c2.relname
+    expect: rows
+    order: ordered

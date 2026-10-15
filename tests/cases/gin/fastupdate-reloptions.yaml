@@ -1,0 +1,38 @@
+# GIN fastupdate and gin_pending_list_limit reloptions, pending-list flush, and ALTER INDEX SET (fastupdate = off).
+id: gin.fastupdate-reloptions
+title: GIN fastupdate reloption, pending-list flush and ALTER INDEX SET
+family: gin
+tier: core
+feature_ids: [gin-index, reloptions, catalog-introspection]
+required_capabilities: [create-table, create-index, gin-index, insert, select, vacuum, reloptions, catalog-introspection, gin-pending-list]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_fu (id int4 PRIMARY KEY, i int4[]);
+  CREATE INDEX gin_fu_idx ON gin_fu USING gin (i) WITH (fastupdate = on, gin_pending_list_limit = 4096);
+  INSERT INTO gin_fu SELECT g, array[1, 2, g] FROM generate_series(1, 500) g;
+steps:
+  - sql: |
+      SELECT gin_clean_pending_list('gin_fu_idx') IS NOT NULL AS flushed
+    expect: rows
+  - sql: |
+      INSERT INTO gin_fu SELECT g, array[3, 1, g] FROM generate_series(501, 1000) g
+    expect: ok
+  - sql: |
+      VACUUM gin_fu
+    expect: ok
+  - sql: |
+      SELECT gin_clean_pending_list('gin_fu_idx') IS NOT NULL AS flushed
+    expect: rows
+  - sql: |
+      ALTER INDEX gin_fu_idx SET (fastupdate = off)
+    expect: ok
+  - sql: |
+      SELECT o FROM pg_class c, unnest(c.reloptions) AS o WHERE c.relname = 'gin_fu_idx' ORDER BY o
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM gin_fu WHERE i @> '{1}'
+    expect: rows

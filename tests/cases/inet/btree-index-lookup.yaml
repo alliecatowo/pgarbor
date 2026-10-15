@@ -1,0 +1,41 @@
+# pg-regress inet.sql: containment predicates answered through a btree index on inet, with seqscan disabled.
+id: inet.btree-index-lookup
+title: inet containment predicates return the same rows with a btree index and seqscan off
+family: inet
+tier: extended
+feature_ids: [inet, cidr, btree-index, guc]
+required_capabilities: [create-table, create-index, insert, select, btree-index, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/inet.sql"
+setup: |
+  CREATE TABLE inet_tbl (id int4 PRIMARY KEY, i inet);
+  CREATE INDEX inet_idx1 ON inet_tbl (i);
+  INSERT INTO inet_tbl (id, i) VALUES
+    (1, '192.168.1.226/24'),
+    (2, '192.168.1.226'),
+    (3, '192.168.1.0/24'),
+    (4, '192.168.1.0/25'),
+    (5, '192.168.1.255/25'),
+    (6, '10.1.2.3/8'),
+    (7, '10:23::ffff');
+steps:
+  - sql: |
+      SET enable_seqscan TO off
+    expect: ok
+  - sql: |
+      SELECT id, i FROM inet_tbl WHERE i << '192.168.1.0/24'::cidr ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM inet_tbl WHERE i <<= '192.168.1.0/24'::cidr ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM inet_tbl WHERE '192.168.1.0/24'::cidr >>= i ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM inet_tbl WHERE i = '192.168.1.0/24'::cidr ORDER BY id
+    expect: rows
+    order: ordered

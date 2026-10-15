@@ -1,0 +1,53 @@
+# INTERSECT ALL and EXCEPT ALL use multiset semantics (min and difference of multiplicities),
+# while the non-ALL forms return distinct rows.
+id: union.intersect-except-all-multiset
+title: "INTERSECT and EXCEPT with and without ALL on duplicated rows"
+family: union
+tier: core
+feature_ids: [intersect, except, values, union]
+required_capabilities: [select, values, order-by]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/union.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2), (3)) v(x)
+      INTERSECT ALL
+      SELECT x FROM (VALUES (1), (1), (3), (3)) w(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: multiplicity is the minimum on each side, so 1 twice and 3 once
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2), (3)) v(x)
+      INTERSECT
+      SELECT x FROM (VALUES (1), (1), (3), (3)) w(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: distinct form returns each shared value once
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2), (3)) v(x)
+      EXCEPT ALL
+      SELECT x FROM (VALUES (1), (4)) w(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: removes one copy of 1 only
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2), (3)) v(x)
+      EXCEPT
+      SELECT x FROM (VALUES (1), (4)) w(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2)) v(x)
+      EXCEPT ALL
+      SELECT DISTINCT x FROM (VALUES (1), (2)) w(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: left has 1 twice and 2 once, right DISTINCT has 1 and 2, so 1 remains once

@@ -1,0 +1,43 @@
+# ALTER OPERATOR ... SET (RESTRICT = NONE / JOIN = NONE) clears the selectivity estimators,
+# and setting them again restores the named functions. Derived from alter_operator.sql.
+id: alter-operator.set-restrict-join-reset
+title: ALTER OPERATOR resets then re-sets RESTRICT and JOIN estimators
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, restrict-selectivity, join-selectivity]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn,
+      RESTRICT = contsel,
+      JOIN = contjoinsel
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE);
+      ALTER OPERATOR === (boolean, boolean) SET (JOIN = NONE)
+    expect: ok
+  - sql: |
+      SELECT oprrest IS NULL AS rest_null, oprjoin IS NULL AS join_null
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = contsel);
+      ALTER OPERATOR === (boolean, boolean) SET (JOIN = contjoinsel)
+    expect: ok
+  - sql: |
+      SELECT oprrest::regproc::text AS restrict_fn, oprjoin::regproc::text AS join_fn
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset

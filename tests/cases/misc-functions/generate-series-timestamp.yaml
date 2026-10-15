@@ -1,0 +1,27 @@
+# Provenance: pg-regress misc_functions.sql, generate_series_timestamp row-estimate section
+# (results only). Timezone-free, so output does not depend on session settings.
+id: misc-functions.generate-series-timestamp
+title: generate_series over timestamp with month steps accumulates from the previous value
+family: misc-functions
+tier: core
+feature_ids: [generate-series, timestamp, datetime, errors]
+required_capabilities: [select, datetime]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/misc_functions.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMP '2024-02-01', TIMESTAMP '2024-03-01', INTERVAL '7 day') AS g(s) ORDER BY s
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMP '2024-01-31', TIMESTAMP '2024-04-30', INTERVAL '1 month') AS g(s) ORDER BY s
+    expect: rows
+    order: ordered
+    comment: each value is previous value plus one month, so month-end clamping compounds
+  - sql: |
+      SELECT s FROM generate_series(TIMESTAMP '2024-02-01', TIMESTAMP '2024-03-01', INTERVAL '0 day') AS g(s)
+    expect: error
+    sqlstate: "22023"
+    comment: step size cannot equal zero, raised by the function itself

@@ -1,0 +1,32 @@
+# An inherited constraint cannot be dropped from the child; it can be dropped from the parent, which removes it everywhere.
+id: inherit.drop-inherited-constraint-rejected
+title: Dropping an inherited check constraint on the child fails, dropping it on the parent succeeds
+family: inherit
+tier: extended
+feature_ids: [inheritance, check-constraints, alter-table, errors]
+required_capabilities: [create-table, insert, select, alter-table, inheritance, constraints]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/inherit.sql
+  license: PostgreSQL License
+sessions: [a]
+setup: |
+  CREATE TABLE ac (aa TEXT);
+  ALTER TABLE ac ADD CONSTRAINT ac_check CHECK (aa IS NOT NULL);
+  CREATE TABLE bc (bb TEXT) INHERITS (ac);
+steps:
+  - sql: |
+      ALTER TABLE bc DROP CONSTRAINT ac_check
+    expect: error
+    comment: cannot drop inherited constraint "ac_check" of relation "bc"
+  - sql: |
+      ALTER TABLE ac DROP CONSTRAINT ac_check
+    expect: ok
+  - sql: |
+      INSERT INTO bc (aa) VALUES (NULL)
+    expect: ok
+    comment: constraint is gone from the child once dropped from the parent
+  - sql: |
+      SELECT aa IS NULL AS aa_null FROM bc
+    expect: rows
+    order: multiset

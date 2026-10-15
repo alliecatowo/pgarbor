@@ -1,0 +1,52 @@
+# Interval comparison operators, including the 30-day month rule used for ordering.
+id: interval.comparison-operators
+title: Interval comparison operators filter and order by normalized duration
+family: interval
+tier: core
+feature_ids: [interval, comparison-operators, where, self-join]
+required_capabilities: [create-table, insert, select, interval]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/interval.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE interval_tbl (f1 interval);
+  INSERT INTO interval_tbl (f1) VALUES
+    ('@ 1 minute'), ('@ 5 hour'), ('@ 10 day'), ('@ 34 year'),
+    ('@ 3 months'), ('@ 14 seconds ago'), ('6 years'), ('5 months');
+steps:
+  - sql: |
+      SELECT f1 FROM interval_tbl WHERE f1 <> interval '@ 10 days'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1 FROM interval_tbl WHERE f1 <= interval '@ 5 hours'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1 FROM interval_tbl WHERE f1 < interval '@ 1 day'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1 FROM interval_tbl WHERE f1 = interval '@ 34 years'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT f1 FROM interval_tbl WHERE f1 >= interval '@ 1 month'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT r1.f1 AS hi, r2.f1 AS lo
+      FROM interval_tbl r1, interval_tbl r2
+      WHERE r1.f1 > r2.f1
+      ORDER BY r1.f1, r2.f1
+    expect: rows
+    order: ordered
+    comment: self-join ordered by both sides, so row order is fully determined
+  - sql: |
+      SELECT interval '1 month' = interval '30 days' AS same_span,
+             interval '1 month' > interval '29 days' AS longer
+    expect: rows
+    order: multiset
+    comment: PG compares months as 30 days, so a 1-month interval equals 30 days

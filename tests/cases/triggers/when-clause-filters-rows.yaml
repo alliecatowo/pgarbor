@@ -1,0 +1,34 @@
+# A row trigger with WHEN (OLD.a <> NEW.a) fires only for rows whose column actually changed.
+id: triggers.when-clause-filters-rows
+title: WHEN clause on a BEFORE UPDATE OF column fires only for changed rows
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, update, select]
+required_capabilities: [create-table, insert, select, update, plpgsql, triggers]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (modified_a: BEFORE UPDATE OF a ... WHEN (OLD.a <> NEW.a))"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int, b int);
+  INSERT INTO t VALUES (1, 1), (2, 2), (3, 3);
+  CREATE TABLE trig_log (msg text);
+  CREATE FUNCTION log_changed() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ':' || NEW.a);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_when BEFORE UPDATE OF a ON t
+    FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE log_changed();
+steps:
+  - sql: |
+      UPDATE t SET a = a WHERE a = 1
+    expect: ok
+  - sql: |
+      UPDATE t SET a = a + 10 WHERE a >= 2
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: ordered

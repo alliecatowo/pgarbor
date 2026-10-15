@@ -1,0 +1,44 @@
+# DEFERRABLE INITIALLY DEFERRED unique: a transient violation is allowed until COMMIT; COMMIT then fails with 23505.
+id: constraints.unique-deferred-commit
+title: Deferred unique constraint is checked at COMMIT and a valid end state commits
+family: constraints
+tier: extended
+feature_ids: [unique-constraints, deferrable-constraints, transactions, update, errors]
+required_capabilities: [create-table, insert, update, delete, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/constraints.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE ud (i int, t text, CONSTRAINT ud_i_key UNIQUE (i) DEFERRABLE INITIALLY DEFERRED);
+  INSERT INTO ud VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE ud SET i = i + 1
+    expect: ok
+    comment: transient duplicate (2 twice) is allowed inside the transaction
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT i, t FROM ud ORDER BY i
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO ud VALUES (2, 'dup')
+    expect: ok
+    comment: deferred, so no error yet
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT i, t FROM ud ORDER BY i, t
+    expect: rows
+    order: ordered

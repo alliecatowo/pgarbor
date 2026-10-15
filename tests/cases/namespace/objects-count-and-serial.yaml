@@ -1,0 +1,37 @@
+# Relations created by a table with a serial column and a UNIQUE constraint all live in the
+# table's schema; serial values come from a sequence in the same schema.
+id: namespace.objects-count-and-serial
+title: Serial, unique index, and view are catalogued in the owning schema and serial counts from 1
+family: namespace
+tier: extended
+feature_ids: [create-schema, create-table, serial, create-index, create-view, catalog-introspection, insert, select]
+required_capabilities: [create-schema, create-table, create-index, create-view, insert, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/namespace.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE SCHEMA oc_schema;
+  CREATE TABLE oc_schema.abc (a serial, b int UNIQUE);
+  CREATE VIEW oc_schema.abc_view AS SELECT a + 1 AS a, b + 1 AS b FROM oc_schema.abc;
+steps:
+  - sql: |
+      SELECT c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'oc_schema' ORDER BY c.relname
+    expect: rows
+    order: ordered
+    comment: table, sequence, index, and view are all listed under the schema
+  - sql: |
+      INSERT INTO oc_schema.abc (b) VALUES (1), (2), (3)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM oc_schema.abc ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO oc_schema.abc DEFAULT VALUES
+    expect: ok
+    comment: b is NULL and UNIQUE allows multiple NULLs
+  - sql: |
+      SELECT a, b, b IS NULL AS b_null FROM oc_schema.abc ORDER BY a
+    expect: rows
+    order: ordered

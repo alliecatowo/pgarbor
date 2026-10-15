@@ -1,0 +1,57 @@
+# LOCK TABLE ONLY leaves child tables unlocked; LOCK TABLE parent * locks the children too.
+id: lock.inheritance-only-versus-star
+title: LOCK TABLE ONLY does not lock inheritance children, while the star form does
+family: lock
+tier: extended
+feature_ids: [lock-table, inheritance, transactions, multi-session]
+required_capabilities: [create-table, insert, select, lock-table, inheritance, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/lock.sql (LOCK TABLE lock_tbl1 * ...; LOCK TABLE ONLY lock_tbl1)"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE lock_parent (a BIGINT);
+  CREATE TABLE lock_child () INHERITS (lock_parent);
+  INSERT INTO lock_child VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE ONLY lock_parent IN ACCESS EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      SELECT a FROM lock_child ORDER BY a
+    expect: rows
+    order: ordered
+    comment: child is not locked by LOCK TABLE ONLY
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE lock_parent * IN ACCESS EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      SELECT a FROM lock_child ORDER BY a
+    async: true
+    expect_blocked: true
+    comment: the star form also locks the child
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    order: ordered

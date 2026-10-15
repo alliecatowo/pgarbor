@@ -1,0 +1,30 @@
+# ALTER DOMAIN ... ADD CONSTRAINT validates existing column data and leaves the domain unchanged
+# when a row violates the new CHECK. Adapted from domain.sql (dcomptype c1/c2 constraints).
+id: domain.alter-add-constraint-validates
+title: ALTER DOMAIN ADD CONSTRAINT fails when existing rows violate it, domain unchanged
+family: domain
+tier: core
+feature_ids: [domains, create-domain, alter-domain, check-constraint]
+required_capabilities: [create-table, insert, select, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS int4 CHECK (VALUE > 0);
+  CREATE TABLE alt_t (v posint);
+  INSERT INTO alt_t VALUES (1), (3);
+steps:
+  - sql: |
+      ALTER DOMAIN posint ADD CONSTRAINT big_enough CHECK (VALUE > 5)
+    expect: error
+    sqlstate: "23514"
+    comment: existing rows 1 and 3 violate the new constraint
+  - sql: |
+      INSERT INTO alt_t VALUES (4)
+    expect: ok
+    comment: the failed ALTER did not add the constraint, so 4 is accepted
+  - sql: |
+      SELECT v FROM alt_t ORDER BY v
+    expect: rows
+    order: ordered

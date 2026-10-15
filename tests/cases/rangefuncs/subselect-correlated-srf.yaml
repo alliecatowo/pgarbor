@@ -1,0 +1,28 @@
+# Set-returning function inside correlated subqueries and EXISTS, referencing outer columns.
+id: rangefuncs.subselect-correlated-srf
+title: "Correlated subqueries that call a set-returning SQL function with outer references"
+family: rangefuncs
+tier: core
+feature_ids: [subqueries, set-returning-functions, sql-functions, exists]
+required_capabilities: [create-table, insert, create-function, sql-functions, set-returning-functions, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (function in subselect)"
+setup: |
+  CREATE TABLE rngfunc2(rngfuncid int, f2 int);
+  INSERT INTO rngfunc2 VALUES (1, 11), (2, 22), (1, 111), (2, 11);
+  CREATE FUNCTION rngfunct(int) RETURNS SETOF rngfunc2 AS 'SELECT * FROM rngfunc2 WHERE rngfuncid = $1 ORDER BY f2;' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM rngfunc2 WHERE f2 IN (SELECT f2 FROM rngfunct(rngfunc2.rngfuncid) z WHERE z.rngfuncid = rngfunc2.rngfuncid) ORDER BY 1,2
+    expect: rows
+    order: ordered
+    comment: "(2,11) is excluded because rngfunct(2) returns only f2 = 22"
+  - sql: |
+      SELECT * FROM rngfunc2 WHERE f2 IN (SELECT f2 FROM rngfunct(1) z WHERE z.rngfuncid = rngfunc2.rngfuncid) ORDER BY 1,2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM rngfunc2 r WHERE EXISTS (SELECT 1 FROM rngfunct(r.rngfuncid))
+    expect: rows
+    order: ordered

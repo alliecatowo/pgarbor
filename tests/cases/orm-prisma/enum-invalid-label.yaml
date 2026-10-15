@@ -1,0 +1,38 @@
+# Invalid enum labels raise 22P02; ADD VALUE extends the enum; dropping a type in use raises 2BP01.
+id: orm-prisma.enum-invalid-label
+title: Invalid enum label raises 22P02, ADD VALUE admits it, DROP TYPE in use raises 2BP01
+family: orm-prisma
+tier: extended
+feature_ids: [enum, create-type, alter-type, errors, insert, cast]
+required_capabilities: [create-type, create-table, insert, select, enum, alter-type]
+provenance:
+  source: research
+  ref: "PG18 docs sql-altertype.html; errcodes 22P02 invalid_text_representation, 2BP01 dependent_objects_still_exist"
+sessions: [a]
+setup: |
+  CREATE TYPE "Role" AS ENUM ('USER', 'ADMIN');
+  CREATE TABLE "Account" ("id" integer PRIMARY KEY, "role" "Role" NOT NULL);
+steps:
+  - sql: |
+      INSERT INTO "Account" ("id", "role") VALUES (1, 'GUEST')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT 'guest'::"Role"
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      ALTER TYPE "Role" ADD VALUE 'GUEST'
+    expect: ok
+  - sql: |
+      INSERT INTO "Account" ("id", "role") VALUES (1, 'GUEST')
+    expect: ok
+  - sql: |
+      SELECT "id", "role"::text AS role FROM "Account" ORDER BY "id"
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TYPE "Role"
+    expect: error
+    sqlstate: "2BP01"
+    comment: column "Account"."role" still depends on the type

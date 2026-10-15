@@ -1,0 +1,43 @@
+# Expression index: a unique index on (f1 || f2) rejects rows whose concatenations collide, but NULL results never collide.
+id: create-index.expression-unique-index
+title: Unique expression index on a concatenation rejects colliding results and allows NULL results
+family: create-index
+tier: core
+feature_ids: [create-index, expression-index, unique-index, text, nulls-distinct, errors]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (functional index and expressional index sections)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE fx (f1 text, f2 text)
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX fx_concat ON fx ((f1 || f2))
+    expect: ok
+  - sql: |
+      INSERT INTO fx VALUES ('ABC', 'DEF'), ('AB', 'CDEFG'), ('QWE', 'RTY')
+    expect: ok
+  - sql: |
+      INSERT INTO fx VALUES ('ABCD', 'EF')
+    expect: error
+    sqlstate: "23505"
+    comment: concatenation ABCD plus EF collides with ABC plus DEF
+  - sql: |
+      INSERT INTO fx VALUES ('QWERTY', NULL), (NULL, NULL)
+    expect: ok
+    comment: NULL concatenations are distinct under the default
+  - sql: |
+      SELECT f1, f2 FROM fx WHERE (f1 || f2) = 'ABCDEF'
+    expect: rows
+    order: ordered
+    comment: the index expression must match the query expression
+  - sql: |
+      SELECT f1 || f2 AS cat FROM fx ORDER BY cat
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM fx WHERE f2 IS NULL
+    expect: rows
+    order: ordered

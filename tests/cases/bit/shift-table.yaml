@@ -1,0 +1,51 @@
+# Repeated self-insertion builds a bit(16) table; shifts and positions over the whole table, then varbit shifts.
+id: bit.shift-table
+title: Shift and position over a table of bit and varbit values built by self-insertion
+family: bit
+tier: core
+feature_ids: [bit-string, shift-operators, insert, position, cast]
+required_capabilities: [create-table, insert, select, bit-string]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/bit.sql (Shifting)"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE bit_shift (b bit(16));
+  INSERT INTO bit_shift VALUES (B'1101100000000000');
+  INSERT INTO bit_shift SELECT b >> 1 FROM bit_shift;
+  INSERT INTO bit_shift SELECT b >> 2 FROM bit_shift;
+  INSERT INTO bit_shift SELECT b >> 4 FROM bit_shift;
+  INSERT INTO bit_shift SELECT b >> 8 FROM bit_shift;
+  CREATE TABLE vbit_shift (v bit varying(20));
+  INSERT INTO vbit_shift VALUES (B'11011');
+steps:
+  - sql: |
+      SELECT POSITION(B'1101' IN b) AS p1, POSITION(B'11011' IN b) AS p2, b
+      FROM bit_shift
+      ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT b, b >> 1 AS bsr, b << 1 AS bsl
+      FROM bit_shift
+      ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT b, b >> 8 AS bsr8, b << 8 AS bsl8
+      FROM bit_shift
+      ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT b::bit(15) AS b15, b::bit(15) >> 8 AS bsr8, b::bit(15) << 8 AS bsl8
+      FROM bit_shift
+      ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT v, v >> 1 AS vsr, v << 1 AS vsl FROM vbit_shift
+    expect: rows
+  - sql: |
+      SELECT v, v >> 8 AS vsr8, v << 8 AS vsl8 FROM vbit_shift
+    expect: rows

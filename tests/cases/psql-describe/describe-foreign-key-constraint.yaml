@@ -1,0 +1,33 @@
+# \d foreign-key section: referencing and referenced constraint definitions, plus the referenced-by side.
+id: psql-describe.describe-foreign-keys
+title: \d foreign-key constraint definitions render ON DELETE actions and referenced-by tables
+family: psql-describe
+tier: extended
+feature_ids: [catalog-introspection, foreign-key, constraints, create-table, psql-describe]
+required_capabilities: [create-table, insert, foreign-key, catalog-introspection]
+provenance:
+  source: pg-source
+  ref: "src/bin/psql/describe.c describeOneTableDetails() FK queries (conrelid/confrelid)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY);
+  CREATE TABLE child (
+    id int4 PRIMARY KEY,
+    parent_id int4 REFERENCES parent (id) ON DELETE CASCADE
+  );
+steps:
+  - sql: |
+      SELECT conname, pg_catalog.pg_get_constraintdef(oid, true) AS def, contype, confdeltype
+      FROM pg_catalog.pg_constraint
+      WHERE conrelid = 'child'::regclass AND contype = 'f'
+      ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT conrelid::regclass::text AS referencing, conname
+      FROM pg_catalog.pg_constraint
+      WHERE confrelid = 'parent'::regclass AND contype = 'f'
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: referenced-by section of \d parent

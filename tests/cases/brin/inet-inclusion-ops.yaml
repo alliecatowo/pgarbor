@@ -1,0 +1,43 @@
+# inet_inclusion_ops and inet_minmax_ops on the same column: network containment operators
+# (>>=, <<, &&) and equality must match results without the index.
+id: brin.inet-inclusion-ops
+title: BRIN inet inclusion and minmax opclasses answer network containment operators
+family: brin
+tier: extended
+feature_ids: [brin, create-index, select, inet, network-operators]
+required_capabilities: [create-table, insert, select, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (inetcol inet_inclusion_ops, inet_minmax_ops rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, addr inet, net cidr);
+  INSERT INTO t VALUES
+    (1, '10.2.3.4', '10.2.3.0/24'),
+    (2, '10.2.14.231/24', '10.2.14.0/24'),
+    (3, '192.168.0.1', '192.168.0.0/16'),
+    (4, 'fe80::6e40:8ff:fea9:8c46', 'fe80::/32'),
+    (5, NULL, NULL);
+  CREATE INDEX t_inet_incl ON t USING brin (addr inet_inclusion_ops, net inet_inclusion_ops) WITH (pages_per_range = 1);
+  CREATE INDEX t_inet_minmax ON t USING brin (addr inet_minmax_ops) WITH (pages_per_range = 1);
+steps:
+  - sql: |
+      SELECT id FROM t WHERE addr >>= inet '10.0.0.0/8' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t WHERE addr && inet '10.2.0.0/16' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t WHERE addr = inet '192.168.0.1' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t WHERE net >>= inet '10.2.3.4' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t WHERE addr << inet 'fe80::/16' ORDER BY id
+    expect: rows
+    order: ordered

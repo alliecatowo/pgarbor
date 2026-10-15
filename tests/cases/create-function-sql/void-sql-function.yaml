@@ -1,0 +1,42 @@
+# VOID-returning SQL functions: scalar, nested, side effects with and without RETURNING, SETOF void.
+id: create-function-sql.void-sql-function
+title: VOID-returning SQL functions return one empty row and apply side effects
+family: create-function-sql
+tier: core
+feature_ids: [create-function, void-return, insert, returning, set-returning-functions]
+required_capabilities: [create-function, sql-functions, create-table, insert, select, returning, set-returning-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE TABLE sometable (f1 int);
+  CREATE FUNCTION voidtest1(a int) RETURNS VOID LANGUAGE SQL AS
+  $$ SELECT a + 1 $$;
+  CREATE FUNCTION voidtest2(a int, b int) RETURNS VOID LANGUAGE SQL AS
+  $$ SELECT voidtest1(a + b) $$;
+  CREATE FUNCTION voidtest3(a int) RETURNS VOID LANGUAGE SQL AS
+  $$ INSERT INTO sometable VALUES(a + 1) $$;
+  CREATE FUNCTION voidtest4(a int) RETURNS VOID LANGUAGE SQL AS
+  $$ INSERT INTO sometable VALUES(a - 1) RETURNING f1 $$;
+  CREATE FUNCTION voidtest5(a int) RETURNS SETOF VOID LANGUAGE SQL AS
+  $$ SELECT generate_series(1, a) $$ STABLE;
+steps:
+  - sql: |
+      SELECT voidtest1(42)
+    expect: rows
+  - sql: |
+      SELECT voidtest2(11, 22)
+    expect: rows
+  - sql: |
+      SELECT voidtest3(17)
+    expect: rows
+  - sql: |
+      SELECT voidtest4(39)
+    expect: rows
+  - sql: |
+      SELECT f1 FROM sometable ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM voidtest5(3)
+    expect: rows

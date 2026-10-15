@@ -1,0 +1,32 @@
+# Composite-returning and record-returning SQL functions: column definition lists with and without ordinality.
+id: rangefuncs.composite-record-column-lists
+title: "Setof composite and setof record SQL functions with column definition lists"
+family: rangefuncs
+tier: core
+feature_ids: [sql-functions, composite-types, set-returning-functions, column-definition-lists, with-ordinality]
+required_capabilities: [create-table, insert, create-function, sql-functions, set-returning-functions, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (sql, proretset = t, prorettype = c and record)"
+setup: |
+  CREATE TABLE rngfunc (rngfuncid int, rngfuncsubid int, rngfuncname text, primary key(rngfuncid,rngfuncsubid));
+  INSERT INTO rngfunc VALUES (1,1,'Joe'), (1,2,'Ed'), (2,1,'Mary');
+  CREATE FUNCTION getrngfunc5(int) RETURNS setof rngfunc AS 'SELECT * FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE sql;
+  CREATE FUNCTION getrngfunc7(int) RETURNS setof record AS 'SELECT * FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM getrngfunc5(1) AS t1 ORDER BY rngfuncsubid
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM getrngfunc5(1) WITH ORDINALITY AS t1(a,b,c,o) ORDER BY o
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM getrngfunc7(1) AS t1(rngfuncid int, rngfuncsubid int, rngfuncname text) ORDER BY 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM ROWS FROM(getrngfunc7(1) AS (rngfuncid int, rngfuncsubid int, rngfuncname text)) WITH ORDINALITY ORDER BY 2
+    expect: rows
+    order: ordered

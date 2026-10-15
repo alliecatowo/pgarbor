@@ -1,0 +1,27 @@
+# A partial unique index is inferred only when the ON CONFLICT WHERE predicate matches its predicate.
+id: insert-conflict.partial-index-inference
+title: ON CONFLICT infers a partial unique index only with a matching WHERE predicate
+family: insert-conflict
+tier: extended
+feature_ids: [insert, on-conflict, partial-index, unique-index, errors]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index, partial-index, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/insert_conflict.sql (Test partial unique index inference)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (key int4, fruit text);
+  CREATE UNIQUE INDEX t_partial ON t (key) WHERE fruit LIKE '%berry';
+  INSERT INTO t VALUES (23, 'Blackberry');
+steps:
+  - sql: |
+      INSERT INTO t VALUES (23, 'Blackberry') ON CONFLICT (key) WHERE fruit LIKE '%berry' DO UPDATE SET fruit = excluded.fruit
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (23, 'Blackberry') ON CONFLICT (key) DO UPDATE SET fruit = excluded.fruit
+    expect: error
+    sqlstate: "42P10"
+  - sql: |
+      SELECT key, fruit FROM t ORDER BY key
+    expect: rows
+    order: ordered

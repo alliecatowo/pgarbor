@@ -1,0 +1,33 @@
+# DROP TABLE with a dependent view is refused (2BP01); dropping the view first lets the table go.
+id: create-view.drop-restrict
+title: Dropping a table that a view depends on is refused
+family: create-view
+tier: core
+feature_ids: [create-view, drop, dependencies, errors]
+required_capabilities: [create-table, select, drop-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_view.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE base (k int4 PRIMARY KEY, d varchar(20));
+  INSERT INTO base VALUES (1, 'one');
+  CREATE VIEW vbase AS SELECT k, d FROM base;
+steps:
+  - sql: |
+      DROP TABLE base
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT k, d FROM vbase
+    expect: rows
+  - sql: |
+      DROP VIEW vbase
+    expect: ok
+  - sql: |
+      DROP TABLE base
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('base', 'vbase')
+    expect: rows

@@ -1,0 +1,40 @@
+# SELECT ... INTO is rejected inside subqueries, INSERT ... SELECT, views, and DECLARE CURSOR.
+id: select-into.disallowed-positions
+title: SELECT INTO rejected in subquery, INSERT source, view definition and cursor
+family: select-into
+tier: core
+feature_ids: [select, select-into, errors, views, cursors, transactions]
+required_capabilities: [select, select-into, create-table, insert, create-view, cursors, transactions, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/select_into.sql (Disallowed uses of SELECT ... INTO); expected/select_into.out"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE int4_tbl (f1 int4);
+steps:
+  - sql: |
+      SELECT * FROM (SELECT 1 INTO f) bar
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      INSERT INTO int4_tbl SELECT 1 INTO f
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE VIEW foo AS SELECT 1 INTO int4_tbl
+    expect: error
+    comment: views must not contain SELECT INTO; sqlstate not asserted
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE foo CURSOR FOR SELECT 1 INTO int4_tbl
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT to_regclass('foo') IS NULL AS no_view, to_regclass('f') IS NULL AS no_f
+    expect: rows

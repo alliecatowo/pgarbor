@@ -1,0 +1,33 @@
+# Scalar op ANY/ALL over arrays: boundary cases, NULL elements, and the error cases for non-boolean operators and non-array right sides.
+id: arrays.any-all-scalar
+title: Scalar ANY and ALL over arrays with NULL elements and empty arrays
+family: arrays
+tier: core
+feature_ids: [arrays, any-all, nulls, errors]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/arrays.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 33 = ANY ('{1,2,3}') AS a1, 33 = ANY ('{1,2,33}') AS a2, 33 = ALL ('{1,2,33}') AS a3, 33 >= ALL ('{1,2,33}') AS a4, 33.4 = ANY (ARRAY[1,2,3]) AS a5, 33.4 > ALL (ARRAY[1,2,3]) AS a6
+    expect: rows
+  - sql: |
+      SELECT null::int >= ALL ('{}') AS e1, null::int >= ANY ('{}') AS e2
+    expect: rows
+    comment: ALL over empty array is true; ANY over empty array is false
+  - sql: |
+      SELECT 33 = ANY (NULL::int[]) AS n1, null::int = ANY ('{1,2,3}') AS n2, 33 = ANY ('{1,null,3}') AS n3, 33 = ANY ('{1,null,33}') AS n4, 33 = ALL ('{1,null,3}') AS n5, 33 = ALL ('{33,null,33}') AS n6
+    expect: rows
+  - sql: |
+      SELECT 33 * ANY ('{1,2,3}')
+    expect: error
+    sqlstate: "42804"
+    comment: operator must yield boolean
+  - sql: |
+      SELECT 33 * ANY (44)
+    expect: error
+    sqlstate: "42809"
+    comment: right side must be an array

@@ -1,0 +1,32 @@
+# A UNIQUE constraint on a column whose type is a domain over a composite compares whole
+# composite values. Adapted from domain.sql "Test domains over composites".
+id: domain.unique-over-composite
+title: UNIQUE on a column of a domain over a composite type rejects duplicate composites
+family: domain
+tier: extended
+feature_ids: [domains, create-domain, composite-types, unique-constraint, insert]
+required_capabilities: [create-table, insert, select, constraints, composite-types]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE TYPE comptype AS (r float8, i float8);
+  CREATE DOMAIN dcomptype AS comptype;
+  CREATE TABLE dcomptable (d1 dcomptype UNIQUE);
+steps:
+  - sql: |
+      INSERT INTO dcomptable VALUES (ROW(1,2)::dcomptype)
+    expect: ok
+  - sql: |
+      INSERT INTO dcomptable VALUES (ROW(3,4)::comptype)
+    expect: ok
+    comment: a base composite value assigns into the domain column
+  - sql: |
+      INSERT INTO dcomptable VALUES (ROW(1,2)::dcomptype)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT (d1).r, (d1).i FROM dcomptable ORDER BY (d1).r
+    expect: rows
+    order: ordered

@@ -1,0 +1,36 @@
+# INCLUDING CONSTRAINTS copies CHECK constraints; a NULL operand passes a CHECK (unknown is not false).
+id: create-table-like.including-constraints
+title: LIKE INCLUDING CONSTRAINTS enforces copied CHECKs, NULL passes
+family: create-table-like
+tier: core
+feature_ids: [create-table, create-table-like, check-constraints, insert, select, null-semantics, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE src (a int4, c int4 CHECK (c > 0), CONSTRAINT src_a_small CHECK (a < 100));
+  CREATE TABLE dst (LIKE src INCLUDING CONSTRAINTS);
+steps:
+  - sql: |
+      INSERT INTO dst VALUES (1, 5)
+    expect: ok
+  - sql: |
+      INSERT INTO dst VALUES (2, -1)
+    expect: error
+    sqlstate: "23514"
+    comment: column CHECK copied
+  - sql: |
+      INSERT INTO dst VALUES (3, NULL)
+    expect: ok
+    comment: CHECK (c > 0) evaluates to NULL for NULL c, which passes
+  - sql: |
+      INSERT INTO dst VALUES (200, 1)
+    expect: error
+    sqlstate: "23514"
+    comment: named table-level CHECK copied
+  - sql: |
+      SELECT a, c FROM dst ORDER BY a
+    expect: rows
+    order: ordered

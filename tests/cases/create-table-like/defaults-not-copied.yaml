@@ -1,0 +1,31 @@
+# Without INCLUDING DEFAULTS, defaults and CHECK constraints are not copied.
+id: create-table-like.defaults-not-copied
+title: Defaults and CHECK constraints are not copied by default
+family: create-table-like
+tier: core
+feature_ids: [create-table, create-table-like, defaults, check-constraints, insert, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE src (a int4, b text DEFAULT 'dflt', c int4 CHECK (c > 0));
+  CREATE TABLE dst (LIKE src);
+steps:
+  - sql: |
+      INSERT INTO dst (a) VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT a, b IS NULL AS b_null, c IS NULL AS c_null FROM dst ORDER BY a
+    expect: rows
+    order: ordered
+    comment: default for b and the CHECK on c are both absent
+  - sql: |
+      INSERT INTO dst (a, c) VALUES (2, -5)
+    expect: ok
+    comment: the CHECK (c > 0) was not copied, so a negative value is accepted
+  - sql: |
+      SELECT a, c FROM dst ORDER BY a
+    expect: rows
+    order: ordered

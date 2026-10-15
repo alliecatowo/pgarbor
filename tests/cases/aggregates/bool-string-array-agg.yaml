@@ -1,0 +1,32 @@
+# bool_and/bool_or/every ignore NULLs; string_agg skips NULLs; array_agg keeps them; ORDER BY inside aggregate.
+id: aggregates.bool-string-array-agg
+title: bool_and, bool_or, every, string_agg, array_agg with NULL inputs and grouping
+family: aggregates
+tier: core
+feature_ids: [aggregates, bool-aggregates, string-agg, array-agg, group-by, nulls]
+required_capabilities: [create-table, insert, select, aggregates, group-by, arrays]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/aggregates.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE b (k int4, flag boolean, s text);
+  INSERT INTO b VALUES (1, true, 'a'), (1, NULL, NULL), (2, false, 'b'), (2, true, NULL), (3, NULL, NULL);
+steps:
+  - sql: |
+      SELECT k, bool_and(flag), bool_or(flag), every(flag) FROM b GROUP BY k ORDER BY k
+    expect: rows
+    order: ordered
+    comment: group 3 is all NULL so bool_and and bool_or are NULL
+  - sql: |
+      SELECT k, string_agg(s, ',' ORDER BY s), array_agg(s ORDER BY s) FROM b GROUP BY k ORDER BY k
+    expect: rows
+    order: ordered
+    comment: string_agg skips NULLs; array_agg keeps them, NULLs sort last
+  - sql: |
+      SELECT string_agg(s, ',') FROM b WHERE k = 3
+    expect: rows
+    comment: no non-NULL input gives NULL
+  - sql: |
+      SELECT array_agg(s ORDER BY s NULLS FIRST) FROM b WHERE k = 1
+    expect: rows

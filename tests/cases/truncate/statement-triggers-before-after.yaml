@@ -1,0 +1,44 @@
+# BEFORE and AFTER TRUNCATE statement-level triggers fire once each, and see the table state at their time.
+id: truncate.statement-triggers-before-after
+title: "BEFORE and AFTER TRUNCATE statement triggers fire once and see the table before and after"
+family: truncate
+tier: extended
+feature_ids: [truncate, triggers, plpgsql, insert, select]
+required_capabilities: [create-table, insert, select, truncate, triggers, plpgsql, transactions]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE tt (f1 int, f2 text);
+  CREATE TABLE trunc_log (tgname text, tgwhen text, rows_seen bigint);
+  CREATE FUNCTION log_before() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trunc_log SELECT 'before', TG_WHEN, count(*) FROM tt;
+    RETURN NULL;
+  END
+  $$;
+  CREATE FUNCTION log_after() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trunc_log SELECT 'after', TG_WHEN, count(*) FROM tt;
+    RETURN NULL;
+  END
+  $$;
+  CREATE TRIGGER tb BEFORE TRUNCATE ON tt FOR EACH STATEMENT EXECUTE FUNCTION log_before();
+  CREATE TRIGGER ta AFTER TRUNCATE ON tt FOR EACH STATEMENT EXECUTE FUNCTION log_after();
+  INSERT INTO tt VALUES (1, 'foo'), (2, 'baz');
+steps:
+  - sql: |
+      SELECT count(*) FROM tt
+    expect: rows
+  - sql: |
+      TRUNCATE tt
+    expect: ok
+  - sql: |
+      SELECT tgname, tgwhen, rows_seen FROM trunc_log ORDER BY tgname
+    expect: rows
+    order: ordered
+    comment: "the before trigger sees the rows, the after trigger sees none"
+  - sql: |
+      SELECT count(*) FROM tt
+    expect: rows

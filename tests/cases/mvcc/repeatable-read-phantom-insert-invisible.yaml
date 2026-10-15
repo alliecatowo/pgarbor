@@ -1,0 +1,45 @@
+# REPEATABLE READ: a concurrent insert matching the predicate stays invisible; the transaction's own insert is visible.
+id: mvcc.repeatable-read-phantom-insert-invisible
+title: REPEATABLE READ predicate count ignores concurrent committed inserts but includes own inserts
+family: mvcc
+tier: core
+feature_ids: [transactions, repeatable-read, insert, select, aggregates]
+required_capabilities: [create-table, insert, select, aggregates, transactions, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (snapshot visibility); PG18 docs transaction-iso.html#XACT-REPEATABLE-READ"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, 5), (2, 50);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t WHERE v > 10
+    expect: rows
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (3, 60)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t WHERE v > 10
+    expect: rows
+    comment: phantom row not visible
+  - session: a
+    sql: |
+      INSERT INTO t VALUES (4, 70)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t WHERE v > 10
+    expect: rows
+    comment: own insert is visible
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

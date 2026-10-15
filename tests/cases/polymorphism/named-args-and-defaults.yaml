@@ -1,0 +1,41 @@
+# Named and positional notation with DEFAULT parameters on a SQL function returning TABLE.
+id: polymorphism.named-args-and-defaults
+title: Named-notation calls fill defaults and reorder arguments; mixing orders or unknown names fails
+family: polymorphism
+tier: core
+feature_ids: [sql-functions, named-arguments, default-arguments, errors]
+required_capabilities: [create-function, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/polymorphism.sql"
+setup: |
+  CREATE FUNCTION named_args(a int, b int, c int DEFAULT 100, d int DEFAULT 1000)
+  RETURNS TABLE (ret_a int, ret_b int, ret_c int, ret_d int) AS $$
+    SELECT $1, $2, $3, $4
+  $$ LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM named_args(1, 2)
+    expect: rows
+  - sql: |
+      SELECT * FROM named_args(b := 20, a := 10)
+    expect: rows
+    comment: named notation in any order
+  - sql: |
+      SELECT * FROM named_args(10, d := 7, b := 20)
+    expect: rows
+  - sql: |
+      SELECT * FROM named_args(1, b := 2, 3)
+    expect: error
+    sqlstate: "42601"
+    comment: positional argument after a named argument is a syntax error
+  - sql: |
+      SELECT * FROM named_args(z := 1, b := 2)
+    expect: error
+    sqlstate: "42883"
+    comment: no parameter named z
+  - sql: |
+      SELECT * FROM named_args(1)
+    expect: error
+    sqlstate: "42883"
+    comment: parameter b has no default

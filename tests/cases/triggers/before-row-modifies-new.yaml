@@ -1,0 +1,33 @@
+# BEFORE row trigger rewrites NEW on INSERT and UPDATE; NULL propagates through the rewrite.
+id: triggers.before-row-modifies-new
+title: BEFORE row trigger rewrites NEW on insert and update, NULL stays NULL
+family: triggers
+tier: slice
+feature_ids: [triggers, plpgsql, insert, update, select]
+required_capabilities: [create-table, insert, select, update, plpgsql, triggers]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (trigger_alpha f1_times_10)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (f1 int, f2 text);
+  CREATE FUNCTION f1_times_10() RETURNS trigger AS $$
+  BEGIN NEW.f1 := NEW.f1 * 10; RETURN NEW; END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER trigger_alpha BEFORE INSERT OR UPDATE ON t
+    FOR EACH ROW EXECUTE PROCEDURE f1_times_10();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 'foo'), (NULL, 'bar')
+    expect: ok
+  - sql: |
+      SELECT f1, f2 FROM t ORDER BY f2
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE t SET f2 = f2 || 'x'
+    expect: ok
+  - sql: |
+      SELECT f1, f2 FROM t ORDER BY f2
+    expect: rows
+    order: ordered

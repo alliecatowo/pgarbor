@@ -1,0 +1,36 @@
+# Dropping a partitioned temp parent on commit also removes its partitions.
+id: temp.partition-on-commit-drop
+title: ON COMMIT DROP on a partitioned temp parent removes all partitions at commit
+family: temp
+tier: extended
+feature_ids: [temp-tables, on-commit, partitioning, catalog-introspection]
+required_capabilities: [create-table, insert, select, transactions, temp-tables, partitioning, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/temp.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE temp_parted_oncommit_test (a int) PARTITION BY LIST (a) ON COMMIT DROP
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE temp_parted_oncommit_test1 PARTITION OF temp_parted_oncommit_test FOR VALUES IN (1) ON COMMIT DELETE ROWS
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE temp_parted_oncommit_test2 PARTITION OF temp_parted_oncommit_test FOR VALUES IN (2) ON COMMIT DROP
+    expect: ok
+  - sql: |
+      INSERT INTO temp_parted_oncommit_test VALUES (1), (2)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname ~ '^temp_parted_oncommit_test' ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: no relations remain

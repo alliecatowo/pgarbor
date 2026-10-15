@@ -1,0 +1,30 @@
+# Polymorphic anyelement -> anyelement SQL function; resolved per call-site argument type.
+id: polymorphism.anyelement-sql-function
+title: anyelement SQL function returns the argument's concrete type; point operand fails with 42883
+family: polymorphism
+tier: slice
+feature_ids: [polymorphic-types, sql-functions, create-function]
+required_capabilities: [create-function, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/polymorphism.sql"
+setup: |
+  CREATE FUNCTION polyf(x anyelement) RETURNS anyelement AS $$
+    SELECT x + 1
+  $$ LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT polyf(42) AS int_result, polyf(4.5) AS num_result
+    expect: rows
+  - sql: |
+      SELECT pg_typeof(polyf(42)) AS int_type, pg_typeof(polyf(4.5)) AS num_type
+    expect: rows
+  - sql: |
+      SELECT polyf(NULL::int) AS null_in
+    expect: rows
+    comment: non-strict SQL function; NULL + 1 is NULL
+  - sql: |
+      SELECT polyf(point(3,4))
+    expect: error
+    sqlstate: "42883"
+    comment: no + operator for point and integer

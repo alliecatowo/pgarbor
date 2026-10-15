@@ -1,0 +1,30 @@
+# A function referenced by a CHECK constraint cannot be dropped under RESTRICT.
+id: dependency.drop-function-check-constraint
+title: DROP FUNCTION refused while a CHECK constraint calls it
+family: dependency
+tier: extended
+feature_ids: [functions, check-constraints, drop-function, dependencies]
+required_capabilities: [create-table, insert, select, functions, check-constraints, drop-function]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints (check constraints); errcode 2BP01"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dep_pos(v int4) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT v > 0 $$;
+  CREATE TABLE posrows (v int4 CHECK (dep_pos(v)));
+  INSERT INTO posrows VALUES (5);
+steps:
+  - sql: |
+      DROP FUNCTION dep_pos(int4)
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      INSERT INTO posrows VALUES (-1)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO posrows VALUES (NULL);
+      SELECT v FROM posrows ORDER BY v NULLS LAST
+    expect: rows
+    order: ordered
+    comment: a NULL input makes the CHECK evaluate to NULL, which passes

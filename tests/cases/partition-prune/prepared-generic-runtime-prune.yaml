@@ -1,0 +1,46 @@
+# Derived from PG18 partition_prune.sql (prepared statements over a partitioned table, forced generic plans).
+id: partition-prune.prepared-generic-runtime-prune
+title: Prepared statement with parameterized BETWEEN on a list-partitioned table under a forced generic plan
+family: partition-prune
+tier: extended
+feature_ids: [partitioning, list-partitioning, prepared-statements, partition-pruning, parameters]
+required_capabilities: [create-table, insert, select, partitioning, order-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_prune.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ab (a int NOT NULL, b int NOT NULL) PARTITION BY LIST (a);
+  CREATE TABLE ab_a1 PARTITION OF ab FOR VALUES IN (1);
+  CREATE TABLE ab_a2 PARTITION OF ab FOR VALUES IN (2);
+  CREATE TABLE ab_a3 PARTITION OF ab FOR VALUES IN (3);
+  INSERT INTO ab SELECT x, y FROM generate_series(1, 3) AS x, generate_series(1, 3) AS y;
+steps:
+  - sql: |
+      SET plan_cache_mode = force_generic_plan
+    expect: ok
+  - sql: |
+      PREPARE ab_q1 (int, int, int) AS SELECT a, b FROM ab WHERE a BETWEEN $1 AND $2 AND b <= $3 ORDER BY a, b
+    expect: ok
+  - sql: |
+      EXECUTE ab_q1 (1, 2, 2)
+    expect: rows
+    order: ordered
+  - sql: |
+      EXECUTE ab_q1 (2, 3, 1)
+    expect: rows
+    order: ordered
+    comment: same statement, different parameter values, so different partitions survive
+  - sql: |
+      EXECUTE ab_q1 (3, 1, 3)
+    expect: rows
+    order: ordered
+    comment: empty BETWEEN range
+  - sql: |
+      EXECUTE ab_q1 (NULL, 3, 3)
+    expect: rows
+    order: ordered
+    comment: NULL bound makes BETWEEN NULL, so no rows
+  - sql: |
+      DEALLOCATE ab_q1
+    expect: ok

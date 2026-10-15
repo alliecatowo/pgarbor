@@ -1,0 +1,31 @@
+# NULL int2 values: operators and comparisons yield NULL, WHERE drops them, NOT NULL rejects them with 23502.
+id: int2.null-handling
+title: "int2 NULL propagates through arithmetic and comparison, is grouped together, and violates NOT NULL with 23502"
+family: int2
+tier: core
+feature_ids: [int2, nulls, arithmetic, constraints, errors]
+required_capabilities: [create-table, insert, select, errors, order-by]
+provenance:
+  source: hand
+  ref: "src/test/regress/sql/int2.sql (NULL edge cases derived from int2 operators); PG18 errcodes 23502"
+setup: |
+  CREATE TABLE int2_n (id int4, f1 int2);
+  CREATE TABLE int2_nn (f1 int2 NOT NULL);
+  INSERT INTO int2_n VALUES (1, 5), (2, NULL), (3, NULL), (4, -5);
+steps:
+  - sql: |
+      SELECT id, f1, f1 + int2 '1' AS plus1, f1 = int2 '5' AS is5, coalesce(f1, int2 '-1') AS co FROM int2_n ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM int2_n WHERE f1 = NULL OR f1 <> int2 '0' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1, count(*) AS n FROM int2_n GROUP BY f1 ORDER BY f1 NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO int2_nn VALUES (NULL)
+    expect: error
+    sqlstate: "23502"

@@ -1,0 +1,35 @@
+# UPDATE of an indexed key must remove the old hash entry and add the new one.
+id: hash-index.update-moves-key
+title: Updating an indexed key moves the row out of the old hash bucket lookup
+family: hash-index
+tier: core
+feature_ids: [hash-index, update, select]
+required_capabilities: [create-table, create-index, insert, update, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+setup: |
+  CREATE TABLE u4 (seqno int4, random int4);
+  CREATE INDEX u4_random ON u4 USING hash (random);
+  INSERT INTO u4 SELECT g, g FROM generate_series(1, 2000) g;
+steps:
+  - sql: |
+      UPDATE u4 SET random = -1 WHERE seqno = 1492
+    expect: ok
+  - sql: |
+      SELECT seqno FROM u4 WHERE random = -1
+    expect: rows
+    order: multiset
+    comment: the updated row is found under its new key
+  - sql: |
+      SELECT seqno FROM u4 WHERE random = 1492
+    expect: rows
+    order: multiset
+    comment: the old key must return zero rows
+  - sql: |
+      UPDATE u4 SET seqno = 20000 WHERE random = 1000
+    expect: ok
+  - sql: |
+      SELECT seqno FROM u4 WHERE random = 1000 ORDER BY seqno
+    expect: rows
+    order: ordered

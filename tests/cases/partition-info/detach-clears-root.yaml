@@ -1,0 +1,34 @@
+# Detaching a partition removes it from the tree: its root becomes NULL and the tree shrinks.
+id: partition-info.detach-clears-root
+title: After DETACH PARTITION the detached table has no partition root and drops out of the parent tree
+family: partition-info
+tier: core
+feature_ids: [partitioning, detach-partition, partition-tree-functions, null-handling]
+required_capabilities: [create-table, select, joins, catalog-introspection, partitioning]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-partitioning.html#DDL-PARTITIONING-DETACH; regress partition_info.sql tree functions"
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_det (a int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_det1 PARTITION OF ptif_det FOR VALUES FROM (0) TO (10);
+  CREATE TABLE ptif_det2 PARTITION OF ptif_det FOR VALUES FROM (10) TO (20);
+steps:
+  - sql: |
+      SELECT pg_partition_root('ptif_det1')::text AS root
+    expect: rows
+    comment: attached, root is ptif_det
+  - sql: |
+      ALTER TABLE ptif_det DETACH PARTITION ptif_det1
+    expect: ok
+  - sql: |
+      SELECT pg_partition_root('ptif_det1') IS NULL AS detached_root_is_null
+    expect: rows
+  - sql: |
+      SELECT relid::regclass::text AS member FROM pg_partition_tree('ptif_det') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only ptif_det and ptif_det2 remain
+  - sql: |
+      SELECT count(*) AS detached_tree_rows FROM pg_partition_tree('ptif_det1')
+    expect: rows

@@ -1,0 +1,32 @@
+# drizzle-kit bootstraps the migrations schema with CREATE SCHEMA IF NOT EXISTS, on every run.
+id: orm-drizzle.create-schema-if-not-exists
+title: CREATE SCHEMA IF NOT EXISTS is idempotent and visible in information_schema
+family: orm-drizzle
+tier: core
+feature_ids: [create-schema, catalog-introspection]
+required_capabilities: [create-schema, select, catalog-introspection]
+provenance:
+  source: hand
+  ref: "drizzle-kit migrate bootstrap; PG18 sql-createschema.html"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS drizzle
+    expect: ok
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS drizzle
+    expect: notice
+    comment: second run must succeed with a NOTICE, not 42P06
+  - sql: |
+      SELECT schema_name FROM information_schema.schemata WHERE schema_name IN ('drizzle', 'public', 'nope') ORDER BY schema_name
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE SCHEMA drizzle
+    expect: error
+    sqlstate: "42P06"
+    comment: plain CREATE SCHEMA on an existing schema is duplicate_schema
+  - sql: |
+      SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname = 'drizzle'
+    expect: rows
+    order: ordered

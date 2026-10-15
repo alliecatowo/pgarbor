@@ -1,0 +1,36 @@
+# Auto-updatable view over one table: INSERT, UPDATE and DELETE through the view reach the base table.
+id: updatable-views.simple-view-insert-update-delete
+title: Insert, update and delete through a simple auto-updatable view
+family: updatable-views
+tier: slice
+feature_ids: [updatable-views, create-view, insert, update, delete, select]
+required_capabilities: [create-table, create-view, insert, update, delete, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/updatable_views.sql (simple updatable view section)"
+sessions: [a]
+setup: |
+  CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
+  INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+  CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a > 0;
+steps:
+  - sql: |
+      INSERT INTO rw_view1 VALUES (3, 'Row 3')
+    expect: ok
+  - sql: |
+      INSERT INTO rw_view1 (a) VALUES (4)
+    expect: ok
+  - sql: |
+      UPDATE rw_view1 SET a = 5 WHERE a = 4
+    expect: ok
+  - sql: |
+      DELETE FROM rw_view1 WHERE b = 'Row 2'
+    expect: ok
+  - sql: |
+      SELECT a, b FROM base_tbl ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM rw_view1 ORDER BY a
+    expect: rows
+    order: ordered

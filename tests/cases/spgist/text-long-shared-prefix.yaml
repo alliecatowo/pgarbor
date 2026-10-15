@@ -1,0 +1,34 @@
+# Many keys sharing a long prefix force SP-GiST node splits; an insert that splits must stay findable.
+id: spgist.text-long-shared-prefix
+title: Node splits under a shared long text prefix keep every key findable
+family: spgist
+tier: extended
+feature_ids: [spgist, create-index, text, insert]
+required_capabilities: [create-table, create-index, insert, select, spgist, text]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/spgist.sql (split-node insertions into spgist_text_tbl)"
+sessions: [a]
+setup: |
+  CREATE TABLE sp_split (id int4, t text);
+  CREATE INDEX sp_split_idx ON sp_split USING spgist (t);
+  INSERT INTO sp_split (id, t)
+    SELECT g, 'f' || repeat('o', 100) || g FROM generate_series(1, 300) g;
+steps:
+  - sql: |
+      INSERT INTO sp_split (id, t)
+        SELECT -g, 'f' || repeat('o', 100 - g) || 'surprise' FROM generate_series(1, 100) g
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM sp_split WHERE t ^@ ('f' || repeat('o', 50))
+    expect: rows
+    comment: base rows all match; inserted rows match only for g <= 50 (at least 50 o's remain before 'surprise')
+  - sql: |
+      SELECT id FROM sp_split WHERE t = 'f' || repeat('o', 100 - 7) || 'surprise'
+    expect: rows
+    order: multiset
+    comment: exactly one inserted key
+  - sql: |
+      SELECT id FROM sp_split WHERE t = 'f' || repeat('o', 100) || 300
+    expect: rows
+    order: multiset

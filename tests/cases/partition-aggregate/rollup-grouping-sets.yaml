@@ -1,0 +1,26 @@
+# ROLLUP and GROUPING SETS over the partition key: subtotal and grand-total rows carry NULL
+# keys and grouping() distinguishes them from real NULLs.
+id: partition-aggregate.rollup-grouping-sets
+title: ROLLUP and GROUPING SETS over a list-partitioned table
+family: partition-aggregate
+tier: extended
+feature_ids: [partitioning, grouping-sets, rollup, aggregates]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, grouping-sets]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_ru (a int, c text) PARTITION BY LIST (c);
+  CREATE TABLE pagg_ru_p1 PARTITION OF pagg_ru FOR VALUES IN ('0000', '0001');
+  CREATE TABLE pagg_ru_p2 PARTITION OF pagg_ru FOR VALUES IN ('0002');
+  INSERT INTO pagg_ru SELECT i % 4, to_char(i % 3, 'FM0000') FROM generate_series(0, 23) i;
+steps:
+  - sql: |
+      SELECT c, sum(a), count(*), grouping(c) FROM pagg_ru GROUP BY ROLLUP (c) ORDER BY c NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, c, count(*) FROM pagg_ru GROUP BY GROUPING SETS ((a), (c)) ORDER BY a NULLS LAST, c NULLS LAST
+    expect: rows
+    order: ordered

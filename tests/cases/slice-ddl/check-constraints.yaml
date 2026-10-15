@@ -1,0 +1,50 @@
+# CHECK constraints: NULL passes (unknown is not false), violations, named table constraints, ADD CONSTRAINT validation.
+id: slice-ddl.check-constraints
+title: CHECK constraints accept NULL, reject false results, and validate existing rows on ADD
+family: slice-ddl
+tier: core
+feature_ids: [create-table, insert, check-constraint, alter-table, errors]
+required_capabilities: [create-table, insert, select, check-constraint, alter-table, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs ddl-constraints.html#DDL-CONSTRAINTS-CHECK-CONSTRAINTS"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ck (
+        id int4 PRIMARY KEY,
+        qty int4 CHECK (qty >= 0),
+        tag text,
+        CONSTRAINT tag_len CHECK (char_length(tag) <= 3)
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO ck VALUES (1, 0, NULL)
+    expect: ok
+    comment: CHECK expressions that evaluate to NULL pass
+  - sql: |
+      INSERT INTO ck VALUES (2, NULL, 'ab')
+    expect: ok
+  - sql: |
+      INSERT INTO ck VALUES (3, -1, 'a')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO ck VALUES (4, 5, 'abcd')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO ck VALUES (5, 5, 'abc')
+    expect: ok
+  - sql: |
+      SELECT id, qty, tag FROM ck ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE ck ADD CONSTRAINT qty_small CHECK (qty < 100)
+    expect: ok
+  - sql: |
+      ALTER TABLE ck ADD CONSTRAINT tag_upper CHECK (tag = upper(tag))
+    expect: error
+    sqlstate: "23514"
+    comment: existing row 2 has tag 'ab', so validation fails; NULL tags in rows 1 are fine

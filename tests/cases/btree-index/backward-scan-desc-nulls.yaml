@@ -1,0 +1,35 @@
+# Derived from PG18 btree_index.sql backward-scan and skip-scan cases (text key, no skip support), using a small table.
+id: btree-index.backward-scan-desc-nulls
+title: Backward scans over a text-leading btree index place NULL keys first for DESC and keep the secondary order
+family: btree-index
+tier: core
+feature_ids: [select, create-index, btree-index, order-by, nulls, text]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (btree_tall_tbl backward scan, text leading column)"
+setup: |
+  CREATE TABLE tall (id int4, t text);
+  INSERT INTO tall SELECT g, repeat('x', 5) FROM generate_series(1, 20) g;
+  INSERT INTO tall SELECT g, NULL FROM generate_series(10, 14) g;
+  INSERT INTO tall VALUES (99, 'a'), (98, 'z');
+  CREATE INDEX tall_t_id_idx ON tall USING btree (t, id) WITH (fillfactor = 10);
+steps:
+  - sql: |
+      SELECT id FROM tall WHERE id = 12 ORDER BY t, id
+    expect: rows
+    order: ordered
+    comment: forward scan, filter on a non-leading column
+  - sql: |
+      SELECT id FROM tall WHERE id = 12 ORDER BY t DESC, id DESC
+    expect: rows
+    order: ordered
+    comment: backward scan, NULL key expected first under DESC
+  - sql: |
+      SELECT t IS NULL AS t_null, count(*) FROM tall GROUP BY 1 ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, t FROM tall ORDER BY t DESC, id DESC LIMIT 3
+    expect: rows
+    order: ordered

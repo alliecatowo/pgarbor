@@ -1,0 +1,30 @@
+# EXCEPTION clause catches a named condition; SQLSTATE is visible in the handler; NULL operands skip the error.
+id: plpgsql.exception-block-catches-division
+title: EXCEPTION WHEN division_by_zero handles 22012 and exposes SQLSTATE; NULL operand does not reach division
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, exception-handling, errors, integer, null-handling]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_safe_div(a int, b int) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN (a / b)::text;
+  EXCEPTION
+    WHEN division_by_zero THEN RETURN 'div0 ' || SQLSTATE;
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_safe_div(7, 2) AS ok_result
+    expect: rows
+  - sql: |
+      SELECT pl_safe_div(1, 0) AS handled
+    expect: rows
+    comment: handler returns text with SQLSTATE 22012
+  - sql: |
+      SELECT pl_safe_div(NULL::int, 0) IS NULL AS null_result
+    expect: rows
+    comment: int4 division is strict, so NULL / 0 yields NULL without an error

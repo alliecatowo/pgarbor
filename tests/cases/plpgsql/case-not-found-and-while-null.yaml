@@ -1,0 +1,40 @@
+# CASE without ELSE and no match raises case_not_found (20000), including NULL selectors; WHILE with a NULL condition exits.
+id: plpgsql.case-not-found-and-while-null
+title: CASE statement with no matching WHEN raises 20000; NULL selector matches nothing; WHILE NULL is false
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, case-statement, control-flow, null-handling, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/plpgsql.sql"
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_case(x int) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    CASE x
+      WHEN 1 THEN RETURN 'one';
+      WHEN 2 THEN RETURN 'two';
+    END CASE;
+  END $$;
+  CREATE FUNCTION pl_while_null() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE n int := 0;
+  BEGIN
+    WHILE (NULL::boolean) LOOP n := n + 1; END LOOP;
+    RETURN n;
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_case(2) AS two
+    expect: rows
+  - sql: |
+      SELECT pl_case(7)
+    expect: error
+    sqlstate: "20000"
+  - sql: |
+      SELECT pl_case(NULL::int)
+    expect: error
+    sqlstate: "20000"
+  - sql: |
+      SELECT pl_while_null() AS iterations
+    expect: rows

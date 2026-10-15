@@ -1,0 +1,32 @@
+# A top-level ROLLBACK undoes DELETEs made in released and open nested savepoints alike.
+id: transactions.rollback-discards-subtransaction-tree
+title: ROLLBACK discards released and unreleased nested savepoint work
+family: transactions
+tier: core
+feature_ids: [transactions, savepoints, delete, rollback]
+required_capabilities: [create-table, insert, select, delete, transactions, savepoints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE savepoints (a int4);
+  INSERT INTO savepoints VALUES (1), (2), (3);
+steps:
+  - sql: |
+      BEGIN;
+      SAVEPOINT one;
+      DELETE FROM savepoints WHERE a = 1;
+      RELEASE SAVEPOINT one;
+      SAVEPOINT two;
+      DELETE FROM savepoints WHERE a = 1;
+      SAVEPOINT three;
+      DELETE FROM savepoints WHERE a = 2;
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT a FROM savepoints ORDER BY a
+    expect: rows
+    order: ordered
+    comment: all three rows are back

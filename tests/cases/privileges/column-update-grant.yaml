@@ -1,0 +1,39 @@
+# Column-level UPDATE: UPDATE of a granted column succeeds without reading it; reading the column in the SET expression needs SELECT.
+id: privileges.column-update-grant
+title: Column-level UPDATE grant allows writing only the granted column and needs SELECT to read it
+family: privileges
+tier: core
+feature_ids: [update, grant, column-privileges, privileges, errors]
+required_capabilities: [create-table, insert, update, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_upd_r;
+  CREATE TABLE pv_upd_t (a int4, b text);
+  INSERT INTO pv_upd_t VALUES (1, 'orig'), (2, 'orig');
+  GRANT UPDATE (b) ON pv_upd_t TO pv_upd_r;
+steps:
+  - sql: |
+      SET ROLE pv_upd_r
+    expect: ok
+  - sql: |
+      UPDATE pv_upd_t SET b = 'changed'
+    expect: ok
+  - sql: |
+      UPDATE pv_upd_t SET a = 9
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      UPDATE pv_upd_t SET b = upper(b)
+    expect: error
+    sqlstate: "42501"
+    comment: reads column b in the SET expression, which needs SELECT
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT a, b FROM pv_upd_t ORDER BY a
+    expect: rows
+    order: ordered

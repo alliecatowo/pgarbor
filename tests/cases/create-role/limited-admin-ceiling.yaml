@@ -1,0 +1,57 @@
+# A CREATEROLE-only role cannot create or alter roles with attributes it does not hold; it can use the ones it does.
+id: create-role.limited-admin-ceiling
+title: CREATEROLE-only session cannot grant SUPERUSER, REPLICATION, BYPASSRLS or CREATEDB but can create plain and CREATEROLE roles
+family: create-role
+tier: core
+feature_ids: [roles, create-role, alter-role, session-authorization, errors]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql (limited admin section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rl_admin CREATEROLE
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION rl_admin
+    expect: ok
+  - sql: |
+      CREATE ROLE rl_su SUPERUSER
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE rl_repl REPLICATION
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE rl_bypass BYPASSRLS
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE rl_createdb CREATEDB
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE rl_plain
+    expect: ok
+  - sql: |
+      CREATE ROLE rl_login CREATEROLE LOGIN INHERIT CONNECTION LIMIT 5
+    expect: ok
+  - sql: |
+      ALTER ROLE rl_plain SUPERUSER
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT rolname, rolcreaterole, rolcanlogin, rolconnlimit
+        FROM pg_roles
+       WHERE rolname IN ('rl_admin', 'rl_su', 'rl_repl', 'rl_bypass', 'rl_createdb', 'rl_plain', 'rl_login')
+       ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE rl_login, rl_plain, rl_admin
+    expect: ok

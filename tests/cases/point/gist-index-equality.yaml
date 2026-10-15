@@ -1,0 +1,41 @@
+# GiST index on point must return the same counts as a sequential scan.
+id: point.gist-index-equality
+title: GiST index on point gives the same counts as sequential scan
+family: point
+tier: extended
+feature_ids: [point-type, gist-index, point-operators, planner-settings]
+required_capabilities: [create-table, insert, select, create-index, gist-index, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/point.sql (point_gist_tbl)"
+sessions: [a]
+setup: |
+  CREATE TABLE gpt (f1 point);
+  INSERT INTO gpt SELECT '(0,0)' FROM generate_series(0, 200);
+  INSERT INTO gpt VALUES ('(0.0000009,0.0000009)');
+  CREATE INDEX gpt_idx ON gpt USING gist (f1);
+steps:
+  - sql: |
+      SET enable_seqscan TO true; SET enable_indexscan TO false; SET enable_bitmapscan TO false
+    expect: ok
+  - sql: |
+      SELECT COUNT(*) FROM gpt WHERE f1 ~= '(0.0000009,0.0000009)'::point
+    expect: rows
+  - sql: |
+      SELECT COUNT(*) FROM gpt WHERE f1 <@ '(0.0000009,0.0000009),(0.0000009,0.0000009)'::box
+    expect: rows
+  - sql: |
+      SELECT COUNT(*) FROM gpt WHERE f1 ~= '(0.0000018,0.0000018)'::point
+    expect: rows
+  - sql: |
+      SET enable_seqscan TO false; SET enable_indexscan TO true; SET enable_bitmapscan TO true
+    expect: ok
+  - sql: |
+      SELECT COUNT(*) FROM gpt WHERE f1 ~= '(0.0000009,0.0000009)'::point
+    expect: rows
+  - sql: |
+      SELECT COUNT(*) FROM gpt WHERE f1 <@ '(0.0000009,0.0000009),(0.0000009,0.0000009)'::box
+    expect: rows
+  - sql: |
+      SELECT COUNT(*) FROM gpt WHERE f1 ~= '(0.0000018,0.0000018)'::point
+    expect: rows

@@ -1,0 +1,38 @@
+# Conditional UPDATE rule that logs salary changes; unchanged and NULL-to-value updates do not satisfy the qualifier.
+id: rules.update-log-null-qual
+title: Conditional ON UPDATE rule fires only on a real change, and not when the old value is NULL
+family: rules
+tier: core
+feature_ids: [rules, update, null-semantics]
+required_capabilities: [create-table, create-rule, insert, select, update]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (rtest_emp_upd, logging test)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (ename text, salary numeric);
+  CREATE TABLE emplog (ename text, action text, newsal numeric, oldsal numeric);
+  CREATE RULE emp_upd AS ON UPDATE TO emp
+    WHERE NEW.salary != OLD.salary DO
+    INSERT INTO emplog VALUES (NEW.ename, 'honored', NEW.salary, OLD.salary);
+  INSERT INTO emp VALUES ('ann', 100), ('bob', NULL);
+steps:
+  - sql: |
+      UPDATE emp SET salary = 100 WHERE ename = 'ann'
+    expect: ok
+    comment: same value, qualifier is false, nothing logged
+  - sql: |
+      UPDATE emp SET salary = 150 WHERE ename = 'ann'
+    expect: ok
+  - sql: |
+      UPDATE emp SET salary = 200 WHERE ename = 'bob'
+    expect: ok
+    comment: OLD.salary is NULL, so NEW.salary != OLD.salary is NULL and the rule does not fire
+  - sql: |
+      SELECT ename, action, newsal, oldsal FROM emplog ORDER BY ename, newsal
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ename, salary FROM emp ORDER BY ename
+    expect: rows
+    order: ordered

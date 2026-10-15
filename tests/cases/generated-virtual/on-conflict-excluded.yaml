@@ -1,0 +1,32 @@
+# EXCLUDED.<virtual column> in ON CONFLICT DO UPDATE is expanded to the generation expression.
+id: generated-virtual.on-conflict-excluded
+title: ON CONFLICT DO UPDATE reads EXCLUDED and target virtual generated columns
+family: generated-virtual
+tier: extended
+feature_ids: [generated-columns, insert, on-conflict, returning]
+required_capabilities: [create-table, insert, select, on-conflict, returning]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest34 (id int PRIMARY KEY, a int, c int GENERATED ALWAYS AS (a * 10) VIRTUAL);
+  INSERT INTO gtest34 VALUES (1, 5);
+steps:
+  - sql: |
+      INSERT INTO gtest34 VALUES (1, 7) ON CONFLICT (id) DO UPDATE SET a = excluded.c RETURNING *
+    expect: rows
+    order: multiset
+    comment: excluded.c is 70, so a becomes 70
+  - sql: |
+      INSERT INTO gtest34 VALUES (1, 2) ON CONFLICT (id) DO UPDATE SET a = gtest34.c + excluded.c RETURNING *
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO gtest34 VALUES (1, 3) ON CONFLICT (id) DO UPDATE SET a = 999 WHERE excluded.c > 20 RETURNING *
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id, a, c FROM gtest34 ORDER BY id
+    expect: rows
+    order: ordered

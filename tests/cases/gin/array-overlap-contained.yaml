@@ -1,0 +1,29 @@
+# Overlap (&&) and contained-by (<@) on int4[] with NULL elements, NULL arrays and empty arrays.
+id: gin.array-overlap-contained
+title: GIN array overlap (&&) and contained-by (<@) with NULL and empty arrays
+family: gin
+tier: core
+feature_ids: [gin-index, arrays, array-overlap]
+required_capabilities: [create-table, create-index, gin-index, insert, select, arrays]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_ov (id int4 PRIMARY KEY, i int4[]);
+  CREATE INDEX gin_ov_idx ON gin_ov USING gin (i);
+  INSERT INTO gin_ov VALUES (1, '{1,2}'), (2, '{3}'), (3, '{}'), (4, NULL), (5, '{2,NULL}');
+steps:
+  - sql: |
+      SELECT id FROM gin_ov WHERE i && '{2,9}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_ov WHERE i <@ '{1,2,3}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '{}'::int4[] && '{}'::int4[] AS overlap_empty,
+             '{}'::int4[] @> '{}'::int4[] AS contains_empty,
+             '{1}'::int4[] && '{}'::int4[] AS overlap_with_empty
+    expect: rows

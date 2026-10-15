@@ -1,0 +1,36 @@
+# serial columns: nextval defaults, pg_get_serial_sequence, and gaps after a failed insert.
+id: orm-drizzle.serial-sequence-defaults
+title: serial columns draw defaults from their sequence and do not roll back on failure
+family: orm-drizzle
+tier: core
+feature_ids: [serial, sequence, insert, select, errors]
+required_capabilities: [create-table, serial, sequence, insert, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 datatype-numeric.html#DATATYPE-SERIAL; functions-sequence.html"
+sessions: [a]
+setup: |
+  CREATE TABLE tickets (
+    id serial PRIMARY KEY,
+    code text NOT NULL UNIQUE
+  );
+steps:
+  - sql: |
+      INSERT INTO tickets (code) VALUES ('t-a'), ('t-b')
+    expect: ok
+  - sql: |
+      INSERT INTO tickets (code) VALUES ('t-a')
+    expect: error
+    sqlstate: "23505"
+    comment: the failed insert still consumes a sequence value
+  - sql: |
+      INSERT INTO tickets (code) VALUES ('t-c')
+    expect: ok
+  - sql: |
+      SELECT id, code FROM tickets ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_get_serial_sequence('tickets', 'id') AS seq
+    expect: rows
+    order: multiset

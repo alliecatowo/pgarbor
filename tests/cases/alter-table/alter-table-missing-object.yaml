@@ -1,0 +1,32 @@
+# ALTER on a missing table without IF EXISTS fails 42P01; with IF EXISTS it is a notice and nothing changes.
+id: alter-table.alter-table-missing-object
+title: ALTER TABLE on a missing relation raises 42P01 unless IF EXISTS is given
+family: alter-table
+tier: core
+feature_ids: [alter-table, if-exists, errors]
+required_capabilities: [create-table, alter-table, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (ALTER TABLE IF EXISTS constraint_not_exist)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE real_t (k int4);
+steps:
+  - sql: |
+      ALTER TABLE missing_t ADD COLUMN x int4
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER TABLE IF EXISTS missing_t ADD COLUMN x int4
+    expect: notice
+  - sql: |
+      ALTER TABLE IF EXISTS real_t RENAME CONSTRAINT no_such_con TO con_new
+    expect: error
+    sqlstate: "42704"
+    comment: the table exists, so IF EXISTS does not suppress a missing constraint
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname = 'missing_t'
+    expect: rows
+    order: multiset
+    comment: no relation was created

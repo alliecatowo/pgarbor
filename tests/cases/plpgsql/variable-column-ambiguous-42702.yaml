@@ -1,0 +1,32 @@
+# A PL/pgSQL parameter with the same name as a column is an error by default (42702); #variable_conflict use_column resolves to the column.
+id: plpgsql.variable-column-ambiguous-42702
+title: Parameter name equal to a column name raises 42702 unless #variable_conflict use_column is set
+family: plpgsql
+tier: core
+feature_ids: [plpgsql, name-resolution, errors, subqueries]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/plpgsql-implementation.html#PLPGSQL-VAR-SUBST"
+sessions: [a]
+setup: |
+  CREATE TABLE people (id int, name text);
+  INSERT INTO people VALUES (1, 'ann'), (2, 'bo');
+  CREATE FUNCTION pl_by_id(id int) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN (SELECT name FROM people WHERE id = id);
+  END $$;
+  CREATE FUNCTION pl_count_cols(id int) RETURNS bigint LANGUAGE plpgsql AS $$
+  #variable_conflict use_column
+  BEGIN
+    RETURN (SELECT count(*) FROM people WHERE id = id);
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_count_cols(0) AS n
+    expect: rows
+    comment: use_column makes id = id a column-to-column comparison, so both rows match
+  - sql: |
+      SELECT pl_by_id(1)
+    expect: error
+    sqlstate: "42702"

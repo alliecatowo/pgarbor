@@ -1,0 +1,40 @@
+# CREATE UNIQUE INDEX on migration_name and on the primary key: duplicates rejected with 23505.
+id: orm-prisma.migrations-unique-name-index
+title: CREATE UNIQUE INDEX on migration_name rejects duplicate names and duplicate ids with 23505
+family: orm-prisma
+tier: core
+feature_ids: [create-index, unique-constraint, insert, errors, primary-key]
+required_capabilities: [create-table, create-index, insert, select, primary-key, varchar]
+provenance:
+  source: research
+  ref: "PG18 docs sql-createindex.html; errcodes 23505 unique_violation"
+sessions: [a]
+setup: |
+  CREATE TABLE "_prisma_migrations" (
+    "id" VARCHAR(36) PRIMARY KEY,
+    "checksum" VARCHAR(64) NOT NULL,
+    "migration_name" VARCHAR(255) NOT NULL,
+    "applied_steps_count" INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE UNIQUE INDEX "_prisma_migrations_name_uq" ON "_prisma_migrations" ("migration_name");
+  INSERT INTO "_prisma_migrations" ("id", "checksum", "migration_name", "applied_steps_count")
+    VALUES ('m-1', 'sum-1', '20240101_init', 1);
+steps:
+  - sql: |
+      INSERT INTO "_prisma_migrations" ("id", "checksum", "migration_name") VALUES ('m-2', 'sum-2', '20240101_init')
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate migration_name against the unique index
+  - sql: |
+      INSERT INTO "_prisma_migrations" ("id", "checksum", "migration_name") VALUES ('m-1', 'sum-3', '20240202_next')
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate primary key
+  - sql: |
+      INSERT INTO "_prisma_migrations" ("id", "checksum", "migration_name") VALUES ('m-3', 'sum-1', '20240202_next')
+    expect: ok
+    comment: checksum is not unique, so a repeated checksum is accepted
+  - sql: |
+      SELECT "id", "migration_name", "applied_steps_count" FROM "_prisma_migrations" ORDER BY "id"
+    expect: rows
+    order: ordered

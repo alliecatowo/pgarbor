@@ -1,0 +1,49 @@
+# Transaction characteristics set by BEGIN cannot be RESET; a function cannot SET them locally.
+id: transactions.reset-transaction-characteristic-rejected
+title: RESET of transaction_isolation, transaction_read_only and transaction_deferrable fails with 0A000
+family: transactions
+tier: core
+feature_ids: [transactions, isolation-level, read-only-transactions, guc, errors]
+required_capabilities: [transactions, guc, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE
+    expect: ok
+  - sql: |
+      RESET transaction_isolation
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      END
+    expect: ok
+    comment: aborted block; END reports ROLLBACK without an error
+  - sql: |
+      BEGIN TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      RESET transaction_read_only
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      END
+    expect: ok
+  - sql: |
+      BEGIN TRANSACTION DEFERRABLE
+    expect: ok
+  - sql: |
+      RESET transaction_deferrable
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      END
+    expect: ok
+  - sql: |
+      CREATE FUNCTION errfunc() RETURNS int LANGUAGE SQL AS 'SELECT 1' SET transaction_read_only = on
+    expect: error
+    sqlstate: "0A000"
+    comment: a function may not set transaction_read_only locally

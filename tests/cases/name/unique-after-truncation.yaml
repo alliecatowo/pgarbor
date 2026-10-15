@@ -1,0 +1,24 @@
+# Two values that differ only past byte 63 are the same name after truncation, so a unique index rejects the second.
+id: name.unique-after-truncation
+title: Unique constraint on name sees values equal after truncation
+family: name
+tier: core
+feature_ids: [name-type, unique-constraint, truncation, errors]
+required_capabilities: [create-table, insert, select, unique-index]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 23505 unique_violation; name.sql truncation rule"
+sessions: [a]
+setup: |
+  CREATE TABLE name_u (f1 name UNIQUE);
+steps:
+  - sql: |
+      INSERT INTO name_u (f1) VALUES (repeat('a', 64))
+    expect: ok
+  - sql: |
+      INSERT INTO name_u (f1) VALUES (repeat('a', 70))
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) AS n, max(length(f1)) AS maxlen FROM name_u
+    expect: rows

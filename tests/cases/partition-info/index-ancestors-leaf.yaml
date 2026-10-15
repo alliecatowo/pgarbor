@@ -1,0 +1,30 @@
+# pg_partition_ancestors on a leaf partition index walks up the index tree.
+id: partition-info.index-ancestors-leaf
+title: pg_partition_ancestors on a leaf partition index returns its parent indexes up to the partitioned root index
+family: partition-info
+tier: extended
+feature_ids: [partitioning, partitioned-indexes, partition-tree-functions, create-index]
+required_capabilities: [create-table, create-index, select, catalog-introspection, partitioning]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_test (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_test0 PARTITION OF ptif_test FOR VALUES FROM (MINVALUE) TO (0) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test01 PARTITION OF ptif_test0 FOR VALUES IN (1);
+  CREATE INDEX ptif_test_index ON ONLY ptif_test (a);
+  CREATE INDEX ptif_test0_index ON ONLY ptif_test0 (a);
+  ALTER INDEX ptif_test_index ATTACH PARTITION ptif_test0_index;
+  CREATE INDEX ptif_test01_index ON ptif_test01 (a);
+  ALTER INDEX ptif_test0_index ATTACH PARTITION ptif_test01_index;
+steps:
+  - sql: |
+      SELECT relid::regclass::text AS ancestor FROM pg_partition_ancestors('ptif_test01_index')
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT relid::regclass::text AS ancestor FROM pg_partition_ancestors('ptif_test_index')
+    expect: rows
+    order: multiset
+    comment: root index lists only itself

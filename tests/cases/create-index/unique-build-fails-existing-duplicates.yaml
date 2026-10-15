@@ -1,0 +1,41 @@
+# A unique index cannot be built over a table that already holds duplicate keys; the failed build leaves no index behind.
+id: create-index.unique-build-fails-existing-duplicates
+title: CREATE UNIQUE INDEX fails on existing duplicate keys and leaves no index behind
+family: create-index
+tier: core
+feature_ids: [create-index, unique-index, errors, catalog-introspection]
+required_capabilities: [create-table, insert, delete, select, create-index, unique-constraints, catalog-introspection, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (functional and covering unique index sections)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ub (k int, v text)
+    expect: ok
+  - sql: |
+      INSERT INTO ub VALUES (1, 'a'), (1, 'b'), (2, 'c')
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX ub_k_uniq ON ub (k)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) FROM pg_indexes WHERE tablename = 'ub' AND indexname = 'ub_k_uniq'
+    expect: rows
+    order: ordered
+    comment: the failed build must not leave the index in the catalog
+  - sql: |
+      DELETE FROM ub WHERE v = 'b'
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX ub_k_uniq ON ub (k)
+    expect: ok
+  - sql: |
+      INSERT INTO ub VALUES (1, 'again')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT k, v FROM ub ORDER BY k, v
+    expect: rows
+    order: ordered

@@ -1,0 +1,29 @@
+# drizzle-kit introspects enums through pg_enum ordered by enumsortorder.
+id: orm-drizzle.pg-enum-labels
+title: pg_enum returns enum labels in declaration order and rejects unknown labels
+family: orm-drizzle
+tier: core
+feature_ids: [enum, catalog-introspection, errors]
+required_capabilities: [create-type, create-table, insert, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 datatype-enum.html; catalog-pg-enum.html; errcodes 22P02"
+sessions: [a]
+setup: |
+  CREATE TYPE public.mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE TABLE diary (id integer PRIMARY KEY, feeling public.mood NOT NULL);
+  INSERT INTO diary VALUES (1, 'ok'), (2, 'happy');
+steps:
+  - sql: |
+      SELECT t.typname, e.enumlabel, e.enumsortorder FROM pg_catalog.pg_enum e JOIN pg_catalog.pg_type t ON t.oid = e.enumtypid JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public' AND t.typname = 'mood' ORDER BY e.enumsortorder
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, feeling::text FROM diary WHERE feeling > 'ok' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: ordering follows enum declaration order, not alphabetical order
+  - sql: |
+      INSERT INTO diary VALUES (3, 'angry')
+    expect: error
+    sqlstate: "22P02"

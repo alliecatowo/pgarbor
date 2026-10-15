@@ -1,0 +1,33 @@
+# SQL-language functions: argument and return types, zero-argument function, NULL propagation.
+id: create-function-sql.create-function-basic-sql
+title: SQL function with text and date arguments, zero-argument function, NULL propagation
+family: create-function-sql
+tier: core
+feature_ids: [create-function, sql-language-functions, null-handling, catalog-introspection]
+required_capabilities: [create-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+steps:
+  - sql: |
+      CREATE FUNCTION functest_a_1(text, date) RETURNS bool LANGUAGE sql
+             AS 'SELECT $1 = ''abcd'' AND $2 > ''2001-01-01'''
+    expect: ok
+  - sql: |
+      CREATE FUNCTION functest_a_3() RETURNS bool LANGUAGE sql AS 'SELECT false'
+    expect: ok
+  - sql: |
+      SELECT functest_a_1('abcd', '2020-01-01') AS t,
+             functest_a_1('abcd', '1999-01-01') AS f,
+             functest_a_1('abce', '2020-01-01') AS f2,
+             functest_a_1(NULL, '2020-01-01') AS n,
+             functest_a_3() AS zero
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args, prorettype::regtype::text AS ret
+        FROM pg_proc
+       WHERE proname IN ('functest_a_1', 'functest_a_3')
+       ORDER BY proname
+    expect: rows
+    order: ordered

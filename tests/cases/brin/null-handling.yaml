@@ -1,0 +1,46 @@
+# NULL values are summarized separately by brin; IS NULL, IS NOT NULL and comparisons must treat
+# them correctly, including after an UPDATE that introduces NULLs into existing ranges.
+id: brin.null-handling
+title: BRIN index with NULL values answers IS NULL and comparison predicates correctly
+family: brin
+tier: core
+feature_ids: [brin, create-index, select, nulls, update]
+required_capabilities: [create-table, insert, select, update, create-index, brin-index]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/brin.sql (throw in some NULL's; brinopers IS / IS NOT rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, a int4, b text);
+  INSERT INTO t VALUES (1, 5, 'x'), (2, NULL, 'x'), (3, 7, NULL), (4, NULL, NULL), (5, 9, '');
+  CREATE INDEX t_brin ON t USING brin (a, b) WITH (pages_per_range = 1);
+steps:
+  - sql: |
+      SELECT id FROM t WHERE a IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t WHERE a IS NOT NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM t WHERE a > 6 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows with NULL a must not match a comparison
+  - sql: |
+      SELECT id FROM t WHERE b = '' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: empty string is a value, not NULL
+  - sql: |
+      SELECT id FROM t WHERE b IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE t SET a = NULL WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM t WHERE a IS NULL
+    expect: rows
+    order: multiset

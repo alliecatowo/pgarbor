@@ -1,0 +1,30 @@
+# Two parents with the same column name merge into one child column; altering that inherited column on a parent is rejected while the child exists.
+id: inherit.merged-inherited-column-alter-rejected
+title: Multiply inherited column merges with NOTICE; ALTER TYPE on a parent is rejected while the child exists
+family: inherit
+tier: extended
+feature_ids: [inheritance, alter-table, column-types, errors]
+required_capabilities: [create-table, insert, select, alter-table, inheritance]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/inherit.sql
+  license: PostgreSQL License
+sessions: [a]
+setup: |
+  CREATE TABLE parent1 (f1 int, f2 int);
+  CREATE TABLE parent2 (f1 int, f3 bigint);
+  CREATE TABLE childtab (f4 int) INHERITS (parent1, parent2);
+steps:
+  - sql: |
+      ALTER TABLE parent1 ALTER COLUMN f1 TYPE bigint
+    expect: error
+    comment: cannot alter inherited column "f1" of relation "childtab"
+  - sql: |
+      ALTER TABLE parent1 ALTER COLUMN f2 TYPE bigint
+    expect: ok
+    comment: f2 is not shared with another parent in a conflicting way
+  - sql: |
+      SELECT column_name, data_type FROM information_schema.columns
+      WHERE table_name = 'childtab' ORDER BY ordinal_position
+    expect: rows
+    order: ordered

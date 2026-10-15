@@ -1,0 +1,26 @@
+# format_type over pg_attribute for typmod-bearing, array, enum and bit types, plus NULL handling.
+id: slice-catalog-introspection.format-type
+title: format_type renders typmods, arrays, enums and NULL inputs
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, create-table, numeric, varchar, arrays, enum, bit]
+required_capabilities: [create-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/functions-info.html#FUNCTIONS-INFO-SCHEMA-TABLE"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE TABLE ft (a varchar(10), b numeric(6, 2), c int4[], d timestamptz(3), e bit varying(5), f "char", g double precision, i interval(2));
+  ALTER TABLE ft ADD COLUMN m mood;
+steps:
+  - sql: |
+      SELECT a.attnum, a.attname, format_type(a.atttypid, a.atttypmod) AS typ FROM pg_attribute a WHERE a.attrelid = 'ft'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT format_type(23, NULL) AS plain_int, format_type(1043, 14) AS varchar_typmod, format_type(NULL, NULL) IS NULL AS null_in_null_out
+    expect: rows
+  - sql: |
+      SELECT format_type('mood'::regtype::oid, NULL) AS enum_name, format_type('int4'::regtype::oid, -1) AS int4_name
+    expect: rows

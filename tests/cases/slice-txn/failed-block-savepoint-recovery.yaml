@@ -1,0 +1,42 @@
+# A unique violation inside a savepoint aborts the block (25P02); ROLLBACK TO SAVEPOINT restores it so the block can continue.
+id: slice-txn.failed-block-savepoint-recovery
+title: Unique violation then 25P02 in the block, recovered by ROLLBACK TO SAVEPOINT
+family: slice-txn
+tier: core
+feature_ids: [transactions, savepoints, errors, insert, primary-key]
+required_capabilities: [create-table, insert, select, transactions, savepoints, constraints]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-rollback-to.html; errcodes 23505, 25P02"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'one');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT s1
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 'dup')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK TO SAVEPOINT s1
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2, NULL)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, v IS NULL AS v_null FROM t ORDER BY id
+    expect: rows
+    order: ordered

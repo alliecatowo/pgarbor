@@ -1,0 +1,36 @@
+# bytea hex input format, malformed hex input error, and bytea to/from integer conversions.
+id: strings.bytea-hex-and-int-conv
+title: bytea hex input and output, odd-digit hex error, and bytea to integer conversions
+family: strings
+tier: extended
+feature_ids: [bytea, bytea-hex-format, integer-conversion, errors]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/strings.sql"
+steps:
+  - sql: |
+      SET bytea_output TO hex
+    expect: ok
+  - sql: |
+      SELECT E'\\xDeAdBeEf'::bytea AS hex_upper_mix, E'\\x De Ad Be Ef '::bytea AS spaced, E'DeAdBeEf'::bytea AS escaped_text
+    expect: rows
+  - sql: |
+      SELECT E'\\xDeAdBeE'::bytea AS odd_digits
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT reverse(''::bytea) AS empty_rev, reverse('\xabcd'::bytea) AS rev
+    expect: rows
+  - sql: |
+      SELECT ''::bytea::int2 AS z2, '\x12'::bytea::int2 AS b2, '\x1234'::bytea::int2 AS b2b, '\x12345678'::bytea::int4 AS b4
+    expect: rows
+  - sql: |
+      SELECT 0x1234::int2::bytea AS i2, (-0x1234)::int2::bytea AS neg2, 0x12345678::int4::bytea AS i4
+    expect: rows
+  - sql: |
+      SELECT '\x8000'::bytea::int2 AS minint2, '\x7FFF'::bytea::int2 AS maxint2
+    expect: rows
+  - sql: |
+      SELECT get_byte('\x1234567890abcdef00'::bytea, 99) AS err
+    expect: error

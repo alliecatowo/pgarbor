@@ -1,0 +1,32 @@
+# Moving-aggregate support (mstype/msfunc/minvfunc) used in sliding and running window frames.
+# A NULL input is skipped by the strict forward and inverse functions.
+id: create-aggregate.moving-aggregate-window
+title: "Moving-aggregate support: sliding ROWS frame and running frame with NULL input"
+family: create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, window-functions, moving-aggregate, nulls]
+required_capabilities: [create-table, insert, select, aggregates, window-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_aggregate.sql (sumdouble moving-aggregate options)"
+  license: PostgreSQL
+setup: |
+  CREATE AGGREGATE sumdouble (float8) (
+    stype = float8, sfunc = float8pl,
+    mstype = float8, msfunc = float8pl, minvfunc = float8mi
+  );
+  CREATE TABLE w (id int4 PRIMARY KEY, v float8);
+  INSERT INTO w VALUES (1, 1), (2, 2), (3, 4), (4, 8), (5, NULL);
+steps:
+  - sql: |
+      SELECT id, sumdouble(v) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+      FROM w ORDER BY id
+    expect: rows
+    order: ordered
+    comment: sliding two-row frame; row 5 is 8 + NULL
+  - sql: |
+      SELECT id, sumdouble(v) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+      FROM w ORDER BY id
+    expect: rows
+    order: ordered
+    comment: running frame, exercises forward transition only

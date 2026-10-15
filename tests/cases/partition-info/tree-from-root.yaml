@@ -1,0 +1,28 @@
+# pg_partition_tree from the root of a table partition tree lists every member with level and isleaf.
+id: partition-info.tree-from-root
+title: pg_partition_tree from the root lists all members with their level, parent and leaf flag
+family: partition-info
+tier: core
+feature_ids: [partitioning, partition-tree-functions, joins, catalog-introspection]
+required_capabilities: [create-table, select, joins, catalog-introspection, partitioning]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_test (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_test0 PARTITION OF ptif_test FOR VALUES FROM (MINVALUE) TO (0) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test01 PARTITION OF ptif_test0 FOR VALUES IN (1);
+  CREATE TABLE ptif_test1 PARTITION OF ptif_test FOR VALUES FROM (0) TO (100) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test11 PARTITION OF ptif_test1 FOR VALUES IN (1);
+  CREATE TABLE ptif_test2 PARTITION OF ptif_test FOR VALUES FROM (100) TO (200);
+  CREATE TABLE ptif_test3 PARTITION OF ptif_test FOR VALUES FROM (200) TO (MAXVALUE) PARTITION BY LIST (b);
+steps:
+  - sql: |
+      SELECT c.relname, p.parentrelid::regclass::text AS parent, p.level, p.isleaf
+      FROM pg_partition_tree('ptif_test') p
+      JOIN pg_class c ON (p.relid = c.oid)
+      ORDER BY p.level, c.relname
+    expect: rows
+    order: ordered
+    comment: root row has NULL parent, level 0 is the root only

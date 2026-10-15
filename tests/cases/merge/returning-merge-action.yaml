@@ -1,0 +1,32 @@
+# RETURNING with merge_action() and the old/new aliases reports which action ran for each row.
+id: merge.returning-merge-action
+title: MERGE RETURNING reports merge_action(), old and new per affected row
+family: merge
+tier: core
+feature_ids: [merge, returning, merge-action, old-new-alias]
+required_capabilities: [create-table, insert, select, merge, returning]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/merge.sql (RETURNING merge_action(), old, new, t.*)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (2, 20);
+  INSERT INTO source VALUES (2, 5), (3, 7);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source s
+      ON t.tid = s.sid
+      WHEN MATCHED THEN
+        UPDATE SET balance = t.balance + s.delta
+      WHEN NOT MATCHED THEN
+        INSERT VALUES (s.sid, s.delta)
+      RETURNING merge_action() AS action, t.tid, old.balance AS old_bal, new.balance AS new_bal
+    expect: rows
+    order: multiset
+    comment: expect ('UPDATE',2,20,25) and ('INSERT',3,NULL,7)
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered

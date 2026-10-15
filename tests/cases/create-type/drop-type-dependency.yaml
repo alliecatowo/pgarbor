@@ -1,0 +1,38 @@
+# DROP TYPE is RESTRICT by default when a column depends on it; CASCADE drops the column.
+id: create-type.drop-type-dependency
+title: "DROP TYPE restricted by a dependent column, then CASCADE removes the column"
+family: create-type
+tier: core
+feature_ids: [create-type, drop-type, dependencies, create-table, insert, select, errors]
+required_capabilities: [create-type, create-table, insert, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_type.sql (dependency checks, rewritten)"
+steps:
+  - sql: |
+      CREATE TYPE pt AS (x int4, y int4)
+    expect: ok
+  - sql: |
+      CREATE TABLE tp (id int4, c pt)
+    expect: ok
+  - sql: |
+      INSERT INTO tp VALUES (1, ROW(1, 2))
+    expect: ok
+  - sql: |
+      DROP TYPE pt
+    expect: error
+    sqlstate: "2BP01"
+    comment: other objects depend on the type
+  - sql: |
+      DROP TYPE pt CASCADE
+    expect: ok
+  - sql: |
+      SELECT id FROM tp ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM pg_attribute WHERE attrelid = 'tp'::regclass AND attname = 'c' AND NOT attisdropped
+    expect: rows
+  - sql: |
+      SELECT to_regtype('pt') IS NULL AS gone
+    expect: rows

@@ -1,0 +1,28 @@
+# ON CONFLICT DO UPDATE with EXCLUDED and a conditional WHERE: rows failing the WHERE are not returned.
+id: slice-dml.on-conflict-do-update-excluded
+title: ON CONFLICT DO UPDATE SET from EXCLUDED with a conditional WHERE
+family: slice-dml
+tier: core
+feature_ids: [insert, on-conflict, on-conflict-do-update, excluded, returning, update]
+required_capabilities: [create-table, insert, update, select, returning, on-conflict]
+provenance:
+  source: hand
+  ref: "https://www.postgresql.org/docs/18/sql-insert.html#SQL-ON-CONFLICT"
+sessions: [a]
+setup: |
+  CREATE TABLE kv (k text PRIMARY KEY, v int4 NOT NULL, touched int4 NOT NULL DEFAULT 0);
+  INSERT INTO kv (k, v) VALUES ('a', 5), ('b', 9);
+steps:
+  - sql: |
+      INSERT INTO kv (k, v) VALUES ('a', 3), ('b', 12), ('c', 1)
+      ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v, touched = kv.touched + 1 WHERE kv.v < EXCLUDED.v
+      RETURNING k, v, touched
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT k, v, touched FROM kv ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO kv (k, v) VALUES ('a', 7) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v RETURNING k, v
+    expect: rows

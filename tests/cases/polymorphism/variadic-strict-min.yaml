@@ -1,0 +1,34 @@
+# STRICT VARIADIC anyarray function over generate_subscripts: NULL and empty inputs and missing arguments.
+id: polymorphism.variadic-strict-min
+title: STRICT variadic min over an anyarray returns NULL for empty or NULL input and rejects zero arguments
+family: polymorphism
+tier: core
+feature_ids: [polymorphic-types, variadic-functions, null-handling, errors]
+required_capabilities: [create-function, select, arrays]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/polymorphism.sql"
+setup: |
+  CREATE FUNCTION myleast(VARIADIC arr anyarray) RETURNS anyelement AS $$
+    SELECT min($1[i]) FROM generate_subscripts($1, 1) g(i)
+  $$ LANGUAGE sql IMMUTABLE STRICT;
+steps:
+  - sql: |
+      SELECT myleast(10, 1, 20, 33) AS int_min, myleast(1.1, 0.22, 0.55) AS num_min
+    expect: rows
+  - sql: |
+      SELECT myleast(VARIADIC array[1,2,3,4,-1]) AS negative_min
+    expect: rows
+  - sql: |
+      SELECT myleast(VARIADIC array[]::int[]) AS empty_min
+    expect: rows
+    comment: min over no subscripts is NULL
+  - sql: |
+      SELECT myleast(VARIADIC NULL::int[]) AS null_min
+    expect: rows
+    comment: STRICT short-circuits to NULL
+  - sql: |
+      SELECT myleast()
+    expect: error
+    sqlstate: "42883"
+    comment: no zero-argument form

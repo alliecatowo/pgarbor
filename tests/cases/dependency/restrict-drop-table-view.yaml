@@ -1,0 +1,31 @@
+# DROP TABLE with a dependent view is refused under RESTRICT; the table survives.
+id: dependency.restrict-drop-table-view
+title: DROP TABLE RESTRICT refuses when a view depends on it
+family: dependency
+tier: core
+feature_ids: [drop-table, views, dependencies]
+required_capabilities: [create-table, insert, select, views, drop-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/dependency.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE deptest (f1 int4 PRIMARY KEY, f2 text);
+  INSERT INTO deptest VALUES (1, 'x'), (2, NULL);
+  CREATE VIEW deptest_v AS SELECT f1, f2 FROM deptest;
+steps:
+  - sql: |
+      DROP TABLE deptest
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT f1, f2 FROM deptest_v ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP VIEW deptest_v;
+      DROP TABLE deptest
+    expect: ok
+  - sql: |
+      SELECT to_regclass('deptest') IS NULL AS gone
+    expect: rows

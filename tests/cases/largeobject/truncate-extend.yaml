@@ -1,0 +1,58 @@
+# Shrink, extend with zero fill, and truncate to zero inside one read-write descriptor.
+id: largeobject.truncate-extend
+title: lo_truncate shrinks and zero-extends, then truncates to empty
+family: largeobject
+tier: core
+feature_ids: [large-objects, lo-truncate, lo-seek, lo-tell, lo-read, transactions]
+required_capabilities: [large-objects, create-table, insert, update, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (loid oid, fd integer);
+  INSERT INTO st (loid) SELECT lo_from_bytea(0, convert_to('I wandered lonely as a cloud', 'UTF8'));
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT lo_truncate(fd, 11) FROM st
+    expect: rows
+  - sql: |
+      SELECT encode(loread(fd, 15), 'escape') FROM st
+    expect: rows
+    comment: only 11 bytes remain, so the read is short
+  - sql: |
+      SELECT lo_truncate(fd, 10000) FROM st
+    expect: rows
+  - sql: |
+      SELECT encode(loread(fd, 10), 'hex') FROM st
+    expect: rows
+    comment: extension is zero-filled
+  - sql: |
+      SELECT lo_lseek(fd, 0, 2) FROM st;
+      SELECT lo_tell(fd) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_truncate(fd, 5000) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_lseek(fd, 0, 2) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_truncate(fd, 0) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_close(fd) FROM st
+    expect: rows
+  - sql: |
+      END
+    expect: ok
+  - sql: |
+      SELECT length(lo_get(loid)) FROM st
+    expect: rows

@@ -1,0 +1,39 @@
+# Validity of UTF-8 input must not depend on surrounding ASCII padding that crosses the fast-path stride.
+id: conversion.utf8-fast-path-padding
+title: UTF-8 validation results with ASCII padding before and after the sequence
+family: conversion
+tier: extended
+feature_ids: [encoding-conversion, utf8, error-sqlstate, plpgsql]
+required_capabilities: [create-table, insert, select, bytea, plpgsql-functions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/conversion.sql"
+setup: |
+  CREATE FUNCTION conv_check(b bytea, src name, dst name) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    PERFORM convert(b, src, dst);
+    RETURN 'ok';
+  EXCEPTION WHEN OTHERS THEN
+    RETURN SQLSTATE;
+  END $$;
+  CREATE TABLE pad_inputs (inbytes bytea, description text PRIMARY KEY);
+  INSERT INTO pad_inputs VALUES
+    ('\x666f6f', 'valid, pure ASCII'),
+    ('\xc3a4c3b6', 'valid, extra latin chars'),
+    ('\xe8b1a1', 'valid, kanji'),
+    ('\xf48fbfbf', 'largest 4-byte'),
+    ('\xc5', 'missing second byte'),
+    ('\xe9af', 'missing third byte'),
+    ('\xf1afbf', 'missing fourth byte'),
+    ('\xaf', 'bare continuation');
+steps:
+  - sql: |
+      SELECT description,
+             conv_check(inbytes, 'UTF8', 'UTF8') AS bare,
+             conv_check(inbytes || repeat('.', 64)::bytea, 'UTF8', 'UTF8') AS ascii_tail,
+             conv_check(repeat('.', 64)::bytea || inbytes, 'UTF8', 'UTF8') AS ascii_head,
+             conv_check(repeat('.', 64 - length(inbytes))::bytea || inbytes || repeat('.', 3)::bytea, 'UTF8', 'UTF8') AS head_fill
+      FROM pad_inputs
+      ORDER BY description
+    expect: rows
+    order: ordered

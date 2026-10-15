@@ -1,0 +1,35 @@
+# Operator with commutator used in WHERE over a table containing NULLs; the commutator gives the same rows.
+id: create-operator.boolean-operator-in-where
+title: Boolean operator with commutator filters rows and treats NULL via IS NOT DISTINCT FROM
+family: create-operator
+tier: core
+feature_ids: [create-operator, where-clause, boolean, null-semantics]
+required_capabilities: [create-table, create-function, create-operator, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_operator.sql (text-book === boolean case, adapted)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION fn_eq3(boolean, boolean) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 IS NOT DISTINCT FROM $2 $$;
+  CREATE OPERATOR === (leftarg = boolean, rightarg = boolean, procedure = fn_eq3, commutator = ===);
+  CREATE TABLE ops_flags (id int4 PRIMARY KEY, flag boolean);
+  INSERT INTO ops_flags VALUES (1, true), (2, false), (3, NULL);
+steps:
+  - sql: |
+      SELECT id FROM ops_flags WHERE flag === true ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM ops_flags WHERE true === flag ORDER BY id
+    expect: rows
+    order: ordered
+    comment: commutator gives the same result set
+  - sql: |
+      SELECT id FROM ops_flags WHERE flag === NULL::boolean ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT NULL::boolean === NULL::boolean AS both_null, true === NULL::boolean AS one_null
+    expect: rows
+    order: multiset

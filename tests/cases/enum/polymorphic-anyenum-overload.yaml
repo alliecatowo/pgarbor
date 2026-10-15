@@ -1,0 +1,40 @@
+# User functions over anyenum and a concrete enum type: the concrete overload wins, and dropping the generic one leaves an unqualified call resolvable.
+id: enum.polymorphic-anyenum-overload
+title: anyenum user function overloaded by a concrete enum-typed function
+family: enum
+tier: extended
+feature_ids: [enum, functions, polymorphism, extended-protocol]
+required_capabilities: [enum-type, user-functions, sql-functions, extended-protocol]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+steps:
+  - sql: |
+      CREATE FUNCTION echo_me(anyenum) RETURNS text AS $$ SELECT $1::text || 'omg' $$ LANGUAGE sql
+    expect: ok
+  - sql: |
+      SELECT echo_me('red'::rainbow)
+    expect: rows
+  - sql: |
+      CREATE FUNCTION echo_me(rainbow) RETURNS text AS $$ SELECT $1::text || 'wtf' $$ LANGUAGE sql
+    expect: ok
+  - sql: |
+      SELECT echo_me('red'::rainbow)
+    expect: rows
+    comment: concrete overload preferred over the polymorphic one
+  - sql: |
+      DROP FUNCTION echo_me(anyenum)
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT echo_me($1)
+      params: ["red"]
+      param_types: [0]
+    expect: rows
+    comment: only one candidate left, so the unknown-typed parameter resolves to rainbow
+  - sql: |
+      DROP FUNCTION echo_me(rainbow)
+    expect: ok

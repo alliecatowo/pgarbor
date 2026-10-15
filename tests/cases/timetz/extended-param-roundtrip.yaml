@@ -1,0 +1,41 @@
+# timetz as a bind parameter over the extended protocol, text format, with a NULL parameter.
+id: timetz.extended-param-roundtrip
+title: "timetz bind parameter round-trip over the extended protocol"
+family: timetz
+tier: core
+feature_ids: [timetz, extended-protocol, prepared-statements]
+required_capabilities: [create-table, insert, select, extended-protocol]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY; pg_type OID 1266 timetz"
+setup: |
+  CREATE TABLE tz_param (id int4 PRIMARY KEY, f1 timetz);
+steps:
+  - parse:
+      name: ins
+      sql: |
+        INSERT INTO tz_param (id, f1) VALUES ($1, $2)
+      param_types: [23, 1266]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["1", "12:00:00+02"]
+    expect: ok
+  - execute:
+      statement: ins
+      params: ["2", null]
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT id, f1 FROM tz_param WHERE f1 = $1
+      params: ["12:00:00+02"]
+      param_types: [1266]
+    expect: rows
+  - exec_params:
+      sql: |
+        SELECT id, f1 IS NULL AS f1_null FROM tz_param ORDER BY id
+      params: []
+    expect: rows
+    order: ordered
+  - close:
+      statement: ins

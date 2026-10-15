@@ -1,0 +1,26 @@
+# DROP TABLE CASCADE removes the dependent view and reports it as a notice.
+id: dependency.cascade-drop-table-view
+title: DROP TABLE CASCADE drops dependent views and reports them
+family: dependency
+tier: core
+feature_ids: [drop-table, views, dependencies]
+required_capabilities: [create-table, insert, select, views, drop-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/dependency.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE deptest (f1 int4, f2 text);
+  INSERT INTO deptest VALUES (1, 'a');
+  CREATE VIEW deptest_v1 AS SELECT f1 FROM deptest;
+  CREATE VIEW deptest_v2 AS SELECT v1.f1, d.f2 FROM deptest_v1 v1 JOIN deptest d ON d.f1 = v1.f1;
+steps:
+  - sql: |
+      DROP TABLE deptest CASCADE
+    expect: ok
+    order: multiset
+  - sql: |
+      SELECT count(*) AS remaining_views
+      FROM information_schema.views
+      WHERE table_schema = current_schema() AND table_name LIKE 'deptest_v%'
+    expect: rows

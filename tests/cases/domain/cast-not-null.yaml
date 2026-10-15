@@ -1,0 +1,34 @@
+# Casting to a NOT NULL domain enforces NOT NULL on the result, including casts of NULL
+# produced by another nullable domain. Adapted from domain.sql "Test out coerced (casted)
+# constraints".
+id: domain.cast-not-null
+title: Casting NULL to a NOT NULL domain fails; non-null casts succeed
+family: domain
+tier: core
+feature_ids: [domains, create-domain, cast, not-null]
+required_capabilities: [create-table, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/domain.sql"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dnotnull varchar(15) NOT NULL;
+  CREATE DOMAIN dnull varchar(15);
+steps:
+  - sql: |
+      SELECT CAST('1' AS dnotnull) AS ok_value
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT CAST(NULL AS dnotnull)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT CAST(CAST(NULL AS dnull) AS dnotnull)
+    expect: error
+    sqlstate: "23502"
+    comment: nullable domain value cast into a NOT NULL domain
+  - sql: |
+      SELECT CAST(CAST(NULL AS dnull) AS varchar(15)) IS NULL AS still_null
+    expect: rows
+    order: ordered

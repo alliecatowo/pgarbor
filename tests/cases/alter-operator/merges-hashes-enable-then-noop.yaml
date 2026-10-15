@@ -1,0 +1,37 @@
+# MERGES and HASHES can be turned on by a bare SET; repeating the bare SET after that is a no-op success.
+id: alter-operator.merges-hashes-enable-then-noop
+title: Enabling MERGES and HASHES with bare SET, then repeating the no-op SET
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, merges, hashes, boolean-attributes]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn_bool_real(boolean, real)
+  RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = real,
+      PROCEDURE = alter_op_test_fn_bool_real
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (MERGES)
+    expect: ok
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (HASHES)
+    expect: ok
+  - sql: |
+      ALTER OPERATOR === (boolean, real) SET (MERGES);
+      ALTER OPERATOR === (boolean, real) SET (HASHES)
+    expect: ok
+  - sql: |
+      SELECT oprcanmerge, oprcanhash
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'real'::regtype
+    expect: rows
+    order: multiset

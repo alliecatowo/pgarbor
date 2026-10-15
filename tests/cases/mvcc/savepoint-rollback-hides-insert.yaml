@@ -1,0 +1,39 @@
+# ROLLBACK TO SAVEPOINT discards rows inserted after the savepoint, keeps earlier ones, and the transaction continues.
+id: mvcc.savepoint-rollback-hides-insert
+title: ROLLBACK TO SAVEPOINT discards only the subtransaction's inserts
+family: mvcc
+tier: core
+feature_ids: [transactions, savepoints, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/mvcc.sql (aborted subtransaction rows); PG18 docs sql-rollback-to.html"
+sessions: [a]
+setup: |
+  CREATE TABLE t (k int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SAVEPOINT s
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2), (3)
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT s
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (4)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT k FROM t ORDER BY k
+    expect: rows
+    order: ordered

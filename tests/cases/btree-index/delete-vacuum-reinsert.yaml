@@ -1,0 +1,35 @@
+# Derived from PG18 btree_index.sql multilevel page deletion and fast-root reinsert; scaled down to a small table.
+id: btree-index.delete-vacuum-reinsert
+title: Bulk delete, VACUUM, then reinsert into a primary-key btree index keeps counts and key range correct
+family: btree-index
+tier: extended
+feature_ids: [create-index, primary-key, delete, vacuum, insert, select, btree-index]
+required_capabilities: [create-table, insert, select, create-index, delete, vacuum, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/btree_index.sql (delete_test_table multilevel page deletion, fast root reinsert)"
+setup: |
+  CREATE TABLE dt (a bigint, b bigint, c bigint, d bigint);
+  INSERT INTO dt SELECT i, 1, 2, 3 FROM generate_series(1, 20000) i;
+  ALTER TABLE dt ADD PRIMARY KEY (a, b, c, d);
+steps:
+  - sql: |
+      DELETE FROM dt WHERE a < 19990
+    expect: ok
+  - sql: |
+      VACUUM dt
+    expect: ok
+  - sql: |
+      SELECT count(*), min(a), max(a) FROM dt
+    expect: rows
+  - sql: |
+      INSERT INTO dt SELECT i, 1, 2, 3 FROM generate_series(1, 1000) i
+    expect: ok
+  - sql: |
+      SELECT count(*), min(a), max(a) FROM dt
+    expect: rows
+  - sql: |
+      INSERT INTO dt VALUES (5, 1, 2, 3)
+    expect: error
+    sqlstate: "23505"
+    comment: reinserted key 5 collides with the primary key

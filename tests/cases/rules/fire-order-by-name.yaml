@@ -1,0 +1,32 @@
+# Several rules on one table fire in name order regardless of creation order or INSTEAD attribute.
+id: rules.fire-order-by-name
+title: Rules on the same event fire in order of rule name, not creation order
+family: rules
+tier: core
+feature_ids: [rules, insert, sequences]
+required_capabilities: [create-table, create-sequence, create-rule, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (rtest_order_r1..r4, rule fire order test)"
+sessions: [a]
+setup: |
+  CREATE TABLE ord1 (a int4);
+  CREATE TABLE ord2 (a int4, b int4, c text);
+  CREATE SEQUENCE ord_seq;
+  CREATE RULE ord_r3 AS ON INSERT TO ord1 DO INSTEAD
+    INSERT INTO ord2 VALUES (NEW.a, nextval('ord_seq'), 'rule 3');
+  CREATE RULE ord_r4 AS ON INSERT TO ord1 WHERE a < 100 DO INSTEAD
+    INSERT INTO ord2 VALUES (NEW.a, nextval('ord_seq'), 'rule 4');
+  CREATE RULE ord_r2 AS ON INSERT TO ord1 DO
+    INSERT INTO ord2 VALUES (NEW.a, nextval('ord_seq'), 'rule 2');
+  CREATE RULE ord_r1 AS ON INSERT TO ord1 DO INSTEAD
+    INSERT INTO ord2 VALUES (NEW.a, nextval('ord_seq'), 'rule 1');
+steps:
+  - sql: |
+      INSERT INTO ord1 VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT b, c FROM ord2 ORDER BY b
+    expect: rows
+    order: ordered
+    comment: the sequence value reflects firing order; expect rule 1, rule 2, rule 3, rule 4 in that order

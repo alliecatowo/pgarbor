@@ -1,0 +1,41 @@
+# information_schema.columns for a Prisma-style table, scoped to current_schema(), ordered by ordinal position.
+id: orm-prisma.introspection-information-schema
+title: information_schema.columns reports data_type, nullability, defaults and lengths for a Prisma-style table
+family: orm-prisma
+tier: core
+feature_ids: [catalog-introspection, information-schema, create-table, timestamp, varchar, arrays, select]
+required_capabilities: [create-table, select, catalog-introspection, timestamp, varchar, arrays]
+provenance:
+  source: research
+  ref: "Prisma introspection reads information_schema.columns; PG18 docs infoschema-columns.html"
+sessions: [a]
+setup: |
+  CREATE TABLE "Ticket" (
+    "id" integer PRIMARY KEY,
+    "title" varchar(50) NOT NULL,
+    "opened_at" timestamp(3) NOT NULL,
+    "labels" text[],
+    "note" text DEFAULT 'none'
+  );
+steps:
+  - sql: |
+      SELECT column_name, data_type, udt_name, is_nullable, column_default,
+             character_maximum_length, ordinal_position
+      FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'Ticket'
+      ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+    comment: labels reports data_type ARRAY with udt_name _text
+  - sql: |
+      SELECT table_name, table_type
+      FROM information_schema.tables
+      WHERE table_schema = current_schema() AND table_name = 'Ticket'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n
+      FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'ticket'
+    expect: rows
+    comment: unquoted-lowercase lookup does not match the mixed-case table name

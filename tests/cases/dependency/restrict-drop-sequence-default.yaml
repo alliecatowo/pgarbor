@@ -1,0 +1,34 @@
+# A sequence used by a column default cannot be dropped under RESTRICT; it stays usable.
+id: dependency.restrict-drop-sequence-default
+title: DROP SEQUENCE refused while a column default depends on it
+family: dependency
+tier: extended
+feature_ids: [sequences, column-defaults, drop-sequence, dependencies]
+required_capabilities: [create-table, insert, select, sequences, alter-table]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/dependency.sql"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE ss1;
+  CREATE TABLE deptest2 (f1 int4);
+  ALTER TABLE deptest2 ALTER f1 SET DEFAULT nextval('ss1');
+steps:
+  - sql: |
+      DROP SEQUENCE ss1
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      INSERT INTO deptest2 DEFAULT VALUES;
+      SELECT f1 FROM deptest2
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER SEQUENCE ss1 OWNED BY deptest2.f1
+    expect: ok
+  - sql: |
+      DROP TABLE deptest2
+    expect: ok
+  - sql: |
+      SELECT to_regclass('ss1') IS NULL AS seq_gone
+    expect: rows

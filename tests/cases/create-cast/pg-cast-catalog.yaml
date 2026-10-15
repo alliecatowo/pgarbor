@@ -1,0 +1,49 @@
+# PostgreSQL 18 regression create_cast.sql, rewritten as a self-contained case.
+id: create-cast.pg-cast-catalog
+title: "pg_cast rows record cast context and method for binary and I/O casts"
+family: create-cast
+tier: core
+feature_ids: [create-cast, catalog-introspection, casts]
+required_capabilities: [create-type, create-cast, create-function-sql, create-function-internal, select, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_cast.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TYPE casttesttype;
+  CREATE FUNCTION casttesttype_in(cstring)
+     RETURNS casttesttype
+     AS 'textin'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION casttesttype_out(casttesttype)
+     RETURNS cstring
+     AS 'textout'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE TYPE casttesttype (
+     internallength = variable,
+     input = casttesttype_in,
+     output = casttesttype_out,
+     alignment = int4
+  );
+  CREATE FUNCTION casttestfunc(casttesttype) RETURNS int4 LANGUAGE SQL AS
+  $$ SELECT 1; $$;
+steps:
+  - sql: |
+      CREATE CAST (text AS casttesttype) WITHOUT FUNCTION AS IMPLICIT;
+    expect: ok
+  - sql: |
+      CREATE CAST (int4 AS casttesttype) WITH INOUT;
+    expect: ok
+  - sql: |
+      SELECT castsource::regtype::text AS src,
+             casttarget::regtype::text AS tgt,
+             castfunc = 0::oid AS no_func,
+             castcontext,
+             castmethod
+      FROM pg_cast
+      WHERE casttarget = 'casttesttype'::regtype
+      ORDER BY src;
+    expect: rows
+    order: ordered
+    comment: "binary cast: context i, method b; I/O cast: context e, method i"
+notes: "Expected values come only from the recorder; these are the author's intent."

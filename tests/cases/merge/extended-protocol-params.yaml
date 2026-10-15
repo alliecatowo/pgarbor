@@ -1,0 +1,41 @@
+# A prepared MERGE with bind parameters in a USING subquery, executed twice, then closed.
+id: merge.extended-protocol-params
+title: Prepared MERGE with bind parameters upserts through extended protocol
+family: merge
+tier: core
+feature_ids: [merge, extended-protocol, prepared-statements, upsert]
+required_capabilities: [create-table, insert, select, extended-protocol, merge]
+provenance:
+  source: hand
+  ref: "PG18 protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY; sql-merge.html"
+setup: |
+  CREATE TABLE target (tid integer PRIMARY KEY, balance integer);
+  INSERT INTO target VALUES (1, 10);
+steps:
+  - parse:
+      name: m1
+      sql: |
+        MERGE INTO target t
+        USING (SELECT $1::int4 AS sid, $2::int4 AS delta) s
+        ON t.tid = s.sid
+        WHEN MATCHED THEN
+          UPDATE SET balance = t.balance + s.delta
+        WHEN NOT MATCHED THEN
+          INSERT VALUES (s.sid, s.delta)
+      param_types: [23, 23]
+    expect: ok
+  - execute:
+      statement: m1
+      params: ["1", "5"]
+    expect: ok
+  - execute:
+      statement: m1
+      params: ["9", "-3"]
+    expect: ok
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect (1,15), (9,-3)
+  - close:
+      statement: m1

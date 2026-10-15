@@ -1,0 +1,30 @@
+# A sequence owned by a serial column cannot be dropped directly (2BP01); dropping the table removes it.
+id: sequence.drop-owned-dependency
+title: DROP SEQUENCE on a serial-owned sequence fails with 2BP01 until the table is dropped
+family: sequence
+tier: core
+feature_ids: [sequences, serial, drop, dependencies, errors]
+required_capabilities: [create-table, select, errors, sequences]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sequence.sql (dependency section)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE dep_t (a int, b serial);
+steps:
+  - sql: |
+      DROP SEQUENCE dep_t_b_seq
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP TABLE dep_t
+    expect: ok
+  - sql: |
+      DROP SEQUENCE dep_t_b_seq
+    expect: error
+    sqlstate: "42P01"
+    comment: the owned sequence was removed with the table
+  - sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname = 'dep_t_b_seq'
+    expect: rows

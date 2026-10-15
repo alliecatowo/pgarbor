@@ -1,0 +1,36 @@
+id: matview.basic-stale-until-refresh
+title: Materialized view is a snapshot until REFRESH
+family: matview
+tier: slice
+feature_ids: [materialized-views, group-by, aggregates, numeric]
+required_capabilities: [create-table, insert, select, create-materialized-view, group-by, aggregates, numeric]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/matview.sql"
+setup: |
+  CREATE TABLE sales (id int4 PRIMARY KEY, region text NOT NULL, amt numeric(8,2) NOT NULL);
+  INSERT INTO sales VALUES (1, 'north', 10.50), (2, 'south', 4.25), (3, 'north', 0.25);
+steps:
+  - sql: |
+      CREATE MATERIALIZED VIEW reg_totals AS
+        SELECT region, sum(amt) AS total, count(*) AS n FROM sales GROUP BY region
+    expect: ok
+  - sql: |
+      SELECT region, total, n FROM reg_totals ORDER BY region
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO sales VALUES (4, 'south', 5.00)
+    expect: ok
+  - sql: |
+      SELECT region, total, n FROM reg_totals ORDER BY region
+    expect: rows
+    order: ordered
+    comment: stale snapshot, south still 4.25
+  - sql: |
+      REFRESH MATERIALIZED VIEW reg_totals
+    expect: ok
+  - sql: |
+      SELECT region, total, n FROM reg_totals ORDER BY region
+    expect: rows
+    order: ordered

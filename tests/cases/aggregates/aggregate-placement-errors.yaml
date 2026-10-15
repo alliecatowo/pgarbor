@@ -1,0 +1,49 @@
+# Misplaced or malformed aggregate calls are rejected with grouping and undefined-function errors.
+id: aggregates.placement-errors
+title: Aggregate in WHERE, nested aggregates, ungrouped columns and wrong argument counts are rejected
+family: aggregates
+tier: core
+feature_ids: [aggregates, group-by, errors, sqlstate]
+required_capabilities: [create-table, insert, select, aggregates, group-by, error-sqlstate]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/aggregates.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE g (ten int4, four int4, v text);
+  INSERT INTO g VALUES (0, 0, 'a'), (1, 1, 'c');
+steps:
+  - sql: |
+      SELECT count(*) FROM g WHERE count(*) > 1
+    expect: error
+    sqlstate: "42803"
+    comment: aggregate functions are not allowed in WHERE
+  - sql: |
+      SELECT sum(max(four)) FROM g
+    expect: error
+    sqlstate: "42803"
+    comment: aggregate function calls cannot be nested
+  - sql: |
+      SELECT ten, four FROM g GROUP BY ten
+    expect: error
+    sqlstate: "42803"
+    comment: column g.four must appear in the GROUP BY clause or be used in an aggregate
+  - sql: |
+      SELECT avg('abc'::text) FROM g
+    expect: error
+    sqlstate: "42883"
+    comment: no avg(text) overload
+  - sql: |
+      SELECT sum(four, ten) FROM g
+    expect: error
+    sqlstate: "42883"
+    comment: sum takes exactly one argument
+  - sql: |
+      SELECT string_agg(v) FROM g
+    expect: error
+    sqlstate: "42883"
+    comment: string_agg needs a delimiter argument
+  - sql: |
+      SELECT count(*) FROM g
+    expect: rows
+    comment: the session is still usable after the errors above

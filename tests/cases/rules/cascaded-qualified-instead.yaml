@@ -1,0 +1,46 @@
+# Conditional INSTEAD and ALSO rules cascade across tables; boundary values decide which rules fire.
+id: rules.cascaded-qualified-instead
+title: Cascaded conditional rules route rows by range boundaries, with ALSO rules keeping the original row
+family: rules
+tier: extended
+feature_ids: [rules, insert, boundaries]
+required_capabilities: [create-table, create-rule, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (rtest_t4_ins1, rtest_t4_ins2, rtest_t5_ins multiple cascaded qualified instead test)"
+sessions: [a]
+setup: |
+  CREATE TABLE q4 (a int4, b text);
+  CREATE TABLE q5 (a int4, b text);
+  CREATE TABLE q6 (a int4, b text);
+  CREATE TABLE q7 (a int4, b text);
+  CREATE RULE q4_ins1 AS ON INSERT TO q4
+    WHERE NEW.a >= 10 AND NEW.a < 20 DO INSTEAD
+    INSERT INTO q5 VALUES (NEW.a, NEW.b);
+  CREATE RULE q4_ins2 AS ON INSERT TO q4
+    WHERE NEW.a >= 20 AND NEW.a < 30 DO
+    INSERT INTO q6 VALUES (NEW.a, NEW.b);
+  CREATE RULE q5_ins AS ON INSERT TO q5
+    WHERE NEW.a > 15 DO
+    INSERT INTO q7 VALUES (NEW.a, NEW.b);
+steps:
+  - sql: |
+      INSERT INTO q4 VALUES (5, 'five'), (15, 'fifteen'), (25, 'twenty-five')
+    expect: ok
+  - sql: |
+      SELECT 'q4' AS t, a, b FROM q4
+      UNION ALL SELECT 'q5', a, b FROM q5
+      UNION ALL SELECT 'q6', a, b FROM q6
+      UNION ALL SELECT 'q7', a, b FROM q7
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: 15 goes only to q5 (INSTEAD), 25 stays in q4 (DO ALSO) and goes to q6; 15 is not > 15 so q7 stays empty
+  - sql: |
+      INSERT INTO q5 VALUES (16, 'sixteen'), (15, 'boundary')
+    expect: ok
+  - sql: |
+      SELECT a, b FROM q7 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only 16 satisfies a > 15 in q5_ins

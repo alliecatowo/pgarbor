@@ -1,0 +1,45 @@
+# Temp tables are private to their session; same name in two sessions refers to two different tables.
+id: temp.session-isolation
+title: Temp tables are invisible to other sessions and same-named temp tables are independent
+family: temp
+tier: core
+feature_ids: [temp-tables, multi-session, errors]
+required_capabilities: [create-table, insert, select, temp-tables, multi-session]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/temp.sql"
+  license: PostgreSQL
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      CREATE TEMP TABLE temptest (col int)
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO temptest VALUES (1)
+    expect: ok
+  - session: b
+    sql: |
+      SELECT col FROM temptest
+    expect: error
+    sqlstate: "42P01"
+    comment: another session cannot see the temp table
+  - session: b
+    sql: |
+      CREATE TEMP TABLE temptest (col int)
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO temptest VALUES (2)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT col FROM temptest
+    expect: rows
+    order: multiset
+  - session: b
+    sql: |
+      SELECT col FROM temptest
+    expect: rows
+    order: multiset

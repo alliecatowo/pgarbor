@@ -1,0 +1,35 @@
+# Column definition list misuse in FROM: required for record functions, redundant for composite or OUT-parameter functions, invalid for scalars.
+id: rangefuncs.column-list-errors
+title: "Column definition list errors for record, composite, and scalar set-returning functions"
+family: rangefuncs
+tier: extended
+feature_ids: [column-definition-lists, set-returning-functions, composite-types, errors]
+required_capabilities: [create-table, insert, create-function, sql-functions, set-returning-functions, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (sql, proretset = t, prorettype = record; column definition list checks)"
+setup: |
+  CREATE TABLE rngfunc (rngfuncid int, rngfuncsubid int, rngfuncname text, primary key(rngfuncid,rngfuncsubid));
+  INSERT INTO rngfunc VALUES (1,1,'Joe'), (1,2,'Ed'), (2,1,'Mary');
+  CREATE FUNCTION getrngfunc5(int) RETURNS setof rngfunc AS 'SELECT * FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE sql;
+  CREATE FUNCTION getrngfunc7(int) RETURNS setof record AS 'SELECT * FROM rngfunc WHERE rngfuncid = $1;' LANGUAGE sql;
+steps:
+  - sql: |
+      SELECT * FROM getrngfunc7(1)
+    expect: error
+    sqlstate: "42601"
+    comment: "a record-returning function needs a column definition list"
+  - sql: |
+      SELECT * FROM getrngfunc5(1) AS t1(a int, b int, c text, d int)
+    expect: error
+    sqlstate: "42601"
+    comment: "a named composite result type must not get a typed column list"
+  - sql: |
+      SELECT * FROM sin(3) AS t(f1 int8, f2 int8)
+    expect: error
+    sqlstate: "42601"
+    comment: "a column definition list is only allowed for record-returning functions"
+  - sql: |
+      SELECT * FROM getrngfunc7(1) AS t1(rngfuncid int, rngfuncsubid int, rngfuncname text) ORDER BY 2
+    expect: rows
+    order: ordered

@@ -1,0 +1,50 @@
+# REPEATABLE READ: a snapshot taken at the first query keeps showing the old value even after another session commits.
+id: slice-txn.rr-snapshot-two-sessions
+title: Repeatable read keeps its snapshot while another session commits an update
+family: slice-txn
+tier: core
+feature_ids: [transactions, isolation-levels, repeatable-read, multi-session, update, null-handling]
+required_capabilities: [create-table, insert, update, select, transactions, isolation-levels, multi-session]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/transaction-iso.html#XACT-REPEATABLE-READ"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, bal int4);
+  INSERT INTO acct VALUES (1, 100), (2, NULL);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, bal FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      UPDATE acct SET bal = bal + 50 WHERE id = 1
+    expect: ok
+    comment: autocommit, so committed immediately
+  - session: b
+    sql: |
+      SELECT id, bal FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      SELECT id, bal FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: still the snapshot from the first query, 100
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, bal FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: new snapshot, 150

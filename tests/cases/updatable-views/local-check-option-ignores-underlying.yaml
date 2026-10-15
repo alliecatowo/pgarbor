@@ -1,0 +1,29 @@
+# WITH LOCAL CHECK OPTION only checks the view's own qualification, not that of an underlying view,
+# so the same row that CASCADED rejects is accepted here.
+id: updatable-views.local-check-option-ignores-underlying
+title: LOCAL check option does not enforce underlying view qualifications
+family: updatable-views
+tier: core
+feature_ids: [updatable-views, create-view, check-option, insert]
+required_capabilities: [create-table, create-view, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/updatable_views.sql (WITH LOCAL CHECK OPTION)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int PRIMARY KEY);
+  CREATE VIEW v1 AS SELECT a FROM t WHERE a > 0;
+  CREATE VIEW v2 AS SELECT a FROM v1 WHERE a < 10 WITH LOCAL CHECK OPTION;
+steps:
+  - sql: |
+      INSERT INTO v2 VALUES (-1)
+    expect: ok
+  - sql: |
+      INSERT INTO v2 VALUES (10)
+    expect: error
+    sqlstate: "44000"
+    comment: 10 fails v2's own qualification a < 10
+  - sql: |
+      SELECT a FROM t ORDER BY a
+    expect: rows
+    order: ordered

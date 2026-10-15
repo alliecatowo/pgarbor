@@ -1,0 +1,30 @@
+# A data-modifying CTE deletes rows and feeds the removed rows into the outer query.
+id: delete.cte-returning
+title: WITH ... DELETE RETURNING feeds deleted rows into an outer SELECT
+family: delete
+tier: extended
+feature_ids: [delete, cte, returning, insert, select, create-table]
+required_capabilities: [create-table, insert, select, delete, returning, cte]
+provenance:
+  source: hand
+  ref: "PG18 queries-with.html#QUERIES-WITH-MODIFYING"
+sessions: [a]
+setup: |
+  CREATE TABLE queue (id int4 PRIMARY KEY, state text NOT NULL);
+  CREATE TABLE archive (id int4 PRIMARY KEY, state text NOT NULL);
+  INSERT INTO queue VALUES (1, 'done'), (2, 'pending'), (3, 'done');
+steps:
+  - sql: |
+      WITH moved AS (
+        DELETE FROM queue WHERE state = 'done' RETURNING id, state
+      )
+      INSERT INTO archive SELECT id, state FROM moved
+    expect: ok
+  - sql: |
+      SELECT id, state FROM archive ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, state FROM queue ORDER BY id
+    expect: rows
+    order: ordered

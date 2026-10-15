@@ -1,0 +1,36 @@
+# created_at timestamp DEFAULT now(): the value varies, so the case checks presence and the stored default text only.
+id: orm-drizzle.timestamp-default-now
+title: now() default fills timestamps without recording the clock value
+family: orm-drizzle
+tier: core
+feature_ids: [timestamp, defaults, insert, select, catalog-introspection]
+required_capabilities: [create-table, insert, select, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 functions-datetime.html now(); drizzle defaultNow() emits DEFAULT now()"
+sessions: [a]
+setup: |
+  CREATE TABLE audit (
+    id integer PRIMARY KEY,
+    created_at timestamp NOT NULL DEFAULT now(),
+    note text
+  );
+steps:
+  - sql: |
+      INSERT INTO audit (id) VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO audit (id, created_at, note) VALUES (2, '2020-01-02 03:04:05', 'fixed')
+    expect: ok
+  - sql: |
+      SELECT id, created_at IS NOT NULL AS has_ts, created_at = '2020-01-02 03:04:05' AS is_fixed FROM audit ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT column_default FROM information_schema.columns WHERE table_name = 'audit' AND column_name = 'created_at'
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO audit (id, created_at) VALUES (3, NULL)
+    expect: error
+    sqlstate: "23502"

@@ -1,0 +1,39 @@
+# Multicolumn GIN index over two int4[] columns, covering NULL, empty and duplicate-element arrays (values adapted from gin.sql).
+id: gin.multicolumn-array-index
+title: Multicolumn GIN index on (int4[], int4[]) with combined containment predicates
+family: gin
+tier: core
+feature_ids: [gin-index, arrays, multicolumn-index]
+required_capabilities: [create-table, create-index, gin-index, insert, select, arrays]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/gin.sql
+sessions: [a]
+setup: |
+  CREATE TABLE gin_mc (id int4 PRIMARY KEY, i int4[], j int4[]);
+  CREATE INDEX gin_mc_idx ON gin_mc USING gin (i, j);
+  INSERT INTO gin_mc VALUES
+    (1, NULL, NULL), (2, '{}', NULL), (3, '{1}', NULL), (4, '{1,2}', NULL),
+    (5, NULL, '{}'), (6, NULL, '{10}'), (7, '{1,2}', '{10}'), (8, '{2}', '{10}'),
+    (9, '{1,3}', '{}'), (10, '{1,1}', '{10}');
+steps:
+  - sql: |
+      SELECT id FROM gin_mc WHERE i @> '{1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_mc WHERE j @> '{10}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_mc WHERE i @> '{1}' AND j @> '{10}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_mc WHERE i @> '{}' AND j @> '{}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM gin_mc WHERE i && '{3}' OR j @> '{10}' ORDER BY id
+    expect: rows
+    order: ordered

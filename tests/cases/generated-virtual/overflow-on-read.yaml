@@ -1,0 +1,33 @@
+# The generation expression is evaluated on read, so an overflow only errors when b is read.
+id: generated-virtual.overflow-on-read
+title: Integer overflow in a virtual generated expression raises 22003 only when the column is read
+family: generated-virtual
+tier: core
+feature_ids: [generated-columns, insert, select, errors]
+required_capabilities: [create-table, insert, select, delete]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest1 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
+steps:
+  - sql: |
+      INSERT INTO gtest1 VALUES (2000000000)
+    expect: ok
+  - sql: |
+      SELECT a FROM gtest1 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: b is not referenced, so the expression is not evaluated
+  - sql: |
+      SELECT * FROM gtest1
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      DELETE FROM gtest1 WHERE a = 2000000000
+    expect: ok
+  - sql: |
+      SELECT * FROM gtest1
+    expect: rows
+    order: ordered

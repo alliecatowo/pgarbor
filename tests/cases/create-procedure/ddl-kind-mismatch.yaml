@@ -1,0 +1,55 @@
+# ALTER and DROP apply only to the matching routine kind; ROUTINE syntax accepts both.
+id: create-procedure.ddl-kind-mismatch
+title: ALTER and DROP FUNCTION or PROCEDURE reject the other routine kind and missing names
+family: create-procedure
+tier: core
+feature_ids: [procedures, functions, alter-routine, drop, errors]
+required_capabilities: [create-procedure, call]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_procedure.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION cp_testfunc1(a int) RETURNS int LANGUAGE SQL AS $$ SELECT a $$
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE ptest1(x text) LANGUAGE SQL AS $$ SELECT 1 $$
+    expect: ok
+  - sql: |
+      ALTER FUNCTION ptest1(text) VOLATILE
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ALTER PROCEDURE cp_testfunc1(int) VOLATILE
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ALTER PROCEDURE nonexistent() VOLATILE
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP FUNCTION ptest1(text)
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      DROP PROCEDURE cp_testfunc1(int)
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      DROP PROCEDURE nonexistent()
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER PROCEDURE ptest1(text) STRICT
+    expect: ok
+  - sql: |
+      ALTER ROUTINE ptest1(text) RENAME TO ptest1a
+    expect: ok
+  - sql: |
+      ALTER ROUTINE ptest1a RENAME TO ptest1
+    expect: ok
+  - sql: |
+      DROP ROUTINE cp_testfunc1(int)
+    expect: ok

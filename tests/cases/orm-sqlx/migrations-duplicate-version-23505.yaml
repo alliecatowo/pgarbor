@@ -1,0 +1,33 @@
+# Re-running a migration insert with an already recorded version violates the primary key.
+id: orm-sqlx.migrations-duplicate-version-23505
+title: Duplicate migration version insert fails with unique violation and leaves the table unchanged
+family: orm-sqlx
+tier: core
+feature_ids: [extended-protocol, constraints, primary-key, errors]
+required_capabilities: [create-table, insert, select, extended-protocol, bytea]
+provenance:
+  source: research
+  ref: "sqlx migrator behaviour on a version already present; PG18 errcodes 23505"
+sessions: [a]
+setup: |
+  CREATE TABLE _sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),
+    success BOOLEAN NOT NULL,
+    checksum BYTEA NOT NULL,
+    execution_time BIGINT NOT NULL
+  );
+  INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (1, 'first', true, '\x00', 10);
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES ($1, $2, $3, $4, $5)
+      params: ["1", "again", "true", "\\x00", "7"]
+      param_types: [20, 25, 16, 17, 20]
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT version, description FROM _sqlx_migrations ORDER BY version
+    expect: rows
+    order: ordered

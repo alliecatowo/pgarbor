@@ -1,0 +1,42 @@
+# Policies scoped by command: SELECT and DELETE policies apply, no UPDATE policy means UPDATE touches zero rows.
+id: rowsecurity.command-specific-policies
+title: "Command-scoped policies apply only to their own statement type"
+family: rowsecurity
+tier: core
+feature_ids: [rls, policies, select, update, delete, returning]
+required_capabilities: [create-table, insert, select, update, delete, rls, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, owner text, note text);
+  INSERT INTO t VALUES (1, 'alice', 'a'), (2, 'bob', 'b'), (3, 'alice', 'c');
+  CREATE POLICY sel_all ON t FOR SELECT USING (true);
+  CREATE POLICY del_own ON t FOR DELETE USING (owner = current_setting('app.uid', true));
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE t FORCE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SET app.uid = 'alice'
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: SELECT policy allows all three rows
+  - sql: |
+      DELETE FROM t WHERE id = 2
+    expect: ok
+    comment: row 2 belongs to bob, so the DELETE policy filters it out and zero rows are deleted
+  - sql: |
+      DELETE FROM t WHERE id = 1 RETURNING id
+    expect: rows
+    comment: row 1 is alice's, so it is deleted
+  - sql: |
+      UPDATE t SET note = 'x' WHERE id = 3
+    expect: ok
+    comment: no UPDATE policy applies, so zero rows are updated without error
+  - sql: |
+      SELECT id, note FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,24 @@
+# A column listed twice in UPDATE OF is rejected with 42701 and no trigger is created.
+id: triggers.err-update-of-duplicate-column
+title: UPDATE OF column list naming the same column twice fails with duplicate_column
+family: triggers
+tier: extended
+feature_ids: [triggers, plpgsql, errors, catalog-introspection]
+required_capabilities: [create-table, select, plpgsql, triggers, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (error_upd_a_a: UPDATE OF a, a); errcodes 42701"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int, b int);
+  CREATE FUNCTION noop2() RETURNS trigger AS $$
+  BEGIN RETURN NEW; END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER t_dup BEFORE UPDATE OF a, a ON t FOR EACH ROW EXECUTE PROCEDURE noop2()
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      SELECT count(*) FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal
+    expect: rows

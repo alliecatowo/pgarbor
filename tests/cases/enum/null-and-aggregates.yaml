@@ -1,0 +1,37 @@
+# NULL enum values: comparisons yield NULL, aggregates skip NULL, count(col) vs count(*), and enum_first on a NULL argument.
+id: enum.null-and-aggregates
+title: NULL enum values in comparisons, min/max, count and enum_first
+family: enum
+tier: core
+feature_ids: [enum, aggregates, null-semantics, enum-functions]
+required_capabilities: [enum-type, create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/enum.sql
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+  CREATE TABLE enumtest (col rainbow);
+  INSERT INTO enumtest VALUES ('yellow'), (NULL), ('green'), (NULL);
+steps:
+  - sql: |
+      SELECT count(*), count(col), min(col), max(col) FROM enumtest
+    expect: rows
+  - sql: |
+      SELECT col IS NULL AS is_null, col = 'green' AS is_green FROM enumtest ORDER BY col NULLS LAST, is_null
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT max(col) FROM enumtest WHERE col < 'green'
+    expect: rows
+  - sql: |
+      SELECT col FROM enumtest WHERE col IS DISTINCT FROM 'green' ORDER BY col NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT enum_first(NULL::rainbow)
+    expect: rows
+  - sql: |
+      SELECT min(col) FROM enumtest WHERE col IS NULL
+    expect: rows
+    comment: aggregate over only NULL inputs yields NULL

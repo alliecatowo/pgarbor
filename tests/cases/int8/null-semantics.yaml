@@ -1,0 +1,43 @@
+# NULL behavior for int8: comparisons drop NULL rows, IS DISTINCT FROM keeps them, aggregates skip them.
+id: int8.null-semantics
+title: int8 NULL propagation through operators, comparisons and aggregates
+family: int8
+tier: core
+feature_ids: [int8, null-handling, aggregates, comparison]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: hand
+  ref: "PG18 docs functions-comparison.html (NULL comparisons); int8 operators strict"
+sessions: [a]
+setup: |
+  CREATE TABLE n (id int4 PRIMARY KEY, v int8);
+  INSERT INTO n VALUES (1, 5), (2, NULL), (3, -5), (4, NULL);
+steps:
+  - sql: |
+      SELECT id FROM n WHERE v = 5 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM n WHERE v <> 5 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows with NULL v are excluded by a NULL comparison
+  - sql: |
+      SELECT id FROM n WHERE v IS DISTINCT FROM 5 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, v + 1 AS plus1, v * 0 AS mul0, -v AS neg FROM n ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS all_rows, count(v) AS non_null, sum(v) AS total, min(v) AS lo, max(v) AS hi FROM n
+    expect: rows
+  - sql: |
+      SELECT 5::int8 = NULL::int8 AS eq_null, NULL::int8 / 0::int8 AS null_div
+    expect: rows
+    comment: strict operators return NULL for NULL input without evaluating the zero divisor
+  - sql: |
+      SELECT id FROM n ORDER BY v NULLS FIRST, id
+    expect: rows
+    order: ordered

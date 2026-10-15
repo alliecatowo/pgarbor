@@ -1,0 +1,40 @@
+# serial columns: DEFAULT draws from the owned sequence, explicit values do not advance it, NULL violates NOT NULL.
+id: sequence.serial-null-and-default
+title: serial column defaults from its sequence, explicit values bypass it, explicit NULL gives 23502
+family: sequence
+tier: core
+feature_ids: [sequences, serial, constraints, insert, errors]
+required_capabilities: [create-table, insert, select, errors, sequences]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/sequence.sql (serialTest1)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st1 (f1 text, f2 serial);
+steps:
+  - sql: |
+      INSERT INTO st1 VALUES ('foo')
+    expect: ok
+  - sql: |
+      INSERT INTO st1 VALUES ('bar')
+    expect: ok
+  - sql: |
+      INSERT INTO st1 VALUES ('force', 100)
+    expect: ok
+    comment: explicit value does not advance the sequence
+  - sql: |
+      INSERT INTO st1 VALUES ('wrong', NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO st1 VALUES ('more')
+    expect: ok
+  - sql: |
+      SELECT f1, f2 FROM st1 ORDER BY f2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT last_value FROM st1_f2_seq
+    expect: rows
+    comment: the sequence advanced only for defaulted rows, so last_value is 3

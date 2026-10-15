@@ -1,0 +1,35 @@
+# CREATE OR REPLACE errors when OUT parameters or the declared return type conflict.
+id: rangefuncs.out-parameter-definition-errors
+title: "CREATE OR REPLACE rejects OUT-parameter result type conflicts; valid redefinition works"
+family: rangefuncs
+tier: extended
+feature_ids: [out-parameters, create-or-replace, function-definition, errors]
+required_capabilities: [create-function, sql-functions, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rangefuncs.sql (explicit spec of return type; error, wrong result type)"
+setup: |
+  CREATE FUNCTION rngfunc(in f1 int, out f2 int) AS 'select $1+1' LANGUAGE sql;
+steps:
+  - sql: |
+      CREATE OR REPLACE FUNCTION rngfunc(in f1 int, out f2 int) RETURNS float AS 'select $1+1' LANGUAGE sql
+    expect: error
+    sqlstate: "42P13"
+    comment: "single OUT int requires result type integer"
+  - sql: |
+      CREATE OR REPLACE FUNCTION rngfunc(in f1 int, out f2 int, out f3 text) RETURNS int AS 'select $1+1' LANGUAGE sql
+    expect: error
+    sqlstate: "42P13"
+    comment: "multiple OUT parameters require result type record"
+  - sql: |
+      CREATE OR REPLACE FUNCTION rngfunc(in f1 int, out f2 int, out f3 text) RETURNS record AS 'select $1+1' LANGUAGE sql
+    expect: error
+    sqlstate: "42P13"
+    comment: "OUT parameter list cannot change for an existing function"
+  - sql: |
+      CREATE OR REPLACE FUNCTION rngfunc(in f1 int, out f2 int) RETURNS int AS 'select $1+1' LANGUAGE sql
+    expect: ok
+  - sql: |
+      SELECT rngfunc(42)
+    expect: rows
+    order: multiset

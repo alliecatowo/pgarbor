@@ -1,0 +1,31 @@
+# A policy expression must be boolean: an integer USING expression fails with 42804.
+id: rowsecurity.policy-using-not-boolean
+title: "Policy USING expression must be boolean"
+family: rowsecurity
+tier: extended
+feature_ids: [rls, policies, errors, types]
+required_capabilities: [create-table, select, rls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowsecurity.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, 1), (2, 0);
+steps:
+  - sql: |
+      CREATE POLICY p_int ON t USING (v)
+    expect: error
+    sqlstate: "42804"
+    comment: argument of POLICY must be type boolean, not type integer
+  - sql: |
+      CREATE POLICY p_bool ON t USING (v > 0)
+    expect: ok
+  - sql: |
+      ALTER TABLE t ENABLE ROW LEVEL SECURITY
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the owner bypasses RLS without FORCE, so both rows are returned

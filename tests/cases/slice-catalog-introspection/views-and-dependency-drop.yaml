@@ -1,0 +1,34 @@
+# information_schema.views and information_schema.tables after nested views; DROP with a dependent view raises 2BP01; CASCADE removes dependents.
+id: slice-catalog-introspection.views-and-dependency-drop
+title: information_schema views and tables listing, dependent-object drop error and CASCADE
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, create-view, drop-table, information-schema]
+required_capabilities: [create-table, create-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/infoschema-views.html; https://www.postgresql.org/docs/18/sql-droptable.html"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4 PRIMARY KEY, v text);
+  CREATE VIEW base_v AS SELECT id, upper(v) AS uv FROM base WHERE id > 0;
+  CREATE VIEW base_v2 AS SELECT uv FROM base_v;
+steps:
+  - sql: |
+      SELECT table_name, view_definition FROM information_schema.views WHERE table_schema = 'public' ORDER BY table_name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE base
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP TABLE base CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM information_schema.views WHERE table_schema = 'public'
+    expect: rows

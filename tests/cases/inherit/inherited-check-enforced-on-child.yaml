@@ -1,0 +1,33 @@
+# An inheritable CHECK constraint is copied to children and enforced there, including for NULL-producing expressions.
+id: inherit.inherited-check-enforced-on-child
+title: Inheritable CHECK constraint is enforced on inheriting child inserts
+family: inherit
+tier: core
+feature_ids: [inheritance, check-constraints, insert, null-semantics, errors]
+required_capabilities: [create-table, insert, select, inheritance, constraints]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/inherit.sql
+  license: PostgreSQL License
+sessions: [a]
+setup: |
+  CREATE TABLE ac (aa TEXT);
+  ALTER TABLE ac ADD CONSTRAINT ac_check CHECK (aa IS NOT NULL);
+  CREATE TABLE bc (bb TEXT) INHERITS (ac);
+steps:
+  - sql: |
+      INSERT INTO ac (aa) VALUES (NULL)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO bc (aa) VALUES (NULL)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO bc (aa, bb) VALUES ('', 'ok')
+    expect: ok
+    comment: empty string is not NULL, so the check passes
+  - sql: |
+      SELECT aa, bb FROM bc
+    expect: rows
+    order: multiset

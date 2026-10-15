@@ -1,0 +1,35 @@
+# MATCH FULL: all-NULL FK columns are allowed, but a partially NULL key is rejected.
+id: foreign-key.match-full-partial-null-rejected
+title: "MATCH FULL accepts all-NULL keys and rejects partially NULL keys"
+family: foreign-key
+tier: core
+feature_ids: [foreign-keys, insert, select, create-table, constraints]
+required_capabilities: [create-table, insert, select, foreign-keys, constraints]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (a int4, b int4, PRIMARY KEY (a, b));
+  CREATE TABLE fk (id int4 PRIMARY KEY, a int4, b int4, FOREIGN KEY (a, b) REFERENCES pk MATCH FULL);
+  INSERT INTO pk VALUES (1, 2);
+steps:
+  - sql: |
+      INSERT INTO fk VALUES (1, NULL, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO fk VALUES (2, 1, NULL)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      INSERT INTO fk VALUES (3, NULL, 2)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      INSERT INTO fk VALUES (4, 1, 2)
+    expect: ok
+  - sql: |
+      SELECT id, a, b FROM fk ORDER BY id
+    expect: rows
+    order: ordered

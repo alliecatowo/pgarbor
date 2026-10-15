@@ -1,0 +1,43 @@
+# A cursor declared after a savepoint is closed by ROLLBACK TO; FETCH on it then fails with 34000.
+id: transactions.cursor-created-in-aborted-subtransaction
+title: Cursor declared inside a rolled-back savepoint is gone (34000); its table is gone too
+family: transactions
+tier: extended
+feature_ids: [transactions, savepoints, cursors, create-table, errors]
+required_capabilities: [create-table, insert, select, transactions, savepoints, cursors, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/transactions.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT x
+    expect: ok
+  - sql: |
+      CREATE TABLE trans_abc (a int4);
+      INSERT INTO trans_abc VALUES (5);
+      INSERT INTO trans_abc VALUES (10);
+      DECLARE foo CURSOR FOR SELECT * FROM trans_abc
+    expect: ok
+  - sql: |
+      FETCH FROM foo
+    expect: rows
+    order: ordered
+  - sql: |
+      ROLLBACK TO x
+    expect: ok
+  - sql: |
+      FETCH FROM foo
+    expect: error
+    sqlstate: "34000"
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: the failed FETCH aborted the block, so COMMIT reports ROLLBACK
+  - sql: |
+      SELECT to_regclass('trans_abc') IS NULL AS table_gone
+    expect: rows

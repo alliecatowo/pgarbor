@@ -1,0 +1,36 @@
+# UPDATE OF b fires whenever b is named in the SET list, even if its value is unchanged.
+id: triggers.update-of-column-list
+title: UPDATE OF column trigger fires when the column is in SET, not only when it changes
+family: triggers
+tier: core
+feature_ids: [triggers, plpgsql, update, select]
+required_capabilities: [create-table, insert, select, update, plpgsql, triggers]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/triggers.sql (after_upd_b_row_trig: AFTER UPDATE OF b)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int, b int, c int);
+  INSERT INTO t VALUES (1, 1, 1);
+  CREATE TABLE trig_log (msg text);
+  CREATE FUNCTION log_upd() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_b AFTER UPDATE OF b ON t FOR EACH ROW EXECUTE PROCEDURE log_upd();
+steps:
+  - sql: |
+      UPDATE t SET c = 2
+    expect: ok
+  - sql: |
+      UPDATE t SET b = b
+    expect: ok
+  - sql: |
+      UPDATE t SET a = 5, b = 1
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: ordered

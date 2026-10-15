@@ -1,0 +1,40 @@
+# Writes through a simple view onto a table with a virtual generated column.
+id: generated-virtual.view-insert-and-delete
+title: INSERT through an auto-updatable view rejects explicit generated values and accepts DEFAULT
+family: generated-virtual
+tier: extended
+feature_ids: [generated-columns, views, insert, delete]
+required_capabilities: [create-table, create-view, insert, delete, select, views]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/generated_virtual.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE gtest1 (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
+  CREATE VIEW gtest1v AS SELECT * FROM gtest1;
+steps:
+  - sql: |
+      INSERT INTO gtest1v VALUES (4, 8)
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      INSERT INTO gtest1v VALUES (5, DEFAULT)
+    expect: ok
+  - sql: |
+      INSERT INTO gtest1v VALUES (6, 66), (7, 77)
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      INSERT INTO gtest1v VALUES (6, DEFAULT), (7, DEFAULT)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM gtest1v ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM gtest1v WHERE a >= 5
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM gtest1
+    expect: rows
+    order: multiset

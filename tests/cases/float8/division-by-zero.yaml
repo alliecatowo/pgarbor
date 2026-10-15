@@ -1,0 +1,28 @@
+# Dividing a non-NaN float8 by zero raises 22012, including from a table column.
+id: float8.division-by-zero
+title: Float8 division by zero raises 22012 except when the dividend is NaN
+family: float8
+tier: core
+feature_ids: [float8, arithmetic, errors]
+required_capabilities: [select, create-table, insert]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/float8.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE f8d (f1 float8);
+  INSERT INTO f8d VALUES (0.0), (1004.3), (-34.84);
+steps:
+  - sql: |
+      SELECT 1.0::float8 / 0.0::float8
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SELECT f1 / '0.0' FROM f8d
+    expect: error
+    sqlstate: "22012"
+    comment: the first row evaluated (0.0) already triggers the error
+  - sql: |
+      SELECT f1, f1 / '-10' AS x FROM f8d WHERE f1 > '0.0' ORDER BY f1
+    expect: rows
+    order: ordered

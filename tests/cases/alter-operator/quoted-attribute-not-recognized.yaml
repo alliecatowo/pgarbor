@@ -1,0 +1,31 @@
+# Attribute names are matched case-sensitively: a quoted, non-lowercase "Restrict" is not recognized.
+id: alter-operator.quoted-attribute-not-recognized
+title: Quoted non-lowercase operator attribute name is rejected as unrecognized
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, errors, identifiers]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn,
+      RESTRICT = contsel
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET ("Restrict" = contsel)
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT oprrest::regproc::text AS restrict_fn
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset

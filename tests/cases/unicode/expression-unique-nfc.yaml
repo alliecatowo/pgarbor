@@ -1,0 +1,39 @@
+# Unique expression index on normalize(raw, NFC): canonically equivalent strings collide (23505),
+# and a normalized parameter finds the stored row.
+id: unicode.expression-unique-nfc
+title: Unique expression index on normalize(..., NFC) rejects canonically equivalent duplicates
+family: unicode
+tier: core
+feature_ids: [unicode-normalize, create-table, create-index, insert, select, extended-protocol, constraints]
+required_capabilities: [create-table, create-index, insert, select, extended-protocol]
+provenance:
+  source: hand
+  ref: "src/test/regress/sql/unicode.sql (normalize NFC equivalence); PG18 indexes-expressional.html"
+sessions: [a]
+setup: |
+  CREATE TABLE names (id int4 PRIMARY KEY, raw text NOT NULL);
+  CREATE UNIQUE INDEX names_nfc_key ON names ((normalize(raw, NFC)));
+steps:
+  - sql: |
+      INSERT INTO names VALUES (1, U&'\0065\0301')
+    expect: ok
+  - sql: |
+      INSERT INTO names VALUES (2, U&'\00E9')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO names VALUES (3, 'plain')
+    expect: ok
+  - exec_params:
+      sql: |
+        SELECT id FROM names WHERE normalize(raw, NFC) = normalize($1, NFC) ORDER BY id
+      params: ["é"]
+      param_types: [25]
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, encode(convert_to(raw, 'UTF8'), 'hex') AS raw_hex,
+             encode(convert_to(normalize(raw, NFC), 'UTF8'), 'hex') AS nfc_hex
+      FROM names ORDER BY id
+    expect: rows
+    order: ordered

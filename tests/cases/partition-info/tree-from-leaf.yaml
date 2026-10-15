@@ -1,0 +1,34 @@
+# pg_partition_tree from a leaf table returns exactly that leaf; the same tree is reached via pg_partition_root.
+id: partition-info.tree-from-leaf
+title: pg_partition_tree from a leaf table returns only the leaf, and from pg_partition_root of a leaf returns the full tree
+family: partition-info
+tier: core
+feature_ids: [partitioning, partition-tree-functions, joins]
+required_capabilities: [create-table, select, joins, catalog-introspection, partitioning]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_info.sql
+sessions: [a]
+setup: |
+  CREATE TABLE ptif_test (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE ptif_test0 PARTITION OF ptif_test FOR VALUES FROM (MINVALUE) TO (0) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test01 PARTITION OF ptif_test0 FOR VALUES IN (1);
+  CREATE TABLE ptif_test1 PARTITION OF ptif_test FOR VALUES FROM (0) TO (100) PARTITION BY LIST (b);
+  CREATE TABLE ptif_test11 PARTITION OF ptif_test1 FOR VALUES IN (1);
+steps:
+  - sql: |
+      SELECT c.relname, p.parentrelid::regclass::text AS parent, p.level, p.isleaf
+      FROM pg_partition_tree('ptif_test01') p
+      JOIN pg_class c ON (p.relid = c.oid)
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+    comment: single row for the leaf, parent is ptif_test0
+  - sql: |
+      SELECT c.relname, p.parentrelid::regclass::text AS parent, p.level, p.isleaf
+      FROM pg_partition_tree(pg_partition_root('ptif_test01')) p
+      JOIN pg_class c ON (p.relid = c.oid)
+      ORDER BY p.level, c.relname
+    expect: rows
+    order: ordered
+    comment: pg_partition_root of the leaf is ptif_test, so the full tree comes back

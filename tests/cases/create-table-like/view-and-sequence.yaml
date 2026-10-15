@@ -1,0 +1,32 @@
+# LIKE accepts a view (its columns are copied), but rejects a sequence as an invalid LIKE relation.
+id: create-table-like.view-and-sequence
+title: LIKE of a view copies its columns, LIKE of a sequence is rejected
+family: create-table-like
+tier: extended
+feature_ids: [create-table, create-table-like, views, sequences, errors, select]
+required_capabilities: [create-table, select, views, sequences]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_table_like.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE base (a int4, b text);
+  INSERT INTO base VALUES (1, 'x');
+  CREATE VIEW v_base AS SELECT a, b FROM base;
+  CREATE SEQUENCE sq1;
+steps:
+  - sql: |
+      CREATE TABLE from_view (LIKE v_base)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n, (SELECT count(*) FROM information_schema.columns WHERE table_name = 'from_view') AS ncols FROM from_view
+    expect: rows
+    comment: the view columns are copied, the view's data is not
+  - sql: |
+      CREATE TABLE from_seq (LIKE sq1)
+    expect: error
+    sqlstate: "42809"
+    comment: sequence is not a valid LIKE relation (recorder checks this sqlstate)
+  - sql: |
+      SELECT to_regclass('from_seq') IS NULL AS absent
+    expect: rows

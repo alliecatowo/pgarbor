@@ -1,0 +1,28 @@
+# Recursive CTE walking a parent-pointer tree and accumulating each node's path as an array.
+id: with.recursive-tree-paths
+title: Recursive CTE accumulates root-to-node paths in an array column
+family: with
+tier: extended
+feature_ids: [with-recursive, cte, arrays, joins, foreign-key]
+required_capabilities: [with, create-table, insert, select, arrays, foreign-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/with.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE tree (
+    id int4 PRIMARY KEY,
+    parent_id int4 REFERENCES tree(id)
+  );
+  INSERT INTO tree VALUES (1, NULL), (2, 1), (3, 1), (4, 2), (5, 2), (6, 3), (7, 4);
+steps:
+  - sql: |
+      WITH RECURSIVE t(id, path) AS (
+          VALUES (1, ARRAY[]::int4[])
+        UNION ALL
+          SELECT tree.id, t.path || tree.id
+          FROM tree JOIN t ON (tree.parent_id = t.id)
+      )
+      SELECT id, path, cardinality(path) AS depth FROM t ORDER BY id
+    expect: rows
+    order: ordered

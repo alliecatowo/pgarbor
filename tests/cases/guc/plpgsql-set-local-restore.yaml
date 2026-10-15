@@ -1,0 +1,50 @@
+# plpgsql functions with a SET option: SET LOCAL and SET inside the body interact with the function-level setting, and a failing call restores it.
+id: guc.plpgsql-set-local-restore
+title: plpgsql SET LOCAL and SET inside a function with SET option; error rolls the setting back
+family: guc
+tier: extended
+feature_ids: [guc, function-set-option, set-local, plpgsql, errors]
+required_capabilities: [select, create-function, plpgsql, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/guc.sql
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_set_local(int) RETURNS text AS $$
+  BEGIN
+    SET LOCAL work_mem = '2MB';
+    RETURN current_setting('work_mem');
+  END $$ LANGUAGE plpgsql SET work_mem = '1MB';
+  CREATE FUNCTION pl_set_plain(int) RETURNS text AS $$
+  BEGIN
+    SET work_mem = '2MB';
+    RETURN current_setting('work_mem');
+  END $$ LANGUAGE plpgsql SET work_mem = '1MB';
+  CREATE FUNCTION pl_set_then_fail(int) RETURNS text AS $$
+  BEGIN
+    SET work_mem = '2MB';
+    PERFORM 1 / $1;
+    RETURN current_setting('work_mem');
+  END $$ LANGUAGE plpgsql SET work_mem = '1MB';
+steps:
+  - sql: |
+      SET work_mem = '3MB'
+    expect: ok
+  - sql: |
+      SELECT pl_set_local(0) AS inside, current_setting('work_mem') AS outside
+    expect: rows
+  - sql: |
+      SELECT pl_set_plain(0) AS inside, current_setting('work_mem') AS outside
+    expect: rows
+  - sql: |
+      SELECT pl_set_then_fail(0)
+    expect: error
+    sqlstate: "22012"
+    comment: division_by_zero; the SET inside the body must be rolled back
+  - sql: |
+      SELECT current_setting('work_mem') AS after_error
+    expect: rows
+    comment: should be back to 3MB
+  - sql: |
+      SELECT pl_set_then_fail(1) AS inside, current_setting('work_mem') AS outside
+    expect: rows

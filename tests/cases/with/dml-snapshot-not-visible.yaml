@@ -1,0 +1,30 @@
+# Sub-statements of one query share a snapshot: the outer SELECT does not see a row
+# inserted by a data-modifying WITH in the same statement.
+id: with.dml-snapshot-not-visible
+title: Data-modifying WITH row is invisible to the outer query snapshot
+family: with
+tier: core
+feature_ids: [with, data-modifying-cte, insert, subquery, transactions]
+required_capabilities: [with, create-table, insert, select, subqueries]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/with.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1), (2);
+steps:
+  - sql: |
+      WITH ins AS (
+        INSERT INTO t VALUES (3) RETURNING id
+      )
+      SELECT
+        (SELECT count(*) FROM t) AS seen_by_outer,
+        (SELECT count(*) FROM ins) AS inserted
+    expect: rows
+    order: multiset
+    comment: outer count must not include the row 3 inserted by the same statement
+  - sql: |
+      SELECT count(*) AS total FROM t
+    expect: rows
+    order: multiset

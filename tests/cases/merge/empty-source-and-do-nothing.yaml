@@ -1,0 +1,39 @@
+# An empty source does nothing for MATCHED / NOT MATCHED clauses, but deletes every target row under NOT MATCHED BY SOURCE.
+id: merge.empty-source-and-do-nothing
+title: Empty source is a no-op for MATCHED and DO NOTHING, but NOT MATCHED BY SOURCE deletes all target rows
+family: merge
+tier: core
+feature_ids: [merge, do-nothing, delete, select]
+required_capabilities: [create-table, insert, delete, select, merge]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/merge.sql (zero rows in source has no effect; DO NOTHING actions)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (2, 20);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source s
+      ON t.tid = s.sid
+      WHEN MATCHED THEN
+        DELETE
+      WHEN NOT MATCHED THEN
+        DO NOTHING
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM target
+    expect: rows
+    comment: expect n = 2
+  - sql: |
+      MERGE INTO target t
+      USING source s
+      ON t.tid = s.sid
+      WHEN NOT MATCHED BY SOURCE THEN
+        DELETE
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM target
+    expect: rows
+    comment: expect n = 0; every target row is not matched by the empty source

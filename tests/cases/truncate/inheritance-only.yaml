@@ -1,0 +1,43 @@
+# TRUNCATE recurses into inheritance children by default; TRUNCATE ONLY leaves them alone.
+id: truncate.inheritance-only
+title: "TRUNCATE recurses into inheritance children, TRUNCATE ONLY does not"
+family: truncate
+tier: extended
+feature_ids: [truncate, inheritance, transactions, insert, select]
+required_capabilities: [create-table, insert, select, inheritance, truncate, transactions]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/truncate.sql
+sessions: [a]
+setup: |
+  CREATE TABLE f (col1 int4 PRIMARY KEY);
+  CREATE TABLE fa (col2 text) INHERITS (f);
+  INSERT INTO f VALUES (1);
+  INSERT INTO fa VALUES (2, 'two');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      TRUNCATE f
+    expect: ok
+  - sql: |
+      SELECT col1 FROM f ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: "the child rows are truncated too"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      TRUNCATE ONLY f
+    expect: ok
+  - sql: |
+      SELECT col1 FROM f ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: "the parent is empty, but the query still sees the child row through inheritance"
+  - sql: |
+      SELECT col1, col2 FROM fa ORDER BY col1
+    expect: rows
+    order: ordered

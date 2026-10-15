@@ -1,0 +1,38 @@
+# Aggregate over a prepared statement with a bound parameter, through the extended protocol.
+id: aggregates.extended-protocol-sum
+title: Prepared aggregate with bound parameter filter, NULL parameter, and text results
+family: aggregates
+tier: extended
+feature_ids: [aggregates, extended-protocol, prepared-statements, count, sum, nulls]
+required_capabilities: [create-table, insert, select, aggregates, extended-protocol]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/aggregates.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4, v int8);
+  INSERT INTO p VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+steps:
+  - parse:
+      name: agg_sum
+      sql: |
+        SELECT sum(v), count(*), count(v) FROM p WHERE id >= $1
+      param_types: [23]
+    expect: ok
+  - execute:
+      statement: agg_sum
+      params: ["2"]
+    expect: rows
+    comment: ids 2..4 give sum 60 (numeric), count 3, count(v) 2
+  - execute:
+      statement: agg_sum
+      params: ["10"]
+    expect: rows
+    comment: no rows, sum is NULL, counts are 0
+  - execute:
+      statement: agg_sum
+      params: [null]
+    expect: rows
+    comment: NULL bound to id >= NULL matches nothing
+  - close:
+      statement: agg_sum

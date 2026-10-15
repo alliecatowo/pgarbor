@@ -1,0 +1,34 @@
+# Assigning a wrong type or an unknown field to a composite subfield is rejected and changes nothing.
+id: rowtypes.composite-subfield-type-error
+title: Composite subfield assignment type mismatch and unknown field errors
+family: rowtypes
+tier: core
+feature_ids: [composite-types, update, errors, field-assignment]
+required_capabilities: [create-type, create-table, insert, update, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rowtypes.sql"
+  license: PostgreSQL License
+setup: |
+  CREATE TYPE complex AS (r float8, i float8);
+  CREATE TYPE quad AS (c1 complex, c2 complex);
+  CREATE TABLE quadtable (f1 int4, q quad);
+  INSERT INTO quadtable VALUES (2, ((null,4.4),(5.5,6.6)));
+steps:
+  - sql: |
+      UPDATE quadtable SET q.c1 = 12
+    expect: error
+    sqlstate: "42804"
+    comment: an integer cannot be assigned to a complex-typed field
+  - sql: |
+      SELECT f1, (q).c1.i AS c1i, (q).c2.r AS c2r FROM quadtable
+    expect: rows
+    comment: the failed update left the row unchanged
+  - sql: |
+      UPDATE quadtable SET q.c1.nosuch = 1 WHERE f1 = 2
+    expect: error
+    sqlstate: "42703"
+    comment: no such field in complex
+  - sql: |
+      SELECT f1, (q).c1.i AS c1i FROM quadtable
+    expect: rows

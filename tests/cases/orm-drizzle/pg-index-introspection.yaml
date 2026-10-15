@@ -1,0 +1,29 @@
+# drizzle-kit reads pg_index and pg_get_indexdef to diff indexes between schema and database.
+id: orm-drizzle.pg-index-introspection
+title: pg_index flags and pg_get_indexdef describe primary, unique and btree indexes
+family: orm-drizzle
+tier: core
+feature_ids: [indexes, btree-index, unique, catalog-introspection]
+required_capabilities: [create-table, btree-index, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 catalog-pg-index.html; functions-info.html pg_get_indexdef"
+sessions: [a]
+setup: |
+  CREATE TABLE events (
+    id integer PRIMARY KEY,
+    kind text NOT NULL,
+    happened_at timestamp,
+    payload jsonb
+  );
+  CREATE UNIQUE INDEX events_kind_uq ON events (kind, id);
+  CREATE INDEX events_happened_idx ON events (happened_at DESC);
+steps:
+  - sql: |
+      SELECT ic.relname AS index_name, i.indisunique, i.indisprimary, i.indnatts, pg_get_indexdef(i.indexrelid) AS definition FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid JOIN pg_catalog.pg_class tc ON tc.oid = i.indrelid WHERE tc.relname = 'events' ORDER BY ic.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'events' ORDER BY indexname
+    expect: rows
+    order: ordered

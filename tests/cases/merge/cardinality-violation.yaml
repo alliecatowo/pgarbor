@@ -1,0 +1,29 @@
+# Two source rows matching one target row is an error and the MERGE has no partial effect.
+id: merge.cardinality-violation
+title: Multiple source rows matching one target row raises cardinality_violation and changes nothing
+family: merge
+tier: core
+feature_ids: [merge, errors, update, delete]
+required_capabilities: [create-table, insert, update, delete, select, merge]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/merge.sql (duplicate source row causes multiple target row update ERROR)"
+setup: |
+  CREATE TABLE target (tid integer, balance integer);
+  CREATE TABLE source (sid integer, delta integer);
+  INSERT INTO target VALUES (1, 10), (2, 20);
+  INSERT INTO source VALUES (1, 5), (1, 7), (2, 1);
+steps:
+  - sql: |
+      MERGE INTO target t
+      USING source s
+      ON t.tid = s.sid
+      WHEN MATCHED THEN
+        UPDATE SET balance = 0
+    expect: error
+    sqlstate: "21000"
+  - sql: |
+      SELECT tid, balance FROM target ORDER BY tid
+    expect: rows
+    order: ordered
+    comment: expect (1,10), (2,20); the failed statement left no changes

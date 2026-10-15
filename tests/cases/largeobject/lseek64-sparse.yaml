@@ -1,0 +1,59 @@
+# 64-bit seek, write at 4GB, and lo_truncate64 beyond 2^32 bytes.
+id: largeobject.lseek64-sparse
+title: 64-bit lo_lseek64, lo_tell64 and lo_truncate64 past the 32-bit boundary
+family: largeobject
+tier: extended
+feature_ids: [large-objects, lo-seek64, lo-tell64, lo-truncate64, transactions]
+required_capabilities: [large-objects, create-table, insert, update, select, transactions]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/largeobject.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE st (loid oid, fd integer);
+  INSERT INTO st (loid) SELECT lo_create(46);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE st SET fd = lo_open(loid, CAST(x'20000' | x'40000' AS integer))
+    expect: ok
+  - sql: |
+      SELECT lo_lseek64(fd, 4294967296, 0) FROM st
+    expect: rows
+  - sql: |
+      SELECT lowrite(fd, 'offset:4GB') FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_tell64(fd) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_lseek64(fd, -10, 1) FROM st
+    expect: rows
+  - sql: |
+      SELECT encode(loread(fd, 10), 'escape') FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_truncate64(fd, 5000000000) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_lseek64(fd, 0, 2) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_truncate64(fd, 3000000000) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_lseek64(fd, 0, 2) FROM st
+    expect: rows
+  - sql: |
+      SELECT lo_close(fd) FROM st
+    expect: rows
+  - sql: |
+      END
+    expect: ok
+  - sql: |
+      SELECT encode(lo_get(loid, 2999999990, 10), 'hex') FROM st
+    expect: rows
+    comment: the region between the 4GB text and the 3GB truncation point is gone; read zeros

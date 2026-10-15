@@ -1,0 +1,39 @@
+# pg_enum listing in sort order after ADD VALUE, enum_range, pg_type typtype, and enum input and duplicate-label errors.
+id: slice-catalog-introspection.enum-labels-and-sort-order
+title: Enum labels listed in sort order after ADD VALUE, with invalid-input and duplicate-label errors
+family: slice-catalog-introspection
+tier: core
+feature_ids: [catalog-introspection, enum, create-type, create-table, errors]
+required_capabilities: [create-table, create-type, insert, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "https://www.postgresql.org/docs/18/catalog-pg-enum.html; https://www.postgresql.org/docs/18/sql-altertype.html"
+sessions: [a]
+setup: |
+  CREATE TYPE level AS ENUM ('low', 'high');
+  ALTER TYPE level ADD VALUE 'mid' BETWEEN 'low' AND 'high';
+  ALTER TYPE level ADD VALUE 'top' AFTER 'high';
+  CREATE TABLE tasks (id int4, lvl level);
+steps:
+  - sql: |
+      SELECT enumlabel FROM pg_enum WHERE enumtypid = 'level'::regtype ORDER BY enumsortorder
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT array_to_string(enum_range(NULL::level), ',') AS labels, t.typtype, format_type(t.oid, NULL) AS name FROM pg_type t WHERE t.typname = 'level' AND t.typnamespace = 'public'::regnamespace
+    expect: rows
+  - sql: |
+      INSERT INTO tasks VALUES (1, 'mid'), (2, NULL), (3, 'top')
+    expect: ok
+  - sql: |
+      SELECT id, lvl::text FROM tasks ORDER BY lvl NULLS LAST, id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO tasks VALUES (4, 'urgent')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      ALTER TYPE level ADD VALUE 'mid'
+    expect: error
+    sqlstate: "42710"

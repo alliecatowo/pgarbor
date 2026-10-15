@@ -1,0 +1,33 @@
+# Name collisions: CREATE VIEW on an existing relation gives 42P07; OR REPLACE VIEW on a table gives 42809.
+id: create-view.duplicate-and-wrong-type
+title: CREATE VIEW name collision and OR REPLACE on a table
+family: create-view
+tier: core
+feature_ids: [create-view, errors, catalog-introspection]
+required_capabilities: [create-table, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_view.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE dt (a int);
+  CREATE VIEW dv AS SELECT 1 AS one;
+steps:
+  - sql: |
+      CREATE VIEW dv AS SELECT 2 AS two
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      CREATE VIEW dt AS SELECT 1 AS one
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      CREATE OR REPLACE VIEW dt AS SELECT 1 AS one
+    expect: error
+    sqlstate: "42809"
+    comment: dt is a table, not a view
+  - sql: |
+      SELECT relname, relkind FROM pg_class WHERE relname IN ('dt', 'dv') ORDER BY relname
+    expect: rows
+    order: ordered

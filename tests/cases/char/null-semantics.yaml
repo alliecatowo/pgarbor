@@ -1,0 +1,34 @@
+# NULL handling for char columns: comparisons yield NULL, aggregates skip NULL, IS DISTINCT FROM.
+id: char.null-semantics
+title: NULL char values propagate through comparisons and are skipped by count(col)
+family: char
+tier: core
+feature_ids: [char-type, nulls, aggregates, where]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: hand
+  ref: "PG18 docs functions-comparison.html (NULL comparison semantics)"
+sessions: [a]
+setup: |
+  CREATE TABLE char_null (id int4 PRIMARY KEY, f1 char(4));
+  INSERT INTO char_null VALUES (1, 'ab'), (2, NULL), (3, '');
+steps:
+  - sql: |
+      SELECT count(*) AS total, count(f1) AS non_null FROM char_null
+    expect: rows
+  - sql: |
+      SELECT id FROM char_null WHERE f1 = 'ab' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM char_null WHERE f1 IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM char_null WHERE NOT (f1 = 'ab') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the NULL row is excluded by three-valued logic; the '' row (stored as spaces) is included
+  - sql: |
+      SELECT (NULL::char(4) = 'ab') IS NULL AS cmp_is_null, (NULL::char(4) IS DISTINCT FROM 'ab'::char(4)) AS distinct_from
+    expect: rows

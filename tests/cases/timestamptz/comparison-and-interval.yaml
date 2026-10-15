@@ -1,0 +1,37 @@
+# Comparison operators, BETWEEN and subtraction of timestamptz values, with a NULL row excluded from predicates.
+id: timestamptz.comparison-and-interval
+title: timestamptz comparisons BETWEEN and difference yielding interval
+family: timestamptz
+tier: core
+feature_ids: [timestamptz, date-type, select, where-clause, comparison-operators, interval]
+required_capabilities: [create-table, insert, select, date-type, guc]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/timestamptz.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE tz_cmp (d1 timestamptz);
+  INSERT INTO tz_cmp VALUES ('1902-01-01 00:00:00+00'), ('1997-01-01 00:00:00+00'), ('1997-01-02 00:00:00+00'), ('1997-01-03 00:00:00+00'), ('2038-01-01 00:00:00+00'), (NULL);
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT
+        count(*) FILTER (WHERE d1 < timestamptz '1997-01-02+00') AS n_lt,
+        count(*) FILTER (WHERE d1 = timestamptz '1997-01-02+00') AS n_eq,
+        count(*) FILTER (WHERE d1 <> timestamptz '1997-01-02+00') AS n_ne,
+        count(*) FILTER (WHERE d1 <= timestamptz '1997-01-02+00') AS n_le,
+        count(*) FILTER (WHERE d1 >= timestamptz '1997-01-02+00') AS n_ge,
+        count(*) FILTER (WHERE d1 > timestamptz '1997-01-02+00') AS n_gt
+      FROM tz_cmp
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT d1::text AS d_text FROM tz_cmp WHERE d1 BETWEEN timestamptz '1902-01-01+00' AND timestamptz '2038-01-01+00' ORDER BY d1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT d1 - timestamptz '1997-01-02+00' AS diff FROM tz_cmp WHERE d1 BETWEEN '1902-01-01' AND '2038-01-01' ORDER BY d1
+    expect: rows
+    order: ordered

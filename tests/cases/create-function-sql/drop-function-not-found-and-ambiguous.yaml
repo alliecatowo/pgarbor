@@ -1,0 +1,32 @@
+# DROP FUNCTION without an argument list: exact drop, not-found error, ambiguous-overload error.
+id: create-function-sql.drop-function-not-found-and-ambiguous
+title: DROP FUNCTION on a missing name and on an ambiguous overloaded name fails with the right SQLSTATE
+family: create-function-sql
+tier: core
+feature_ids: [drop-function, errors, create-function]
+required_capabilities: [create-function, drop-function, sql-functions, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+setup: |
+  CREATE FUNCTION functest_b_1(int) RETURNS bool LANGUAGE sql AS 'SELECT $1 > 0';
+  CREATE FUNCTION functest_b_2(int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 > 0';
+  CREATE FUNCTION functest_b_2(bigint) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 > 0';
+steps:
+  - sql: |
+      DROP FUNCTION functest_b_1
+    expect: ok
+  - sql: |
+      DROP FUNCTION functest_b_1
+    expect: error
+    sqlstate: "42883"
+    comment: could not find a function named functest_b_1
+  - sql: |
+      DROP FUNCTION functest_b_2
+    expect: error
+    sqlstate: "42725"
+    comment: function name is not unique
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'functest_b_2'
+    expect: rows
+    comment: both overloads still exist after the ambiguous DROP

@@ -1,0 +1,30 @@
+# SP-GiST point_ops: containment in a box, equality, and index-backed filtering.
+id: spgist.point-containment
+title: SP-GiST point index answers point-in-box and point-equality filters
+family: spgist
+tier: core
+feature_ids: [spgist, create-index, point, select]
+required_capabilities: [create-table, create-index, insert, select, spgist, point]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/spgist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE sp_pt (id int4, p point);
+  CREATE INDEX sp_pt_idx ON sp_pt USING spgist (p);
+  INSERT INTO sp_pt (id, p)
+    SELECT g, point(g*10, g*10) FROM generate_series(1, 20) g;
+steps:
+  - sql: |
+      SELECT id FROM sp_pt WHERE p <@ box '((0,0),(55,55))' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: points (10,10)..(50,50) lie inside the box; (60,60) does not
+  - sql: |
+      SELECT id, p FROM sp_pt WHERE p ~= point(70, 70)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) FROM sp_pt WHERE p ~= point(71, 71)
+    expect: rows
+    comment: no point at (71,71), so the count must be zero

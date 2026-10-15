@@ -1,0 +1,45 @@
+# -> and ->> on objects, arrays and scalars: missing keys, out-of-range and negative indexes give NULL, JSON null vs SQL NULL.
+id: json.arrow-operators
+title: Field and element access operators -> and ->> across object, array and scalar input
+family: json
+tier: core
+feature_ids: [json, json-access, json-null]
+required_capabilities: [select, json]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/json.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT v.kind,
+             (v.j -> 'field2')::text AS key_json,
+             v.j ->> 'field2' AS key_text,
+             (v.j -> 'field3') IS NULL AS json_null_is_sql_null,
+             v.j ->> 'field3' IS NULL AS text_null_is_sql_null,
+             (v.j -> 'missing') IS NULL AS missing_key
+      FROM (VALUES
+        ('object', '{"field1":"val1","field2":"val2","field3":null,"field4":4}'::json),
+        ('array', '["zero","one",null,[1,2,3],{"f1":9}]'::json),
+        ('scalar', '"a scalar"'::json)
+      ) v(kind, j)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT v.kind,
+             (v.j -> 2)::text AS idx2,
+             v.j ->> 2 AS idx2_text,
+             (v.j -> -1)::text AS last_elem,
+             v.j ->> 9 AS out_of_range
+      FROM (VALUES
+        ('array', '["zero","one",null,[1,2,3],{"f1":9}]'::json),
+        ('object', '{"field1":"val1"}'::json),
+        ('scalar', '42'::json)
+      ) v(kind, j)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::json -> 1 IS NULL AS object_int_key_null,
+             '{"a": [{"b": "c"}, {"b": "cc"}]}'::json -> null::text IS NULL AS null_key_null
+    expect: rows

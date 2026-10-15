@@ -1,0 +1,45 @@
+# unnest with NULL elements, array_agg over arrays and rows, and min/max over array-valued columns.
+id: arrays.unnest-and-aggregates
+title: unnest preserves NULL elements; array_agg and min/max operate on array values
+family: arrays
+tier: core
+feature_ids: [arrays, unnest, array-aggregates, nulls, group-aggregates]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/arrays.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE arraggtest (id int4 PRIMARY KEY, f1 int4[], f2 text[][], f3 float8[]);
+  INSERT INTO arraggtest VALUES (1, '{1,2,3,4}', '{{grey,red},{blue,blue}}', '{1.6, 0.0}');
+  INSERT INTO arraggtest VALUES (2, '{1,2,3}', '{{grey,red},{grey,blue}}', '{1.6}');
+  INSERT INTO arraggtest VALUES (3, '{3,3,2,4,5,6}', '{{white,yellow},{pink,orange}}', '{2.1,3.3,1.8,1.7,1.6}');
+  INSERT INTO arraggtest VALUES (4, '{4,2,6,7,8,1}', '{{red},{black},{purple},{blue},{blue}}', NULL);
+steps:
+  - sql: |
+      SELECT v FROM unnest(ARRAY[1,2,3,NULL,4,NULL,NULL,5,6]) AS v ORDER BY v
+    expect: rows
+    order: ordered
+    comment: NULLs sort last by default
+  - sql: |
+      SELECT abs(v) AS a FROM unnest(ARRAY[1,2,NULL,-3]) AS v
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT max(f1), min(f1), max(f2), min(f2), max(f3), min(f3) FROM arraggtest
+    expect: rows
+  - sql: |
+      SELECT array_agg(ar) FROM (VALUES ('{1,2}'::int[]), ('{3,4}'::int[])) v(ar)
+    expect: rows
+  - sql: |
+      SELECT array_agg(x ORDER BY x) FROM (VALUES (2), (NULL::int), (1)) v(x)
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT array_agg(array[i, nullif(i, 3), i+1]) FROM generate_series(1,4) g(i)
+    expect: rows
+  - sql: |
+      SELECT array_agg(ar) FROM (VALUES ('{1,2}'::int[]), ('{3}'::int[])) v(ar)
+    expect: error
+    comment: no sqlstate asserted; arrays of different dimensionality cannot be accumulated

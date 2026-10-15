@@ -1,0 +1,51 @@
+# CHECK constraints: adding over violating rows fails 23514; NOT VALID enforces only new rows; VALIDATE fails until fixed; NULL passes CHECK.
+id: alter-table.add-check-validate
+title: ADD CONSTRAINT CHECK with NOT VALID and VALIDATE; NULL passes a CHECK
+family: alter-table
+tier: core
+feature_ids: [alter-table, check-constraint, not-valid, validate-constraint, null-semantics, errors]
+required_capabilities: [create-table, alter-table, insert, delete, select, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_table.sql (b_greater_than_ten CHECK NOT VALID)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE attmp3 (a int4, b int4);
+  INSERT INTO attmp3 VALUES (1, 10), (1, 20), (5, 5);
+steps:
+  - sql: |
+      ALTER TABLE attmp3 ADD CONSTRAINT b_gt_ten CHECK (b > 10)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      ALTER TABLE attmp3 ADD CONSTRAINT b_gt_ten CHECK (b > 10) NOT VALID
+    expect: ok
+  - sql: |
+      INSERT INTO attmp3 VALUES (9, 5)
+    expect: error
+    sqlstate: "23514"
+    comment: new rows are checked even though the constraint is NOT VALID
+  - sql: |
+      INSERT INTO attmp3 VALUES (2, NULL)
+    expect: ok
+    comment: NULL makes the CHECK expression NULL, which passes
+  - sql: |
+      ALTER TABLE attmp3 VALIDATE CONSTRAINT b_gt_ten
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      DELETE FROM attmp3 WHERE NOT b > 10
+    expect: ok
+    comment: removes (1,10) and (5,5); the NULL row survives because NOT NULL is NULL
+  - sql: |
+      ALTER TABLE attmp3 VALIDATE CONSTRAINT b_gt_ten
+    expect: ok
+  - sql: |
+      ALTER TABLE attmp3 VALIDATE CONSTRAINT b_gt_ten
+    expect: ok
+    comment: validating an already-valid constraint is a no-op
+  - sql: |
+      SELECT a, b FROM attmp3 ORDER BY a, b
+    expect: rows
+    order: ordered

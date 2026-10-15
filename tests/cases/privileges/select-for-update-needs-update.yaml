@@ -1,0 +1,30 @@
+# FOR SHARE needs only SELECT; FOR UPDATE also needs UPDATE privilege on the table.
+id: privileges.select-for-update-needs-update
+title: SELECT FOR UPDATE requires UPDATE privilege while FOR SHARE needs only SELECT
+family: privileges
+tier: extended
+feature_ids: [select, row-locks, grant, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, row-locks, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_fu_r;
+  CREATE TABLE pv_fu_t (id int4, v text);
+  INSERT INTO pv_fu_t VALUES (1, 'a');
+  GRANT SELECT ON pv_fu_t TO pv_fu_r;
+steps:
+  - sql: |
+      SET ROLE pv_fu_r
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_fu_t FOR SHARE
+    expect: rows
+  - sql: |
+      SELECT id FROM pv_fu_t FOR UPDATE
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,38 @@
+# Grouped selects are valid as UNION arms and inside IN subqueries, with functional dependence applied in each block.
+id: functional-deps.union-of-grouped-selects
+title: "UNION arms and IN subquery each apply primary key functional dependence"
+family: functional-deps
+tier: extended
+feature_ids: [group-by, functional-dependencies, union, subqueries, primary-key]
+required_capabilities: [create-table, insert, select, group-by, union, subqueries, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE articles (
+      id int CONSTRAINT articles_pkey PRIMARY KEY,
+      keywords text,
+      title text UNIQUE NOT NULL,
+      body text UNIQUE,
+      created date
+  );
+  INSERT INTO articles VALUES
+      (1, 'db pg', 'First', 'body one', '2024-01-01'),
+      (2, NULL, 'Second', NULL, '2024-02-01'),
+      (3, '', 'Third', 'body three', NULL);
+steps:
+  - sql: |
+      SELECT id, keywords FROM articles GROUP BY id
+      UNION
+      SELECT id, keywords FROM articles GROUP BY id
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: "UNION removes duplicate rows from the two identical arms"
+  - sql: |
+      SELECT id FROM articles
+      WHERE title IN (SELECT title FROM articles GROUP BY id)
+      ORDER BY id
+    expect: rows
+    order: ordered

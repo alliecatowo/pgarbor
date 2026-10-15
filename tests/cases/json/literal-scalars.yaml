@@ -1,0 +1,44 @@
+# JSON scalar literals round-trip as text; json null is not SQL NULL; malformed scalars are 22P02.
+id: json.literal-scalars
+title: JSON scalar literals preserve input text and reject malformed scalars
+family: json
+tier: core
+feature_ids: [json, json-input, json-literal]
+required_capabilities: [select, json]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/json.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT j::text AS t, j IS NULL AS sql_null FROM (VALUES ('true'::json), (' false '::json), ('null'::json)) v(j) ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: input whitespace is preserved; the JSON literal null is not SQL NULL
+  - sql: |
+      SELECT NULL::json IS NULL AS sql_null_input
+    expect: rows
+  - sql: |
+      SELECT 'true false'::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT 'true, false'::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT 'truf'::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT 'trues'::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT ''::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '    '::json
+    expect: error
+    sqlstate: "22P02"

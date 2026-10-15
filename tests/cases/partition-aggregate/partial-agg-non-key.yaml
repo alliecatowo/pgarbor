@@ -1,0 +1,26 @@
+# GROUP BY a column that is not the partition key: the aggregates must combine correctly
+# across partitions (sum, avg, count, min, max with HAVING on another aggregate).
+id: partition-aggregate.partial-agg-non-key
+title: GROUP BY non-partition-key column with multiple aggregates across partitions
+family: partition-aggregate
+tier: core
+feature_ids: [partitioning, group-by, aggregates, having]
+required_capabilities: [create-table, insert, select, partitioning, aggregates, group-by]
+provenance:
+  source: pg-regress
+  ref: src/test/regress/sql/partition_aggregate.sql
+  license: PostgreSQL License
+setup: |
+  CREATE TABLE pagg_tab (a int, b int, c text, d int) PARTITION BY LIST (c);
+  CREATE TABLE pagg_tab_p1 PARTITION OF pagg_tab FOR VALUES IN ('0000', '0001', '0002');
+  CREATE TABLE pagg_tab_p2 PARTITION OF pagg_tab FOR VALUES IN ('0003', '0004');
+  INSERT INTO pagg_tab SELECT i % 20, i % 30, to_char(i % 5, 'FM0000'), i % 30 FROM generate_series(0, 99) i;
+steps:
+  - sql: |
+      SELECT a, sum(b), avg(b), count(*), min(a), max(b) FROM pagg_tab GROUP BY a HAVING avg(d) < 15 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, sum(b) FROM pagg_tab GROUP BY a ORDER BY a DESC LIMIT 3
+    expect: rows
+    order: ordered

@@ -1,0 +1,31 @@
+# Naming a nonexistent JOIN estimator fails with undefined_function and leaves the operator unchanged.
+id: alter-operator.join-unknown-function-error
+title: ALTER OPERATOR with a nonexistent JOIN function errors and changes nothing
+family: alter-operator
+tier: core
+feature_ids: [alter-operator, join-selectivity, errors]
+required_capabilities: [alter-operator, create-function-sql, create-operator]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/alter_operator.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE FUNCTION alter_op_test_fn(boolean, boolean) RETURNS boolean AS $$ SELECT NULL::BOOLEAN; $$ LANGUAGE sql IMMUTABLE;
+  CREATE OPERATOR === (
+      LEFTARG = boolean,
+      RIGHTARG = boolean,
+      PROCEDURE = alter_op_test_fn,
+      JOIN = contjoinsel
+  );
+steps:
+  - sql: |
+      ALTER OPERATOR === (boolean, boolean) SET (JOIN = non_existent_func)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT oprjoin::regproc::text AS join_fn
+      FROM pg_operator
+      WHERE oprname = '===' AND oprleft = 'boolean'::regtype AND oprright = 'boolean'::regtype
+    expect: rows
+    order: multiset

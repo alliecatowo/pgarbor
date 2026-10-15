@@ -1,0 +1,30 @@
+# Expression GiST index on circle(p,1) with a recheck: the index answers candidate rows,
+# results must match a sequential evaluation of the same expression.
+id: gist.expression-index-circle
+title: GiST expression index on circle(point,1) answers containment and overlap with exact results
+family: gist
+tier: core
+feature_ids: [gist, create-index, expression-index, circle, point, geometric-operators]
+required_capabilities: [create-table, insert, select, create-index, gist-index, expression-index, point-type, circle-type, null-semantics]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/gist.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE ex (id int4 PRIMARY KEY, p point);
+  INSERT INTO ex VALUES (1, point(0,0)), (2, point(0.5,0.5)), (3, point(0.9,0)), (4, point(2,2)), (5, NULL);
+  CREATE INDEX ex_c ON ex USING gist (circle(p,1));
+steps:
+  - sql: |
+      SELECT id FROM ex WHERE circle(p,1) @> circle(point(0,0),0.95) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only id 1 has its unit circle containing the 0.95 circle at the origin
+  - sql: |
+      SELECT id FROM ex WHERE circle(p,1) && circle(point(0,0),0.1) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM ex WHERE circle(p,1) IS NULL
+    expect: rows
+    order: multiset

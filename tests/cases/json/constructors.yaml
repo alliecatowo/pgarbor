@@ -1,0 +1,31 @@
+# array_to_json, row_to_json and to_json constructors, including SQL NULL input giving SQL NULL output.
+id: json.constructors
+title: array_to_json, row_to_json and to_json build JSON text from SQL values
+family: json
+tier: core
+feature_ids: [json, json-constructors, json-array-to-json, json-row-to-json]
+required_capabilities: [select, json, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/json.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE tbl_nums (x int4);
+  INSERT INTO tbl_nums VALUES (1), (2), (3);
+steps:
+  - sql: |
+      SELECT array_to_json(array(SELECT 1 AS a)) AS one_elem,
+             array_to_json('{{1,5},{99,100}}'::int4[]) AS matrix,
+             array_to_json(array_agg(q ORDER BY q.b), false) AS rows_json
+      FROM (SELECT x AS b, x * 2 AS c FROM tbl_nums) q
+    expect: rows
+  - sql: |
+      SELECT row_to_json(row(1, 'foo')) AS anon_row
+    expect: rows
+    comment: anonymous record columns are named f1, f2
+  - sql: |
+      SELECT row_to_json(q) AS j FROM (SELECT 'a' || x AS b, x AS c FROM tbl_nums WHERE x = 2) q
+    expect: rows
+  - sql: |
+      SELECT to_json(NULL::int4) IS NULL AS sql_null_in_sql_null_out, to_json('a"b'::text)::text AS quoted
+    expect: rows

@@ -1,0 +1,28 @@
+# Grouping a LATERAL sampled subquery by its outer percentage: 0 percent yields no rows, 100 percent yields all.
+id: tablesample.lateral-group-by-percent
+title: LATERAL TABLESAMPLE grouped by outer percentage with 0 and 100 extremes
+family: tablesample
+tier: extended
+feature_ids: [tablesample, lateral, values, aggregates, group-by]
+required_capabilities: [create-table, insert, select, tablesample, lateral-joins, values, storage-parameters]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/tablesample.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE test_tablesample (id int, name text) WITH (fillfactor=10);
+  INSERT INTO test_tablesample SELECT i, repeat(i::text, 200) FROM generate_series(0, 9) s(i);
+steps:
+  - sql: |
+      SELECT pct, count(t.id) FROM (VALUES (0), (100)) v(pct),
+        LATERAL (SELECT * FROM test_tablesample t TABLESAMPLE BERNOULLI (pct)) t
+      GROUP BY pct ORDER BY pct
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pct, count(t.id) FROM (VALUES (0), (100)) v(pct),
+        LATERAL (SELECT * FROM test_tablesample t TABLESAMPLE SYSTEM (pct)) t
+      GROUP BY pct ORDER BY pct
+    expect: rows
+    order: ordered

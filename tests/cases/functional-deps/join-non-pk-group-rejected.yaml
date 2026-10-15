@@ -1,0 +1,36 @@
+# Grouping by the join columns does not make the left table's primary key a functional source.
+id: functional-deps.join-non-pk-group-rejected
+title: "GROUP BY join columns rejects ungrouped left-side primary key"
+family: functional-deps
+tier: core
+feature_ids: [group-by, functional-dependencies, joins, errors]
+required_capabilities: [create-table, insert, select, group-by, joins, primary-key]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/functional_deps.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TABLE articles (
+      id int CONSTRAINT articles_pkey PRIMARY KEY,
+      keywords text,
+      title text UNIQUE NOT NULL,
+      body text UNIQUE,
+      created date
+  );
+  CREATE TABLE articles_in_category (
+      article_id int,
+      category_id int,
+      changed date,
+      PRIMARY KEY (article_id, category_id)
+  );
+  INSERT INTO articles VALUES (1, 'db pg', 'First', 'body one', '2024-01-01');
+  INSERT INTO articles_in_category VALUES (1, 14, '2024-03-01');
+steps:
+  - sql: |
+      SELECT a.id, a.keywords, a.title, a.body, a.created
+      FROM articles AS a JOIN articles_in_category AS aic ON a.id = aic.article_id
+      WHERE aic.category_id IN (14, 62, 70, 53, 138)
+      GROUP BY aic.article_id, aic.category_id
+    expect: error
+    sqlstate: "42803"
+    comment: "a.id is equal to aic.article_id, but equality across a join is not a functional dependency"

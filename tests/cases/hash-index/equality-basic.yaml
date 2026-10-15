@@ -1,0 +1,29 @@
+# Equality lookups through a hash index on int4, text and name keys, plus a non-matching key.
+id: hash-index.equality-basic
+title: Equality lookup through a hash index returns exactly the matching rows
+family: hash-index
+tier: core
+feature_ids: [hash-index, create-index, select, insert]
+required_capabilities: [create-table, create-index, insert, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+setup: |
+  CREATE TABLE hash_i4 (seqno int4, random int4);
+  CREATE INDEX hash_i4_index ON hash_i4 USING hash (random int4_ops);
+  INSERT INTO hash_i4 SELECT g, g * 37 FROM generate_series(1, 1000) g;
+steps:
+  - sql: |
+      SELECT seqno FROM hash_i4 WHERE random = 37 * 500
+    expect: rows
+    order: multiset
+    comment: exactly one match
+  - sql: |
+      SELECT seqno FROM hash_i4 WHERE random = 37 * 500 + 1
+    expect: rows
+    order: multiset
+    comment: no match, empty result
+  - sql: |
+      SELECT seqno, random FROM hash_i4 WHERE random IN (37, 74) ORDER BY seqno
+    expect: rows
+    order: ordered

@@ -1,0 +1,57 @@
+# Quoted SQL bodies: validated at CREATE time (return type, syntax, parameters, AS count, empty body),
+# and an empty body is only rejected at call time when check_function_bodies is off.
+id: create-function-sql.quoted-body-create-errors
+title: Quoted SQL function body errors at CREATE time and deferred empty-body error at call time
+family: create-function-sql
+tier: extended
+feature_ids: [create-function, errors, sql-language-functions, polymorphism]
+required_capabilities: [create-function, sql-functions, errors, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_function_sql.sql"
+steps:
+  - sql: |
+      CREATE FUNCTION test1 (int) RETURNS int LANGUAGE SQL AS 'SELECT ''not an integer'';'
+    expect: error
+    sqlstate: "42P13"
+    comment: return type mismatch in function declared to return integer
+  - sql: |
+      CREATE FUNCTION test1 (int) RETURNS int LANGUAGE SQL AS 'not even SQL'
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE FUNCTION test1 (int) RETURNS int LANGUAGE SQL AS 'SELECT 1, 2, 3;'
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      CREATE FUNCTION test1 (int) RETURNS int LANGUAGE SQL AS 'SELECT $2;'
+    expect: error
+    sqlstate: "42P02"
+    comment: there is no parameter $2
+  - sql: |
+      CREATE FUNCTION test1 (int) RETURNS int LANGUAGE SQL AS 'a', 'b'
+    expect: error
+    sqlstate: "42601"
+    comment: only one AS item needed for language sql
+  - sql: |
+      CREATE FUNCTION test1 (int) RETURNS int LANGUAGE SQL AS ''
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'test1'
+    expect: rows
+  - sql: |
+      SET check_function_bodies = off
+    expect: ok
+  - sql: |
+      CREATE FUNCTION test1 (anyelement) RETURNS anyarray LANGUAGE SQL AS ''
+    expect: ok
+    comment: with check_function_bodies off the empty body is accepted at CREATE time
+  - sql: |
+      SELECT test1(0)
+    expect: error
+    sqlstate: "42P13"
+    comment: empty body fails at execution time with the return type mismatch for integer[]
+  - sql: |
+      RESET check_function_bodies
+    expect: ok

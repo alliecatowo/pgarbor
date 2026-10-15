@@ -1,0 +1,33 @@
+# Equality joins never match NULL keys; IS NOT DISTINCT FROM does match them.
+id: join.null-keys-never-match
+title: Equality join never matches NULL keys while IS NOT DISTINCT FROM does
+family: join
+tier: core
+feature_ids: [joins, inner-join, null-semantics, using-clause, is-distinct-from]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: hand
+  ref: "PG18 docs functions-comparison.html#FUNCTIONS-COMPARISON (IS NOT DISTINCT FROM)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (k integer, v text);
+  CREATE TABLE q (k integer, w text);
+  INSERT INTO p VALUES (1, 'p1'), (NULL, 'pn');
+  INSERT INTO q VALUES (1, 'q1'), (NULL, 'qn');
+steps:
+  - sql: |
+      SELECT p.v, q.w FROM p JOIN q ON p.k = q.k
+    expect: rows
+    order: multiset
+    comment: only the 1 = 1 pair matches
+  - sql: |
+      SELECT count(*) FROM p JOIN q USING (k)
+    expect: rows
+    order: multiset
+    comment: USING also uses equality, so the count is 1
+  - sql: |
+      SELECT p.v, q.w FROM p JOIN q ON p.k IS NOT DISTINCT FROM q.k
+      ORDER BY p.v
+    expect: rows
+    order: ordered
+    comment: IS NOT DISTINCT FROM treats NULL as matching NULL

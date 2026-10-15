@@ -1,0 +1,25 @@
+# NULL handling with collations: NOT NULL enforcement, NULL comparisons, coalesce and nullif keep the collation.
+id: collate.null-and-collation
+title: "NOT NULL enforcement and NULL semantics through collated expressions"
+family: collate
+tier: core
+feature_ids: [collation, nulls, errors, coalesce, create-table, insert]
+required_capabilities: [create-table, insert, select, collation]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/collate.sql"
+setup: |
+  CREATE TABLE nt (a int, b text COLLATE "C" NOT NULL);
+  INSERT INTO nt VALUES (1, 'abc');
+steps:
+  - sql: |
+      INSERT INTO nt VALUES (2, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT NULL::text COLLATE "C" < 'a' COLLATE "C" AS c_null, coalesce(NULL::text COLLATE "C", 'foo') AS c_foo
+    expect: rows
+  - sql: |
+      SELECT a, nullif(b, 'abc') FROM nt ORDER BY a
+    expect: rows
+    order: ordered

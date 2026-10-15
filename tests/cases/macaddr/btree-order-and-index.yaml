@@ -1,0 +1,46 @@
+# macaddr btree and hash indexes: ORDER BY, DISTINCT, GROUP BY and equality/range lookups.
+id: macaddr.btree-order-and-index
+title: "macaddr ORDER BY, DISTINCT, GROUP BY and indexed lookups over btree and hash indexes"
+family: macaddr
+tier: core
+feature_ids: [macaddr, btree-index, hash-index, order-by, group-by]
+required_capabilities: [create-table, insert, select, create-index, order-by, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/macaddr.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE md (a int4, b macaddr);
+  INSERT INTO md VALUES
+    (1, '08:00:2b:01:02:03'), (2, '08:00:2b:01:02:03'), (3, '08:00:2b:01:02:03'),
+    (4, '08:00:2b:01:02:04'), (5, '08:00:2b:01:02:02'), (6, '08:00:2a:01:02:03'),
+    (7, '08:00:2c:01:02:03'), (8, '08:00:2a:01:02:04');
+steps:
+  - sql: |
+      CREATE INDEX md_btree ON md USING btree (b);
+      CREATE INDEX md_hash ON md USING hash (b)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM md ORDER BY b, a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b FROM md ORDER BY b DESC, a DESC
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT DISTINCT b FROM md ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT b, count(*) AS n FROM md GROUP BY b ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM md WHERE b = '08:00:2b:01:02:03' ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM md WHERE b >= '08:00:2b:00:00:00' AND b < '08:00:2c:00:00:00' ORDER BY a
+    expect: rows
+    order: ordered

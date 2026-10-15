@@ -1,0 +1,31 @@
+# Grouped aggregates with DISTINCT arguments, HAVING on an aggregate, and row-valued max/min.
+id: aggregates.group-distinct-having
+title: GROUP BY with count, sum DISTINCT, HAVING on aggregate, and max/min over row values
+family: aggregates
+tier: core
+feature_ids: [aggregates, group-by, having, distinct, record-types]
+required_capabilities: [create-table, insert, select, aggregates, group-by, having]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/aggregates.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE g (ten int4, four int4, v text);
+  INSERT INTO g VALUES (0, 0, 'a'), (0, 2, 'b'), (1, 1, 'c'), (1, 1, 'd'), (1, 3, NULL);
+steps:
+  - sql: |
+      SELECT ten, count(*), sum(four), count(DISTINCT four), sum(DISTINCT four) FROM g GROUP BY ten ORDER BY ten
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ten FROM g GROUP BY ten HAVING count(*) > 2 ORDER BY ten
+    expect: rows
+    order: ordered
+    comment: only ten=1 has more than two rows
+  - sql: |
+      SELECT max(row(ten, four)), min(row(four, ten)) FROM g
+    expect: rows
+    comment: row comparison is lexicographic over the fields
+  - sql: |
+      SELECT max(row(ten, four)) FROM g WHERE ten = 0
+    expect: rows

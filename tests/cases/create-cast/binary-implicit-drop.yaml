@@ -1,0 +1,53 @@
+# PostgreSQL 18 regression create_cast.sql, rewritten as a self-contained case.
+id: create-cast.binary-implicit-drop
+title: "Implicit binary-coercion cast enables function resolution until dropped"
+family: create-cast
+tier: core
+feature_ids: [create-cast, binary-coercion, drop-cast, casts]
+required_capabilities: [create-type, create-cast, create-function-sql, create-function-internal, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_cast.sql"
+  license: PostgreSQL
+setup: |
+  CREATE TYPE casttesttype;
+  CREATE FUNCTION casttesttype_in(cstring)
+     RETURNS casttesttype
+     AS 'textin'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE FUNCTION casttesttype_out(casttesttype)
+     RETURNS cstring
+     AS 'textout'
+     LANGUAGE internal STRICT IMMUTABLE;
+  CREATE TYPE casttesttype (
+     internallength = variable,
+     input = casttesttype_in,
+     output = casttesttype_out,
+     alignment = int4
+  );
+  CREATE FUNCTION casttestfunc(casttesttype) RETURNS int4 LANGUAGE SQL AS
+  $$ SELECT 1; $$;
+steps:
+  - sql: |
+      CREATE CAST (text AS casttesttype) WITHOUT FUNCTION AS IMPLICIT;
+    expect: ok
+  - sql: |
+      SELECT casttestfunc('foo'::text) AS r;
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP CAST (text AS casttesttype);
+    expect: ok
+  - sql: |
+      DROP CAST (text AS casttesttype);
+    expect: error
+    sqlstate: "42704"
+    comment: "dropping a missing cast is undefined_object"
+  - sql: |
+      SELECT casttestfunc('foo'::text) AS r;
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP CAST IF EXISTS (text AS casttesttype);
+    expect: any
+    comment: "IF EXISTS variant emits a notice and succeeds"

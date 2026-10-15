@@ -1,0 +1,37 @@
+# Many duplicate keys in one hash bucket: bulk insert, delete the whole chain, reinsert, then VACUUM.
+id: hash-index.duplicate-keys-vacuum
+title: Heavily duplicated hash key survives bulk insert, delete, reinsert and VACUUM
+family: hash-index
+tier: extended
+feature_ids: [hash-index, vacuum, delete, insert, aggregates]
+required_capabilities: [create-table, create-index, insert, delete, select, aggregates, vacuum]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/hash_index.sql"
+setup: |
+  CREATE TABLE dup (keycol int4);
+  CREATE INDEX dup_idx ON dup USING hash (keycol);
+  INSERT INTO dup SELECT 1 FROM generate_series(1, 3000) a;
+steps:
+  - sql: |
+      SELECT count(*) FROM dup WHERE keycol = 1
+    expect: rows
+    order: multiset
+  - sql: |
+      DELETE FROM dup WHERE keycol = 1
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM dup WHERE keycol = 1
+    expect: rows
+    order: multiset
+    comment: zero after delete
+  - sql: |
+      INSERT INTO dup SELECT a / 2 FROM generate_series(1, 25000) a
+    expect: ok
+  - sql: |
+      VACUUM dup
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM dup WHERE keycol = 1000
+    expect: rows
+    order: multiset

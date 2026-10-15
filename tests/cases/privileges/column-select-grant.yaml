@@ -1,0 +1,39 @@
+# Column-level SELECT: only the granted column is readable; any reference to an ungranted column fails.
+id: privileges.column-select-grant
+title: Column-level SELECT grant permits the granted column and denies other column references
+family: privileges
+tier: core
+feature_ids: [select, grant, column-privileges, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_col_r;
+  CREATE TABLE pv_col_t (a int4, b text);
+  INSERT INTO pv_col_t VALUES (2, 'y'), (1, 'x');
+  GRANT SELECT (a) ON pv_col_t TO pv_col_r;
+steps:
+  - sql: |
+      SET ROLE pv_col_r
+    expect: ok
+  - sql: |
+      SELECT a FROM pv_col_t ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT b FROM pv_col_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SELECT * FROM pv_col_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SELECT a FROM pv_col_t WHERE b = 'x'
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

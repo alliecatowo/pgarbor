@@ -1,0 +1,37 @@
+# A view is read with its owner's privileges, so a role can read the view without any privilege on the base table.
+id: privileges.view-owner-rights
+title: SELECT through a view works without base-table privilege, and only exposes the view's columns
+family: privileges
+tier: core
+feature_ids: [views, select, grant, privileges]
+required_capabilities: [create-table, create-view, insert, select, roles, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/privileges.sql"
+sessions: [a]
+setup: |
+  CREATE ROLE pv_vw_r;
+  CREATE TABLE pv_vw_base (id int4, secret text);
+  INSERT INTO pv_vw_base VALUES (1, 'hidden'), (2, 'hidden2');
+  CREATE VIEW pv_vw AS SELECT id FROM pv_vw_base;
+  GRANT SELECT ON pv_vw TO pv_vw_r;
+steps:
+  - sql: |
+      SET ROLE pv_vw_r
+    expect: ok
+  - sql: |
+      SELECT * FROM pv_vw ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, secret FROM pv_vw_base
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SELECT secret FROM pv_vw
+    expect: error
+    sqlstate: "42703"
+    comment: the view does not expose the secret column
+  - sql: |
+      RESET ROLE
+    expect: ok

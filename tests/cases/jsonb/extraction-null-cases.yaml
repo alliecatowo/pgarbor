@@ -1,0 +1,41 @@
+# -> and ->> return SQL NULL (not errors) for missing keys, out-of-range indexes and wrong container types.
+id: jsonb.extraction-null-cases
+title: jsonb -> and ->> return NULL for missing keys, bad indexes and scalar containers
+family: jsonb
+tier: core
+feature_ids: [jsonb, jsonb-extraction, nulls]
+required_capabilities: [select, jsonb, nulls]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/jsonb.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '{"a": "c", "b": null}'::jsonb -> 'b' AS json_null_value,
+             '{"a": "c", "b": null}'::jsonb ->> 'b' AS text_of_json_null,
+             '{"a": "c", "b": null}'::jsonb -> 'z' AS missing_key
+    expect: rows
+    order: ordered
+    comment: a JSON null extracted with -> is jsonb 'null', with ->> it is SQL NULL
+  - sql: |
+      SELECT '[{"b": "c"}, {"b": "cc"}]'::jsonb -> 3 AS oob_json,
+             '[{"b": "c"}, {"b": "cc"}]'::jsonb ->> 3 AS oob_text,
+             '[]'::jsonb -> -2147483648 AS min_int_json,
+             '[]'::jsonb ->> -2147483648 AS min_int_text
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '"foo"'::jsonb -> 1 AS scalar_index, '"foo"'::jsonb ->> 'z' AS scalar_key, '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> 1 AS object_index
+    expect: rows
+    order: ordered
+    comment: a scalar or object indexed by the wrong kind of key returns NULL
+  - sql: |
+      SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> null::text AS null_key, '[1]'::jsonb ->> null::int AS null_index
+    expect: rows
+    order: ordered
+    comment: a NULL key or index yields SQL NULL
+  - sql: |
+      SELECT '{"a": [{"b": "c"}, {"b": "cc"}]}'::jsonb -> '' AS empty_key, '[{"b": "c"}, {"b": "cc"}]'::jsonb ->> 1 AS array_elem_text
+    expect: rows
+    order: ordered

@@ -1,0 +1,45 @@
+# Under READ COMMITTED a CREATE SCHEMA is invisible to another session until commit. A second
+# CREATE SCHEMA with the same name blocks on the unique index, then fails with 23505 after commit.
+id: create-schema.uncommitted-create-schema-multi-session
+title: Uncommitted CREATE SCHEMA is invisible; same-name creator waits then fails 23505
+family: create-schema
+tier: core
+feature_ids: [create-schema, transactions, read-committed, unique-violation, multi-session]
+required_capabilities: [create-schema, create-table, insert, transactions, multi-session]
+provenance:
+  source: hand
+  ref: "PG18 transaction-iso.html#XACT-READ-COMMITTED; errcodes 23505"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      CREATE SCHEMA s11 CREATE TABLE t11 (id int4 PRIMARY KEY); INSERT INTO s11.t11 VALUES (1)
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_namespace WHERE nspname = 's11'
+    expect: rows
+    comment: b must not see the uncommitted schema
+  - session: b
+    sql: |
+      CREATE SCHEMA s11
+    async: true
+    expect_blocked: true
+    comment: the duplicate insert into pg_namespace waits for a's transaction to finish
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: error
+    sqlstate: "23505"
+  - session: b
+    sql: |
+      SELECT count(*) FROM s11.t11
+    expect: rows
+    comment: the committed table from a is visible now

@@ -1,0 +1,35 @@
+# CREATE DATABASE needs the CREATEDB attribute; a role without it is denied, a CREATEDB role passes the attribute check.
+id: create-role.createdb-privilege
+title: CREATE DATABASE is denied to a role without CREATEDB, and pg_roles reflects the attribute per role
+family: create-role
+tier: extended
+feature_ids: [roles, create-database, session-authorization, errors, catalog-introspection]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_role.sql (regress_createrole lacks CREATEDB)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE rdb_plain
+    expect: ok
+  - sql: |
+      CREATE ROLE rdb_creator CREATEDB
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION rdb_plain
+    expect: ok
+  - sql: |
+      CREATE DATABASE rdb_nosuch_db
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT rolname, rolcreatedb FROM pg_roles WHERE rolname IN ('rdb_plain', 'rdb_creator') ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE rdb_plain, rdb_creator
+    expect: ok

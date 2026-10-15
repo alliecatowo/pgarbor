@@ -1,0 +1,37 @@
+# uuid primary keys with DEFAULT gen_random_uuid(). Values are random, so the case checks only their shape.
+id: orm-drizzle.uuid-default-gen-random-uuid
+title: gen_random_uuid() defaults produce distinct version-4 uuid values
+family: orm-drizzle
+tier: core
+feature_ids: [uuid, insert, select, catalog-introspection]
+required_capabilities: [create-table, insert, select, uuid]
+provenance:
+  source: hand
+  ref: "PG18 functions-uuid.html gen_random_uuid(); RFC 9562 version 4"
+sessions: [a]
+setup: |
+  CREATE TABLE sessions_tok (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    label text NOT NULL
+  );
+steps:
+  - sql: |
+      INSERT INTO sessions_tok (label) VALUES ('one'), ('two')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS total, count(DISTINCT id) AS distinct_ids FROM sessions_tok
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT label, id::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AS is_v4 FROM sessions_tok ORDER BY label
+    expect: rows
+    order: ordered
+    comment: regex checks version nibble 4 and RFC 4122 variant without recording the random value
+  - sql: |
+      SELECT column_default FROM information_schema.columns WHERE table_name = 'sessions_tok' AND column_name = 'id'
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO sessions_tok (id, label) VALUES ('not-a-uuid', 'bad')
+    expect: error
+    sqlstate: "22P02"

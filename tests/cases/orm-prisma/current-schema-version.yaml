@@ -1,0 +1,33 @@
+# Connection introspection: current_schema(), search_path skipping of missing schemas, server version checks.
+id: orm-prisma.current-schema-version
+title: current_schema() and version checks, including a nonexistent schema in search_path
+family: orm-prisma
+tier: core
+feature_ids: [current-schema, search-path, guc, version, select]
+required_capabilities: [select, guc]
+provenance:
+  source: research
+  ref: "Prisma connection probe SELECT current_schema(), version(); PG18 docs functions-info.html"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT current_schema() AS schema_name
+    expect: rows
+  - sql: |
+      SELECT version() LIKE 'PostgreSQL 18%' AS is_pg18,
+             current_setting('server_version_num')::int / 10000 AS major
+    expect: rows
+    comment: avoids comparing the full version() string, which is build-specific
+  - sql: |
+      SET search_path TO no_such_schema_xyz, public
+    expect: ok
+    comment: a nonexistent schema in search_path is silently skipped, not an error
+  - sql: |
+      SELECT current_schema() AS schema_name, current_schemas(false) AS path
+    expect: rows
+  - sql: |
+      RESET search_path
+    expect: ok
+  - sql: |
+      SELECT current_schema() AS schema_name
+    expect: rows

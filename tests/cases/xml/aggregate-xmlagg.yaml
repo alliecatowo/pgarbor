@@ -1,0 +1,28 @@
+id: xml.aggregate-xmlagg
+title: xmlagg concatenates non-NULL values, returns NULL for empty input, nests in xmlelement
+family: xml
+tier: core
+feature_ids: [xml, xmlagg, aggregates, nulls]
+required_capabilities: [xml, create-table, insert, select, aggregates]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/xml.sql"
+sessions: [a]
+setup: |
+  CREATE TABLE xmltest (id int4, data xml);
+  INSERT INTO xmltest VALUES (1, '<value>one</value>'), (2, '<value>two</value>'), (3, NULL);
+steps:
+  - sql: |
+      SELECT xmlagg(data ORDER BY id)::text FROM xmltest
+    expect: rows
+    order: ordered
+    comment: NULL inputs are skipped
+  - sql: |
+      SELECT xmlagg(data) IS NULL AS empty_is_null FROM xmltest WHERE id > 10
+    expect: rows
+    comment: aggregate over no rows is NULL
+  - sql: |
+      SELECT xmlelement(name employees, xmlagg(xmlelement(name name, e.name ORDER BY e.name)))::text
+      FROM (VALUES ('bob'), ('alice')) AS e(name)
+    expect: rows
+    order: ordered

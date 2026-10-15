@@ -1,0 +1,43 @@
+# ADD FOREIGN KEY validates existing rows; NOT VALID defers that check until VALIDATE CONSTRAINT.
+id: foreign-key.add-constraint-existing-violation
+title: "ADD CONSTRAINT rejects existing violations unless NOT VALID is used"
+family: foreign-key
+tier: extended
+feature_ids: [foreign-keys, alter-table, insert, delete, constraints, catalog-introspection]
+required_capabilities: [create-table, insert, delete, alter-table, foreign-keys, constraints, catalog-introspection]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/foreign_key.sql"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE pk (id int4 PRIMARY KEY);
+  CREATE TABLE fk (id int4 PRIMARY KEY, pid int4);
+  INSERT INTO pk VALUES (1);
+  INSERT INTO fk VALUES (1, 1), (2, 5);
+steps:
+  - sql: |
+      ALTER TABLE fk ADD CONSTRAINT fk_pid FOREIGN KEY (pid) REFERENCES pk (id)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      ALTER TABLE fk ADD CONSTRAINT fk_pid FOREIGN KEY (pid) REFERENCES pk (id) NOT VALID
+    expect: ok
+  - sql: |
+      INSERT INTO fk VALUES (3, 6)
+    expect: error
+    sqlstate: "23503"
+    comment: NOT VALID still checks newly inserted rows
+  - sql: |
+      ALTER TABLE fk VALIDATE CONSTRAINT fk_pid
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM fk WHERE id = 2
+    expect: ok
+  - sql: |
+      ALTER TABLE fk VALIDATE CONSTRAINT fk_pid
+    expect: ok
+  - sql: |
+      SELECT convalidated FROM pg_constraint WHERE conname = 'fk_pid'
+    expect: rows

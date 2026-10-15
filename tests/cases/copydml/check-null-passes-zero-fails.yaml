@@ -1,0 +1,31 @@
+# CHECK constraints accept NULL (unknown) and reject FALSE; INSERT ... RETURNING shows the stored NULL.
+id: copydml.check-null-passes-zero-fails
+title: "CHECK constraint passes on NULL, fails with 23514 on a false result"
+family: copydml
+tier: core
+feature_ids: [insert, returning, constraints, null-semantics, errors]
+required_capabilities: [create-table, insert, returning, constraints, select]
+provenance:
+  source: hand
+  ref: "PG18 ddl-constraints.html#DDL-CONSTRAINTS-CHECK-CONSTRAINTS; errcodes 23514"
+  license: CC0
+sessions: [a]
+setup: |
+  CREATE TABLE copydml_test (id serial, v int4 CHECK (v > 0), t text);
+steps:
+  - sql: |
+      INSERT INTO copydml_test (v, t) VALUES (NULL, 'n') RETURNING id, v IS NULL AS v_null
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO copydml_test (v, t) VALUES (0, 'zero') RETURNING id
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO copydml_test (v, t) VALUES (7, 'seven') RETURNING id, v
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id, v, t FROM copydml_test ORDER BY id
+    expect: rows
+    order: ordered

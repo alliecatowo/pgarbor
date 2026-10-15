@@ -1,0 +1,46 @@
+# DROP of a temp table is transactional: rollback restores it with data, commit removes it.
+id: temp.drop-transactional
+title: DROP of a temp table is rolled back with its data, or removed on commit
+family: temp
+tier: core
+feature_ids: [temp-tables, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, temp-tables]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/temp.sql"
+  license: PostgreSQL
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEMP TABLE temptest (col int)
+    expect: ok
+  - sql: |
+      INSERT INTO temptest VALUES (1)
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TABLE temptest
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT col FROM temptest
+    expect: rows
+    order: multiset
+    comment: table and row survive the rolled-back drop
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TABLE temptest
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT col FROM temptest
+    expect: error
+    sqlstate: "42P01"

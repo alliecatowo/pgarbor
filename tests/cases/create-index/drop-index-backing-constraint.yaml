@@ -1,0 +1,43 @@
+# An index that backs a primary key cannot be dropped directly; dropping the constraint removes the index too.
+id: create-index.drop-index-backing-constraint
+title: Index backing a primary key cannot be dropped directly and disappears with the constraint
+family: create-index
+tier: extended
+feature_ids: [create-index, drop-index, primary-key, unique-index, alter-table, errors, catalog-introspection]
+required_capabilities: [create-table, insert, select, create-index, alter-table, unique-constraints, catalog-introspection, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/create_index.sql (ADD CONSTRAINT USING INDEX section)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE cwi (a int, b varchar(10))
+    expect: ok
+  - sql: |
+      INSERT INTO cwi VALUES (1, 'x'), (3, 'y')
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX cwi_ab ON cwi (a, b)
+    expect: ok
+  - sql: |
+      ALTER TABLE cwi ADD PRIMARY KEY USING INDEX cwi_ab
+    expect: ok
+  - sql: |
+      DROP INDEX cwi_ab
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'cwi' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO cwi VALUES (1, 'x')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      ALTER TABLE cwi DROP CONSTRAINT cwi_ab
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_indexes WHERE tablename = 'cwi'
+    expect: rows
+    order: ordered

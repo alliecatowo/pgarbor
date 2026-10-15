@@ -1,0 +1,26 @@
+# Overloads determine result types: int4, int8 and numeric bounds return integer, bigint and numeric; random() and random_normal() return double precision.
+id: random.result-types
+title: random() overloads return the expected SQL types and values stay in range
+family: random
+tier: core
+feature_ids: [random-function, numeric, int8]
+required_capabilities: [random-function, numeric, int8]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/random.sql"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_typeof(random(1::int4, 6::int4))::text AS t_int4,
+             pg_typeof(random(1::int8, 6::int8))::text AS t_int8,
+             pg_typeof(random(1::numeric, 6::numeric))::text AS t_numeric,
+             pg_typeof(random())::text AS t_float,
+             pg_typeof(random_normal())::text AS t_normal
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FILTER (WHERE r < 1 OR r > 6) AS out_of_range,
+             count(DISTINCT r) > 1 AS varied
+      FROM (SELECT random(1::int4, 6::int4) r FROM generate_series(1, 500)) ss
+    expect: rows
+    order: ordered
