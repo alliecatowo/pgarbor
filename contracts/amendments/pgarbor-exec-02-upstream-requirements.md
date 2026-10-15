@@ -1,6 +1,6 @@
 # Amendment request pgarbor-exec-02: requirements of the executor on pgarbor-plan, pgarbor-sql and the embedding session
 
-Status: PROPOSED (architect, pgarbor-exec). None blocks implementation: the executor is written defensively (errors, not
+Status: ACCEPTED WITH LIMITS (lead-engineer decision, 2026-10-15).
 panics) where an upstream promise might not hold. Each item names the executor behavior if it is not honored.
 
 ## Requirements on pgarbor-plan
@@ -41,3 +41,7 @@ panics) where an upstream promise might not hold. Each item names the executor b
 1. Treat `pgarbor_exec::error::is_catalog_retry` as "re-snapshot, re-bind, re-run" under READ COMMITTED (bounded retries).
 2. Provide `GucAccess` (`set_config`, `current_setting`, `pg_settings`) and `EngineServices` (activity, locks, notify, cancel).
 3. Transaction control, SET/SHOW, PREPARE/EXECUTE, LISTEN/NOTIFY, DISCARD are session statements: the executor returns XX000 for them.
+
+## Steward decision (2026-10-15)
+
+Accept row-slot layouts, 1-based virtual attnums, runtime stored-expression rebinding, session utility dispatch, bounded pre-effect catalog retry, and overlay precedence. Mixed-type hash/merge keys require a semantically correct nested-loop fallback. EPQ on unsupported shapes remains 40001, not a false successful recheck. These are required invariants, not proof that concurrency and expression parity pass.

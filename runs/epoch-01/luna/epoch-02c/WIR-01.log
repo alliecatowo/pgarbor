@@ -1,0 +1,2989 @@
+Reading additional input from stdin...
+OpenAI Codex v0.160.0
+--------
+workdir: /home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01
+model: gpt-6-luna
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 01a14136-0871-7901-a54a-fb17e4692a0d
+--------
+user
+You are an implementation worker in the PGArbor swarm (epoch-02c). Your cwd is an ISOLATED git
+worktree of the repo. PGArbor is a Rust single-file, branch-native database targeting exact PostgreSQL 18 behavior.
+
+YOUR LEASE: WIR-01 (crate pgarbor-wire)
+FILES YOU OWN (edit ONLY these): crates/pgarbor-wire/src/frontend.rs
+FULL LEASE SPEC: your entry (lease_id WIR-01) in contracts/leases/pgarbor-wire.json. Its summary, spec, reads,
+depends_on_leases and acceptance are binding.
+READ FOR CONTEXT: AGENTS.md, contracts/ARCHITECTURE.md, contracts/crates/pgarbor-wire.md, the lease's 'reads'
+files, and the doc comments in your files (the frozen spec). Read the upstream crate source you call so your
+calls match real signatures exactly. Dependency sources: /home/allie/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/. PostgreSQL 18.6 source for reference:
+~/develop/reference/postgres-18 (read to understand; write original Rust, never paste C).
+
+RULES:
+- Do NOT run cargo, rustc or tests (other workers build concurrently; a central build happens later). Write
+  carefully: exact types, imports, lifetimes, error conversions, exhaustive matches. Re-read once for compile errors.
+- Keep every public signature marked "// CONTRACT" exactly. Private helpers and #[cfg(test)] mod tests are fine.
+  If the contract is insufficient, work around it inside your files and say so in your final message.
+- Replace every PgError::unimplemented("WIR-01", ...) body you can with a real, PostgreSQL-faithful
+  implementation. Never todo!(), unimplemented!(), panic! on user/wire/file data, fake data, or silent no-ops.
+  Exact PG SQLSTATEs and message text.
+- Prefer clear, fast, allocation-conscious code.
+FINISH: do not run git; the harness commits your leased files. End with a short summary: what is
+implemented, what still returns unimplemented and why, and any contract problems.
+2026-10-15T20:17:03.079790Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"Token is not authorized\", resource_metadata=\"https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/\"" })
+2026-10-15T20:17:03.454340Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer error=\"invalid_token\", error_description=\"Token is not authorized\", resource_metadata=\"https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/\"" })
+codex
+I’ll read the wire contract, architecture, and frontend dependencies first, then implement only `frontend.rs` and review it for type and contract issues without running builds or tests.
+exec
+/usr/bin/zsh -lc "cat README.md contracts/ARCHITECTURE.md contracts/crates/pgarbor-wire.md contracts/leases/pgarbor-wire.json && sed -n '1,260p' crates/pgarbor-wire/src/frontend.rs" in /home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01
+ succeeded in 0ms:
+# PGArbor
+
+**PostgreSQL without the server.** PGArbor is a work-in-progress, single-file, branch-native
+relational database written in Rust. It aims for behavioral compatibility with PostgreSQL 18, and
+it checks that compatibility by running the same tests against a pinned, real PostgreSQL 18.6.
+
+> **Status: pre-alpha, not usable yet.** The storage, transaction, branching, type and catalog
+> layers are implemented and unit-tested. The SQL front end, planner, executor, wire protocol
+> and CLI are still being designed or are queued for implementation. You cannot run `psql`
+> against PGArbor yet. Nothing here is published to crates.io, npm or PyPI.
+
+## What exists today
+
+| Layer | Crate | State |
+|---|---|---|
+| Common types, errors, KV traits | `pgarbor-common` | implemented |
+| Single `.pga` file storage: CoW B+tree, dual superblock, crash recovery | `pgarbor-storage` | implemented, unit + property tests |
+| Deterministic fault injection (torn writes, lost fsync, ENOSPC) | `pgarbor-fault` | implemented |
+| Branches: create/delete/rename/reset, handles, detach/export, reflink | `pgarbor-branches` | implemented |
+| Transactions: snapshots, savepoints, row locks, deadlock detection, sequences | `pgarbor-core` | implemented (SERIALIZABLE runs as REPEATABLE READ; known gap) |
+| Types: numeric, date/time, json/jsonb, arrays, regex, aggregates, … | `pgarbor-types` | implemented |
+| Catalog: `pg_catalog`, `information_schema`, DDL, dependencies, ACLs | `pgarbor-catalog` | implemented |
+| SQL parser/binder, planner, executor, embedded API | `pgarbor-sql`, `-plan`, `-exec`, `pgarbor` | in design |
+| PG wire protocol server, CLI | `pgarbor-wire`, `pgarbor-cli` | in design |
+
+## How compatibility is verified
+
+`harness/` is a Python verification harness (run with `uv`):
+
+- `tests/cases/` holds about 5,800 differential test cases, authored from the PostgreSQL 18 docs
+  and command reference.
+- `tests/expected/` holds their reference outputs, recorded **only** from a pinned
+  PostgreSQL 18.6 container (`postgres@sha256:74935e72…`). Expected outputs are never written
+  by hand.
+- `tests/apps/` holds unmodified client fixture apps (sqlx, node-postgres, Drizzle, Prisma)
+  that pass against PostgreSQL 18 and will be pointed at PGArbor.
+- Unsupported behavior returns SQLSTATE `0A000` with a `pgarbor-unimplemented:` detail. It
+  never silently returns wrong results.
+
+```sh
+cd harness
+uv run python -m pgarbor_harness oracle up      # start the pinned PG18 oracle (podman)
+uv run python -m pgarbor_harness cases validate
+uv run pytest -q
+cargo test --workspace                          # from the repo root
+```
+
+## Design documents
+
+- [`docs/rfcs/PGARBOR_RFC_001.md`](docs/rfcs/PGARBOR_RFC_001.md): vision and architecture
+- [`docs/rfcs/PGARBOR_RFC_002_AUTONOMOUS_VERIFICATION.md`](docs/rfcs/PGARBOR_RFC_002_AUTONOMOUS_VERIFICATION.md): verification
+- [`contracts/ARCHITECTURE.md`](contracts/ARCHITECTURE.md): frozen architecture contract
+- `contracts/crates/*.md`: per-crate contracts
+
+PostgreSQL is a trademark of the PostgreSQL Community Association. PGArbor is not affiliated
+with or endorsed by the PostgreSQL project.
+
+## License
+
+Dual-licensed under either [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+# PGArbor Architecture Contract — v1 (ARCH-03..ARCH-08)
+
+Status: RATIFIED (contract steward: orchestrator). Becomes FROZEN@SHA when tagged `contracts-v1`.
+Changing anything here or any `// CONTRACT` item in Rust requires an amendment ticket
+(`contracts/amendments/NNNN-*.md`), never a silent edit inside a feature patch.
+
+## 0. Ground rules for every author
+
+1. **No silent stubs.** Code that cannot yet do the PostgreSQL thing returns
+   `Err(PgError::unimplemented("LEASE-ID", "what"))` (SQLSTATE `0A000`). Never `todo!()`,
+   `unimplemented!()`, `panic!`, fake empty results, or `Ok(())` no-ops for unsupported behavior.
+   The factory counts `PgError::unimplemented(` call sites as UNIMPLEMENTED inventory.
+2. **No panics on user input.** No `unwrap()`/`expect()` on data that comes from SQL, the wire,
+   or the file. Internal invariants may `debug_assert!`. Corruption → `PgError::corruption(..)` (XX001).
+3. **Dependency direction is law** (see §1). Storage knows nothing about SQL, types, or catalogs.
+4. **One author per file.** Only edit files listed in your lease. `Cargo.toml`, `lib.rs`, `mod.rs`
+   files and anything under `contracts/`, `harness/oracle/`, `tests/expected/` are not yours.
+5. **The engine is synchronous.** No async runtime inside engine crates (wasm-friendly). Only
+   `pgarbor-wire`/`pgarbor-cli` use threads/sockets (std::net, thread per connection).
+6. **Reference PG18 is truth.** Pinned: `docker.io/library/postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336`
+   (PostgreSQL 18.6), initdb `--encoding=UTF8 --locale-provider=builtin --locale=C.UTF-8`,
+   `TimeZone=UTC`, `DateStyle=ISO, MDY`, `IntervalStyle=postgres`, `extra_float_digits=1`.
+   Default collation is therefore codepoint order (C.UTF-8). Other collations are later work.
+
+## 1. Crates and dependency DAG (acyclic, enforced by Cargo)
+
+```
+pgarbor-common   (ids, PgError/SqlState, Kv traits, keycodec helpers)      deps: —
+pgarbor-storage  (FileIo, pager, CoW B+tree, container commit/recovery,     deps: common
+                  file lock, compaction/export, doctor)
+pgarbor-fault    (fault-injecting FileIo, reference model, crash scheduler) deps: common, storage
+pgarbor-branches (branch directory, create/delete/rename/reset/compare,     deps: common, storage
+                  .pgabranch handles, detach/export, reflink)
+pgarbor-types    (Datum, TypeId/OIDs, text+binary IO, casts, operators,     deps: common
+                  functions, numeric, datetime, json/jsonb, arrays, memcomparable key encoding)
+pgarbor-catalog  (catalog model, persistence over Kv, OID allocation,       deps: common, types
+                  pg_catalog + information_schema virtual relations)
+pgarbor-core     (Engine: txn manager, snapshots, overlays, savepoints,     deps: common, storage, branches
+                  key locks, deadlock detection, sequences store)
+pgarbor-sql      (sqlparser 0.63 adapter, binder → bound IR, param typing)  deps: common, types, catalog
+pgarbor-plan     (logical plan, rewrite/optimize, physical plan, EXPLAIN)   deps: common, types, catalog, sql
+pgarbor-exec     (executor operators, expression eval, DML/DDL, constraints)deps: common, types, catalog, sql, plan, core
+pgarbor          (embedded API: Database, Session, statement dispatch,      deps: all of the above
+                  GUCs, portals/prepared statements)
+pgarbor-wire     (PG v3 protocol server over std::net)                      deps: common, types, pgarbor
+pgarbor-cli      (`pgarbor` binary)                                         deps: pgarbor, pgarbor-wire, branches, storage
+```
+
+`pgarbor-catalog` and `pgarbor-exec` never import `pgarbor-storage`: they see data only through the
+`Kv` traits in `pgarbor-common`. `pgarbor-core` adapts storage trees + overlays into `Kv`.
+
+## 2. Identifiers (pgarbor-common::ids) — ARCH-04
+
+| Type | Repr | Meaning |
+|---|---|---|
+| `PageId(u64)` | page number in file; 0 = superblock area, never a tree page | storage-internal |
+| `CommitSeq(u64)` | monotonically increasing container commit counter | durable ordering |
+| `DatabaseUuid([u8;16])` | random per container (fresh on export) | file identity |
+| `BranchId([u8;16])` | random UUID per branch; stable across rename | branch identity |
+| `TxnId(u64)` | in-process, monotonically increasing; NOT persisted | locks/diagnostics |
+| `Oid(u32)` | PostgreSQL OID; user objects allocated from 16384 per branch | catalog |
+| `RelId = Oid` | relation (table/index/sequence/view) OID | catalog |
+
+## 3. Errors (pgarbor-common::error) — ARCH-05/08, SQL-13
+
+`PgError { sqlstate: SqlState, severity: Severity, message, detail, hint, position, schema, table,
+column, datatype, constraint }`. `SqlState` is a newtype over `[u8;5]` with named constants for the
+PG18 errcodes we use (full `errcodes.txt` table generated later). `Result<T> = std::result::Result<T, PgError>`.
+Messages copy PostgreSQL's wording exactly (differential tests compare SQLSTATE always and
+message text where deterministic).
+
+## 4. Key/value layer (pgarbor-common::kv) — ARCH-06
+
+```rust
+pub trait KvRead {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
+    /// Ascending iteration over [start, end) bounds, bytewise key order.
+    fn scan<'a>(&'a self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<KvIter<'a>>;
+}
+pub trait KvWrite: KvRead {
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
+    fn delete(&mut self, key: &[u8]) -> Result<bool>;
+}
+```
+**Keyspace of one branch tree.** Every key starts with a 4-byte big-endian *space id*:
+- `0x0000_0001` catalog (owned by pgarbor-catalog, layout in catalog contract)
+- `0x0000_0002` sequences state (owned by pgarbor-core::sequence)
+- `0x0000_0003` branch-local metadata (next OID counters, etc.)
+- `oid >= 16384`: relation data. Table rows: `[relid][rowid: u64 BE]` → encoded tuple.
+  Index entries: `[index relid][memcomparable key][rowid u64 BE if non-unique]` → rowid u64 BE.
+- System catalog relation OIDs < 16384 never hold row data (pg_catalog views are virtual).
+
+## 5. Storage contract — ARCH-06, STORE-*
+
+- `FileIo` trait (`read_at`, `write_at`, `sync_data`, `sync_all`, `len`, `set_len`) is the ONLY path to
+  bytes. `OsFile` (std::fs) for real files, `MemFile` for wasm/tests, `FaultFile` in pgarbor-fault.
+- File = superblock area (2 slots of 4096 bytes at offsets 0 and 4096) + pages of `page_size`
+  (default 8192) starting at offset 8192. PageId n ↦ offset `8192 + (n-1)*page_size`, n ≥ 1.
+- Every page: 32-byte header `{magic u32, kind u8, flags u8, reserved u16, page_id u64, commit_seq u64,
+  crc32c u32, payload_len u32}` + payload; checksum covers header (crc field zeroed) + payload.
+- Superblock: `{magic "PGARBOR\0", format_version u32, feature_flags u64, page_size u32,
+  db_uuid, commit_seq, directory_root PageId, page_count u64, freelist_root PageId (0 = none),
+  created_unix_ms u64, crc32c}`. Two slots; the valid slot with the higher `commit_seq` wins.
+  Unknown `format_version` or required feature flag → refuse to open (`XX001`-class error, fail closed).
+- **Commit protocol** (STORE-09/10): all new pages are appended past `page_count` (never overwrite a
+  page reachable from either superblock slot) → `sync_data` → write superblock into the *older*
+  slot with `commit_seq+1` → `sync_data` → only then return `CommitSeq` (acknowledged).
+  Recovery = read both slots, take highest valid; pages past its `page_count` are garbage.
+- Copy-on-write B+tree (`BTree`): byte keys/values, ordered bytewise. Values larger than
+  `page_size/4` go to overflow page chains. Mutation produces a new root `PageId`; old pages stay
+  readable for any snapshot until compaction proves them unreachable.
+- Space reuse in v1: append-only; `compact()` writes a fresh file with only reachable pages (live
+  branches + pinned roots), syncs it, then atomically renames over the original and syncs the dir.
+- `Container::lock` — exclusive OS advisory lock (`fs2`) on open; second opener gets an error, not
+  silent sharing (STORE-12, ADR-004). One engine instance per file per process.
+
+## 6. Branch contract — ARCH-07, BRANCH-*
+
+Directory tree (root in superblock.directory_root), keys owned by pgarbor-branches:
+`b"B" + branch_id(16)` → `BranchRecord`, `b"N" + name utf8` → branch_id,
+`b"M" + name` → container metadata. `BranchRecord { id, name, data_root: PageId, parent: Option<BranchId>,
+created_at_seq: CommitSeq, head_seq: CommitSeq, created_unix_ms, state: Active|Deleted,
+snapshots: Vec<(label, PageId)> }`. A new container has branch `main`.
+Create = one commit inserting a record whose `data_root` = parent's current `data_root` (O(1)).
+Branch names: `[A-Za-z0-9._/-]{1,200}`, no leading `-` or `/`.
+`.pgabranch` handle: small JSON `{format:"pgabranch/1", db_uuid, branch_id, branch_name_hint,
+db_path_hint, created_unix_ms, crc32c}`; resolution validates db_uuid, errors loudly on mismatch.
+
+## 7. Transactions — ARCH-07, TXN-*
+
+- `Engine` owns `Container`; per-branch head = `BranchRecord.data_root`.
+- `Txn` = snapshot root (`PageId`) + **overlay** (`BTreeMap<Vec<u8>, Option<Vec<u8>>>`, None = delete)
+  + savepoint stack (overlay checkpoints) + isolation + `TxnState {Idle, InProgress, Failed}`.
+- Reads see overlay over snapshot. READ COMMITTED refreshes the snapshot root at every statement
+  start (`Txn::begin_statement`). REPEATABLE READ keeps the first statement's snapshot.
+  SERIALIZABLE: until SSI exists (TXN-11), it runs with REPEATABLE READ snapshot + write-conflict
+  rules. That matches PG for histories without rw-antidependency cycles but can admit write-skew
+  that PG would abort. This is a KNOWN INCOMPATIBILITY recorded in `docs/compatibility/KNOWN_GAPS.md`
+  and the inventory (`serializable_ssi = UNIMPLEMENTED`), never reported as PASS.
+- **Row/key locks** (`LockManager`): every write (`put`/`delete` on relation data or unique index keys,
+  catalog rows) first takes an exclusive key lock (branch_id, key). Conflict → wait on the holder;
+  wait-for graph cycle → `40P01 deadlock_detected` for the requester; `lock_timeout` GUC (ms, 0 = ∞)
+  → `55P03`. After acquiring, `Txn` compares latest committed value vs snapshot value:
+  `LockOutcome::{Unchanged, Changed(Option<Vec<u8>>)}`. RC callers re-evaluate; RR callers raise
+  `40001` ("could not serialize access due to concurrent update").
+- Commit: take the container write mutex (short), re-read branch head, apply overlay to the head tree
+  (keys are locked, so no lost updates), write new `BranchRecord.data_root`, container commit,
+  release key locks. Rollback = drop overlay + release locks. Failed state: every statement except
+  ROLLBACK / ROLLBACK TO SAVEPOINT / COMMIT(→ROLLBACK) errors `25P02`.
+- Sequences: `nextval` writes go to a separate immediate mini-commit (non-transactional, like PG).
+
+## 8. Types — ARCH-05, TYPE-*
+
+`TypeId { oid: Oid, typmod: i32 }` (typmod -1 = none). `Datum` enum (values never carry type):
+`Null, Bool, Int2(i16), Int4(i32), Int8(i64), Float4(f32), Float8(f64), Numeric(Numeric), Text(String)`
+(text, varchar, bpchar, name, enum labels), `Bytea(Vec<u8>), Uuid([u8;16]), Date(i32)` (days since
+2000-01-01, PG epoch; ±infinity as i32::MAX/MIN), `Time(i64)` µs, `TimeTz(i64 µs, i32 offset secs)`,
+`Timestamp(i64)`/`TimestampTz(i64)` µs since 2000-01-01 UTC (±infinity = i64::MAX/MIN),
+`Interval{months:i32, days:i32, micros:i64}`, `Json(String)`, `Jsonb(Jsonb)`, `Array(Box<Array>)`
+(`Array{elem: Oid, dims: Vec<(i32 len, i32 lbound)>, items: Vec<Datum>}`), `Oid(u32)`, `Char(u8)`
+("char"), `Record(Vec<Datum>)`.
+Text I/O: `type_input(TypeId, &str) -> Result<Datum>` / `type_output(TypeId, &Datum) -> Result<String>`
+byte-exact with PG18 under the pinned GUCs. Binary: `type_send`/`type_recv` per PG `*send/*recv`.
+Tuple storage encoding (`tuple::encode_row/decode_row`) is engine-internal, versioned (leading u8).
+Memcomparable encoding (`keycodec::encode_key`) preserves PG ordering for the default collation,
+NULLS LAST ascending; used for index keys.
+
+## 9. Catalog — ARCH-08, CAT-*
+
+Catalog rows are stored under space 1: `[0,0,0,1][kind u8][oid u32 BE]` → serialized object
+(serde_json bytes, versioned). Kinds: namespace, class (table/index/view/sequence), type (enum/domain/
+composite), constraint, attrdef, database, role, description. `CatalogSnapshot::load(&dyn KvRead)`
+builds an immutable in-memory view; `CatalogTxn` writes through `&mut dyn KvWrite`.
+Built-in objects (pg_catalog namespace 11, public 2200, information_schema, built-in types/procs,
+role `postgres` oid 10, database oid 5 `postgres`) are compiled-in constants with PG18's OIDs.
+pg_catalog / information_schema relations are **virtual**: generated rows from `CatalogSnapshot`.
+
+## 10. SQL → plan → exec — ARCH-05
+
+- `pgarbor-sql::parse(sql) -> Result<Vec<RawStatement>>` wraps `sqlparser` 0.63 (`PostgreSqlDialect`),
+  keeping source text + byte offsets. Syntax errors → `42601` with PG-style message and `position`.
+- `pgarbor-sql::bind(stmt, &BindContext) -> Result<BoundStatement>`: name resolution via
+  search_path, type resolution/coercion via pgarbor-types, parameter type inference ($n).
+  Unsupported syntax → `0A000` with the construct named, never ignored.
+- `pgarbor-plan::plan(BoundStatement) -> Result<Plan>`; `Plan` is a tree of `PhysicalNode`s plus
+  output `Vec<ColumnDesc{name, type_id, table_oid, column_attnum}>`.
+- `pgarbor-exec::execute(plan, &mut ExecContext) -> Result<ExecResult>` where ExecContext gives
+  `&mut dyn KvWrite` (txn view), catalog snapshot, params, GUC values, lock hooks.
+  `ExecResult::{Rows{desc, rows: Vec<Vec<Datum>>, tag}, Command{tag}}`; command tags exactly PG's
+  (`INSERT 0 3`, `UPDATE 2`, `SELECT 5`, `CREATE TABLE`, ...).
+
+## 11. Embedded API (pgarbor crate) — CLI-08
+
+```rust
+let db = pgarbor::Database::open("dev.pga", OpenOptions::default())?;   // or ::create
+let mut s = db.session("main", SessionOptions { user: "postgres".into(), database: "postgres".into() })?;
+let results = s.simple_query("CREATE TABLE t(id int primary key); INSERT INTO t VALUES (1)")?;
+let stmt = s.prepare("q1", "SELECT * FROM t WHERE id = $1", &[])?;    // extended protocol
+db.create_branch("feature", "main")?;
+```
+Session exposes everything the wire layer needs (simple query, parse/bind/describe/execute/sync/close,
+transaction status `I|T|E`, parameter status, notices, cancel flag). The wire layer contains **no**
+SQL semantics.
+
+## 12. Wire — ARCH-08, WIRE-*
+
+PostgreSQL protocol 3.0 (accept 3.2 negotiation via NegotiateProtocolVersion down to 3.0), SSLRequest →
+'N' until TLS exists, GSSENCRequest → 'N', CancelRequest via (pid, secret) map. Auth: trust (default,
+loopback only) and SCRAM-SHA-256/cleartext when a password is configured. Startup params `user`,
+`database`, `application_name`, `options` (-c GUCs); branch is bound at listener level.
+
+## 13. Test oracle schema — ORACLE-03/04
+
+Case files: `tests/cases/**/*.yaml` (schema `contracts/oracle/case.schema.json`). Expected outputs are
+*recorded* from the pinned PG18 into `tests/expected/**` by the trusted recorder — never authored by
+hand or by feature workers. Comparison: typed values (text format as PG prints), column names, type
+OIDs, command tags, SQLSTATE; multiset comparison when no ORDER BY. Outcome classes: PASS, MISMATCH,
+CRASH, HANG, CORRUPTION, UNEXPECTED_ACCEPTANCE, UNSUPPORTED, BLOCKED, FLAKY, INVALID_CASE, HARNESS_ERROR.
+# pgarbor-wire — crate contract v1
+
+Status: RATIFIED skeleton (contract freeze). Leases: `contracts/leases/pgarbor-wire.json` (WIR-01..WIR-21; seed tasks
+WIRE-01..WIRE-13). Amendments: `pgarbor-wire-01-copy-channel-and-streaming`, `pgarbor-wire-02-protocol-3-2-native`.
+Depends on: pgarbor-common, pgarbor-types, pgarbor (embedded API) + sha2/hmac/base64/md-5/pbkdf2/rand. Consumed by pgarbor-cli.
+
+## Purpose
+
+The PostgreSQL v3 frontend/backend protocol server over `std::net` (TCP, plus Unix-domain sockets on unix), one OS thread per
+connection, no async runtime. It is a protocol translator: **no SQL semantics live here**. Every message maps to a method on
+`pgarbor::Database` / `pgarbor::Session` (simple query, parse/bind/describe/execute/close/sync, cancel, notifications, COPY channel).
+Each listener is bound to exactly ONE branch (`ServerConfig::branch`); the logical SQL database comes from the startup `database`
+parameter (v1: only `postgres`). Different branches are served by different listeners (RFC 001 section 7).
+
+## Public API
+
+```rust
+let server = pgarbor_wire::Server::start(db, ServerConfig::loopback("main"))?;   // binds + spawns accept threads
+let url    = server.url("postgres", "postgres");        // postgres://postgres@127.0.0.1:PORT/postgres?sslmode=disable
+let handle = server.handle();                           // ServerHandle: stop(), is_stopping(), local_addr(), connection_count()
+server.wait_for(&|| stop_requested())?;                 // blocks, then runs shutdown()
+server.shutdown()?;                                     // idempotent graceful stop
+```
+| Item | Use |
+|---|---|
+| `ServerConfig`, `ListenAddr`, `AuthPolicy`, `TlsPolicy` | configuration; `validate()` refuses unsafe combinations; `ServerConfig::loopback(branch)` |
+| `Server`, `ServerHandle` | lifecycle; `tcp_addr()`, `unix_paths()`, `url()`, `connection_count()` |
+| `Frontend`, `Backend`, `RowField`, `CopyResponse`, `ErrorFields` | typed message model; `frontend::decode_frontend`, `backend::encode_backend` are the only (de)serializers |
+| `transcript::{TranscriptSink, TranscriptEntry, MemoryTranscript, to_jsonl, summarize}` | WIRE-12 diagnostics hook (no serde in this crate) |
+| `client::WireClient` | minimal test/diagnostic client (startup incl. cleartext/md5/SCRAM, simple + extended query, raw frames, cancel) |
+| `scram::{ScramServer, ScramClient, make_verifier, parse_verifier}` | SCRAM-SHA-256 building blocks |
+
+## Protocol support (byte-exact per PG 18.6 `protocol.sgml`)
+
+* **Versions:** 3.0 (4-byte cancel secret) and 3.2 (32-byte secret, variable-length CancelRequest 16..=264 bytes) natively; minor > 2 or
+  any `_pq_.*` option -> `NegotiateProtocolVersion(newest_minor, unrecognized names)`; major != 3 -> FATAL `0A000`
+  `unsupported frontend protocol N.M: server supports 3.0 to 3.2` (amendment 02 deviates from ARCHITECTURE section 12 here).
+* **First packet** (untagged): StartupMessage, SSLRequest (80877103) and GSSENCRequest (80877104) -> single byte `N`, CancelRequest
+  (80877102) -> `Database::cancel_request(pid, secret)` then close silently. Max 10000 bytes.
+* **Startup params:** `user` (required), `database` (default = user), `application_name`, `options` (`-c n=v`, `--n=v`),
+  `replication` (rejected unless false), other names forwarded as startup GUCs (the session validates them), `_pq_.*` negotiated away.
+* **Auth:** `Auto` (default), `Trust`, `Password` (cleartext), `Md5`, `ScramSha256`. Failures are FATAL `28P01 password authentication
+  failed for user "x"` with no detail; unknown roles run a mock SCRAM exchange first. See `auth.rs` for the method table.
+* **After auth:** AuthenticationOk, ParameterStatus for `Session::startup_param_status()`, BackendKeyData, ReadyForQuery('I').
+* **Simple Query:** `Session::simple_query_raw`; per statement: NoticeResponse*, RowDescription (all text), DataRow*, CommandComplete /
+  EmptyQueryResponse; ErrorResponse stops the string; ParameterStatus changes (deduplicated against the last reported value) are
+  emitted just before ReadyForQuery, as PG 14+ does (`ReportChangedGUCOptions`).
+* **Extended:** Parse/Bind/Describe/Execute/Close/Sync/Flush. After an error everything (including Query, Flush, Terminate) is discarded
+  until Sync (`ignore_till_sync`); no ReadyForQuery until then. Describe('S') reports format 0; Describe('P') reports the formats
+  recorded at Bind. `max_rows <= 0` = unlimited; PortalSuspended on row-limit.
+* **COPY:** CopyIn/CopyOut/CopyData/CopyDone/CopyFail (`copy.rs`), blocked on amendment 01 for installation (see gaps).
+* **Notifications:** `NotificationResponse` after ReadyForQuery and on idle polls, only while the session is idle (status `I`).
+* **Cancel/terminate:** engine owns the key map; `CancelToken::terminate` implements shutdown; `statement_timeout` is enforced by
+  core `Interrupts`; the wire layer enforces `idle_in_transaction_session_timeout` (FATAL `25P03`) and `idle_session_timeout`
+  (FATAL `57P05`) while waiting for the next message.
+* **Limits:** `max_connections` established sessions (FATAL `53300 sorry, too many clients already`), handler-thread cap
+  `2*max+16` (excess sockets are closed unanswered), startup timeout 60 s (FATAL `57014 canceling authentication due to timeout`),
+  frame cap 256 MiB (FATAL `08P01 invalid message length`).
+* **Errors:** `ErrorResponse`/`NoticeResponse` fields `S V C M D H P s t c d n` in that order. `F`/`L`/`R`/`W` are never sent (PgError
+  has no such data; fabricating them would break transcript parity).
+* **TLS:** NOT implemented (WIRE-13 is "explicit not yet"): SSLRequest/GSSENCRequest are answered `N`; `TlsPolicy::Required` is refused
+  by `validate()` with `0A000 TLS is not supported yet`. Non-loopback binds need `allow_nonloopback` and a password policy.
+
+## Threading and state
+
+* `Shared` (Arc): `Database`, config, stop flag, two `ConnGate` counters, `ConnRegistry`, mock-auth secret.
+* One thread per accepted socket (`connection::serve_connection`); the `Session` is created ON that thread (it is `!Send`).
+* Idle connections poll with a read timeout (`idle_poll`, default 100 ms; 25 ms while LISTENing) so they observe shutdown and notifications;
+  partial frames survive timeouts because `FrameReader` owns an accumulation buffer.
+* Shutdown: stop flag -> accept loops exit (non-blocking accept, 50 ms poll; SA_RESTART signal handlers cannot interrupt a blocking accept)
+  -> `CancelToken::terminate` for every session -> grace wait -> `shutdown(Both)` on remaining sockets -> detach stragglers.
+* Output is buffered per connection and flushed after ReadyForQuery / Flush / CopyInResponse / auth challenges and before every blocking read.
+
+## Error conventions
+
+* Protocol violations are `08P01` with PG's wording from `pqformat.c` (`insufficient data left in message`, `invalid message format`,
+  `invalid string in message`, `invalid frontend message type N`, ...). Startup/auth errors are FATAL and close the socket without
+  ReadyForQuery.
+* The address-in-use bind failure message contains the substring `address in use` (the CLI maps it to exit code 2, harness-02).
+* `WireError::{Io, Closed, Pg, Shutdown}` separates "socket is gone" (close silently) from "send this error".
+
+## How downstream crates use it
+
+`pgarbor-cli` runs `Server::start` for `serve`, for `branch serve`, and for owned/on-demand listeners of `branch exec` and the control
+socket; it never touches protocol internals. The harness (`PgarborTarget`) reaches the same server through `pgarbor serve`.
+
+## Non-goals and known gaps (v1)
+
+* No TLS/GSS, no replication protocol, no fastpath `FunctionCall` (answered `0A000`), no `COPY BOTH`.
+* **COPY** installation is blocked on amendment `pgarbor-wire-01`: `Session::set_copy_channel` needs a nameable `CopyChannel` trait
+  (re-export from `pgarbor`), a `start(direction, binary, column_count)` hook (CopyIn/OutResponse need column counts/formats) and a
+  streaming simple-query API. Until then `copy::install` returns `0A000` and a `COPY` inside a multi-statement string cannot interleave
+  correctly.
+* Simple Query results are fully materialized by `Session::simple_query_raw` (no row streaming).
+* Client encodings other than UTF-8 are not converted.
+* A blocked `read` cannot be woken by the NotifyHub waker; notification latency is bounded by the poll interval.
+* One listener serves one branch; reaching another branch needs another listener (CLI `branch exec` automates this).
+
+## Lease index
+| lease | file | tier | scope |
+|---|---|---|---|
+| WIR-01 | frontend.rs | haiku | decode all frontend messages |
+| WIR-02 | backend.rs | haiku | encode all backend messages |
+| WIR-03 | startup_packet.rs | haiku | first-packet parser |
+| WIR-04 | error_fields.rs | haiku | PgError -> Error/NoticeResponse fields |
+| WIR-05 | framing.rs | sonnet | resumable frame reader + buffered writer |
+| WIR-06 | conn_io.rs | haiku | typed I/O with transcript recording |
+| WIR-07 | options_parse.rs | haiku | `options` parsing and startup GUC assembly |
+| WIR-08 | startup_flow.rs | sonnet | SSL/GSS/cancel/version negotiation/params |
+| WIR-09 | scram.rs | sonnet | SCRAM-SHA-256 server + client |
+| WIR-10 | auth.rs | sonnet | method choice and exchanges |
+| WIR-11 | simple_query.rs | haiku | Query message |
+| WIR-12 | extended.rs | sonnet | extended protocol + skip-until-Sync |
+| WIR-13 | copy.rs | sonnet | COPY IN/OUT channel (install blocked on amendment 01) |
+| WIR-14 | result_encode.rs | haiku | result/error/RFQ message emission |
+| WIR-15 | notify_out.rs | haiku | NotificationResponse delivery, poll interval |
+| WIR-16 | session_loop.rs | sonnet | command loop, idle timeouts, shutdown |
+| WIR-17 | connection.rs | sonnet | connection lifecycle |
+| WIR-18 | listener.rs | sonnet | bind + non-blocking accept loops |
+| WIR-19 | server.rs (+ tests/wir_19.rs) | sonnet | server lifecycle, URLs, e2e tests |
+| WIR-20 | transcript.rs | haiku | JSONL/summary formatting |
+| WIR-21 | client.rs | haiku | test/diagnostic client |
+
+Frozen and implemented (not leased): `lib.rs`, `consts.rs`, `error.rs`, `buf.rs`, `transport.rs`, `config.rs`, `tls.rs`, `cancel.rs`,
+`param_report.rs`, `limits.rs`, `registry.rs`, `shared.rs`.
+{
+ "crate": "pgarbor-wire",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "WIR-01",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-04",
+    "WIRE-05"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/frontend.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Decode all frontend messages (Q P B E D C S H X d c f p F).",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-01\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement decode_frontend, parse_password, parse_sasl_initial using buf::MsgReader. Follow the layout table in the module docs. Unknown tag -> 08P01 `invalid frontend message type N` (decimal). Counts (Int16) must be >= 0 and are never used for with_capacity beyond `remaining()`. Bind: formats vec, then param count, then per param Int32 len (-1 NULL, else 0..=remaining, anything else `invalid message format`), then result formats; finish() the reader. Describe/Close subtype other than b'S'/b'P' -> `invalid DESCRIBE message subtype N` / `invalid CLOSE message subtype N` (N decimal of the byte). Execute max_rows is Int32 (keep sign). Empty-body messages with a non-empty body -> `invalid message format`. Tests: one hand-built byte vector per message type; truncation of every prefix of a Bind body errors with 08P01 and never panics; negative counts; unknown tag.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml",
+    "crates/pgarbor-wire/src/frontend.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "decode_frontend(b'Q', b\"select 1\\0\") == Query(\"select 1\")",
+    "every strict prefix of a valid Bind body fails with SQLSTATE 08P01 and never panics",
+    "unknown tag 90 gives message `invalid frontend message type 90`"
+   ]
+  },
+  {
+   "lease_id": "WIR-02",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-05",
+    "WIRE-06"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/backend.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Encode all backend messages byte-exactly.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-02\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement encode_backend with buf::MsgWriter (tag + Int32 length counting itself; patched by finish()). Follow the layout table and the limits (Int16 counts -> 54000 `too many columns` / `too many parameters`; buffer restored to entry length on error). ErrorResponse/NoticeResponse: for each (code,value) in fields write the code byte then put_cstr(value), then a final 0 byte. AuthenticationSASL: mechanisms as cstrs then an extra 0 byte. BackendKeyData secret = rest of body. ReadyForQuery byte from TxnStatus::byte(). Tests: every hex example in the docs byte for byte; a decode-by-hand round trip for RowDescription/DataRow; limit error leaves `out` unchanged.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml",
+    "crates/pgarbor-wire/src/backend.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "crates/pgarbor/src/types.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "ReadyForQuery(Idle) encodes to 5a 00 00 00 05 49",
+    "DataRow([Some(b\"1\"),None]) encodes to 44 0000000f 0002 00000001 31 ffffffff",
+    "encode errors leave the output buffer unchanged"
+   ]
+  },
+  {
+   "lease_id": "WIR-03",
+   "task_ids": [
+    "WIRE-01"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/startup_packet.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Parse the untagged first packet (Startup/SSL/GSSENC/Cancel).",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-03\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement parse_startup_packet. First Int32 is the code: 80877103/80877104/80877102 per consts.rs else protocol version (major=code>>16, minor=code&0xffff). SslRequest/GssEncRequest bodies must be exactly 4 bytes else FATAL 08P01 `invalid length of startup packet`. Cancel: Int32 pid then 4..=256 secret bytes. Startup: parse name/value cstr pairs until an empty name; the terminator must be the LAST byte, otherwise FATAL 08P01 `invalid startup packet layout: expected terminator as last byte`. All errors via .with_severity(Severity::Fatal). Tests: each packet kind, missing terminator, trailing bytes after terminator, 3.2 version code, cancel with 3 and 257 secret bytes.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml",
+    "~/develop/reference/postgres-18/src/backend/postmaster/postmaster.c (ProcessStartupPacket)"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "80877103 parses to SslRequest",
+    "Startup with user/database parses params in arrival order",
+    "missing terminator is FATAL 08P01"
+   ]
+  },
+  {
+   "lease_id": "WIR-04",
+   "task_ids": [
+    "WIRE-06"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/error_fields.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "PgError -> ErrorResponse/NoticeResponse field list.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-04\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement fields_from_pg_error exactly per the table in the module docs (order S V C M D H P s t c d n; omit None/empty optional fields; M always present; P is position as decimal). Tests: full error with every optional field, minimal error, NOTICE severity, empty detail omitted.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "fields order is S,V,C,M,D,H,P,s,t,c,d,n",
+    "no F/L/R/W fields are ever emitted"
+   ]
+  },
+  {
+   "lease_id": "WIR-05",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-03",
+    "WIRE-10"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/framing.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Resumable frame reader and buffered writer.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-05\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement FrameReader::poll_frame/poll_startup and FrameWriter::push/flush per the module docs. Accumulate bytes in `buf`; return a frame only when complete; timeouts (WouldBlock/TimedOut) return Polled::TimedOut WITHOUT discarding partial data; Interrupted retried; read of 0 = Eof if nothing buffered else Io(UnexpectedEof). Validate the length field BEFORE reading the body (len < 4 or len-4 > max_body => FATAL 08P01 `invalid message length`; startup length outside 8..=max_len => FATAL 08P01 `invalid length of startup packet`). Compact the buffer (drain consumed prefix) when pos > buf.len()/2 to keep memory bounded. poll_startup sets the stream read timeout from `timeout` for each read. FrameWriter::push encodes with backend::encode_backend into a scratch Vec then appends (so errors leave the buffer unchanged), auto-flushes when pending > AUTO_FLUSH_BYTES; flush uses write_all + flush and clears the buffer even on error. Tests with a connected pair of std::net::TcpStream on 127.0.0.1:0 (bind a listener in the test): frame split across two writes arrives intact after a TimedOut; two pipelined frames; oversized length rejected without allocation; EOF mid-frame is Io error; writer auto-flush.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/transport.rs",
+    "crates/pgarbor-wire/src/backend.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-02"
+   ],
+   "acceptance": [
+    "a frame delivered in two TCP segments is returned once complete and a poll between them returns TimedOut",
+    "len=3 is FATAL 08P01 invalid message length",
+    "clean close at a frame boundary yields Polled::Eof"
+   ]
+  },
+  {
+   "lease_id": "WIR-06",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-12"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/conn_io.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Typed connection I/O with transcript recording.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-06\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement ConnIo::new/send/flush/poll/poll_raw/poll_startup/write_ssl_answer per the module docs. new: stream.try_clone() for the writer; FrameReader::new(stream, cfg.max_frame_bytes); set_nodelay(cfg.tcp_nodelay); peer = stream.peer_info() BEFORE moving; transcript = cfg.transcript.clone(). send: encode with backend::encode_backend into a scratch Vec, record(ServerToClient, Some(tag), msg.name(), &bytes[5..]) then self.writer.push_raw (auto-flush threshold via pending()). poll/poll_raw: if writer.pending() > 0 flush FIRST (never block on read with unflushed output), then reader.poll_frame; record ClientToServer with the frontend name (use frontend::decode_frontend then Frontend::name(); on decode error record name `Invalid`); poll_startup records the packet (tag None) with names per the docs. write_ssl_answer writes the single byte through writer.push_raw + flush and records `SSLResponse`.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/framing.rs",
+    "crates/pgarbor-wire/src/transcript.rs",
+    "crates/pgarbor-wire/src/config.rs",
+    "crates/pgarbor-wire/src/frontend.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-01",
+    "WIR-02",
+    "WIR-05"
+   ],
+   "acceptance": [
+    "pending output is flushed before every blocking read",
+    "each message in both directions is recorded exactly once with increasing seq"
+   ]
+  },
+  {
+   "lease_id": "WIR-07",
+   "task_ids": [
+    "WIRE-01"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/options_parse.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Parse the startup `options` string and assemble startup GUCs.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-07\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement split_options (backslash escapes; split on space, tab, \\n, \\r, \\x0c, \\x0b), parse_options and build_startup_gucs per the module docs. Errors are FATAL 42601 `invalid command-line argument for server process: <token>`. -c accepts `-c n=v`, `-cn=v`; `--n=v` converts '-' to '_' in the name. Tests: escapes, both -c forms, long form, missing '=', unknown short option, assembly order with defaults/params/options, reserved params excluded (user, database, options, replication, application_name, _pq_.*).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/src/backend/postmaster/postmaster.c (process_startup_options)",
+    "~/develop/reference/postgres-18/src/backend/utils/misc/guc.c (ParseLongOption)"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`-c DateStyle=ISO,MDY --statement-timeout=5s` parses to two pairs with statement_timeout",
+    "`-c foo` is FATAL 42601"
+   ]
+  },
+  {
+   "lease_id": "WIR-08",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-09",
+    "WIRE-13"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/startup_flow.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Startup negotiation: SSL/GSS refusal, cancel, version negotiation, parameter extraction.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-08\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement negotiate exactly per the numbered algorithm in the module docs, using io.poll_startup, startup_packet::parse_startup_packet, tls::encryption_answer, cancel::handle, options_parse::build_startup_gucs and io.send_flush for NegotiateProtocolVersion. Truncate user/database to 63 bytes on a char boundary. Send each FATAL error with error_fields::error_message BEFORE returning Err (the caller only closes). Tests (use a connected TCP pair + ConnIo): SSLRequest then StartupMessage proceeds and the peer saw one 'N'; major 4 => FATAL 0A000; minor 5 => NegotiateProtocolVersion(newest_minor 2) and cancel_key_len 32; _pq_.foo => listed in the negotiate message; missing user => FATAL 28000; replication=true rejected.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/startup_packet.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/options_parse.rs",
+    "crates/pgarbor-wire/src/cancel.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "contracts/amendments/pgarbor-wire-02-protocol-3-2-native.md"
+   ],
+   "depends_on_leases": [
+    "WIR-03",
+    "WIR-06",
+    "WIR-07"
+   ],
+   "acceptance": [
+    "SSLRequest is answered with exactly one byte N",
+    "protocol 3.0 => cancel_key_len 4, 3.2 => 32",
+    "unsupported major version is FATAL 0A000 with the documented text"
+   ]
+  },
+  {
+   "lease_id": "WIR-09",
+   "task_ids": [
+    "WIRE-02"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/scram.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "SCRAM-SHA-256 server and client state machines, verifier handling.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-09\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement parse_verifier, make_verifier, mock_verifier, ScramServer::{client_first, client_final}, ScramClient::{client_first, client_final, verify_server_final} per the module docs and RFC 5802/7677. Crates: sha2 0.10 (Sha256, Digest), hmac 0.12 (Hmac<Sha256>, Mac::new_from_slice, update, finalize().into_bytes()), pbkdf2 0.12 (`pbkdf2::pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut out)`), base64 0.22 (`base64::engine::general_purpose::STANDARD`, Engine trait encode/decode), rand 0.9 (`rand::fill(&mut buf)`): READ their sources. Constant-time comparison for StoredKey (fold XOR over bytes). Nonces: 18 random bytes base64. Parse attributes like auth-scram.c read_attr (single-char key, '=', value up to ','). Reject channel binding (`p=` gs2) with 08P01. The client-final channel-binding attribute must equal base64(gs2 header) i.e. `biws` for `n,,`. Tests: RFC 7677 test vector (user, password `pencil`, salt W22ZaJ0SNY7soEsUEjb6gQ==, 4096 iterations, nonces from the RFC) for both sides; full client<->server loop with random nonces; wrong password => Ok(Failed); mock verifier is deterministic per (secret,user) and the exchange always ends Failed; parse_verifier rejects bad strings.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/src/backend/libpq/auth-scram.c",
+    "~/develop/reference/postgres-18/src/common/scram-common.c",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pbkdf2-0.12.2/src/lib.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "RFC 7677 vector verifies",
+    "make_verifier output round-trips through parse_verifier",
+    "wrong proof => Ok(ScramOutcome::Failed) not Err"
+   ]
+  },
+  {
+   "lease_id": "WIR-10",
+   "task_ids": [
+    "WIRE-02"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/auth.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Authentication: method choice, cleartext, md5, SCRAM exchanges, failure shapes.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-10\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement choose_method, md5_verifier, md5_response, verify_plain_password, authenticate per the module docs (method table, exchanges, failures). md-5 crate: library name `md5` (`use md5::{Md5, Digest}`); hex-encode by hand. Use io.poll_raw for `p` frames with timeout = deadline - now (TimedOut => FATAL 57014 `canceling authentication due to timeout`), check tag == b'p' else FATAL 08P01 `expected password response, got message type <decimal>`. Unknown role / no verifier under a password policy must take the SAME code path and timing shape as a wrong password (mock SCRAM for Scram; for Cleartext/Md5 still read the response, then fail 28P01). Role `valid_until` (timestamptz \u00b5s since 2000-01-01) in the past => 28P01. All failures: FATAL, sent via error_fields::error_message and flushed BEFORE returning Err. After success send_flush AuthenticationOk. Tests with a connected TCP pair + WireClient-style raw bytes or the scram::ScramClient: trust => AuthenticationOk only; cleartext right/wrong; md5 right/wrong (known vector: user `postgres`, password `secret`); SCRAM right/wrong; non-local peer + Auto without verifier => 28000 pg_hba text.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/scram.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/startup_flow.rs",
+    "crates/pgarbor/src/types.rs",
+    "crates/pgarbor/src/database.rs",
+    "~/develop/reference/postgres-18/src/backend/libpq/auth.c",
+    "~/develop/reference/postgres-18/src/backend/libpq/crypt.c"
+   ],
+   "depends_on_leases": [
+    "WIR-06",
+    "WIR-09"
+   ],
+   "acceptance": [
+    "wrong password => FATAL 28P01 `password authentication failed for user \"x\"`",
+    "unknown role under scram runs a full mock exchange before failing",
+    "md5 response matches PG's formula"
+   ]
+  },
+  {
+   "lease_id": "WIR-11",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-06"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/simple_query.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Simple Query message handling.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-11\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement handle per the numbered steps in the module docs using Session::simple_query_raw and result_encode::{send_statement_output, send_error_cycle, finish_cycle}. Borrow the SharedIo with ctx.io.borrow_mut() only for the duration of each call (do not hold it across session calls: COPY channels borrow it during execution). Tests (marked #[ignore = \"needs API-07\"] where they need a real Session): empty query => EmptyQueryResponse + ReadyForQuery; two statements => two CommandCompletes; error => ErrorResponse then ReadyForQuery('I'); FATAL error closes without ReadyForQuery.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/result_encode.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "crates/pgarbor/src/simple_query.rs",
+    "crates/pgarbor/src/types.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-14"
+   ],
+   "acceptance": [
+    "every Query ends with ReadyForQuery carrying SimpleQueryOutput.status unless the error is FATAL",
+    "statement outputs are sent in order, errors after the completed statements"
+   ]
+  },
+  {
+   "lease_id": "WIR-12",
+   "task_ids": [
+    "WIRE-04",
+    "WIRE-05",
+    "WIRE-06",
+    "WIRE-07"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/extended.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Extended protocol messages with skip-until-Sync semantics.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-12\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement handle per the table and error-handling rules in the module docs. Convert wire format codes with pgarbor::FormatCode::from_i16 (08P01 `unsupported format code: N`). Describe portal uses ctx.portal_formats (map FormatCode lists with backend::format_for_column via result_encode::row_fields); Describe statement uses empty formats. Execute: max_rows <= 0 => 0. On any Err from a session call: result_encode::send_error_cycle(.., err), set ctx.skipping_until_sync = true and return Ok(()) (FATAL errors: flush and return Err(WireError::Pg)). Sync: call session.sync(); on Ok(status) finish_cycle(status); on Err(e) send the error then finish_cycle(session.txn_status()); always clear skipping_until_sync. Flush: io.flush(). Close portal removes ctx.portal_formats entry. Tests (ignored where a real Session is needed): unit-test the format mapping helper functions you add privately; Parse error then Execute is skipped until Sync; Describe portal reports the Bind-time formats.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor/src/extended.rs",
+    "crates/pgarbor/src/types.rs",
+    "crates/pgarbor-wire/src/result_encode.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "crates/pgarbor-wire/src/frontend.rs",
+    "~/develop/reference/postgres-18/src/backend/tcop/postgres.c"
+   ],
+   "depends_on_leases": [
+    "WIR-14"
+   ],
+   "acceptance": [
+    "after an error no message is answered until Sync",
+    "Describe(P) uses the result formats given at Bind",
+    "Sync always ends with exactly one ReadyForQuery"
+   ]
+  },
+  {
+   "lease_id": "WIR-13",
+   "task_ids": [
+    "WIRE-08"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/copy.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "COPY IN/OUT message handling (channel logic; installation blocked on amendment pgarbor-wire-01).",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-13\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement WireCopyChannel::read_chunk/write_chunk and CopyHandle::finish_statement per the module docs. The io is `Rc<RefCell<ConnIo>>`: borrow_mut only inside each method. CopyData chunks are returned as-is (no re-framing). `install` MUST stay `Err(PgError::unimplemented(\"WIR-13\", ..))` until the amendment lands (keep that single call site). Tests: construct a WireCopyChannel over a connected TCP pair and drive it with raw frames: d,d,c => chunks then None; f => 57014 `COPY from stdin failed: msg`; H and S ignored; stray 'Q' => `unexpected message type 0x51 during COPY from stdin`; OUT: first write queues CopyOutResponse, finish_statement(true) queues CopyDone.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "contracts/amendments/pgarbor-wire-01-copy-channel-and-streaming.md",
+    "crates/pgarbor-exec/src/copy.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/copyfromparse.c",
+    "~/develop/reference/postgres-18/src/backend/commands/copyto.c"
+   ],
+   "depends_on_leases": [
+    "WIR-06"
+   ],
+   "acceptance": [
+    "CopyFail yields 57014 with `COPY from stdin failed: ` prefix",
+    "CopyDone is sent exactly once per COPY TO statement and never after an error"
+   ]
+  },
+  {
+   "lease_id": "WIR-14",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-06",
+    "WIRE-07"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/result_encode.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Statement results to backend messages; error cycle; ReadyForQuery cycle.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-14\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement send_notices, send_statement_output, send_error_cycle, finish_cycle per the module docs (message order; rows encoded BEFORE the RowDescription is queued; param_status handed to the ParamReporter; FATAL flush). Use ConnIo::send, error_fields::{error_message, notice_message}, Session::encode_row(columns, &[], row) for DataRows. Tests with a ConnIo over a TCP pair and a hand-built StatementOutput: Rows => T D D C order; Command => C; Empty => I; notices precede the result; finish_cycle emits deduplicated ParameterStatus then Z.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/param_report.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "crates/pgarbor/src/types.rs",
+    "crates/pgarbor/src/portal.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-02",
+    "WIR-04",
+    "WIR-06"
+   ],
+   "acceptance": [
+    "ParameterStatus is emitted only before ReadyForQuery and only when the value changed",
+    "a row-encoding error leaves no partial RowDescription queued"
+   ]
+  },
+  {
+   "lease_id": "WIR-15",
+   "task_ids": [
+    "WIRE-11"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/notify_out.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "NotificationResponse delivery and idle poll interval.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-15\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement deliver (only when session.txn_status() == TxnStatus::Idle; drain session.take_notifications(); send Backend::NotificationResponse{pid, channel, payload}; flush if any) and refine poll_interval (min(idle_poll, 25ms) while `shared.db.notify_hub().listening(session.pid())` is non-empty, never below 1 ms). Tests: poll_interval arithmetic (needs a Shared: build one via an in-memory Database and mark #[ignore = \"needs API-04\"] if necessary).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor/src/notify.rs",
+    "crates/pgarbor/src/session.rs",
+    "crates/pgarbor-wire/src/conn_io.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-06"
+   ],
+   "acceptance": [
+    "notifications are delivered only while idle",
+    "each delivered NotificationResponse carries the notifying backend pid"
+   ]
+  },
+  {
+   "lease_id": "WIR-16",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-05",
+    "WIRE-06",
+    "WIRE-09",
+    "WIRE-10",
+    "WIRE-11"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/session_loop.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Per-connection command loop: dispatch, idle polling, timeouts, shutdown.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-16\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement parse_pg_duration_ms and run per the module docs. The loop borrows ctx.io only around poll/send calls (never across simple_query::handle/extended::handle which borrow it themselves). Track `idle_since: Instant` reset after every handled message; check idle_in_transaction_session_timeout / idle_session_timeout only when poll returns TimedOut; read them via session.setting(name) (errors => treat as 0). Decode errors from poll (WireError::Pg non-fatal) are reported with result_encode::send_error_cycle and followed by finish_cycle unless the current protocol state is extended (skipping). Panics are caught by connection.rs, not here. Tests: parse_pg_duration_ms table (`0`, `5000`, `5s`, `1min`, `250ms`, `1h`, `1d`, `garbage`); the dispatch table as a pure private helper `classify(&Frontend, skipping) -> Action` tested exhaustively (ignore-till-sync rules).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/simple_query.rs",
+    "crates/pgarbor-wire/src/extended.rs",
+    "crates/pgarbor-wire/src/notify_out.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor/src/guc_derive.rs",
+    "~/develop/reference/postgres-18/src/backend/tcop/postgres.c (PostgresMain)"
+   ],
+   "depends_on_leases": [
+    "WIR-06",
+    "WIR-11",
+    "WIR-12",
+    "WIR-15"
+   ],
+   "acceptance": [
+    "while skipping until Sync every message except Sync is discarded",
+    "idle_in_transaction_session_timeout terminates with FATAL 25P03",
+    "Terminate ends the loop without sending anything"
+   ]
+  },
+  {
+   "lease_id": "WIR-17",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-02",
+    "WIRE-10"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/connection.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Connection lifecycle from accept to close.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-17\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement serve_connection (catch_unwind around run_connection; swallow the result; drop permit and registry guard) and run_connection per the numbered steps in the module docs. Sessions are created on this thread with shared.db.connect(Some(&branch), SessionOptions{..}); map ALL connect errors to FATAL via PgError::with_severity. Seed ParamReporter with session.startup_param_status(). Never hold the ConnIo RefCell borrow across Database/Session calls. Use std::panic::catch_unwind(AssertUnwindSafe(..)); print `pgarbor-wire: connection N panicked: <msg>` to stderr. Tests (ignored until API-04/05/07 exist): trust connect + `select 1`; unknown role => FATAL 28000 after AuthenticationOk; too many clients => FATAL 53300.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/startup_flow.rs",
+    "crates/pgarbor-wire/src/auth.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "crates/pgarbor-wire/src/registry.rs",
+    "crates/pgarbor-wire/src/limits.rs",
+    "crates/pgarbor/src/database.rs",
+    "crates/pgarbor/src/types.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-06",
+    "WIR-08",
+    "WIR-10",
+    "WIR-16"
+   ],
+   "acceptance": [
+    "a panic in session code does not kill the server process",
+    "the permit and registry entry are released on every path"
+   ]
+  },
+  {
+   "lease_id": "WIR-18",
+   "task_ids": [
+    "WIRE-10",
+    "WIRE-01"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/listener.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Bind TCP/Unix listeners and run non-blocking accept loops.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-18\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement bind_all and accept_loop per the module docs. Unix-only code under #[cfg(unix)]; fallback 0A000 otherwise. Never panic on accept errors. Spawn connection threads with std::thread::Builder (name `pgarbor-conn-<id>`); take the `shared.threads` permit BEFORE spawning and pass it into connection::serve_connection. Socket file removal when the loop ends only if this listener created it. Tests: bind 127.0.0.1:0 twice and check distinct ports; binding an in-use port yields message containing `address in use`; unix socket path too long error; stale socket file is replaced; accept loop exits within 200 ms of shared.request_stop().",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/config.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "crates/pgarbor-wire/src/connection.rs",
+    "crates/pgarbor-wire/src/transport.rs",
+    "~/develop/reference/postgres-18/src/backend/libpq/pqcomm.c"
+   ],
+   "depends_on_leases": [
+    "WIR-17"
+   ],
+   "acceptance": [
+    "port 0 resolves to a real port",
+    "in-use port message contains the substring `address in use`",
+    "accept loop stops promptly after request_stop"
+   ]
+  },
+  {
+   "lease_id": "WIR-19",
+   "task_ids": [
+    "WIRE-10",
+    "WIRE-09"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/server.rs",
+    "crates/pgarbor-wire/tests/wir_19.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Server start/stop, URL building, end-to-end tests.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-19\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement Server::start, url, shutdown, wait_for per the module docs (shutdown idempotent: guard with the stop flag + a Mutex<bool> `done`; join accept threads via take of accept_threads; poll the registry for emptiness; close sockets after grace). Percent-encode user/database in url (unreserved set A-Za-z0-9-._~). Also write tests/wir_19.rs: end-to-end tests using pgarbor_wire::client::WireClient against Server::start(Database::in_memory()?, ServerConfig::loopback(\"main\")): startup + ParameterStatus set contains server_version 18.6, simple query, extended query with a parameter, error recovery (ErrorResponse then next query works), cancel of a long statement, 3.2 vs 3.0 key lengths via raw bytes, SSLRequest answered N, many parallel clients, shutdown while a client is connected. Mark every test #[ignore = \"needs API-04..API-12 and engine\"] until the engine is complete.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/listener.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "crates/pgarbor-wire/src/registry.rs",
+    "crates/pgarbor-wire/src/client.rs",
+    "crates/pgarbor/src/database.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-18",
+    "WIR-21"
+   ],
+   "acceptance": [
+    "shutdown returns within shutdown_grace + 2s even with connected idle clients",
+    "url() percent-encodes and brackets IPv6",
+    "Server::start fails cleanly (no leaked threads) when binding fails"
+   ]
+  },
+  {
+   "lease_id": "WIR-20",
+   "task_ids": [
+    "WIRE-12"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/transcript.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Transcript JSON line and human summary formatting.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-20\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement to_jsonl and summarize per the module docs. Hand-write JSON escaping (no serde in this crate). summarize decodes only the fields listed using buf::MsgReader (ignore decode failures: fall back to `len=N`). Tests: exact JSON line for a ReadyForQuery entry; escaping of quotes/control chars; summaries for Query, ErrorResponse, ReadyForQuery, DataRow.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/transcript.rs",
+    "crates/pgarbor-wire/src/error_fields.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "to_jsonl output is valid JSON with the documented key order",
+    "summarize never panics on arbitrary bodies"
+   ]
+  },
+  {
+   "lease_id": "WIR-21",
+   "task_ids": [
+    "WIRE-12",
+    "WIRE-07"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/client.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Minimal test/diagnostic wire client.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-21\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement WireClient per the module docs using only std + scram::ScramClient + md5 for the md5 password. Parse backend messages with buf::MsgReader. Keep it small and robust: bound all lengths (max message 64 MiB), 10 s default read timeout. extended_query: Parse(\"\" , sql, []), Bind(\"\",\"\", [], params as text, []), Describe('P',\"\"), Execute(\"\",0), Sync. Error messages -> PgError rebuilt from fields S/C/M. Tests (ignored until the server exists): none required beyond pure helpers you extract (message parsing from byte slices).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/scram.rs",
+    "crates/pgarbor-wire/src/backend.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml"
+   ],
+   "depends_on_leases": [
+    "WIR-09"
+   ],
+   "acceptance": [
+    "connect_tcp completes startup against trust, cleartext, md5 and SCRAM servers",
+    "QueryResponse separates results, notices, error and notifications"
+   ]
+  }
+ ]
+}//! Frontend (client -> server) messages after startup (lease WIR-01). PG: `protocol.sgml`
+//! "Message Formats", `tcop/postgres.c` (`SocketBackend`, `exec_*_message`).
+//!
+//! A message on the wire is `tag: u8`, `len: Int32` (counts itself, NOT the tag; minimum 4), then
+//! `len - 4` body bytes. [`crate::framing::FrameReader`] delivers `(tag, body)`; this module turns that
+//! pair into a [`Frontend`] value. Decoding is pure (no I/O) and never panics.
+//!
+//! ## Body layouts (all integers big-endian)
+//! | tag | message | body |
+//! |---|---|---|
+//! | `Q` | Query | `String sql` |
+//! | `P` | Parse | `String name`, `String query`, `Int16 n`, `n x Int32 param_type_oid` (0 = unspecified) |
+//! | `B` | Bind | `String portal`, `String statement`, `Int16 nf`, `nf x Int16 param_format`, `Int16 np`, `np x (Int32 len or -1 = NULL, len bytes)`, `Int16 nr`, `nr x Int16 result_format` |
+//! | `E` | Execute | `String portal`, `Int32 max_rows` (0 or negative = no limit) |
+//! | `D` | Describe | `Byte1 'S' or 'P'`, `String name` |
+//! | `C` | Close | `Byte1 'S' or 'P'`, `String name` |
+//! | `S` | Sync | empty |
+//! | `H` | Flush | empty |
+//! | `X` | Terminate | empty |
+//! | `d` | CopyData | raw bytes |
+//! | `c` | CopyDone | empty |
+//! | `f` | CopyFail | `String message` |
+//! | `p` | PasswordMessage / SASLInitialResponse / SASLResponse | raw body, interpreted by the auth state ([`parse_password`], [`parse_sasl_initial`]) |
+//! | `F` | FunctionCall | raw body kept (answered with 0A000, see `session_loop`) |
+//!
+//! ## Errors (all `08P01`, PG wording from `pqformat.c`, produced by [`crate::buf::MsgReader`])
+//! * `insufficient data left in message` - body shorter than the layout needs;
+//! * `invalid message format` - trailing bytes after a fully parsed fixed-layout message;
+//! * `invalid string in message` - missing NUL / invalid UTF-8;
+//! * negative count (`Int16 n < 0`) for formats/params/oids: `invalid message format`;
+//! * Bind parameter length < -1 or larger than the remaining body: `invalid message format`;
+//! * Describe/Close kind byte not `S`/`P`: `invalid DESCRIBE message subtype N` / `invalid CLOSE
+//!   message subtype N` (N = the byte as a decimal number, PG prints `%d`);
+//! * unknown tag: `invalid frontend message type N` (decimal), see [`decode_frontend`].
+//!
+//! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+//! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+use pgarbor_common::{PgError, Result};
+
+/// Describe / Close target.
+// CONTRACT
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetKind {
+    /// `S`: prepared statement.
+    Statement,
+    /// `P`: portal.
+    Portal,
+}
+
+/// A decoded frontend message.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frontend {
+    Query(String),
+    Parse { name: String, query: String, param_oids: Vec<u32> },
+    Bind {
+        portal: String,
+        statement: String,
+        /// Raw Int16 format codes as sent (0/1); validated later with `FormatCode::from_i16`.
+        param_formats: Vec<i16>,
+        /// `None` = SQL NULL.
+        params: Vec<Option<Vec<u8>>>,
+        result_formats: Vec<i16>,
+    },
+    /// `max_rows <= 0` means "all rows".
+    Execute { portal: String, max_rows: i32 },
+    Describe { kind: TargetKind, name: String },
+    Close { kind: TargetKind, name: String },
+    Sync,
+    Flush,
+    Terminate,
+    CopyData(Vec<u8>),
+    CopyDone,
+    CopyFail(String),
+    /// Raw body of a `p` message.
+    Password(Vec<u8>),
+    /// Raw body of an `F` message.
+    FunctionCall(Vec<u8>),
+}
+
+impl Frontend {
+    /// Message name for logs and transcripts (`"Query"`, `"Parse"`, ...).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Frontend::Query(_) => "Query",
+            Frontend::Parse { .. } => "Parse",
+            Frontend::Bind { .. } => "Bind",
+            Frontend::Execute { .. } => "Execute",
+            Frontend::Describe { .. } => "Describe",
+            Frontend::Close { .. } => "Close",
+            Frontend::Sync => "Sync",
+            Frontend::Flush => "Flush",
+            Frontend::Terminate => "Terminate",
+            Frontend::CopyData(_) => "CopyData",
+            Frontend::CopyDone => "CopyDone",
+            Frontend::CopyFail(_) => "CopyFail",
+            Frontend::Password(_) => "PasswordMessage",
+            Frontend::FunctionCall(_) => "FunctionCall",
+        }
+    }
+}
+
+/// Decode one frontend message. `tag` is the type byte, `body` the bytes after the length field.
+///
+/// Fixed-layout messages (everything except CopyData/Password/FunctionCall, whose bodies are raw)
+/// must consume the body exactly (`MsgReader::finish`). Empty-body messages (`S`, `H`, `X`, `c`)
+/// with a non-empty body -> `invalid message format`.
+/// Unknown tag -> `08P01 invalid frontend message type N` (N decimal of the tag byte).
+/// Examples: `decode_frontend(b'Q', b"select 1\0")` -> `Query("select 1")`;
+/// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+/// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+/// message type 90`.
+#[allow(unused_variables)]
+pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+    Err(PgError::unimplemented("WIR-01", "decode a frontend message (frontend::decode_frontend)"))
+}
+
+/// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+/// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+/// -> `08P01 invalid message format`.
+#[allow(unused_variables)]
+pub fn parse_password(body: &[u8]) -> Result<String> {
+    Err(PgError::unimplemented("WIR-01", "parse PasswordMessage body (frontend::parse_password)"))
+}
+
+/// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+/// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+/// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+#[allow(unused_variables)]
+pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+    Err(PgError::unimplemented("WIR-01", "parse SASLInitialResponse body (frontend::parse_sasl_initial)"))
+}
+
+exec
+/usr/bin/zsh -lc "python3 - <<'PY'
+import json
+p=json.load(open('contracts/leases/pgarbor-wire.json'))
+for x in p['leases']:
+ if x['lease_id']=='WIR-01': print(json.dumps(x,indent=2))
+PY
+cat crates/pgarbor-wire/src/buf.rs
+cat crates/pgarbor-wire/src/error.rs
+cat crates/pgarbor-common/src/error.rs" in /home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01
+ succeeded in 22ms:
+{
+  "lease_id": "WIR-01",
+  "task_ids": [
+    "WIRE-03",
+    "WIRE-04",
+    "WIRE-05"
+  ],
+  "files": [
+    "crates/pgarbor-wire/src/frontend.rs"
+  ],
+  "model_tier": "haiku",
+  "summary": "Decode all frontend messages (Q P B E D C S H X d c f p F).",
+  "spec": "Implement every `PgError::unimplemented(\"WIR-01\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement decode_frontend, parse_password, parse_sasl_initial using buf::MsgReader. Follow the layout table in the module docs. Unknown tag -> 08P01 `invalid frontend message type N` (decimal). Counts (Int16) must be >= 0 and are never used for with_capacity beyond `remaining()`. Bind: formats vec, then param count, then per param Int32 len (-1 NULL, else 0..=remaining, anything else `invalid message format`), then result formats; finish() the reader. Describe/Close subtype other than b'S'/b'P' -> `invalid DESCRIBE message subtype N` / `invalid CLOSE message subtype N` (N decimal of the byte). Execute max_rows is Int32 (keep sign). Empty-body messages with a non-empty body -> `invalid message format`. Tests: one hand-built byte vector per message type; truncation of every prefix of a Bind body errors with 08P01 and never panics; negative counts; unknown tag.",
+  "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml",
+    "crates/pgarbor-wire/src/frontend.rs"
+  ],
+  "depends_on_leases": [],
+  "acceptance": [
+    "decode_frontend(b'Q', b\"select 1\\0\") == Query(\"select 1\")",
+    "every strict prefix of a valid Bind body fails with SQLSTATE 08P01 and never panics",
+    "unknown tag 90 gives message `invalid frontend message type 90`"
+  ]
+}
+//! Byte cursors for message bodies. Fully implemented, frozen (v1).
+//!
+//! [`MsgReader`] mirrors PG's `pq_getmsg*` family (`libpq/pqformat.c`) including its error wording:
+//! every failure is `08P01` (`PROTOCOL_VIOLATION`). [`MsgWriter`] builds one framed message
+//! (`tag` + Int32 length that counts itself but not the tag).
+use pgarbor_common::{PgError, Result, SqlState};
+
+fn pv(msg: &str) -> PgError {
+    PgError::new(SqlState::PROTOCOL_VIOLATION, msg)
+}
+
+/// Cursor over a message body. Never panics; never allocates more than the body holds.
+// CONTRACT
+#[derive(Debug, Clone)]
+pub struct MsgReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> MsgReader<'a> {
+    pub fn new(data: &'a [u8]) -> MsgReader<'a> {
+        MsgReader { data, pos: 0 }
+    }
+    /// Bytes not consumed yet.
+    pub fn remaining(&self) -> usize {
+        self.data.len() - self.pos
+    }
+    /// Take `n` raw bytes. Error: `insufficient data left in message`.
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        if n > self.remaining() {
+            return Err(pv("insufficient data left in message"));
+        }
+        let s = &self.data[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(s)
+    }
+    pub fn read_u8(&mut self) -> Result<u8> {
+        Ok(self.take(1)?[0])
+    }
+    pub fn read_i16(&mut self) -> Result<i16> {
+        let b = self.take(2)?;
+        Ok(i16::from_be_bytes([b[0], b[1]]))
+    }
+    pub fn read_i32(&mut self) -> Result<i32> {
+        let b = self.take(4)?;
+        Ok(i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    pub fn read_u32(&mut self) -> Result<u32> {
+        let b = self.take(4)?;
+        Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    /// NUL-terminated string. Errors: no terminator -> `invalid string in message`; not UTF-8 ->
+    /// `invalid byte sequence for encoding "UTF8"` is the PG text for bad client strings, but we use
+    /// `invalid string in message` for both (client_encoding conversion is a non-goal).
+    pub fn read_cstr(&mut self) -> Result<&'a str> {
+        let rest = &self.data[self.pos..];
+        let nul = rest.iter().position(|b| *b == 0).ok_or_else(|| pv("invalid string in message"))?;
+        let s = std::str::from_utf8(&rest[..nul]).map_err(|_| pv("invalid string in message"))?;
+        self.pos += nul + 1;
+        Ok(s)
+    }
+    /// Everything left (consumes it).
+    pub fn read_rest(&mut self) -> &'a [u8] {
+        let s = &self.data[self.pos..];
+        self.pos = self.data.len();
+        s
+    }
+    /// Require the body to be fully consumed (PG `pq_getmsgend`): `invalid message format`.
+    pub fn finish(&self) -> Result<()> {
+        if self.pos != self.data.len() {
+            return Err(pv("invalid message format"));
+        }
+        Ok(())
+    }
+}
+
+/// Builds one backend message into a caller-owned buffer. `MsgWriter::begin` appends the tag and a
+/// length placeholder; `finish()` patches the length.
+// CONTRACT
+#[derive(Debug)]
+pub struct MsgWriter<'a> {
+    out: &'a mut Vec<u8>,
+    start: usize,
+}
+
+impl<'a> MsgWriter<'a> {
+    /// Append a new message with `tag` to `out`.
+    pub fn begin(out: &'a mut Vec<u8>, tag: u8) -> MsgWriter<'a> {
+        let start = out.len();
+        out.push(tag);
+        out.extend_from_slice(&[0, 0, 0, 0]);
+        MsgWriter { out, start }
+    }
+    pub fn put_u8(&mut self, v: u8) {
+        self.out.push(v);
+    }
+    pub fn put_i16(&mut self, v: i16) {
+        self.out.extend_from_slice(&v.to_be_bytes());
+    }
+    pub fn put_i32(&mut self, v: i32) {
+        self.out.extend_from_slice(&v.to_be_bytes());
+    }
+    pub fn put_u32(&mut self, v: u32) {
+        self.out.extend_from_slice(&v.to_be_bytes());
+    }
+    pub fn put_bytes(&mut self, v: &[u8]) {
+        self.out.extend_from_slice(v);
+    }
+    /// String followed by NUL. Interior NULs are replaced by `?` (a NUL would corrupt framing).
+    pub fn put_cstr(&mut self, s: &str) {
+        for b in s.bytes() {
+            self.out.push(if b == 0 { b'?' } else { b });
+        }
+        self.out.push(0);
+    }
+    /// Patch the length field (counts itself, not the tag). Saturates at `i32::MAX`.
+    pub fn finish(self) {
+        let len = (self.out.len() - self.start - 1).min(i32::MAX as usize) as i32;
+        let at = self.start + 1;
+        self.out[at..at + 4].copy_from_slice(&len.to_be_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reader_roundtrip_and_errors() {
+        let mut r = MsgReader::new(b"ab\0\x00\x01\xff\xff");
+        assert_eq!(r.read_cstr().unwrap(), "ab");
+        assert_eq!(r.read_i16().unwrap(), 1);
+        assert_eq!(r.read_i16().unwrap(), -1);
+        assert!(r.finish().is_ok());
+        assert_eq!(r.read_u8().unwrap_err().sqlstate.code(), "08P01");
+        let mut r = MsgReader::new(b"abc");
+        assert_eq!(r.read_cstr().unwrap_err().message, "invalid string in message");
+    }
+
+    #[test]
+    fn writer_patches_length() {
+        let mut out = Vec::new();
+        let mut w = MsgWriter::begin(&mut out, b'Z');
+        w.put_u8(b'I');
+        w.finish();
+        assert_eq!(out, vec![b'Z', 0, 0, 0, 5, b'I']);
+    }
+}
+//! Wire-level error type. Fully implemented, frozen (v1).
+//!
+//! `WireError` separates "the socket is gone / the stream is unusable" (which must close the
+//! connection WITHOUT trying to write an ErrorResponse) from "send this PgError and carry on"
+//! and "send this FATAL error and close".
+use pgarbor_common::{PgError, Severity, SqlState};
+
+/// Result alias used across the crate.
+// CONTRACT
+pub type WireResult<T> = std::result::Result<T, WireError>;
+
+/// Why a connection (or one step of it) failed.
+// CONTRACT
+#[derive(Debug)]
+pub enum WireError {
+    /// Socket I/O failure or EOF mid-message: close silently (PG logs "unexpected EOF").
+    Io(std::io::Error),
+    /// The peer closed the connection cleanly at a message boundary (EOF before a tag byte).
+    Closed,
+    /// A protocol violation (08P01) or other error that PG would send as ErrorResponse. The loop
+    /// decides: in the main loop it is reported and the connection continues unless severity is FATAL.
+    Pg(PgError),
+    /// The server is shutting down; send FATAL 57P01 `terminating connection due to administrator
+    /// command` and close.
+    Shutdown,
+}
+
+impl WireError {
+    /// 08P01 protocol violation with PG wording.
+    pub fn protocol(message: impl Into<String>) -> WireError {
+        WireError::Pg(PgError::new(SqlState::PROTOCOL_VIOLATION, message))
+    }
+    /// Same, FATAL (closes the connection after sending).
+    pub fn fatal(err: PgError) -> WireError {
+        WireError::Pg(err.with_severity(Severity::Fatal))
+    }
+    /// True when the error forces the connection to close after being reported.
+    pub fn is_fatal(&self) -> bool {
+        match self {
+            WireError::Io(_) | WireError::Closed | WireError::Shutdown => true,
+            WireError::Pg(e) => matches!(e.severity, Severity::Fatal | Severity::Panic),
+        }
+    }
+}
+
+impl From<std::io::Error> for WireError {
+    fn from(e: std::io::Error) -> WireError {
+        WireError::Io(e)
+    }
+}
+
+impl From<PgError> for WireError {
+    fn from(e: PgError) -> WireError {
+        WireError::Pg(e)
+    }
+}
+
+impl std::fmt::Display for WireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WireError::Io(e) => write!(f, "I/O error: {e}"),
+            WireError::Closed => f.write_str("connection closed by peer"),
+            WireError::Pg(e) => write!(f, "{}: {}", e.sqlstate.code(), e.message),
+            WireError::Shutdown => f.write_str("server shutting down"),
+        }
+    }
+}
+
+impl std::error::Error for WireError {}
+//! PostgreSQL error model (SQL-13, ARCH-05/08). Messages must match PostgreSQL 18 wording.
+use std::fmt;
+
+/// Five-character SQLSTATE code.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SqlState(pub [u8; 5]);
+
+impl SqlState {
+    pub const SUCCESSFUL_COMPLETION: SqlState = SqlState(*b"00000");
+    pub const WARNING: SqlState = SqlState(*b"01000");
+    pub const NO_DATA: SqlState = SqlState(*b"02000");
+    pub const CONNECTION_EXCEPTION: SqlState = SqlState(*b"08000");
+    pub const CONNECTION_FAILURE: SqlState = SqlState(*b"08006");
+    pub const PROTOCOL_VIOLATION: SqlState = SqlState(*b"08P01");
+    pub const FEATURE_NOT_SUPPORTED: SqlState = SqlState(*b"0A000");
+    pub const INVALID_TRANSACTION_INITIATION: SqlState = SqlState(*b"0B000");
+    pub const CARDINALITY_VIOLATION: SqlState = SqlState(*b"21000");
+    pub const DATA_EXCEPTION: SqlState = SqlState(*b"22000");
+    pub const STRING_DATA_RIGHT_TRUNCATION: SqlState = SqlState(*b"22001");
+    pub const NULL_VALUE_NOT_ALLOWED: SqlState = SqlState(*b"22004");
+    pub const ARRAY_SUBSCRIPT_ERROR: SqlState = SqlState(*b"2202E");
+    pub const CHARACTER_NOT_IN_REPERTOIRE: SqlState = SqlState(*b"22021");
+    pub const DATETIME_FIELD_OVERFLOW: SqlState = SqlState(*b"22008");
+    pub const DIVISION_BY_ZERO: SqlState = SqlState(*b"22012");
+    pub const INVALID_DATETIME_FORMAT: SqlState = SqlState(*b"22007");
+    pub const INTERVAL_FIELD_OVERFLOW: SqlState = SqlState(*b"22015");
+    pub const INVALID_ARGUMENT_FOR_LOGARITHM: SqlState = SqlState(*b"2201E");
+    pub const INVALID_ARGUMENT_FOR_POWER_FUNCTION: SqlState = SqlState(*b"2201F");
+    pub const INVALID_PARAMETER_VALUE: SqlState = SqlState(*b"22023");
+    pub const INVALID_REGULAR_EXPRESSION: SqlState = SqlState(*b"2201B");
+    pub const INVALID_ROW_COUNT_IN_LIMIT_CLAUSE: SqlState = SqlState(*b"2201W");
+    pub const INVALID_ROW_COUNT_IN_RESULT_OFFSET_CLAUSE: SqlState = SqlState(*b"2201X");
+    pub const INVALID_TEXT_REPRESENTATION: SqlState = SqlState(*b"22P02");
+    pub const INVALID_BINARY_REPRESENTATION: SqlState = SqlState(*b"22P03");
+    pub const INVALID_ESCAPE_SEQUENCE: SqlState = SqlState(*b"22025");
+    pub const NUMERIC_VALUE_OUT_OF_RANGE: SqlState = SqlState(*b"22003");
+    pub const UNTRANSLATABLE_CHARACTER: SqlState = SqlState(*b"22P05");
+    pub const INVALID_JSON_TEXT: SqlState = SqlState(*b"22032");
+    pub const SQL_JSON_MEMBER_NOT_FOUND: SqlState = SqlState(*b"2203A");
+    pub const DATETIME_VALUE_OUT_OF_RANGE: SqlState = SqlState(*b"22008");
+    pub const INVALID_TIME_ZONE_DISPLACEMENT_VALUE: SqlState = SqlState(*b"22009");
+    pub const INTEGRITY_CONSTRAINT_VIOLATION: SqlState = SqlState(*b"23000");
+    pub const RESTRICT_VIOLATION: SqlState = SqlState(*b"23001");
+    pub const NOT_NULL_VIOLATION: SqlState = SqlState(*b"23502");
+    pub const FOREIGN_KEY_VIOLATION: SqlState = SqlState(*b"23503");
+    pub const UNIQUE_VIOLATION: SqlState = SqlState(*b"23505");
+    pub const CHECK_VIOLATION: SqlState = SqlState(*b"23514");
+    pub const EXCLUSION_VIOLATION: SqlState = SqlState(*b"23P01");
+    pub const INVALID_CURSOR_STATE: SqlState = SqlState(*b"24000");
+    pub const INVALID_TRANSACTION_STATE: SqlState = SqlState(*b"25000");
+    pub const ACTIVE_SQL_TRANSACTION: SqlState = SqlState(*b"25001");
+    pub const READ_ONLY_SQL_TRANSACTION: SqlState = SqlState(*b"25006");
+    pub const NO_ACTIVE_SQL_TRANSACTION: SqlState = SqlState(*b"25P01");
+    pub const IN_FAILED_SQL_TRANSACTION: SqlState = SqlState(*b"25P02");
+    pub const INVALID_SQL_STATEMENT_NAME: SqlState = SqlState(*b"26000");
+    pub const INVALID_AUTHORIZATION_SPECIFICATION: SqlState = SqlState(*b"28000");
+    pub const INVALID_PASSWORD: SqlState = SqlState(*b"28P01");
+    pub const INVALID_CATALOG_NAME: SqlState = SqlState(*b"3D000");
+    pub const INVALID_CURSOR_NAME: SqlState = SqlState(*b"34000");
+    pub const INVALID_SCHEMA_NAME: SqlState = SqlState(*b"3F000");
+    pub const TRANSACTION_ROLLBACK: SqlState = SqlState(*b"40000");
+    pub const SERIALIZATION_FAILURE: SqlState = SqlState(*b"40001");
+    pub const DEADLOCK_DETECTED: SqlState = SqlState(*b"40P01");
+    pub const SYNTAX_ERROR_OR_ACCESS_RULE_VIOLATION: SqlState = SqlState(*b"42000");
+    pub const SYNTAX_ERROR: SqlState = SqlState(*b"42601");
+    pub const INSUFFICIENT_PRIVILEGE: SqlState = SqlState(*b"42501");
+    pub const GROUPING_ERROR: SqlState = SqlState(*b"42803");
+    pub const INVALID_FOREIGN_KEY: SqlState = SqlState(*b"42830");
+    pub const INVALID_NAME: SqlState = SqlState(*b"42602");
+    pub const NAME_TOO_LONG: SqlState = SqlState(*b"42622");
+    pub const RESERVED_NAME: SqlState = SqlState(*b"42939");
+    pub const DATATYPE_MISMATCH: SqlState = SqlState(*b"42804");
+    pub const INDETERMINATE_DATATYPE: SqlState = SqlState(*b"42P18");
+    pub const WRONG_OBJECT_TYPE: SqlState = SqlState(*b"42809");
+    pub const UNDEFINED_COLUMN: SqlState = SqlState(*b"42703");
+    pub const UNDEFINED_FUNCTION: SqlState = SqlState(*b"42883");
+    pub const UNDEFINED_TABLE: SqlState = SqlState(*b"42P01");
+    pub const UNDEFINED_PARAMETER: SqlState = SqlState(*b"42P02");
+    pub const UNDEFINED_OBJECT: SqlState = SqlState(*b"42704");
+    pub const DUPLICATE_COLUMN: SqlState = SqlState(*b"42701");
+    pub const DUPLICATE_DATABASE: SqlState = SqlState(*b"42P04");
+    pub const DUPLICATE_FUNCTION: SqlState = SqlState(*b"42723");
+    pub const DUPLICATE_PREPARED_STATEMENT: SqlState = SqlState(*b"42P05");
+    pub const DUPLICATE_SCHEMA: SqlState = SqlState(*b"42P06");
+    pub const DUPLICATE_TABLE: SqlState = SqlState(*b"42P07");
+    pub const DUPLICATE_ALIAS: SqlState = SqlState(*b"42712");
+    pub const DUPLICATE_OBJECT: SqlState = SqlState(*b"42710");
+    pub const AMBIGUOUS_COLUMN: SqlState = SqlState(*b"42702");
+    pub const AMBIGUOUS_FUNCTION: SqlState = SqlState(*b"42725");
+    pub const AMBIGUOUS_PARAMETER: SqlState = SqlState(*b"42P08");
+    pub const INVALID_COLUMN_REFERENCE: SqlState = SqlState(*b"42P10");
+    pub const INVALID_COLUMN_DEFINITION: SqlState = SqlState(*b"42611");
+    pub const INVALID_TABLE_DEFINITION: SqlState = SqlState(*b"42P16");
+    pub const INVALID_OBJECT_DEFINITION: SqlState = SqlState(*b"42P17");
+    pub const INVALID_RECURSION: SqlState = SqlState(*b"42P19");
+    pub const WINDOWING_ERROR: SqlState = SqlState(*b"42P20");
+    pub const CANNOT_COERCE: SqlState = SqlState(*b"42846");
+    pub const DEPENDENT_OBJECTS_STILL_EXIST: SqlState = SqlState(*b"2BP01");
+    pub const OBJECT_NOT_IN_PREREQUISITE_STATE: SqlState = SqlState(*b"55000");
+    pub const OBJECT_IN_USE: SqlState = SqlState(*b"55006");
+    pub const LOCK_NOT_AVAILABLE: SqlState = SqlState(*b"55P03");
+    pub const QUERY_CANCELED: SqlState = SqlState(*b"57014");
+    pub const ADMIN_SHUTDOWN: SqlState = SqlState(*b"57P01");
+    pub const INSUFFICIENT_RESOURCES: SqlState = SqlState(*b"53000");
+    pub const DISK_FULL: SqlState = SqlState(*b"53100");
+    pub const OUT_OF_MEMORY: SqlState = SqlState(*b"53200");
+    pub const TOO_MANY_CONNECTIONS: SqlState = SqlState(*b"53300");
+    pub const PROGRAM_LIMIT_EXCEEDED: SqlState = SqlState(*b"54000");
+    pub const STATEMENT_TOO_COMPLEX: SqlState = SqlState(*b"54001");
+    pub const UNDEFINED_FILE: SqlState = SqlState(*b"58P01");
+    pub const IO_ERROR: SqlState = SqlState(*b"58030");
+    pub const CONFIG_FILE_ERROR: SqlState = SqlState(*b"F0000");
+    pub const PLPGSQL_ERROR: SqlState = SqlState(*b"P0000");
+    pub const RAISE_EXCEPTION: SqlState = SqlState(*b"P0001");
+    pub const INTERNAL_ERROR: SqlState = SqlState(*b"XX000");
+    pub const DATA_CORRUPTED: SqlState = SqlState(*b"XX001");
+    pub const INDEX_CORRUPTED: SqlState = SqlState(*b"XX002");
+
+    pub fn code(&self) -> &str {
+        std::str::from_utf8(&self.0).unwrap_or("XX000")
+    }
+    pub fn from_code(code: &str) -> Option<SqlState> {
+        let b = code.as_bytes();
+        if b.len() != 5 || !b.iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+            return None;
+        }
+        Some(SqlState([b[0], b[1], b[2], b[3], b[4]]))
+    }
+    /// Class (first two characters), e.g. "23" for integrity constraint violations.
+    pub fn class(&self) -> &str {
+        &self.code()[..2]
+    }
+}
+
+impl fmt::Debug for SqlState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SqlState({})", self.code())
+    }
+}
+impl fmt::Display for SqlState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+/// Error severity as sent in the wire `S`/`V` fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Fatal,
+    Panic,
+    Warning,
+    Notice,
+    Debug,
+    Info,
+    Log,
+}
+
+impl Severity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Error => "ERROR",
+            Severity::Fatal => "FATAL",
+            Severity::Panic => "PANIC",
+            Severity::Warning => "WARNING",
+            Severity::Notice => "NOTICE",
+            Severity::Debug => "DEBUG",
+            Severity::Info => "INFO",
+            Severity::Log => "LOG",
+        }
+    }
+}
+
+/// A PostgreSQL-shaped error (or notice) with structured fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PgError {
+    pub sqlstate: SqlState,
+    pub severity: Severity,
+    pub message: String,
+    pub detail: Option<String>,
+    pub hint: Option<String>,
+    /// 1-based character position in the original query string.
+    pub position: Option<u32>,
+    pub schema: Option<String>,
+    pub table: Option<String>,
+    pub column: Option<String>,
+    pub datatype: Option<String>,
+    pub constraint: Option<String>,
+}
+
+pub type Result<T> = std::result::Result<T, PgError>;
+
+impl PgError {
+    pub fn new(sqlstate: SqlState, message: impl Into<String>) -> PgError {
+        PgError {
+            sqlstate,
+            severity: Severity::Error,
+            message: message.into(),
+            detail: None,
+            hint: None,
+            position: None,
+            schema: None,
+            table: None,
+            column: None,
+            datatype: None,
+            constraint: None,
+        }
+    }
+    /// Feature not implemented yet. `lease` names the owning task/lease so the factory can inventory it.
+    pub fn unimplemented(lease: &str, what: impl Into<String>) -> PgError {
+        let what = what.into();
+        PgError::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported by PGArbor yet"))
+            .with_detail(format!("pgarbor-unimplemented: {lease}"))
+    }
+    pub fn syntax(message: impl Into<String>, position: Option<u32>) -> PgError {
+        let mut e = PgError::new(SqlState::SYNTAX_ERROR, message);
+        e.position = position;
+        e
+    }
+    pub fn internal(message: impl Into<String>) -> PgError {
+        PgError::new(SqlState::INTERNAL_ERROR, message)
+    }
+    pub fn corruption(message: impl Into<String>) -> PgError {
+        PgError::new(SqlState::DATA_CORRUPTED, message)
+    }
+    pub fn io(context: &str, err: &std::io::Error) -> PgError {
+        let state = match err.raw_os_error() {
+            Some(28) => SqlState::DISK_FULL, // ENOSPC
+            _ => SqlState::IO_ERROR,
+        };
+        PgError::new(state, format!("{context}: {err}"))
+    }
+    pub fn with_detail(mut self, d: impl Into<String>) -> Self {
+        self.detail = Some(d.into());
+        self
+    }
+    pub fn with_hint(mut self, h: impl Into<String>) -> Self {
+        self.hint = Some(h.into());
+        self
+    }
+    pub fn with_position(mut self, p: u32) -> Self {
+        self.position = Some(p);
+        self
+    }
+    pub fn with_table(mut self, schema: impl Into<String>, table: impl Into<String>) -> Self {
+        self.schema = Some(schema.into());
+        self.table = Some(table.into());
+        self
+    }
+    pub fn with_column(mut self, c: impl Into<String>) -> Self {
+        self.column = Some(c.into());
+        self
+    }
+    pub fn with_constraint(mut self, c: impl Into<String>) -> Self {
+        self.constraint = Some(c.into());
+        self
+    }
+    pub fn with_datatype(mut self, d: impl Into<String>) -> Self {
+        self.datatype = Some(d.into());
+        self
+    }
+    pub fn with_severity(mut self, s: Severity) -> Self {
+        self.severity = s;
+        self
+    }
+    /// A NOTICE-level message (sent as NoticeResponse, not an error).
+    pub fn notice(message: impl Into<String>) -> PgError {
+        PgError::new(SqlState::SUCCESSFUL_COMPLETION, message).with_severity(Severity::Notice)
+    }
+    pub fn is_unimplemented(&self) -> bool {
+        self.sqlstate == SqlState::FEATURE_NOT_SUPPORTED
+            && self.detail.as_deref().is_some_and(|d| d.starts_with("pgarbor-unimplemented:"))
+    }
+}
+
+impl fmt::Display for PgError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {} ({})", self.severity.as_str(), self.message, self.sqlstate)
+    }
+}
+
+impl std::error::Error for PgError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unimplemented_is_tagged() {
+        let e = PgError::unimplemented("EXEC-13", "ON CONFLICT DO UPDATE");
+        assert_eq!(e.sqlstate.code(), "0A000");
+        assert!(e.is_unimplemented());
+        assert_eq!(SqlState::from_code("23505"), Some(SqlState::UNIQUE_VIOLATION));
+        assert_eq!(SqlState::UNIQUE_VIOLATION.class(), "23");
+    }
+}
+
+apply patch
+patch: completed
+/home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01/crates/pgarbor-wire/src/frontend.rs
+diff --git a/crates/pgarbor-wire/src/frontend.rs b/crates/pgarbor-wire/src/frontend.rs
+index 56a6d960b5deb6b4bf4860b9a2d711a8b0be7179..4c4c8e33d7b297ff73921b1cb4d239207f16de84
+--- a/crates/pgarbor-wire/src/frontend.rs
++++ b/crates/pgarbor-wire/src/frontend.rs
+@@ -35,8 +35,23 @@
+ //!
+ //! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+ //! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+-use pgarbor_common::{PgError, Result};
++use crate::buf::MsgReader;
++use pgarbor_common::{PgError, Result, SqlState};
++
++fn invalid_format<T>() -> Result<T> {
++    Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid message format"))
++}
+ 
++fn read_codes(r: &mut MsgReader<'_>) -> Result<Vec<i16>> {
++    let n = r.read_i16()?;
++    if n < 0 { return invalid_format(); }
++    let n = n as usize;
++    if n > r.remaining() / 2 { return invalid_format(); }
++    let mut values = Vec::new();
++    for _ in 0..n { values.push(r.read_i16()?); }
++    Ok(values)
++}
++
+ /// Describe / Close target.
+ // CONTRACT
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -110,23 +125,110 @@
+ /// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+ /// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+ /// message type 90`.
+-#[allow(unused_variables)]
+ pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+-    Err(PgError::unimplemented("WIR-01", "decode a frontend message (frontend::decode_frontend)"))
++    let mut r = MsgReader::new(body);
++    let message = match tag {
++        b'Q' => Frontend::Query(r.read_cstr()?.to_owned()),
++        b'P' => {
++            let name = r.read_cstr()?.to_owned();
++            let query = r.read_cstr()?.to_owned();
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut param_oids = Vec::new();
++            for _ in 0..n { param_oids.push(r.read_u32()?); }
++            Frontend::Parse { name, query, param_oids }
++        }
++        b'B' => {
++            let portal = r.read_cstr()?.to_owned();
++            let statement = r.read_cstr()?.to_owned();
++            let param_formats = read_codes(&mut r)?;
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut params = Vec::new();
++            for _ in 0..n {
++                let len = r.read_i32()?;
++                if len == -1 { params.push(None); }
++                else if len < 0 || len as usize > r.remaining() { return invalid_format(); }
++                else { params.push(Some(r.take(len as usize)?.to_vec())); }
++            }
++            let result_formats = read_codes(&mut r)?;
++            Frontend::Bind { portal, statement, param_formats, params, result_formats }
++        }
++        b'E' => Frontend::Execute { portal: r.read_cstr()?.to_owned(), max_rows: r.read_i32()? },
++        b'D' | b'C' => {
++            let subtype = r.read_u8()?;
++            let kind = match subtype {
++                b'S' => TargetKind::Statement,
++                b'P' => TargetKind::Portal,
++                other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid {} message subtype {}", if tag == b'D' { "DESCRIBE" } else { "CLOSE" }, other))),
++            };
++            let name = r.read_cstr()?.to_owned();
++            if tag == b'D' { Frontend::Describe { kind, name } } else { Frontend::Close { kind, name } }
++        }
++        b'S' => Frontend::Sync,
++        b'H' => Frontend::Flush,
++        b'X' => Frontend::Terminate,
++        b'd' => Frontend::CopyData(r.read_rest().to_vec()),
++        b'c' => Frontend::CopyDone,
++        b'f' => Frontend::CopyFail(r.read_cstr()?.to_owned()),
++        b'p' => Frontend::Password(r.read_rest().to_vec()),
++        b'F' => Frontend::FunctionCall(r.read_rest().to_vec()),
++        other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid frontend message type {other}"))),
++    };
++    r.finish()?;
++    Ok(message)
+ }
+ 
+ /// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+ /// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+ /// -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_password(body: &[u8]) -> Result<String> {
+-    Err(PgError::unimplemented("WIR-01", "parse PasswordMessage body (frontend::parse_password)"))
++    let mut r = MsgReader::new(body);
++    let password = r.read_cstr()?.to_owned();
++    r.finish()?;
++    Ok(password)
+ }
+ 
+ /// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+ /// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+ /// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+-    Err(PgError::unimplemented("WIR-01", "parse SASLInitialResponse body (frontend::parse_sasl_initial)"))
++    let mut r = MsgReader::new(body);
++    let mechanism = r.read_cstr()?.to_owned();
++    let len = r.read_i32()?;
++    let data = if len == -1 { None }
++        else if len < -1 || len as usize > r.remaining() { return invalid_format(); }
++        else { Some(r.take(len as usize)?.to_vec()) };
++    r.finish()?;
++    Ok((mechanism, data))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn decodes_frontend_message_shapes() {
++        assert_eq!(decode_frontend(b'Q', b"select 1\0").unwrap(), Frontend::Query("select 1".into()));
++        assert_eq!(decode_frontend(b'S', b"").unwrap(), Frontend::Sync);
++        assert_eq!(decode_frontend(b'E', b"\0\0\0\0\0").unwrap(), Frontend::Execute { portal: String::new(), max_rows: 0 });
++        assert_eq!(decode_frontend(b'p', b"raw").unwrap(), Frontend::Password(b"raw".to_vec()));
++        assert_eq!(parse_password(b"pw\0").unwrap(), "pw");
++        assert_eq!(parse_sasl_initial(b"SCRAM-SHA-256\0\0\0\0\x03abc").unwrap(), ("SCRAM-SHA-256".into(), Some(b"abc".to_vec())));
++    }
++
++    #[test]
++    fn bind_prefixes_and_bad_tags_are_protocol_errors() {
++        let body = b"\0\0\0\0\0\0\0\0\0\0"; // empty portal/statement and three zero counts
++        for end in 0..body.len() {
++            assert_eq!(decode_frontend(b'B', &body[..end]).unwrap_err().sqlstate.code(), "08P01");
++        }
++        let err = decode_frontend(b'Z', b"").unwrap_err();
++        assert_eq!(err.message, "invalid frontend message type 90");
++        assert_eq!(err.sqlstate.code(), "08P01");
++    }
+ }
+
+diff --git a/crates/pgarbor-wire/src/frontend.rs b/crates/pgarbor-wire/src/frontend.rs
+index 56a6d960b5deb6b4bf4860b9a2d711a8b0be7179..4c4c8e33d7b297ff73921b1cb4d239207f16de84
+--- a/crates/pgarbor-wire/src/frontend.rs
++++ b/crates/pgarbor-wire/src/frontend.rs
+@@ -35,8 +35,23 @@
+ //!
+ //! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+ //! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+-use pgarbor_common::{PgError, Result};
++use crate::buf::MsgReader;
++use pgarbor_common::{PgError, Result, SqlState};
++
++fn invalid_format<T>() -> Result<T> {
++    Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid message format"))
++}
+ 
++fn read_codes(r: &mut MsgReader<'_>) -> Result<Vec<i16>> {
++    let n = r.read_i16()?;
++    if n < 0 { return invalid_format(); }
++    let n = n as usize;
++    if n > r.remaining() / 2 { return invalid_format(); }
++    let mut values = Vec::new();
++    for _ in 0..n { values.push(r.read_i16()?); }
++    Ok(values)
++}
++
+ /// Describe / Close target.
+ // CONTRACT
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -110,23 +125,110 @@
+ /// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+ /// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+ /// message type 90`.
+-#[allow(unused_variables)]
+ pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+-    Err(PgError::unimplemented("WIR-01", "decode a frontend message (frontend::decode_frontend)"))
++    let mut r = MsgReader::new(body);
++    let message = match tag {
++        b'Q' => Frontend::Query(r.read_cstr()?.to_owned()),
++        b'P' => {
++            let name = r.read_cstr()?.to_owned();
++            let query = r.read_cstr()?.to_owned();
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut param_oids = Vec::new();
++            for _ in 0..n { param_oids.push(r.read_u32()?); }
++            Frontend::Parse { name, query, param_oids }
++        }
++        b'B' => {
++            let portal = r.read_cstr()?.to_owned();
++            let statement = r.read_cstr()?.to_owned();
++            let param_formats = read_codes(&mut r)?;
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut params = Vec::new();
++            for _ in 0..n {
++                let len = r.read_i32()?;
++                if len == -1 { params.push(None); }
++                else if len < 0 || len as usize > r.remaining() { return invalid_format(); }
++                else { params.push(Some(r.take(len as usize)?.to_vec())); }
++            }
++            let result_formats = read_codes(&mut r)?;
++            Frontend::Bind { portal, statement, param_formats, params, result_formats }
++        }
++        b'E' => Frontend::Execute { portal: r.read_cstr()?.to_owned(), max_rows: r.read_i32()? },
++        b'D' | b'C' => {
++            let subtype = r.read_u8()?;
++            let kind = match subtype {
++                b'S' => TargetKind::Statement,
++                b'P' => TargetKind::Portal,
++                other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid {} message subtype {}", if tag == b'D' { "DESCRIBE" } else { "CLOSE" }, other))),
++            };
++            let name = r.read_cstr()?.to_owned();
++            if tag == b'D' { Frontend::Describe { kind, name } } else { Frontend::Close { kind, name } }
++        }
++        b'S' => Frontend::Sync,
++        b'H' => Frontend::Flush,
++        b'X' => Frontend::Terminate,
++        b'd' => Frontend::CopyData(r.read_rest().to_vec()),
++        b'c' => Frontend::CopyDone,
++        b'f' => Frontend::CopyFail(r.read_cstr()?.to_owned()),
++        b'p' => Frontend::Password(r.read_rest().to_vec()),
++        b'F' => Frontend::FunctionCall(r.read_rest().to_vec()),
++        other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid frontend message type {other}"))),
++    };
++    r.finish()?;
++    Ok(message)
+ }
+ 
+ /// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+ /// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+ /// -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_password(body: &[u8]) -> Result<String> {
+-    Err(PgError::unimplemented("WIR-01", "parse PasswordMessage body (frontend::parse_password)"))
++    let mut r = MsgReader::new(body);
++    let password = r.read_cstr()?.to_owned();
++    r.finish()?;
++    Ok(password)
+ }
+ 
+ /// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+ /// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+ /// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+-    Err(PgError::unimplemented("WIR-01", "parse SASLInitialResponse body (frontend::parse_sasl_initial)"))
++    let mut r = MsgReader::new(body);
++    let mechanism = r.read_cstr()?.to_owned();
++    let len = r.read_i32()?;
++    let data = if len == -1 { None }
++        else if len < -1 || len as usize > r.remaining() { return invalid_format(); }
++        else { Some(r.take(len as usize)?.to_vec()) };
++    r.finish()?;
++    Ok((mechanism, data))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn decodes_frontend_message_shapes() {
++        assert_eq!(decode_frontend(b'Q', b"select 1\0").unwrap(), Frontend::Query("select 1".into()));
++        assert_eq!(decode_frontend(b'S', b"").unwrap(), Frontend::Sync);
++        assert_eq!(decode_frontend(b'E', b"\0\0\0\0\0").unwrap(), Frontend::Execute { portal: String::new(), max_rows: 0 });
++        assert_eq!(decode_frontend(b'p', b"raw").unwrap(), Frontend::Password(b"raw".to_vec()));
++        assert_eq!(parse_password(b"pw\0").unwrap(), "pw");
++        assert_eq!(parse_sasl_initial(b"SCRAM-SHA-256\0\0\0\0\x03abc").unwrap(), ("SCRAM-SHA-256".into(), Some(b"abc".to_vec())));
++    }
++
++    #[test]
++    fn bind_prefixes_and_bad_tags_are_protocol_errors() {
++        let body = b"\0\0\0\0\0\0\0\0\0\0"; // empty portal/statement and three zero counts
++        for end in 0..body.len() {
++            assert_eq!(decode_frontend(b'B', &body[..end]).unwrap_err().sqlstate.code(), "08P01");
++        }
++        let err = decode_frontend(b'Z', b"").unwrap_err();
++        assert_eq!(err.message, "invalid frontend message type 90");
++        assert_eq!(err.sqlstate.code(), "08P01");
++    }
+ }
+
+codex
+The decoder paths are implemented using the frozen `MsgReader` error behavior. I’m doing the required source-only review now, especially around signed lengths, count bounds, and strict-body consumption.
+exec
+/usr/bin/zsh -lc "sed -n '1,280p' crates/pgarbor-wire/src/frontend.rs" in /home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01
+ succeeded in 0ms:
+//! Frontend (client -> server) messages after startup (lease WIR-01). PG: `protocol.sgml`
+//! "Message Formats", `tcop/postgres.c` (`SocketBackend`, `exec_*_message`).
+//!
+//! A message on the wire is `tag: u8`, `len: Int32` (counts itself, NOT the tag; minimum 4), then
+//! `len - 4` body bytes. [`crate::framing::FrameReader`] delivers `(tag, body)`; this module turns that
+//! pair into a [`Frontend`] value. Decoding is pure (no I/O) and never panics.
+//!
+//! ## Body layouts (all integers big-endian)
+//! | tag | message | body |
+//! |---|---|---|
+//! | `Q` | Query | `String sql` |
+//! | `P` | Parse | `String name`, `String query`, `Int16 n`, `n x Int32 param_type_oid` (0 = unspecified) |
+//! | `B` | Bind | `String portal`, `String statement`, `Int16 nf`, `nf x Int16 param_format`, `Int16 np`, `np x (Int32 len or -1 = NULL, len bytes)`, `Int16 nr`, `nr x Int16 result_format` |
+//! | `E` | Execute | `String portal`, `Int32 max_rows` (0 or negative = no limit) |
+//! | `D` | Describe | `Byte1 'S' or 'P'`, `String name` |
+//! | `C` | Close | `Byte1 'S' or 'P'`, `String name` |
+//! | `S` | Sync | empty |
+//! | `H` | Flush | empty |
+//! | `X` | Terminate | empty |
+//! | `d` | CopyData | raw bytes |
+//! | `c` | CopyDone | empty |
+//! | `f` | CopyFail | `String message` |
+//! | `p` | PasswordMessage / SASLInitialResponse / SASLResponse | raw body, interpreted by the auth state ([`parse_password`], [`parse_sasl_initial`]) |
+//! | `F` | FunctionCall | raw body kept (answered with 0A000, see `session_loop`) |
+//!
+//! ## Errors (all `08P01`, PG wording from `pqformat.c`, produced by [`crate::buf::MsgReader`])
+//! * `insufficient data left in message` - body shorter than the layout needs;
+//! * `invalid message format` - trailing bytes after a fully parsed fixed-layout message;
+//! * `invalid string in message` - missing NUL / invalid UTF-8;
+//! * negative count (`Int16 n < 0`) for formats/params/oids: `invalid message format`;
+//! * Bind parameter length < -1 or larger than the remaining body: `invalid message format`;
+//! * Describe/Close kind byte not `S`/`P`: `invalid DESCRIBE message subtype N` / `invalid CLOSE
+//!   message subtype N` (N = the byte as a decimal number, PG prints `%d`);
+//! * unknown tag: `invalid frontend message type N` (decimal), see [`decode_frontend`].
+//!
+//! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+//! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+use crate::buf::MsgReader;
+use pgarbor_common::{PgError, Result, SqlState};
+
+fn invalid_format<T>() -> Result<T> {
+    Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid message format"))
+}
+
+fn read_codes(r: &mut MsgReader<'_>) -> Result<Vec<i16>> {
+    let n = r.read_i16()?;
+    if n < 0 { return invalid_format(); }
+    let n = n as usize;
+    if n > r.remaining() / 2 { return invalid_format(); }
+    let mut values = Vec::new();
+    for _ in 0..n { values.push(r.read_i16()?); }
+    Ok(values)
+}
+
+/// Describe / Close target.
+// CONTRACT
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetKind {
+    /// `S`: prepared statement.
+    Statement,
+    /// `P`: portal.
+    Portal,
+}
+
+/// A decoded frontend message.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frontend {
+    Query(String),
+    Parse { name: String, query: String, param_oids: Vec<u32> },
+    Bind {
+        portal: String,
+        statement: String,
+        /// Raw Int16 format codes as sent (0/1); validated later with `FormatCode::from_i16`.
+        param_formats: Vec<i16>,
+        /// `None` = SQL NULL.
+        params: Vec<Option<Vec<u8>>>,
+        result_formats: Vec<i16>,
+    },
+    /// `max_rows <= 0` means "all rows".
+    Execute { portal: String, max_rows: i32 },
+    Describe { kind: TargetKind, name: String },
+    Close { kind: TargetKind, name: String },
+    Sync,
+    Flush,
+    Terminate,
+    CopyData(Vec<u8>),
+    CopyDone,
+    CopyFail(String),
+    /// Raw body of a `p` message.
+    Password(Vec<u8>),
+    /// Raw body of an `F` message.
+    FunctionCall(Vec<u8>),
+}
+
+impl Frontend {
+    /// Message name for logs and transcripts (`"Query"`, `"Parse"`, ...).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Frontend::Query(_) => "Query",
+            Frontend::Parse { .. } => "Parse",
+            Frontend::Bind { .. } => "Bind",
+            Frontend::Execute { .. } => "Execute",
+            Frontend::Describe { .. } => "Describe",
+            Frontend::Close { .. } => "Close",
+            Frontend::Sync => "Sync",
+            Frontend::Flush => "Flush",
+            Frontend::Terminate => "Terminate",
+            Frontend::CopyData(_) => "CopyData",
+            Frontend::CopyDone => "CopyDone",
+            Frontend::CopyFail(_) => "CopyFail",
+            Frontend::Password(_) => "PasswordMessage",
+            Frontend::FunctionCall(_) => "FunctionCall",
+        }
+    }
+}
+
+/// Decode one frontend message. `tag` is the type byte, `body` the bytes after the length field.
+///
+/// Fixed-layout messages (everything except CopyData/Password/FunctionCall, whose bodies are raw)
+/// must consume the body exactly (`MsgReader::finish`). Empty-body messages (`S`, `H`, `X`, `c`)
+/// with a non-empty body -> `invalid message format`.
+/// Unknown tag -> `08P01 invalid frontend message type N` (N decimal of the tag byte).
+/// Examples: `decode_frontend(b'Q', b"select 1\0")` -> `Query("select 1")`;
+/// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+/// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+/// message type 90`.
+pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+    let mut r = MsgReader::new(body);
+    let message = match tag {
+        b'Q' => Frontend::Query(r.read_cstr()?.to_owned()),
+        b'P' => {
+            let name = r.read_cstr()?.to_owned();
+            let query = r.read_cstr()?.to_owned();
+            let n = r.read_i16()?;
+            if n < 0 { return invalid_format(); }
+            let n = n as usize;
+            if n > r.remaining() / 4 { return invalid_format(); }
+            let mut param_oids = Vec::new();
+            for _ in 0..n { param_oids.push(r.read_u32()?); }
+            Frontend::Parse { name, query, param_oids }
+        }
+        b'B' => {
+            let portal = r.read_cstr()?.to_owned();
+            let statement = r.read_cstr()?.to_owned();
+            let param_formats = read_codes(&mut r)?;
+            let n = r.read_i16()?;
+            if n < 0 { return invalid_format(); }
+            let n = n as usize;
+            if n > r.remaining() / 4 { return invalid_format(); }
+            let mut params = Vec::new();
+            for _ in 0..n {
+                let len = r.read_i32()?;
+                if len == -1 { params.push(None); }
+                else if len < 0 || len as usize > r.remaining() { return invalid_format(); }
+                else { params.push(Some(r.take(len as usize)?.to_vec())); }
+            }
+            let result_formats = read_codes(&mut r)?;
+            Frontend::Bind { portal, statement, param_formats, params, result_formats }
+        }
+        b'E' => Frontend::Execute { portal: r.read_cstr()?.to_owned(), max_rows: r.read_i32()? },
+        b'D' | b'C' => {
+            let subtype = r.read_u8()?;
+            let kind = match subtype {
+                b'S' => TargetKind::Statement,
+                b'P' => TargetKind::Portal,
+                other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid {} message subtype {}", if tag == b'D' { "DESCRIBE" } else { "CLOSE" }, other))),
+            };
+            let name = r.read_cstr()?.to_owned();
+            if tag == b'D' { Frontend::Describe { kind, name } } else { Frontend::Close { kind, name } }
+        }
+        b'S' => Frontend::Sync,
+        b'H' => Frontend::Flush,
+        b'X' => Frontend::Terminate,
+        b'd' => Frontend::CopyData(r.read_rest().to_vec()),
+        b'c' => Frontend::CopyDone,
+        b'f' => Frontend::CopyFail(r.read_cstr()?.to_owned()),
+        b'p' => Frontend::Password(r.read_rest().to_vec()),
+        b'F' => Frontend::FunctionCall(r.read_rest().to_vec()),
+        other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid frontend message type {other}"))),
+    };
+    r.finish()?;
+    Ok(message)
+}
+
+/// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+/// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+/// -> `08P01 invalid message format`.
+pub fn parse_password(body: &[u8]) -> Result<String> {
+    let mut r = MsgReader::new(body);
+    let password = r.read_cstr()?.to_owned();
+    r.finish()?;
+    Ok(password)
+}
+
+/// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+/// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+/// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+    let mut r = MsgReader::new(body);
+    let mechanism = r.read_cstr()?.to_owned();
+    let len = r.read_i32()?;
+    let data = if len == -1 { None }
+        else if len < -1 || len as usize > r.remaining() { return invalid_format(); }
+        else { Some(r.take(len as usize)?.to_vec()) };
+    r.finish()?;
+    Ok((mechanism, data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_frontend_message_shapes() {
+        assert_eq!(decode_frontend(b'Q', b"select 1\0").unwrap(), Frontend::Query("select 1".into()));
+        assert_eq!(decode_frontend(b'S', b"").unwrap(), Frontend::Sync);
+        assert_eq!(decode_frontend(b'E', b"\0\0\0\0\0").unwrap(), Frontend::Execute { portal: String::new(), max_rows: 0 });
+        assert_eq!(decode_frontend(b'p', b"raw").unwrap(), Frontend::Password(b"raw".to_vec()));
+        assert_eq!(parse_password(b"pw\0").unwrap(), "pw");
+        assert_eq!(parse_sasl_initial(b"SCRAM-SHA-256\0\0\0\0\x03abc").unwrap(), ("SCRAM-SHA-256".into(), Some(b"abc".to_vec())));
+    }
+
+    #[test]
+    fn bind_prefixes_and_bad_tags_are_protocol_errors() {
+        let body = b"\0\0\0\0\0\0\0\0\0\0"; // empty portal/statement and three zero counts
+        for end in 0..body.len() {
+            assert_eq!(decode_frontend(b'B', &body[..end]).unwrap_err().sqlstate.code(), "08P01");
+        }
+        let err = decode_frontend(b'Z', b"").unwrap_err();
+        assert_eq!(err.message, "invalid frontend message type 90");
+        assert_eq!(err.sqlstate.code(), "08P01");
+    }
+}
+
+diff --git a/crates/pgarbor-wire/src/frontend.rs b/crates/pgarbor-wire/src/frontend.rs
+index 56a6d960b5deb6b4bf4860b9a2d711a8b0be7179..4c4c8e33d7b297ff73921b1cb4d239207f16de84
+--- a/crates/pgarbor-wire/src/frontend.rs
++++ b/crates/pgarbor-wire/src/frontend.rs
+@@ -35,8 +35,23 @@
+ //!
+ //! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+ //! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+-use pgarbor_common::{PgError, Result};
++use crate::buf::MsgReader;
++use pgarbor_common::{PgError, Result, SqlState};
++
++fn invalid_format<T>() -> Result<T> {
++    Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid message format"))
++}
+ 
++fn read_codes(r: &mut MsgReader<'_>) -> Result<Vec<i16>> {
++    let n = r.read_i16()?;
++    if n < 0 { return invalid_format(); }
++    let n = n as usize;
++    if n > r.remaining() / 2 { return invalid_format(); }
++    let mut values = Vec::new();
++    for _ in 0..n { values.push(r.read_i16()?); }
++    Ok(values)
++}
++
+ /// Describe / Close target.
+ // CONTRACT
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -110,23 +125,110 @@
+ /// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+ /// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+ /// message type 90`.
+-#[allow(unused_variables)]
+ pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+-    Err(PgError::unimplemented("WIR-01", "decode a frontend message (frontend::decode_frontend)"))
++    let mut r = MsgReader::new(body);
++    let message = match tag {
++        b'Q' => Frontend::Query(r.read_cstr()?.to_owned()),
++        b'P' => {
++            let name = r.read_cstr()?.to_owned();
++            let query = r.read_cstr()?.to_owned();
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut param_oids = Vec::new();
++            for _ in 0..n { param_oids.push(r.read_u32()?); }
++            Frontend::Parse { name, query, param_oids }
++        }
++        b'B' => {
++            let portal = r.read_cstr()?.to_owned();
++            let statement = r.read_cstr()?.to_owned();
++            let param_formats = read_codes(&mut r)?;
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut params = Vec::new();
++            for _ in 0..n {
++                let len = r.read_i32()?;
++                if len == -1 { params.push(None); }
++                else if len < 0 || len as usize > r.remaining() { return invalid_format(); }
++                else { params.push(Some(r.take(len as usize)?.to_vec())); }
++            }
++            let result_formats = read_codes(&mut r)?;
++            Frontend::Bind { portal, statement, param_formats, params, result_formats }
++        }
++        b'E' => Frontend::Execute { portal: r.read_cstr()?.to_owned(), max_rows: r.read_i32()? },
++        b'D' | b'C' => {
++            let subtype = r.read_u8()?;
++            let kind = match subtype {
++                b'S' => TargetKind::Statement,
++                b'P' => TargetKind::Portal,
++                other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid {} message subtype {}", if tag == b'D' { "DESCRIBE" } else { "CLOSE" }, other))),
++            };
++            let name = r.read_cstr()?.to_owned();
++            if tag == b'D' { Frontend::Describe { kind, name } } else { Frontend::Close { kind, name } }
++        }
++        b'S' => Frontend::Sync,
++        b'H' => Frontend::Flush,
++        b'X' => Frontend::Terminate,
++        b'd' => Frontend::CopyData(r.read_rest().to_vec()),
++        b'c' => Frontend::CopyDone,
++        b'f' => Frontend::CopyFail(r.read_cstr()?.to_owned()),
++        b'p' => Frontend::Password(r.read_rest().to_vec()),
++        b'F' => Frontend::FunctionCall(r.read_rest().to_vec()),
++        other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid frontend message type {other}"))),
++    };
++    r.finish()?;
++    Ok(message)
+ }
+ 
+ /// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+ /// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+ /// -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_password(body: &[u8]) -> Result<String> {
+-    Err(PgError::unimplemented("WIR-01", "parse PasswordMessage body (frontend::parse_password)"))
++    let mut r = MsgReader::new(body);
++    let password = r.read_cstr()?.to_owned();
++    r.finish()?;
++    Ok(password)
+ }
+ 
+ /// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+ /// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+ /// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+-    Err(PgError::unimplemented("WIR-01", "parse SASLInitialResponse body (frontend::parse_sasl_initial)"))
++    let mut r = MsgReader::new(body);
++    let mechanism = r.read_cstr()?.to_owned();
++    let len = r.read_i32()?;
++    let data = if len == -1 { None }
++        else if len < -1 || len as usize > r.remaining() { return invalid_format(); }
++        else { Some(r.take(len as usize)?.to_vec()) };
++    r.finish()?;
++    Ok((mechanism, data))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn decodes_frontend_message_shapes() {
++        assert_eq!(decode_frontend(b'Q', b"select 1\0").unwrap(), Frontend::Query("select 1".into()));
++        assert_eq!(decode_frontend(b'S', b"").unwrap(), Frontend::Sync);
++        assert_eq!(decode_frontend(b'E', b"\0\0\0\0\0").unwrap(), Frontend::Execute { portal: String::new(), max_rows: 0 });
++        assert_eq!(decode_frontend(b'p', b"raw").unwrap(), Frontend::Password(b"raw".to_vec()));
++        assert_eq!(parse_password(b"pw\0").unwrap(), "pw");
++        assert_eq!(parse_sasl_initial(b"SCRAM-SHA-256\0\0\0\0\x03abc").unwrap(), ("SCRAM-SHA-256".into(), Some(b"abc".to_vec())));
++    }
++
++    #[test]
++    fn bind_prefixes_and_bad_tags_are_protocol_errors() {
++        let body = b"\0\0\0\0\0\0\0\0\0\0"; // empty portal/statement and three zero counts
++        for end in 0..body.len() {
++            assert_eq!(decode_frontend(b'B', &body[..end]).unwrap_err().sqlstate.code(), "08P01");
++        }
++        let err = decode_frontend(b'Z', b"").unwrap_err();
++        assert_eq!(err.message, "invalid frontend message type 90");
++        assert_eq!(err.sqlstate.code(), "08P01");
++    }
+ }
+
+apply patch
+patch: completed
+/home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01/crates/pgarbor-wire/src/frontend.rs
+diff --git a/crates/pgarbor-wire/src/frontend.rs b/crates/pgarbor-wire/src/frontend.rs
+index 56a6d960b5deb6b4bf4860b9a2d711a8b0be7179..f72a6ff4104ea85ca3692cf9ebf49dc52271b1d4
+--- a/crates/pgarbor-wire/src/frontend.rs
++++ b/crates/pgarbor-wire/src/frontend.rs
+@@ -35,8 +35,23 @@
+ //!
+ //! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+ //! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+-use pgarbor_common::{PgError, Result};
++use crate::buf::MsgReader;
++use pgarbor_common::{PgError, Result, SqlState};
++
++fn invalid_format<T>() -> Result<T> {
++    Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid message format"))
++}
+ 
++fn read_codes(r: &mut MsgReader<'_>) -> Result<Vec<i16>> {
++    let n = r.read_i16()?;
++    if n < 0 { return invalid_format(); }
++    let n = n as usize;
++    if n > r.remaining() / 2 { return invalid_format(); }
++    let mut values = Vec::new();
++    for _ in 0..n { values.push(r.read_i16()?); }
++    Ok(values)
++}
++
+ /// Describe / Close target.
+ // CONTRACT
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -110,23 +125,110 @@
+ /// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+ /// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+ /// message type 90`.
+-#[allow(unused_variables)]
+ pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+-    Err(PgError::unimplemented("WIR-01", "decode a frontend message (frontend::decode_frontend)"))
++    let mut r = MsgReader::new(body);
++    let message = match tag {
++        b'Q' => Frontend::Query(r.read_cstr()?.to_owned()),
++        b'P' => {
++            let name = r.read_cstr()?.to_owned();
++            let query = r.read_cstr()?.to_owned();
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut param_oids = Vec::new();
++            for _ in 0..n { param_oids.push(r.read_u32()?); }
++            Frontend::Parse { name, query, param_oids }
++        }
++        b'B' => {
++            let portal = r.read_cstr()?.to_owned();
++            let statement = r.read_cstr()?.to_owned();
++            let param_formats = read_codes(&mut r)?;
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut params = Vec::new();
++            for _ in 0..n {
++                let len = r.read_i32()?;
++                if len == -1 { params.push(None); }
++                else if len < 0 || len as usize > r.remaining() { return invalid_format(); }
++                else { params.push(Some(r.take(len as usize)?.to_vec())); }
++            }
++            let result_formats = read_codes(&mut r)?;
++            Frontend::Bind { portal, statement, param_formats, params, result_formats }
++        }
++        b'E' => Frontend::Execute { portal: r.read_cstr()?.to_owned(), max_rows: r.read_i32()? },
++        b'D' | b'C' => {
++            let subtype = r.read_u8()?;
++            let kind = match subtype {
++                b'S' => TargetKind::Statement,
++                b'P' => TargetKind::Portal,
++                other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid {} message subtype {}", if tag == b'D' { "DESCRIBE" } else { "CLOSE" }, other))),
++            };
++            let name = r.read_cstr()?.to_owned();
++            if tag == b'D' { Frontend::Describe { kind, name } } else { Frontend::Close { kind, name } }
++        }
++        b'S' => Frontend::Sync,
++        b'H' => Frontend::Flush,
++        b'X' => Frontend::Terminate,
++        b'd' => Frontend::CopyData(r.read_rest().to_vec()),
++        b'c' => Frontend::CopyDone,
++        b'f' => Frontend::CopyFail(r.read_cstr()?.to_owned()),
++        b'p' => Frontend::Password(r.read_rest().to_vec()),
++        b'F' => Frontend::FunctionCall(r.read_rest().to_vec()),
++        other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid frontend message type {other}"))),
++    };
++    r.finish()?;
++    Ok(message)
+ }
+ 
+ /// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+ /// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+ /// -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_password(body: &[u8]) -> Result<String> {
+-    Err(PgError::unimplemented("WIR-01", "parse PasswordMessage body (frontend::parse_password)"))
++    let mut r = MsgReader::new(body);
++    let password = r.read_cstr()?.to_owned();
++    r.finish()?;
++    Ok(password)
+ }
+ 
+ /// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+ /// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+ /// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+-    Err(PgError::unimplemented("WIR-01", "parse SASLInitialResponse body (frontend::parse_sasl_initial)"))
++    let mut r = MsgReader::new(body);
++    let mechanism = r.read_cstr()?.to_owned();
++    let len = r.read_i32()?;
++    let data = if len == -1 { None }
++        else if len < -1 || len as usize > r.remaining() { return invalid_format(); }
++        else { Some(r.take(len as usize)?.to_vec()) };
++    r.finish()?;
++    Ok((mechanism, data))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn decodes_frontend_message_shapes() {
++        assert_eq!(decode_frontend(b'Q', b"select 1\0").unwrap(), Frontend::Query("select 1".into()));
++        assert_eq!(decode_frontend(b'S', b"").unwrap(), Frontend::Sync);
++        assert_eq!(decode_frontend(b'E', b"\0\0\0\0\0").unwrap(), Frontend::Execute { portal: String::new(), max_rows: 0 });
++        assert_eq!(decode_frontend(b'p', b"raw").unwrap(), Frontend::Password(b"raw".to_vec()));
++        assert_eq!(parse_password(b"pw\0").unwrap(), "pw");
++        assert_eq!(parse_sasl_initial(b"SCRAM-SHA-256\0\0\0\0\x03abc").unwrap(), ("SCRAM-SHA-256".into(), Some(b"abc".to_vec())));
++    }
++
++    #[test]
++    fn bind_prefixes_and_bad_tags_are_protocol_errors() {
++        let body = b"\0\0\0\0\0\0\0\0"; // empty portal/statement and three zero counts
++        for end in 0..body.len() {
++            assert_eq!(decode_frontend(b'B', &body[..end]).unwrap_err().sqlstate.code(), "08P01");
++        }
++        let err = decode_frontend(b'Z', b"").unwrap_err();
++        assert_eq!(err.message, "invalid frontend message type 90");
++        assert_eq!(err.sqlstate.code(), "08P01");
++    }
+ }
+
+diff --git a/crates/pgarbor-wire/src/frontend.rs b/crates/pgarbor-wire/src/frontend.rs
+index 56a6d960b5deb6b4bf4860b9a2d711a8b0be7179..f72a6ff4104ea85ca3692cf9ebf49dc52271b1d4
+--- a/crates/pgarbor-wire/src/frontend.rs
++++ b/crates/pgarbor-wire/src/frontend.rs
+@@ -35,8 +35,23 @@
+ //!
+ //! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+ //! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+-use pgarbor_common::{PgError, Result};
++use crate::buf::MsgReader;
++use pgarbor_common::{PgError, Result, SqlState};
++
++fn invalid_format<T>() -> Result<T> {
++    Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid message format"))
++}
+ 
++fn read_codes(r: &mut MsgReader<'_>) -> Result<Vec<i16>> {
++    let n = r.read_i16()?;
++    if n < 0 { return invalid_format(); }
++    let n = n as usize;
++    if n > r.remaining() / 2 { return invalid_format(); }
++    let mut values = Vec::new();
++    for _ in 0..n { values.push(r.read_i16()?); }
++    Ok(values)
++}
++
+ /// Describe / Close target.
+ // CONTRACT
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -110,23 +125,110 @@
+ /// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+ /// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+ /// message type 90`.
+-#[allow(unused_variables)]
+ pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+-    Err(PgError::unimplemented("WIR-01", "decode a frontend message (frontend::decode_frontend)"))
++    let mut r = MsgReader::new(body);
++    let message = match tag {
++        b'Q' => Frontend::Query(r.read_cstr()?.to_owned()),
++        b'P' => {
++            let name = r.read_cstr()?.to_owned();
++            let query = r.read_cstr()?.to_owned();
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut param_oids = Vec::new();
++            for _ in 0..n { param_oids.push(r.read_u32()?); }
++            Frontend::Parse { name, query, param_oids }
++        }
++        b'B' => {
++            let portal = r.read_cstr()?.to_owned();
++            let statement = r.read_cstr()?.to_owned();
++            let param_formats = read_codes(&mut r)?;
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut params = Vec::new();
++            for _ in 0..n {
++                let len = r.read_i32()?;
++                if len == -1 { params.push(None); }
++                else if len < 0 || len as usize > r.remaining() { return invalid_format(); }
++                else { params.push(Some(r.take(len as usize)?.to_vec())); }
++            }
++            let result_formats = read_codes(&mut r)?;
++            Frontend::Bind { portal, statement, param_formats, params, result_formats }
++        }
++        b'E' => Frontend::Execute { portal: r.read_cstr()?.to_owned(), max_rows: r.read_i32()? },
++        b'D' | b'C' => {
++            let subtype = r.read_u8()?;
++            let kind = match subtype {
++                b'S' => TargetKind::Statement,
++                b'P' => TargetKind::Portal,
++                other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid {} message subtype {}", if tag == b'D' { "DESCRIBE" } else { "CLOSE" }, other))),
++            };
++            let name = r.read_cstr()?.to_owned();
++            if tag == b'D' { Frontend::Describe { kind, name } } else { Frontend::Close { kind, name } }
++        }
++        b'S' => Frontend::Sync,
++        b'H' => Frontend::Flush,
++        b'X' => Frontend::Terminate,
++        b'd' => Frontend::CopyData(r.read_rest().to_vec()),
++        b'c' => Frontend::CopyDone,
++        b'f' => Frontend::CopyFail(r.read_cstr()?.to_owned()),
++        b'p' => Frontend::Password(r.read_rest().to_vec()),
++        b'F' => Frontend::FunctionCall(r.read_rest().to_vec()),
++        other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid frontend message type {other}"))),
++    };
++    r.finish()?;
++    Ok(message)
+ }
+ 
+ /// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+ /// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+ /// -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_password(body: &[u8]) -> Result<String> {
+-    Err(PgError::unimplemented("WIR-01", "parse PasswordMessage body (frontend::parse_password)"))
++    let mut r = MsgReader::new(body);
++    let password = r.read_cstr()?.to_owned();
++    r.finish()?;
++    Ok(password)
+ }
+ 
+ /// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+ /// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+ /// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+-    Err(PgError::unimplemented("WIR-01", "parse SASLInitialResponse body (frontend::parse_sasl_initial)"))
++    let mut r = MsgReader::new(body);
++    let mechanism = r.read_cstr()?.to_owned();
++    let len = r.read_i32()?;
++    let data = if len == -1 { None }
++        else if len < -1 || len as usize > r.remaining() { return invalid_format(); }
++        else { Some(r.take(len as usize)?.to_vec()) };
++    r.finish()?;
++    Ok((mechanism, data))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn decodes_frontend_message_shapes() {
++        assert_eq!(decode_frontend(b'Q', b"select 1\0").unwrap(), Frontend::Query("select 1".into()));
++        assert_eq!(decode_frontend(b'S', b"").unwrap(), Frontend::Sync);
++        assert_eq!(decode_frontend(b'E', b"\0\0\0\0\0").unwrap(), Frontend::Execute { portal: String::new(), max_rows: 0 });
++        assert_eq!(decode_frontend(b'p', b"raw").unwrap(), Frontend::Password(b"raw".to_vec()));
++        assert_eq!(parse_password(b"pw\0").unwrap(), "pw");
++        assert_eq!(parse_sasl_initial(b"SCRAM-SHA-256\0\0\0\0\x03abc").unwrap(), ("SCRAM-SHA-256".into(), Some(b"abc".to_vec())));
++    }
++
++    #[test]
++    fn bind_prefixes_and_bad_tags_are_protocol_errors() {
++        let body = b"\0\0\0\0\0\0\0\0"; // empty portal/statement and three zero counts
++        for end in 0..body.len() {
++            assert_eq!(decode_frontend(b'B', &body[..end]).unwrap_err().sqlstate.code(), "08P01");
++        }
++        let err = decode_frontend(b'Z', b"").unwrap_err();
++        assert_eq!(err.message, "invalid frontend message type 90");
++        assert_eq!(err.sqlstate.code(), "08P01");
++    }
+ }
+
+codex
+Implemented WIR-01 in [frontend.rs](/home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01/crates/pgarbor-wire/src/frontend.rs): frontend message decoding, password and SASL initial response parsing, and unit tests for message shapes, Bind truncation, and unknown tags.
+
+No WIR-01 paths remain unimplemented. No contract issues found. As required, I did not run builds or tests.
+diff --git a/crates/pgarbor-wire/src/frontend.rs b/crates/pgarbor-wire/src/frontend.rs
+index 56a6d960b5deb6b4bf4860b9a2d711a8b0be7179..f72a6ff4104ea85ca3692cf9ebf49dc52271b1d4
+--- a/crates/pgarbor-wire/src/frontend.rs
++++ b/crates/pgarbor-wire/src/frontend.rs
+@@ -35,8 +35,23 @@
+ //!
+ //! Allocation safety: never `Vec::with_capacity(count)` from an unchecked wire count; cap the
+ //! reservation at `remaining()` of the body (each element takes at least 2 bytes).
+-use pgarbor_common::{PgError, Result};
++use crate::buf::MsgReader;
++use pgarbor_common::{PgError, Result, SqlState};
++
++fn invalid_format<T>() -> Result<T> {
++    Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid message format"))
++}
+ 
++fn read_codes(r: &mut MsgReader<'_>) -> Result<Vec<i16>> {
++    let n = r.read_i16()?;
++    if n < 0 { return invalid_format(); }
++    let n = n as usize;
++    if n > r.remaining() / 2 { return invalid_format(); }
++    let mut values = Vec::new();
++    for _ in 0..n { values.push(r.read_i16()?); }
++    Ok(values)
++}
++
+ /// Describe / Close target.
+ // CONTRACT
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -110,23 +125,110 @@
+ /// `decode_frontend(b'S', b"")` -> `Sync`; `decode_frontend(b'E', b"\0\0\0\0\0")` ->
+ /// `Execute{portal:"", max_rows:0}`; `decode_frontend(b'Z', b"")` -> error `invalid frontend
+ /// message type 90`.
+-#[allow(unused_variables)]
+ pub fn decode_frontend(tag: u8, body: &[u8]) -> Result<Frontend> {
+-    Err(PgError::unimplemented("WIR-01", "decode a frontend message (frontend::decode_frontend)"))
++    let mut r = MsgReader::new(body);
++    let message = match tag {
++        b'Q' => Frontend::Query(r.read_cstr()?.to_owned()),
++        b'P' => {
++            let name = r.read_cstr()?.to_owned();
++            let query = r.read_cstr()?.to_owned();
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut param_oids = Vec::new();
++            for _ in 0..n { param_oids.push(r.read_u32()?); }
++            Frontend::Parse { name, query, param_oids }
++        }
++        b'B' => {
++            let portal = r.read_cstr()?.to_owned();
++            let statement = r.read_cstr()?.to_owned();
++            let param_formats = read_codes(&mut r)?;
++            let n = r.read_i16()?;
++            if n < 0 { return invalid_format(); }
++            let n = n as usize;
++            if n > r.remaining() / 4 { return invalid_format(); }
++            let mut params = Vec::new();
++            for _ in 0..n {
++                let len = r.read_i32()?;
++                if len == -1 { params.push(None); }
++                else if len < 0 || len as usize > r.remaining() { return invalid_format(); }
++                else { params.push(Some(r.take(len as usize)?.to_vec())); }
++            }
++            let result_formats = read_codes(&mut r)?;
++            Frontend::Bind { portal, statement, param_formats, params, result_formats }
++        }
++        b'E' => Frontend::Execute { portal: r.read_cstr()?.to_owned(), max_rows: r.read_i32()? },
++        b'D' | b'C' => {
++            let subtype = r.read_u8()?;
++            let kind = match subtype {
++                b'S' => TargetKind::Statement,
++                b'P' => TargetKind::Portal,
++                other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid {} message subtype {}", if tag == b'D' { "DESCRIBE" } else { "CLOSE" }, other))),
++            };
++            let name = r.read_cstr()?.to_owned();
++            if tag == b'D' { Frontend::Describe { kind, name } } else { Frontend::Close { kind, name } }
++        }
++        b'S' => Frontend::Sync,
++        b'H' => Frontend::Flush,
++        b'X' => Frontend::Terminate,
++        b'd' => Frontend::CopyData(r.read_rest().to_vec()),
++        b'c' => Frontend::CopyDone,
++        b'f' => Frontend::CopyFail(r.read_cstr()?.to_owned()),
++        b'p' => Frontend::Password(r.read_rest().to_vec()),
++        b'F' => Frontend::FunctionCall(r.read_rest().to_vec()),
++        other => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, format!("invalid frontend message type {other}"))),
++    };
++    r.finish()?;
++    Ok(message)
+ }
+ 
+ /// Interpret a `p` body as PasswordMessage: one NUL-terminated UTF-8 `String password` filling the
+ /// whole body. Missing NUL or invalid UTF-8 -> `08P01 invalid string in message`; bytes after the NUL
+ /// -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_password(body: &[u8]) -> Result<String> {
+-    Err(PgError::unimplemented("WIR-01", "parse PasswordMessage body (frontend::parse_password)"))
++    let mut r = MsgReader::new(body);
++    let password = r.read_cstr()?.to_owned();
++    r.finish()?;
++    Ok(password)
+ }
+ 
+ /// Interpret a `p` body as SASLInitialResponse: `String mechanism`, `Int32 len` (-1 = no initial
+ /// response), `len bytes`. Returns `(mechanism, Some(data) | None)`. `len < -1`, `len` larger than the
+ /// remaining bytes, or trailing bytes after the data -> `08P01 invalid message format`.
+-#[allow(unused_variables)]
+ pub fn parse_sasl_initial(body: &[u8]) -> Result<(String, Option<Vec<u8>>)> {
+-    Err(PgError::unimplemented("WIR-01", "parse SASLInitialResponse body (frontend::parse_sasl_initial)"))
++    let mut r = MsgReader::new(body);
++    let mechanism = r.read_cstr()?.to_owned();
++    let len = r.read_i32()?;
++    let data = if len == -1 { None }
++        else if len < -1 || len as usize > r.remaining() { return invalid_format(); }
++        else { Some(r.take(len as usize)?.to_vec()) };
++    r.finish()?;
++    Ok((mechanism, data))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn decodes_frontend_message_shapes() {
++        assert_eq!(decode_frontend(b'Q', b"select 1\0").unwrap(), Frontend::Query("select 1".into()));
++        assert_eq!(decode_frontend(b'S', b"").unwrap(), Frontend::Sync);
++        assert_eq!(decode_frontend(b'E', b"\0\0\0\0\0").unwrap(), Frontend::Execute { portal: String::new(), max_rows: 0 });
++        assert_eq!(decode_frontend(b'p', b"raw").unwrap(), Frontend::Password(b"raw".to_vec()));
++        assert_eq!(parse_password(b"pw\0").unwrap(), "pw");
++        assert_eq!(parse_sasl_initial(b"SCRAM-SHA-256\0\0\0\0\x03abc").unwrap(), ("SCRAM-SHA-256".into(), Some(b"abc".to_vec())));
++    }
++
++    #[test]
++    fn bind_prefixes_and_bad_tags_are_protocol_errors() {
++        let body = b"\0\0\0\0\0\0\0\0"; // empty portal/statement and three zero counts
++        for end in 0..body.len() {
++            assert_eq!(decode_frontend(b'B', &body[..end]).unwrap_err().sqlstate.code(), "08P01");
++        }
++        let err = decode_frontend(b'Z', b"").unwrap_err();
++        assert_eq!(err.message, "invalid frontend message type 90");
++        assert_eq!(err.sqlstate.code(), "08P01");
++    }
+ }
+
+tokens used
+36,776
+Implemented WIR-01 in [frontend.rs](/home/allie/develop/pgarbor/.claude/worktrees/luna-epoch-02c-WIR-01/crates/pgarbor-wire/src/frontend.rs): frontend message decoding, password and SASL initial response parsing, and unit tests for message shapes, Bind truncation, and unknown tags.
+
+No WIR-01 paths remain unimplemented. No contract issues found. As required, I did not run builds or tests.

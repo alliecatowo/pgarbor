@@ -56,14 +56,30 @@ impl ErrorFields {
 ///
 /// Example: `PgError::new(SqlState::UNDEFINED_TABLE, "relation \"t\" does not exist").with_position(15)`
 /// -> `[(b'S',"ERROR"),(b'V',"ERROR"),(b'C',"42P01"),(b'M',"relation \"t\" does not exist"),(b'P',"15")]`.
-#[allow(unused_variables)]
 pub fn fields_from_pg_error(err: &PgError) -> pgarbor_common::Result<ErrorFields> {
-    Err(PgError::unimplemented("WIR-04", "PgError -> ErrorResponse fields (error_fields::fields_from_pg_error)"))
+    let mut fields = Vec::with_capacity(12);
+    let severity = err.severity.as_str().to_owned();
+    fields.push((b'S', severity.clone()));
+    fields.push((b'V', severity));
+    fields.push((b'C', err.sqlstate.code().to_owned()));
+    fields.push((b'M', sanitize_value(&err.message)));
+
+    push_optional(&mut fields, b'D', err.detail.as_deref());
+    push_optional(&mut fields, b'H', err.hint.as_deref());
+    if let Some(position) = err.position {
+        fields.push((b'P', position.to_string()));
+    }
+    push_optional(&mut fields, b's', err.schema.as_deref());
+    push_optional(&mut fields, b't', err.table.as_deref());
+    push_optional(&mut fields, b'c', err.column.as_deref());
+    push_optional(&mut fields, b'd', err.datatype.as_deref());
+    push_optional(&mut fields, b'n', err.constraint.as_deref());
+
+    Ok(ErrorFields { fields })
 }
 
 /// Same fields for a NoticeResponse. Identical to [`fields_from_pg_error`] (the message type tag
 /// differs, the fields do not); NOTICE/WARNING/INFO/LOG severities pass through unchanged.
-#[allow(unused_variables)]
 pub fn fields_for_notice(notice: &PgError) -> pgarbor_common::Result<ErrorFields> {
     fields_from_pg_error(notice)
 }
@@ -91,5 +107,64 @@ pub fn fallback_fields() -> ErrorFields {
             (b'C', "XX000".to_string()),
             (b'M', "internal error building error response".to_string()),
         ],
+    }
+}
+
+fn push_optional(fields: &mut Vec<(u8, String)>, code: u8, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        fields.push((code, sanitize_value(value)));
+    }
+}
+
+fn sanitize_value(value: &str) -> String {
+    value.chars().map(|ch| if ch == '\0' { '?' } else { ch }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pgarbor_common::SqlState;
+
+    #[test]
+    fn full_error_has_documented_order_and_values() {
+        let mut error = PgError::new(SqlState::UNDEFINED_TABLE, "missing table")
+            .with_detail("detail")
+            .with_hint("hint")
+            .with_position(12)
+            .with_table("public", "items")
+            .with_column("id")
+            .with_datatype("integer")
+            .with_constraint("items_pkey");
+        error.message = "missing\0table".to_owned();
+
+        let fields = fields_from_pg_error(&error).expect("field conversion is infallible");
+        assert_eq!(
+            fields.fields,
+            vec![
+                (b'S', "ERROR".into()), (b'V', "ERROR".into()), (b'C', "42P01".into()),
+                (b'M', "missing?table".into()), (b'D', "detail".into()), (b'H', "hint".into()),
+                (b'P', "12".into()), (b's', "public".into()), (b't', "items".into()),
+                (b'c', "id".into()), (b'd', "integer".into()), (b'n', "items_pkey".into()),
+            ]
+        );
+        assert!(!fields.fields.iter().any(|(code, _)| matches!(code, b'F' | b'L' | b'R' | b'W')));
+    }
+
+    #[test]
+    fn minimal_error_keeps_empty_primary_message() {
+        let error = PgError::new(SqlState::INTERNAL_ERROR, "");
+        let fields = fields_from_pg_error(&error).expect("field conversion is infallible");
+        assert_eq!(fields.fields, vec![
+            (b'S', "ERROR".into()), (b'V', "ERROR".into()), (b'C', "XX000".into()), (b'M', "".into()),
+        ]);
+    }
+
+    #[test]
+    fn notice_severity_passes_through_and_empty_detail_is_omitted() {
+        let notice = PgError::notice("hello").with_detail("");
+        let fields = fields_for_notice(&notice).expect("field conversion is infallible");
+        assert_eq!(fields.fields, vec![
+            (b'S', "NOTICE".into()), (b'V', "NOTICE".into()), (b'C', "00000".into()), (b'M', "hello".into()),
+        ]);
     }
 }

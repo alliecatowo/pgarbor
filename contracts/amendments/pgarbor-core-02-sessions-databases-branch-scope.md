@@ -1,6 +1,6 @@
 # Amendment request pgarbor-core-02: session binding, logical databases, branch-scoped diagnostics
 
-Status: PROPOSED (architect, pgarbor-core).
+Status: ACCEPTED WITH DEFERRED CLAUSES (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -35,3 +35,8 @@ how `CREATE DATABASE`, lock tags or `pg_stat_activity` behave across branches.
 pgarbor (session startup → `SessionRequest`), pgarbor-catalog (virtual pg_stat_activity/pg_locks
 rows from `pgarbor_core::diag`), pgarbor-wire (CancelRequest → `Engine::cancel_request`),
 pgarbor-cli (`branch delete/reset --force`).
+
+
+## Steward decision (2026-10-15)
+
+Accept branch/database lock tags, session binding, branch-scoped diagnostic filtering, and generation checks. Logical CREATE DATABASE and shared-catalog cross-tree overlays remain deferred. The proposed forced-admin 5-second wait is NOT implemented: Engine requests termination and wakes waiters after mutation; generation checks reject stale commits. Accept that current behavior as an explicit divergence, not a wait guarantee. No new public all-branch SQL view is ratified.

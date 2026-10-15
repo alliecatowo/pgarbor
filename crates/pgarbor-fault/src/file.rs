@@ -144,6 +144,13 @@ impl FaultFile {
 }
 
 impl FileIo for FaultFile {
+    fn identity(&self) -> io::Result<(u64, u64)> {
+        self.ctl.decide(OpKind::Len, &self.path, 0, 0).map_err(io::Error::other)
+            .and_then(|d| match d {
+                Decision::Proceed => Ok((2, Arc::as_ptr(&self.state) as usize as u64)),
+                other => Err(FaultController::error_for(other)),
+            })
+    }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         match self.decide(OpKind::Read, offset, buf.len() as u64)? {
             Decision::Proceed | Decision::ShortWrite(_) => Ok(self.lock_state().read(offset, buf)),

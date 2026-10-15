@@ -207,8 +207,228 @@ pub fn format_for_column(formats: &[FormatCode], column: usize) -> FormatCode {
 /// `43 0000000d 53454c4543542031 00`; `DataRow([Some(b"1"), None])` -> `44 0000000f 0002
 /// 00000001 31 ffffffff`; `ParameterStatus{"a","b"}` -> `53 00000008 6100 6200`;
 /// `AuthenticationSasl{["SCRAM-SHA-256"]}` -> `52 len 0000000a "SCRAM-SHA-256\0" 00`.
-#[allow(unused_variables)]
 pub fn encode_backend(msg: &Backend, out: &mut Vec<u8>) -> Result<()> {
-    let _ = MsgWriter::begin; // used by the implementation
-    Err(PgError::unimplemented("WIR-02", "encode a backend message (backend::encode_backend)"))
+    fn limit(message: &'static str) -> PgError {
+        PgError::new(pgarbor_common::SqlState::PROGRAM_LIMIT_EXCEEDED, message)
+    }
+
+    match msg {
+        Backend::RowDescription(fields) if fields.len() > i16::MAX as usize => {
+            return Err(limit("too many columns"));
+        }
+        Backend::DataRow(values) if values.len() > i16::MAX as usize => {
+            return Err(limit("too many columns"));
+        }
+        Backend::ParameterDescription(params) if params.len() > i16::MAX as usize => {
+            return Err(limit("too many parameters"));
+        }
+        Backend::CopyInResponse(response)
+        | Backend::CopyOutResponse(response)
+        | Backend::CopyBothResponse(response)
+            if response.column_formats.len() > i16::MAX as usize =>
+        {
+            return Err(limit("too many columns"));
+        }
+        Backend::NegotiateProtocolVersion { unrecognized, .. }
+            if unrecognized.len() > u32::MAX as usize =>
+        {
+            return Err(limit("too many unrecognized startup parameters"));
+        }
+        Backend::DataRow(values) if values.iter().flatten().any(|v| v.len() > i32::MAX as usize) => {
+            return Err(limit("value too long for wire format"));
+        }
+        Backend::BackendKeyData { secret, .. } if secret.len() > i32::MAX as usize - 8 => {
+            return Err(limit("message is too long"));
+        }
+        Backend::CopyData(data) if data.len() > i32::MAX as usize - 4 => {
+            return Err(limit("message is too long"));
+        }
+        Backend::AuthenticationSaslContinue { data } | Backend::AuthenticationSaslFinal { data }
+            if data.len() > i32::MAX as usize - 8 =>
+        {
+            return Err(limit("message is too long"));
+        }
+        _ => {}
+    }
+
+    let original_len = out.len();
+    let result = (|| {
+        let mut w = MsgWriter::begin(out, msg.tag());
+        match msg {
+            Backend::AuthenticationOk => w.put_i32(AUTH_OK),
+            Backend::AuthenticationCleartextPassword => w.put_i32(AUTH_CLEARTEXT_PASSWORD),
+            Backend::AuthenticationMd5Password { salt } => {
+                w.put_i32(AUTH_MD5_PASSWORD);
+                w.put_bytes(salt);
+            }
+            Backend::AuthenticationSasl { mechanisms } => {
+                w.put_i32(AUTH_SASL);
+                for mechanism in mechanisms {
+                    w.put_cstr(mechanism);
+                }
+                w.put_u8(0);
+            }
+            Backend::AuthenticationSaslContinue { data } => {
+                w.put_i32(AUTH_SASL_CONTINUE);
+                w.put_bytes(data);
+            }
+            Backend::AuthenticationSaslFinal { data } => {
+                w.put_i32(AUTH_SASL_FINAL);
+                w.put_bytes(data);
+            }
+            Backend::BackendKeyData { pid, secret } => {
+                w.put_i32(*pid);
+                w.put_bytes(secret);
+            }
+            Backend::ParameterStatus { name, value } => {
+                w.put_cstr(name);
+                w.put_cstr(value);
+            }
+            Backend::ReadyForQuery(status) => w.put_u8(status.byte()),
+            Backend::RowDescription(fields) => {
+                w.put_i16(fields.len() as i16);
+                for field in fields {
+                    w.put_cstr(&field.name);
+                    w.put_u32(field.table_oid);
+                    w.put_i16(field.column_attnum);
+                    w.put_u32(field.type_oid);
+                    w.put_i16(field.type_len);
+                    w.put_i32(field.type_mod);
+                    w.put_i16(field.format);
+                }
+            }
+            Backend::DataRow(values) => {
+                w.put_i16(values.len() as i16);
+                for value in values {
+                    match value {
+                        Some(bytes) => {
+                            w.put_i32(bytes.len() as i32);
+                            w.put_bytes(bytes);
+                        }
+                        None => w.put_i32(-1),
+                    }
+                }
+            }
+            Backend::CommandComplete { tag } => w.put_cstr(tag),
+            Backend::EmptyQueryResponse
+            | Backend::ParseComplete
+            | Backend::BindComplete
+            | Backend::CloseComplete
+            | Backend::NoData
+            | Backend::PortalSuspended
+            | Backend::CopyDone => {}
+            Backend::ErrorResponse(fields) | Backend::NoticeResponse(fields) => {
+                for (code, value) in &fields.fields {
+                    w.put_u8(*code);
+                    w.put_cstr(value);
+                }
+                w.put_u8(0);
+            }
+            Backend::NotificationResponse { pid, channel, payload } => {
+                w.put_i32(*pid);
+                w.put_cstr(channel);
+                w.put_cstr(payload);
+            }
+            Backend::ParameterDescription(params) => {
+                w.put_i16(params.len() as i16);
+                for oid in params {
+                    w.put_u32(*oid);
+                }
+            }
+            Backend::CopyInResponse(response)
+            | Backend::CopyOutResponse(response)
+            | Backend::CopyBothResponse(response) => {
+                w.put_u8(response.overall_format);
+                w.put_i16(response.column_formats.len() as i16);
+                for format in &response.column_formats {
+                    w.put_i16(*format);
+                }
+            }
+            Backend::CopyData(data) => w.put_bytes(data),
+            Backend::NegotiateProtocolVersion { newest_minor, unrecognized } => {
+                w.put_u32(*newest_minor);
+                w.put_u32(unrecognized.len() as u32);
+                for option in unrecognized {
+                    w.put_cstr(option);
+                }
+            }
+        }
+        w.finish();
+        Ok(())
+    })();
+    if result.is_err() {
+        out.truncate(original_len);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encoded(msg: Backend) -> Vec<u8> {
+        let mut out = Vec::new();
+        assert!(encode_backend(&msg, &mut out).is_ok());
+        out
+    }
+
+    #[test]
+    fn documented_wire_examples() {
+        assert_eq!(encoded(Backend::ReadyForQuery(TxnStatus::Idle)), b"Z\0\0\0\x05I");
+        assert_eq!(
+            encoded(Backend::complete("SELECT 1")),
+            b"C\0\0\0\x0dSELECT 1\0"
+        );
+        assert_eq!(
+            encoded(Backend::DataRow(vec![Some(b"1".to_vec()), None])),
+            b"D\0\0\0\x0f\0\x02\0\0\0\x011\xff\xff\xff\xff"
+        );
+        assert_eq!(
+            encoded(Backend::ParameterStatus { name: "a".into(), value: "b".into() }),
+            b"S\0\0\0\x08a\0b\0"
+        );
+        assert_eq!(
+            encoded(Backend::AuthenticationSasl { mechanisms: vec!["SCRAM-SHA-256".into()] }),
+            b"R\0\0\0\x13\0\0\0\x0aSCRAM-SHA-256\0\0"
+        );
+    }
+
+    #[test]
+    fn row_description_and_data_row_layouts() {
+        let row_description = encoded(Backend::RowDescription(vec![RowField {
+            name: "x".into(), table_oid: 42, column_attnum: 1, type_oid: 23,
+            type_len: 4, type_mod: -1, format: 0,
+        }]));
+        let mut r = crate::buf::MsgReader::new(&row_description[5..]);
+        assert_eq!(r.read_i16().ok(), Some(1));
+        assert_eq!(r.read_cstr().ok(), Some("x"));
+        assert_eq!(r.read_u32().ok(), Some(42));
+        assert_eq!(r.read_i16().ok(), Some(1));
+        assert_eq!(r.read_u32().ok(), Some(23));
+        assert_eq!(r.read_i16().ok(), Some(4));
+        assert_eq!(r.read_i32().ok(), Some(-1));
+        assert_eq!(r.read_i16().ok(), Some(0));
+        assert!(r.finish().is_ok());
+
+        let data = encoded(Backend::DataRow(vec![Some(b"1".to_vec()), None]));
+        let mut r = crate::buf::MsgReader::new(&data[5..]);
+        assert_eq!(r.read_i16().ok(), Some(2));
+        assert_eq!(r.read_i32().ok(), Some(1));
+        assert_eq!(r.take(1).ok(), Some(&b"1"[..]));
+        assert_eq!(r.read_i32().ok(), Some(-1));
+        assert!(r.finish().is_ok());
+    }
+
+    #[test]
+    fn count_limit_preserves_existing_buffer() {
+        let mut out = vec![7, 8, 9];
+        let err = encode_backend(&Backend::DataRow(vec![None; i16::MAX as usize + 1]), &mut out)
+            .err();
+        assert_eq!(err.as_ref().map(|e| e.sqlstate.code()), Some("54000"));
+        assert_eq!(out, vec![7, 8, 9]);
+        let err = encode_backend(&Backend::ParameterDescription(vec![0; i16::MAX as usize + 1]), &mut out)
+            .err();
+        assert_eq!(err.map(|e| e.message), Some("too many parameters".into()));
+        assert_eq!(out, vec![7, 8, 9]);
+    }
 }

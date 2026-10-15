@@ -600,6 +600,8 @@ def _run_one(name: str, isolation_dir: Path, target: Any, out_dir: Path) -> Isol
         return done(Outcome.HARNESS_ERROR, f"spec parse error: {e}")
     try:
         env = target.provision(name)
+    except PermissionError as e:
+        return done(Outcome.BLOCKED, f"environment_permission: {e}")
     except Exception as e:
         return done(Outcome.CRASH, f"target_start: {e}")
     text = ""
@@ -658,7 +660,12 @@ def run_suite(isolation_dir: Path, target: object, out_dir: Path,
     names = parse_schedule(sched.read_text(encoding="utf-8"))
     if only is not None:
         wanted = set(only)
+        unknown = sorted(wanted - set(names))
+        if unknown:
+            raise ValueError("unknown isolation spec(s): " + ", ".join(unknown))
         names = [n for n in names if n in wanted]
+    if not names:
+        raise ValueError("isolation selection contains no specs")
     out_dir.mkdir(parents=True, exist_ok=True)
     if jobs <= 1 or len(names) <= 1:
         return [_run_one(n, isolation_dir, target, out_dir) for n in names]

@@ -15,17 +15,10 @@ target (at compare time).
 Registry (name -> Normalizer):
 
 ``user_oids`` (DEFAULT, always applied)
-    Why: OIDs >= 16384 are allocated from a cluster-wide counter in PG (they differ between two
-    PG runs) and from a per-branch counter in PGArbor; their numeric value is not observable
-    behavior, only their identity is. What: per transcript, collect every occurrence in
-    first-appearance order (setup then steps; within a result: columns' table_oid, type_oid,
-    then param_type_oids, then row values of columns whose type_oid is 26 ``oid``) of integers
-    >= 16384 and replace them with a bijective canonical numbering: the k-th distinct OID
-    becomes integer ``1_000_000_000 + k`` in ColumnDesc ints / param_type_oids, and string
-    ``"U<k>"`` in oid-typed text values. Values < 16384 are untouched (built-in objects must
-    match exactly). Idempotence: 1_000_000_000+k >= 16384 would be renumbered again, so the
-    normalizer must skip values already in [1_000_000_000, 1_000_000_000+10**6) and strings
-    matching ``^U\\d+$``.
+    Why: descriptor table/type identities are allocation-dependent. Canonically renumber
+    descriptor OIDs bijectively in first-appearance order. OID-typed row values are data:
+    without explicit allocated-object provenance they must remain byte-exact, including
+    literal and stored OIDs. See amendment harness-03-verifier-integrity.md.
 
 ``timestamps`` (opt-in per step)
     Why: steps that call now()/clock_timestamp()/CURRENT_* legitimately differ per run.
@@ -69,12 +62,11 @@ from ..model import ColumnDesc, ErrorInfo, Notice, StatementResult, StepObservat
 _FIRST_USER_OID = 16384
 #: OID is an unsigned 32-bit integer; larger integers can never be OIDs.
 _OID_MAX = 0xFFFFFFFF
-#: Canonical user-OID numbering: the k-th distinct OID becomes ``_CANON_BASE + k`` (ints) or
-#: ``"U<k>"`` (oid-typed text). Canonical integers occupy [_CANON_BASE, _CANON_BASE + _CANON_SPAN).
+#: Canonical user-OID numbering: the k-th distinct descriptor OID becomes _CANON_BASE + k.
+#: Canonical descriptor integers occupy [_CANON_BASE, _CANON_BASE + _CANON_SPAN).
 _CANON_BASE = 1_000_000_000
 _CANON_SPAN = 10**6
 
-_OID_TYPE = 26  #: oid
 _UUID_TYPE = 2950  #: uuid
 _INT4_TYPE = 23  #: int4
 _LSN_TYPE = 3220  #: pg_lsn
@@ -85,8 +77,6 @@ _PID_COLUMNS = frozenset({"pid", "pg_backend_pid", "procpid"})
 _XID_COLUMNS = frozenset({"txid_current", "pg_current_xact_id"})
 _EXPLAIN_COLUMN = "QUERY PLAN"
 
-#: Text of an oid-typed value that PostgreSQL printed as a decimal integer.
-_DECIMAL_TEXT = re.compile(r"[0-9]+")
 #: ``process <n>`` in deadlock DETAIL / notice text. The leading word keeps its original case
 #: (PostgreSQL prints ``Process 123 waits for ...`` at the start of the DETAIL line).
 _PROCESS_RE = re.compile(r"\b(process )[0-9]+", re.IGNORECASE)
@@ -150,14 +140,6 @@ class _OidCanonicalizer:
             return _CANON_BASE + self._number(v)
         return v
 
-    def canon_text(self, v: str) -> str:
-        # Canonical "U<k>" strings are not decimal, so they are left alone (idempotence).
-        if _DECIMAL_TEXT.fullmatch(v) is None:
-            return v
-        n = int(v)
-        if not _is_user_oid(n):
-            return v
-        return f"U{self._number(n)}"
 
 
 def _canon_result(r: StatementResult, canon: _OidCanonicalizer) -> None:
@@ -169,16 +151,18 @@ def _canon_result(r: StatementResult, canon: _OidCanonicalizer) -> None:
         c.type_oid = canon.canon_int(c.type_oid)
     if r.param_type_oids is not None:
         r.param_type_oids = [canon.canon_int(v) for v in r.param_type_oids]
-    # Built-in type 26 (oid) is never remapped, so testing it after the rewrite is stable.
-    oid_cols = [i for i, c in enumerate(cols) if c.type_oid == _OID_TYPE]
-    if not oid_cols:
-        return
-    for row in r.rows:
-        for i in oid_cols:
-            if i < len(row):
-                v = row[i]
-                if isinstance(v, str):
-                    row[i] = canon.canon_text(v)
+
+
+def has_legacy_oid_values(transcript: Transcript) -> bool:
+    """Old recordings erased OID data as U<n>; require reviewed PG rerecording."""
+    for step in [*transcript.setup, *transcript.steps]:
+        for result in step.results:
+            for i, col in enumerate(result.columns):
+                if col.type_oid == 26:
+                    for row in result.rows:
+                        if i < len(row) and isinstance(row[i], str) and re.fullmatch(r"U[0-9]+", row[i]):
+                            return True
+    return False
 
 
 def _user_oids(t: Transcript) -> None:
@@ -274,7 +258,7 @@ def _explain_numbers(s: StepObservation) -> None:
 
 #: CONTRACT: names are referenced by case files; never rename.
 REGISTRY: dict[str, Normalizer] = {
-    "user_oids": Normalizer("user_oids", "user OID values are allocation-dependent", True,
+    "user_oids": Normalizer("user_oids", "descriptor object identities are allocation-dependent", True,
                             _user_oids),
     "timestamps": Normalizer("timestamps", "wall clock values differ per run", False,
                              _timestamps),

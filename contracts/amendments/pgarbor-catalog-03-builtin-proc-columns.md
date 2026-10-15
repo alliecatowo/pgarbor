@@ -1,6 +1,6 @@
 # Amendment request pgarbor-catalog-03: more `pg_proc` / `pg_type` / `pg_operator` / `pg_aggregate` columns in `pgarbor_types::catalog_data`
 
-Status: PROPOSED (architect, pgarbor-catalog). Fidelity improvement, not a blocker.
+Status: DEFERRED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -24,3 +24,8 @@ changes, hand-written code only uses field access. Until then pgarbor-catalog de
 ## Affected crates
 
 pgarbor-types (structs + generated tables), pgarbor-catalog (vrel::pg_type, vrel::pg_proc).
+
+
+## Steward decision (2026-10-15)
+
+Defer generated metadata expansion to a coordinated type/catalog epoch. Current default/NULL substitutions are incomplete catalog fidelity and remain a P2 gap; this decision does not approve them as PostgreSQL measurements or exact metadata. Do not count affected catalog queries as compatibility passes without oracle comparison.

@@ -111,7 +111,8 @@ let key = keycodec::encode_key_vec(env, &[KeyColumn::asc(TypeId::INT4)], &[v])?;
    - `PartialEq` is by value. `pg_cmp` orders NaN above +Inf and treats NaN = NaN.
 3. **Jsonb.** `Object` pairs are unique and sorted in jsonb storage order: shorter key first, then bytewise
    (`json::jsonb_key_cmp`). On duplicate keys the last one wins. Numbers are `Numeric`. `Json` is the
-   verbatim validated input text.
+   verbatim validated input text. Parsed JSON/JSONB input is limited to 128 open containers
+   (54001 on excess; accepted amendment `pgarbor-types-05-json-depth-safety`).
 4. **Array.**
    - `dims` is a list of (len, lbound) pairs, and `items.len() == product(len)`, in row-major order.
    - An empty array has `dims == []`. `int2vector`/`oidvector` are 1-D arrays with lbound 0.

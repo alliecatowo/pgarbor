@@ -1,6 +1,6 @@
 # Amendment request pgarbor-catalog-04: pgarbor-sql must provide the `ExprRewriter` and canonical deparse
 
-Status: PROPOSED (architect, pgarbor-catalog). Requirement on pgarbor-sql / pgarbor-exec.
+Status: ACCEPTED WITH LIMITED SCOPE (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -26,3 +26,8 @@ place (e.g. `nextval('t_id_seq'::regclass)`, `'x'::character varying`, ` SELECT 
 ## Affected crates
 
 pgarbor-sql (deparser + rewriter), pgarbor-exec (passes the rewriter), pgarbor-catalog (already calls it).
+
+
+## Steward decision (2026-10-15)
+
+Accept the dependency inversion through the existing `ExprRewriter` trait. Assembled SQL supplies `SqlExprRewriter`; executor rename paths pass it into the catalog. Exact ruleutils equivalence for arbitrary stored expressions is not established and remains a differential-testing requirement, rather than an approved completeness guarantee.

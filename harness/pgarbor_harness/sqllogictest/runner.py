@@ -111,6 +111,9 @@ def _describe_diff(expected: list[str], actual: list[str]) -> str:
 
 def _finalize(result: SltFileResult) -> SltFileResult:
     """A passing file with skipped records is BLOCKED, never PASS (acceptance)."""
+    if result.outcome is Outcome.PASS and result.records_passed == 0:
+        result.outcome = Outcome.BLOCKED
+        result.reason = "no_executed_records"
     if result.outcome is Outcome.PASS and result.records_skipped > 0:
         result.outcome = Outcome.BLOCKED
         result.reason = "skipped_records"

@@ -85,7 +85,7 @@ def test_mutant_names_match_contract():
         "ignore_type_oids", "ignore_nulls", "always_multiset", "ignore_sqlstate",
         "ignore_command_tags",
     }
-    assert len(mutants.EXPECTED_OUTCOME) == 18
+    assert len(mutants.EXPECTED_OUTCOME) == 19
     assert mutants.EXPECTED_OUTCOME["reorder_unordered"] is Outcome.PASS
 
 
@@ -93,6 +93,10 @@ def test_mutant_names_match_contract():
 def test_observation_mutant_applies_without_touching_input(name):
     case = _case()
     original = _transcript()
+    if name == "change_oid_value":
+        from pgarbor_harness.selftest.run import builtin_fixtures
+        case, original = next((c, t) for c, t in builtin_fixtures()
+                              if c.id == "selftest.oid-literal")
     pristine = copy.deepcopy(original)
     out = mutants.observation_mutants()[name](original, case)
     assert out is not None, f"{name} not applicable to the fixture"

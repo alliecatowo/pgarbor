@@ -153,8 +153,20 @@ fn initialize_inner(
 /// that was not durable before its own superblock write.
 pub(crate) fn recover(vfs: &dyn Vfs, path: &Path, opts: &OpenOptions) -> Result<Recovered> {
     let mode = if opts.read_only { OpenMode::ReadOnly } else { OpenMode::ReadWrite };
-    let file = vfs.open(path, mode).map_err(|e| error::open_failed(path, &e))?;
-    lock(file.as_ref(), path, if opts.read_only { LockMode::Shared } else { LockMode::Exclusive })?;
+    let mut attempts = 0;
+    let file = loop {
+        let candidate = vfs.open(path, mode).map_err(|e| error::open_failed(path, &e))?;
+        let locked = lock(candidate.as_ref(), path, if opts.read_only { LockMode::Shared } else { LockMode::Exclusive });
+        let current = vfs.is_current_file(path, candidate.as_ref()).map_err(|e| error::open_failed(path, &e))?;
+        if current {
+            locked?;
+            break candidate;
+        }
+        // An opener paused before flock can hold a retired inode after compaction.
+        // Drop it and retry the pathname; never read or truncate the retired file.
+        attempts += 1;
+        if attempts >= 16 { return Err(error::locked(path)); }
+    };
 
     let slots = read_slots(file.as_ref(), path)?;
     let mut choice = choose_slot(path, &slots)?;
@@ -201,6 +213,19 @@ pub(crate) fn recover(vfs: &dyn Vfs, path: &Path, opts: &OpenOptions) -> Result<
             if !present {
                 continue;
             }
+            let temporary = match vfs.open(&tmp, OpenMode::ReadWrite) {
+                Ok(f) => f,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(error::open_failed(&tmp, &e)),
+            };
+            match temporary.try_lock(LockMode::Exclusive) {
+                Ok(()) => {},
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(error::open_failed(&tmp, &e)),
+            }
+            if !vfs.is_current_file(&tmp, temporary.as_ref()).map_err(|e| error::open_failed(&tmp, &e))? {
+                continue;
+            }
             match vfs.remove_file(&tmp) {
                 Ok(()) => removed_temp_files.push(tmp),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -227,6 +252,26 @@ pub(crate) fn recover(vfs: &dyn Vfs, path: &Path, opts: &OpenOptions) -> Result<
         created: false,
     };
     Ok(Recovered { file, choice, report })
+}
+
+/// Assign a fresh identity to a closed, unpublished private file. A crash during
+/// this operation may invalidate the private temporary; callers must not expose it.
+pub fn reidentify(
+    vfs: &dyn Vfs, path: &Path, new_uuid: pgarbor_common::DatabaseUuid, sync: SyncMode,
+) -> Result<Superblock> {
+    let file = vfs.open(path, OpenMode::ReadWrite).map_err(|e| error::open_failed(path, &e))?;
+    lock(file.as_ref(), path, LockMode::Exclusive)?;
+    if !vfs.is_current_file(path, file.as_ref()).map_err(|e| error::open_failed(path, &e))? {
+        return Err(error::locked(path));
+    }
+    let choice = choose_slot(path, &read_slots(file.as_ref(), path)?)?;
+    let mut sb = choice.superblock;
+    sb.db_uuid = new_uuid;
+    file.write_all_at(slot_offset(choice.slot), &sb.encode()?).map_err(|e| error::write_failed(path, &e))?;
+    file.write_all_at(slot_offset(1-choice.slot), &[0; SUPERBLOCK_SLOT_SIZE])
+        .map_err(|e| error::write_failed(path, &e))?;
+    if sync == SyncMode::Full { file.sync_data().map_err(|e| error::fsync_failed(path, &e))?; }
+    Ok(sb)
 }
 
 #[cfg(test)]

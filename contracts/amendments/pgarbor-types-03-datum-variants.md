@@ -1,7 +1,6 @@
 # Amendment request pgarbor-types-03: additional `Datum` variants for the remaining PG18 base types
 
-Status: PROPOSED (architect, pgarbor-types). v1 routes these types to `extra_types.rs` (lease TYP-42), which
-returns 0A000 for them.
+Status: DEFERRED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -34,3 +33,8 @@ Tid(u32 /*block*/, u16 /*offset*/),
 
 pgarbor-types (all value modules), pgarbor-exec and pgarbor-wire (exhaustive matches), pgarbor-catalog
 (virtual tables exposing inet/tid columns).
+
+
+## Steward decision (2026-10-15)
+
+Defer new Datum payloads to a coordinated encoding/type/executor/wire epoch. Unsupported families continue to return their existing leased 0A000; no textual or numeric placeholder is approved as faithful support. Money/aclitem handling that already fits current variants is unaffected.

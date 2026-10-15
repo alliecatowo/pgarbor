@@ -6,7 +6,7 @@
 //!
 //! Grammar: RFC 8259 JSON as PG accepts it: whitespace = space, \t, \n, \r; numbers `-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?`;
 //! literals `true`, `false`, `null` (case-sensitive); strings with escapes `\" \\ \/ \b \f \n \r \t \uXXXX`
-//! (surrogate pairs combined). Nesting depth limit: PG uses stack-depth checks; use 6400 levels → 54001
+//! (surrogate pairs combined). Nesting depth limit: PG uses stack-depth checks; use 128 levels → 54001
 //! `stack depth limit exceeded`.
 //!
 //! Every syntax error is 22P02 `invalid input syntax for type json` with a DETAIL (exact text below).
@@ -31,7 +31,8 @@
 //!   surrogates and `\u0000` are accepted. PG's `jsonb_in` and the json functions (`need_escapes = true`)
 //!   also enforce surrogate pairing and reject `\u0000`. `validate_json` follows the first rule; `parse_jsonb` and
 //!   `parse_json_value` follow the second. The `'"\ud83d"'` acceptance line therefore applies to jsonb, not json.
-//! - The parser is iterative (explicit frame stack) so the 6400-level limit cannot overflow the Rust stack.
+//! - The parser is iterative; the conservative 128-level limit also protects recursive consumers,
+//!   cloning and destruction on a 2 MiB stack (amendment pgarbor-types-05-json-depth-safety).
 //! - Error ordering follows PG: each token is lexed when the previous one is consumed, a scalar's semantic
 //!   action (number conversion) runs after the following token is lexed, and the top-level end check is last.
 use super::{Jsonb, jsonb_key_cmp};
@@ -39,9 +40,9 @@ use crate::numeric::io::parse_numeric;
 use pgarbor_common::{PgError, Result, SqlState};
 
 /// Maximum open containers (PG `check_stack_depth` analogue; see module docs).
-const MAX_DEPTH: usize = 6400;
+const MAX_DEPTH: usize = 128;
 
-/// Validate `json` input text (PG `json_in`): returns Ok(()) iff PG accepts it.
+/// Validate `json` input text (PG `json_in`), subject to the documented nesting limit.
 // CONTRACT
 pub fn validate_json(s: &str) -> Result<()> {
     run::<ValidateBuilder>(s)
@@ -799,4 +800,45 @@ mod tests {
         assert_eq!(e.sqlstate.code(), "54001");
         assert_eq!(e.message, "stack depth limit exceeded");
     }
+
+    // Run the complete lifecycle in a child process: stack overflow aborts rather than unwinds.
+    #[test]
+    fn nested_json_lifecycle_subprocess() {
+        const CHILD: &str = "PGARBOR_JSON_DEPTH_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args(["--exact", "json::parse::tests::nested_json_lifecycle_subprocess", "--nocapture"])
+                .env(CHILD, "1")
+                .status()
+                .expect("start depth regression subprocess");
+            assert!(status.success(), "JSON lifecycle subprocess failed: {status}");
+            return;
+        }
+        std::thread::Builder::new().stack_size(2 * 1024 * 1024).spawn(|| {
+            for (open, close) in [("[", "]"), ("{\"a\":", "}")] {
+                let text = format!("{}0{}", open.repeat(MAX_DEPTH), close.repeat(MAX_DEPTH));
+                let value = parse_jsonb(&text).expect("supported depth");
+                let clone = value.clone();
+                assert_eq!(crate::json::ops::compare_jsonb(&value, &clone).expect("compare"), std::cmp::Ordering::Equal);
+                let formatted = crate::json::io::format_jsonb(&value).expect("format");
+                assert_eq!(parse_jsonb(&formatted).expect("round trip"), value);
+                crate::json::io::format_jsonb_pretty(&value).expect("pretty format");
+                let column = crate::keycodec::KeyColumn::asc(crate::TypeId::new(crate::oids::JSONB, -1));
+                crate::keycodec::encode_key_vec(crate::registry::builtin_env(), &[column],
+                    &[crate::Datum::Jsonb(value.clone())]).expect("index key encoding");
+                let plain = parse_json_value(&text).expect("plain JSON tree");
+                drop(plain.clone());
+                drop(plain);
+                drop(clone);
+                drop(value);
+                for depth in [MAX_DEPTH + 1, 6000] {
+                    let too_deep = format!("{}0{}", open.repeat(depth), close.repeat(depth));
+                    assert_eq!(parse_jsonb(&too_deep).expect_err("depth rejected").sqlstate.code(), "54001");
+                    assert_eq!(parse_json_value(&too_deep).expect_err("depth rejected").sqlstate.code(), "54001");
+                    assert_eq!(validate_json(&too_deep).expect_err("depth rejected").sqlstate.code(), "54001");
+                }
+            }
+        }).expect("start 2 MiB thread").join().expect("lifecycle thread");
+    }
+
 }

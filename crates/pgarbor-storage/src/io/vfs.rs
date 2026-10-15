@@ -41,6 +41,18 @@ pub trait Vfs: Send + Sync + fmt::Debug {
     fn open(&self, path: &Path, mode: OpenMode) -> io::Result<Box<dyn FileIo>>;
     fn exists(&self, path: &Path) -> io::Result<bool>;
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// Atomically move `from` to an absent `to`; AlreadyExists leaves both unchanged.
+    fn rename_noreplace(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "no-replace publication unsupported"))
+    }
+    /// Check pathname identity after locking, before reading or changing file bytes.
+    fn is_current_file(&self, path: &Path, file: &dyn FileIo) -> io::Result<bool> {
+        match self.open(path, OpenMode::ReadOnly) {
+            Ok(current) => Ok(current.identity()? == file.identity()?),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
     fn remove_file(&self, path: &Path) -> io::Result<()>;
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
 }

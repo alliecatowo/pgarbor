@@ -194,6 +194,12 @@ def builtin_fixtures() -> list[tuple[Any, Any]]:
             notices=[Notice(severity="NOTICE", sqlstate="42P07",
                             message='relation "t" already exists, skipping')])]),
     ))
+    oid_id = "selftest.oid-literal"
+    fixtures.append((
+        _fx_case(oid_id, [{"sql": "SELECT 20000::oid", "order": "ordered"}]),
+        _fx_transcript(oid_id, [_fx_step(0, [_fx_rows(
+            [_fx_col("oid", 26)], [["20000"]], "SELECT 1")])]),
+    ))
     return fixtures
 
 

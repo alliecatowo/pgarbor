@@ -20,7 +20,7 @@ from pgarbor_harness.model import (
     expected_path,
 )
 from pgarbor_harness.oracle import recorder
-from pgarbor_harness.oracle.recorder import RecordStatus, check_intent, record_case, record_corpus
+from pgarbor_harness.oracle.recorder import RecordStatus, check_intent, _record_verified_case as record_case, record_corpus
 
 
 def _case(steps, cid="smoke.one", quarantine=None):

@@ -10,8 +10,8 @@ Isolation per case (every target gives each case a pristine database):
     served by its own ``pgarbor`` server process on a free loopback port; the process is
     stopped (SIGTERM, 5 s, then SIGKILL) and the file deleted on release (kept when
     ``keep_files`` for repro packages). Commands come from ``PgarborCommand`` templates; the
-    defaults assume the pgarbor-cli contract in
-    contracts/amendments/harness-02-cli-serve-contract.md until pgarbor-cli freezes its own.
+    defaults match the frozen contracts/crates/pgarbor-cli.md grammar and the accepted
+    contracts/amendments/harness-02-cli-serve-contract.md.
     Readiness = TCP connect + successful ``SELECT 1`` within 10 s; process exit before
     readiness -> provision raises TargetStartError (the case becomes CRASH if the reference
     ran fine, because the engine could not even start).
@@ -294,7 +294,7 @@ class PostgresTarget:
 class PgarborCommand:
     """argv templates; ``{binary} {file} {host} {port} {branch}`` are substituted per item.
 
-    Defaults per contracts/amendments/harness-02-cli-serve-contract.md:
+    Defaults per contracts/crates/pgarbor-cli.md (accepted harness-02 amendment):
       create: ``{binary} create {file}``
       serve:  ``{binary} serve {file} --host {host} --port {port} --branch {branch}``
     """

@@ -30,7 +30,7 @@
 use pgarbor_common::PgError;
 use std::io::Write;
 
-use pgarbor::{ColumnInfo, Datum, Session};
+use pgarbor::{ColumnInfo, Datum, FormatCode, Session, StatementResult, TypeId};
 
 use crate::ctx::CliError;
 
@@ -47,18 +47,94 @@ pub struct TableRef {
 }
 
 /// Write the data of `table` (module docs). `copy` selects COPY mode.
-#[allow(unused_variables)]
 pub fn dump_table_data(
     session: &mut Session,
     table: &TableRef,
     copy: bool,
     out: &mut dyn Write,
 ) -> Result<u64, CliError> {
-    Err(CliError::from(PgError::unimplemented("CLI-27", "dump table data (dump_data::dump_table_data)")))
+    if copy {
+        return Err(CliError::from(PgError::unimplemented("CLI-27", "dump --copy needs COPY streaming (not implemented yet)")));
+    }
+    if table.columns.is_empty() {
+        return Ok(0);
+    }
+    let columns = table.columns.iter().map(|c| crate::cmd::dump::quote_ident(c)).collect::<Result<Vec<_>, _>>()?.join(", ");
+    let sql = format!("SELECT {columns} FROM {}.{}", crate::cmd::dump::quote_ident(&table.schema)?, crate::cmd::dump::quote_ident(&table.name)?);
+    let outputs = session.simple_query(&sql).map_err(CliError::from)?;
+    let mut rows: &[Vec<Datum>] = &[];
+    let mut column_info: &[ColumnInfo] = &[];
+    for output in &outputs {
+        if let StatementResult::Rows { columns, rows: result_rows, .. } = &output.result {
+            column_info = columns;
+            rows = result_rows;
+            break;
+        }
+    }
+    let mut count = 0u64;
+    for row in rows {
+        if row.len() != column_info.len() || row.len() != table.columns.len() {
+            return Err(CliError::internal("dump query returned a row with an unexpected number of columns"));
+        }
+        let mut values = Vec::with_capacity(row.len());
+        for (col, value) in column_info.iter().zip(row) {
+            values.push(literal_for(session, col, value)?);
+        }
+        let overriding = if table.identity_always.is_empty() { "" } else { " OVERRIDING SYSTEM VALUE" };
+        let statement = format!("INSERT INTO {}.{} ({columns}){overriding} VALUES ({});\n",
+            crate::cmd::dump::quote_ident(&table.schema)?, crate::cmd::dump::quote_ident(&table.name)?, values.join(", "));
+        out.write_all(statement.as_bytes()).map_err(|e| CliError::io("write dump data", &e))?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// SQL literal for one value (module docs).
-#[allow(unused_variables)]
 pub fn literal_for(session: &Session, col: &ColumnInfo, value: &Datum) -> Result<String, CliError> {
-    Err(CliError::from(PgError::unimplemented("CLI-27", "dump literal rendering (dump_data::literal_for)")))
+    if matches!(value, Datum::Null) {
+        return Ok("NULL".to_owned());
+    }
+    let encoded = session.encode_value(TypeId { oid: col.type_oid, typmod: col.type_mod }, value, FormatCode::Text)
+        .map_err(CliError::from)?
+        .ok_or_else(|| CliError::internal("non-NULL value encoded as SQL NULL"))?;
+    let text = std::str::from_utf8(&encoded).map_err(|_| CliError::internal("text value encoding was not UTF-8"))?;
+    Ok(literal_from_text(col.type_oid, Some(text)))
+}
+
+fn literal_from_text(oid: u32, text: Option<&str>) -> String {
+    let Some(text) = text else { return "NULL".to_owned(); };
+    match oid {
+        16 => match text { "t" | "true" => "true".to_owned(), _ => "false".to_owned() },
+        21 | 23 | 20 | 26 => text.to_owned(),
+        700 | 701 if matches!(text, "NaN" | "Infinity" | "-Infinity") => quote_literal_text(text),
+        700 | 701 | 1700 if text != "NaN" => text.to_owned(),
+        1700 => quote_literal_text(text),
+        17 if text.starts_with("\\x") => quote_literal_text(text),
+        _ => quote_literal_text(text),
+    }
+}
+
+fn quote_literal_text(text: &str) -> String {
+    if text.contains('\\') {
+        format!("E'{}'", text.replace('\\', "\\\\").replace('\'', "''"))
+    } else {
+        format!("'{}'", text.replace('\'', "''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::literal_from_text;
+
+    #[test]
+    fn renders_scalar_literals() {
+        assert_eq!(literal_from_text(23, Some("42")), "42");
+        assert_eq!(literal_from_text(16, Some("t")), "true");
+        assert_eq!(literal_from_text(23, None), "NULL");
+        assert_eq!(literal_from_text(701, Some("NaN")), "'NaN'");
+        assert_eq!(literal_from_text(701, Some("Infinity")), "'Infinity'");
+        assert_eq!(literal_from_text(1700, Some("1.25")), "1.25");
+        assert_eq!(literal_from_text(17, Some("\\x00ff")), "'\\x00ff'");
+        assert_eq!(literal_from_text(25, Some("it's \\")), r"E'it''s \\\\'");
+    }
 }

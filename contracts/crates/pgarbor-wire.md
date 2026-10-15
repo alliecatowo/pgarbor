@@ -123,3 +123,7 @@ socket; it never touches protocol internals. The harness (`PgarborTarget`) reach
 
 Frozen and implemented (not leased): `lib.rs`, `consts.rs`, `error.rs`, `buf.rs`, `transport.rs`, `config.rs`, `tls.rs`, `cancel.rs`,
 `param_report.rs`, `limits.rs`, `registry.rs`, `shared.rs`.
+
+## Assembly decisions (2026-10-15)
+
+Steward decisions: wire-02 native protocol 3.2 accepted as the intended representation; wire-01 complete COPY streaming deferred. WIR-13 remains 0A000. Live protocol parity is unverified.

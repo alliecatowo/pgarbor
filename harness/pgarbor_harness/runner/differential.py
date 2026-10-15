@@ -116,6 +116,9 @@ def _execute(case: Case, target: Target, expected_root: Path, out_dir: Path,
     if not ref_file.is_file():
         return _result(case, Outcome.BLOCKED, "reference_missing")
     expected = ExpectedFile.load(ref_file)
+    from ..compare.normalize import has_legacy_oid_values
+    if has_legacy_oid_values(expected.transcript):
+        return _result(case, Outcome.BLOCKED, "reference_normalization_stale")
     if expected.case_sha256 != case.sha256:
         return _result(case, Outcome.BLOCKED, "reference_stale")
     # ExpectedFile documents that all three identity fields must match the live oracle; the

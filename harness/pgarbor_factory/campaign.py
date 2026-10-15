@@ -27,9 +27,10 @@ failure is RECORDED and later phases still run unless they depend on it:
      "regress-differential".
   7. isolation: pgarbor_harness.isolation.tester.run_suite -> family "isolation".
   8. wire transcripts: replay every ``tests/expected/wire/*.jsonl`` -> family "wire".
-  9. client fixtures (``harness/fixtures/<client>/run.sh`` contract: each fixture is an
-     UNMODIFIED app; the script receives ``PGARBOR_DSN`` and exits 0 on success; stdout
-     JSON lines ``{"test": name, "status": "pass"|"fail", "detail"}``) -> family "clients";
+  9. client fixtures (``tests/apps/<client>/run.sh`` contract: each fixture is an
+     UNMODIFIED app; the script receives ``DATABASE_URL`` and ``PGARBOR_DSN`` and exits 0
+     on success; stdout has one ``FIXTURE_RESULT {"name", "passed", "failed", "steps"}``
+     with positive consistent totals) -> family "clients";
      missing fixtures dir -> family status BLOCKED with reason "no fixtures".
   10. evidence.build_pack + report.write_reports + cluster.cluster_failures +
       repair.generate_tickets (-> ``repair_dag.json``) + halt.decide.
@@ -237,7 +238,7 @@ def _catalog_count(cfg: CampaignConfig, key: str) -> int:
     if key == "wire":
         return len(list((paths.expected / "wire").glob("*.jsonl")))
     if key == "clients":
-        fx = cfg.repo_root / "harness" / "fixtures"
+        fx = cfg.repo_root / "tests" / "apps"
         return len([d for d in fx.iterdir() if (d / "run.sh").is_file()]) if fx.is_dir() else 0
     if key == "storage-fault":
         n = 0
@@ -539,25 +540,26 @@ def _phase_wire(cfg: CampaignConfig, ctx: _Ctx) -> list[FamilyEvidence]:
 
 
 def _parse_client_lines(stdout: str) -> list[tuple[str, str, str]]:
-    """(test, status, detail) from the fixture's JSON stdout lines; other lines ignored."""
-    res = []
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(d, dict) and "test" in d and "status" in d:
-            res.append((str(d["test"]), str(d["status"]), str(d.get("detail", ""))))
-    return res
+    """Require exactly one substantive FIXTURE_RESULT summary from the actual apps."""
+    lines = [line.removeprefix("FIXTURE_RESULT ") for line in stdout.splitlines()
+             if line.startswith("FIXTURE_RESULT ")]
+    if len(lines) != 1:
+        raise ValueError("expected exactly one FIXTURE_RESULT summary")
+    d = json.loads(lines[0])
+    if not isinstance(d, dict) or not isinstance(d.get("name"), str) or not d["name"]:
+        raise ValueError("invalid fixture name")
+    if any(type(d.get(k)) is not int or d[k] < 0 for k in ("passed", "failed", "steps")):
+        raise ValueError("invalid fixture counters")
+    if d["steps"] == 0 or d["passed"] + d["failed"] != d["steps"]:
+        raise ValueError("fixture must execute substantive checks with consistent totals")
+    return [(d["name"], "pass" if d["failed"] == 0 else "fail",
+             json.dumps(d, sort_keys=True))]
 
 
 def _phase_clients(cfg: CampaignConfig, ctx: _Ctx) -> list[FamilyEvidence]:
-    """Phase 9: client fixtures (``harness/fixtures/<client>/run.sh``)."""
+    """Phase 9: client fixtures (``tests/apps/<client>/run.sh``)."""
     t0 = time.monotonic()
-    fx = cfg.repo_root / "harness" / "fixtures"
+    fx = cfg.repo_root / "tests" / "apps"
     fixtures = sorted(d for d in fx.iterdir() if (d / "run.sh").is_file()) if fx.is_dir() else []
     if not fixtures:
         return [_make_family("clients", "BLOCKED", [], 0, 0.0, notes=["no fixtures"])]
@@ -583,7 +585,8 @@ def _phase_clients(cfg: CampaignConfig, ctx: _Ctx) -> list[FamilyEvidence]:
                 continue
             try:
                 p = subprocess.run(["bash", str(d / "run.sh")], cwd=str(d),
-                                   env=dict(os.environ, PGARBOR_DSN=_dsn(env.endpoint)),
+                                   env=dict(os.environ, PGARBOR_DSN=_dsn(env.endpoint),
+                                            DATABASE_URL=_dsn(env.endpoint)),
                                    capture_output=True, text=True, timeout=_CLIENT_TIMEOUT_S,
                                    check=False)
             except subprocess.TimeoutExpired:
@@ -591,13 +594,22 @@ def _phase_clients(cfg: CampaignConfig, ctx: _Ctx) -> list[FamilyEvidence]:
             except OSError as e:
                 add(d.name, "HARNESS_ERROR", f"exception:{type(e).__name__}")
             else:
-                lines = _parse_client_lines(p.stdout)
-                for test, status, detail in lines:
-                    add(f"{d.name}::{test}", "PASS" if status == "pass" else "MISMATCH", detail)
-                if p.returncode != 0 and not any(s != "pass" for _, s, _ in lines):
-                    add(d.name, "MISMATCH", f"exit {p.returncode}: {p.stderr.strip()[-200:]}")
-                elif not lines and p.returncode == 0:
-                    add(d.name, "PASS")
+                evidence_dir = ctx.run_dir / "clients" / d.name
+                evidence_dir.mkdir(parents=True, exist_ok=True)
+                (evidence_dir / "stdout.txt").write_text(p.stdout, encoding="utf-8")
+                (evidence_dir / "stderr.txt").write_text(p.stderr, encoding="utf-8")
+                try:
+                    lines = _parse_client_lines(p.stdout)
+                    summary = json.loads(lines[0][2])
+                    if summary["name"] != d.name:
+                        raise ValueError("fixture summary name differs from selected app")
+                except (ValueError, TypeError) as exc:
+                    add(d.name, "HARNESS_ERROR", f"fixture_summary: {exc}")
+                else:
+                    test, status, detail = lines[0]
+                    passed = status == "pass" and p.returncode == 0
+                    add(d.name, "PASS" if passed else "MISMATCH",
+                        f"exit={p.returncode}; {detail}")
             finally:
                 target.release(env)
     finally:

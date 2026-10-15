@@ -1,4 +1,4 @@
-Status: PROPOSED
+Status: ACCEPTED (lead-engineer decision, 2026-10-15).
 Crate: pgarbor-cli
 Affects: pgarbor-cli (Cargo.toml)
 Leases: CLI-07 (serve), CLI-22 (branch exec)
@@ -20,3 +20,7 @@ polls `signals::shutdown_requested()` every 50 ms.
 Optional hardening: add `libc = { workspace = true }` to `crates/pgarbor-cli/Cargo.toml` and replace
 the hand-written declaration with `libc::sigaction` (SA_RESTART off, SA_RESETHAND off). Not
 required for correctness of the v1 design.
+
+## Steward decision (2026-10-15)
+
+Accept existing Unix signal declarations and atomic flags with polling loops. No dependency change. Non-Unix signal handling and second-signal immediate termination remain unverified gaps; live signal tests blocked by socket policy.

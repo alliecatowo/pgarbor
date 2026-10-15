@@ -87,6 +87,9 @@ impl Drop for MemFile {
 }
 
 impl FileIo for MemFile {
+    fn identity(&self) -> io::Result<(u64, u64)> {
+        Ok((1, Arc::as_ptr(&self.inner) as usize as u64))
+    }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         let d = self.inner.data.read().map_err(|_| poisoned())?;
         let len = d.len() as u64;
@@ -226,6 +229,15 @@ impl Vfs for MemVfs {
     }
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         let mut files = self.files.lock().map_err(|_| poisoned())?;
+        let f = files.remove(from).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))?;
+        files.insert(to.to_path_buf(), f);
+        Ok(())
+    }
+    fn rename_noreplace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let mut files = self.files.lock().map_err(|_| poisoned())?;
+        if files.contains_key(to) {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "file exists"));
+        }
         let f = files.remove(from).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))?;
         files.insert(to.to_path_buf(), f);
         Ok(())

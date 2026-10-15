@@ -26,11 +26,19 @@
 //!    `index_maint::update_entries(.., modified_cols)` -> `fk::after_update`. Returns the new image.
 //! A target row matched by SEVERAL input rows is updated once (first match): the caller
 //! (`modify`) dedups by rowid before calling.
-use pgarbor_common::{PgError, Result};
+use pgarbor_common::{PgError, Result, SqlState};
+use pgarbor_core::locks::LockMode;
+use pgarbor_core::WaitPolicy;
 use pgarbor_plan::plan::{ModifyTarget, UpdateSpec};
-use pgarbor_sql::ir::BoundExpr;
+use pgarbor_sql::ir::{BoundExpr, ExprKind};
 use pgarbor_types::Datum;
 
+use crate::constraints;
+use crate::error;
+use crate::eval;
+use crate::fk;
+use crate::index_maint;
+use crate::rowstore::{self, RowLock};
 use crate::runtime::Executor;
 use crate::tabledesc::TableDesc;
 
@@ -43,7 +51,6 @@ pub struct EpqPolicy {
     pub quals: Option<Vec<BoundExpr>>,
 }
 
-#[allow(unused_variables)]
 pub fn update_one(
     ex: &mut Executor,
     td: &TableDesc,
@@ -53,10 +60,52 @@ pub fn update_one(
     input: &[Datum],
     rowid: u64,
 ) -> Result<Option<Vec<Datum>>> {
-    Err(PgError::unimplemented("EXE-28", "UPDATE row (dml_update::update_one)"))
+    let n = td.ncols();
+    let assigned = assigned_attnums(spec);
+    let mode = if touches_key(td, &assigned) { LockMode::ForUpdate } else { LockMode::ForNoKeyUpdate };
+
+    // `eval_input` is `Some` only when EvalPlanQual rebuilt the input row from the latest image.
+    let (old_row, eval_input): (Vec<Datum>, Option<Vec<Datum>>) =
+        match rowstore::lock_row(ex, td, rowid, mode, WaitPolicy::Block)? {
+            RowLock::Gone => return Ok(None),
+            RowLock::Current(img) => (img, None),
+            RowLock::NotAvailable => return Err(error::row_lock_not_available(&td.name)),
+            RowLock::Changed(latest) => {
+                let quals = match &policy.quals {
+                    Some(q) => q,
+                    None => return Err(serialization_failure()),
+                };
+                if latest.len() != n {
+                    return Err(PgError::internal(format!(
+                        "latest image of row {rowid} has {} values, table {} has {n} attributes",
+                        latest.len(),
+                        td.name
+                    )));
+                }
+                for q in quals.iter() {
+                    if !eval::eval_qual(ex, q, &latest)? {
+                        return Ok(None);
+                    }
+                }
+                // New input row = latest table image ++ the input's rowid and extra FROM slots.
+                let mut rebuilt: Vec<Datum> = Vec::with_capacity(input.len().max(n));
+                rebuilt.extend_from_slice(&latest);
+                if input.len() > n {
+                    rebuilt.extend_from_slice(&input[n..]);
+                }
+                (latest, Some(rebuilt))
+            }
+        };
+
+    let eval_row: &[Datum] = match &eval_input {
+        Some(v) => v.as_slice(),
+        None => input,
+    };
+    let new_row = build_new_row(ex, td, target, spec, &old_row, eval_row)?;
+    let stored = apply_update(ex, td, rowid, &old_row, new_row, Some(assigned.as_slice()))?;
+    Ok(Some(stored))
 }
 
-#[allow(unused_variables)]
 pub fn build_new_row(
     ex: &mut Executor,
     td: &TableDesc,
@@ -65,18 +114,43 @@ pub fn build_new_row(
     old_row: &[Datum],
     input: &[Datum],
 ) -> Result<Vec<Datum>> {
-    Err(PgError::unimplemented("EXE-28", "UPDATE new row (dml_update::build_new_row)"))
+    let n = td.ncols();
+    if old_row.len() != n {
+        return Err(PgError::internal(format!(
+            "UPDATE old row has {} values, table {} has {n} attributes",
+            old_row.len(),
+            td.name
+        )));
+    }
+    let mut row: Vec<Datum> = old_row.to_vec();
+    // Every assignment is evaluated over the INPUT row (the old values), so order does not matter.
+    for (attnum, expr) in spec.assignments.iter() {
+        let idx = slot(*attnum, n)?;
+        if td.cols[idx].dropped {
+            return Err(PgError::internal(format!("UPDATE assigns dropped attribute {attnum}")));
+        }
+        let value = assignment_value(ex, target, expr, input)?;
+        row[idx] = value;
+    }
+    recompute_generated(ex, &spec.generated, &mut row)?;
+    Ok(row)
 }
 
 /// Recompute stored generated columns `(attnum, expr)` over the (new) row, in order.
-#[allow(unused_variables)]
 pub fn recompute_generated(ex: &mut Executor, generated: &[(i16, BoundExpr)], row: &mut Vec<Datum>) -> Result<()> {
-    Err(PgError::unimplemented("EXE-28", "generated column recompute (dml_update::recompute_generated)"))
+    for (attnum, expr) in generated.iter() {
+        let idx = slot(*attnum, row.len())?;
+        let value = eval::eval(ex, expr, row.as_slice())?;
+        row[idx] = value;
+    }
+    Ok(())
 }
 
 /// Low-level in-place update used by UPDATE, ON CONFLICT DO UPDATE and foreign-key actions (module
 /// docs step 4). `modified_cols`: assigned attnums when known (index maintenance hint).
-#[allow(unused_variables)]
+///
+/// Row counting is NOT done here: the ModifyTable driver counts top-level rows only (PG does not count
+/// cascaded or conflict-action changes in the command's row count for FK actions).
 pub fn apply_update(
     ex: &mut Executor,
     td: &TableDesc,
@@ -85,5 +159,114 @@ pub fn apply_update(
     new_row: Vec<Datum>,
     modified_cols: Option<&[i16]>,
 ) -> Result<Vec<Datum>> {
-    Err(PgError::unimplemented("EXE-28", "row update (dml_update::apply_update)"))
+    constraints::enforce(ex, td, &new_row)?;
+    rowstore::write_row(ex, td, rowid, &new_row)?;
+    index_maint::update_entries(ex, td, rowid, old_row, &new_row, modified_cols)?;
+    fk::after_update(ex, td, old_row, &new_row)?;
+    Ok(new_row)
+}
+
+/// 40001 for an EvalPlanQual situation that cannot be re-checked (joins / FROM sources).
+fn serialization_failure() -> PgError {
+    PgError::new(SqlState::SERIALIZATION_FAILURE, "could not serialize access due to concurrent update")
+}
+
+/// Attnums written by the UPDATE: assignments plus stored generated columns (recomputed).
+fn assigned_attnums(spec: &UpdateSpec) -> Vec<i16> {
+    let mut out: Vec<i16> = Vec::with_capacity(spec.assignments.len() + spec.generated.len());
+    out.extend(spec.assignments.iter().map(|(a, _)| *a));
+    out.extend(spec.generated.iter().map(|(a, _)| *a));
+    out
+}
+
+/// True when the UPDATE may change a key: a column of a unique index (expression keys are treated
+/// conservatively as keys) or a column referenced by a foreign key. Such updates take `FOR UPDATE`
+/// instead of `FOR NO KEY UPDATE` (PG `ExecUpdate`, `RelationGetIndexAttrBitmap`).
+fn touches_key(td: &TableDesc, assigned: &[i16]) -> bool {
+    let unique_key_hit = td.unique_indexes().any(|idx| {
+        idx.keys.iter().any(|k| k.expr.is_some() || k.column.map_or(false, |c| assigned.contains(&c)))
+    });
+    if unique_key_hit {
+        return true;
+    }
+    td.fks_in.iter().any(|f| f.ref_cols.iter().any(|c| assigned.contains(c)))
+}
+
+/// Map a 1-based attnum to a slot of a row with `n` slots.
+fn slot(attnum: i16, n: usize) -> Result<usize> {
+    if attnum < 1 || attnum as usize > n {
+        return Err(PgError::internal(format!("attribute number {attnum} out of range for {n} attributes")));
+    }
+    Ok(attnum as usize - 1)
+}
+
+/// Value of one SET expression over the input row. A `DEFAULT` (`SetToDefault`) that survived planning
+/// is replaced by the column default, evaluated once per row (PG evaluates defaults per row).
+fn assignment_value(ex: &mut Executor, target: &ModifyTarget, expr: &BoundExpr, input: &[Datum]) -> Result<Datum> {
+    let has_default = expr.any(&mut |e: &BoundExpr| matches!(e.kind, ExprKind::SetToDefault { .. }));
+    if has_default {
+        let resolved = expr.clone().transform(&mut |e: BoundExpr| -> Result<BoundExpr> {
+            let default_attnum = if let ExprKind::SetToDefault { attnum } = e.kind { Some(attnum) } else { None };
+            match default_attnum {
+                Some(attnum) => {
+                    let value = column_default(ex, target, attnum)?;
+                    Ok(BoundExpr::constant(value, e.ty))
+                }
+                None => Ok(e),
+            }
+        })?;
+        return eval::eval(ex, &resolved, input);
+    }
+    eval::eval(ex, expr, input)
+}
+
+/// Evaluated column default of `attnum` (NULL when the column has none). Defaults are already coerced
+/// to the column type when the DDL stores them.
+fn column_default(ex: &mut Executor, target: &ModifyTarget, attnum: i16) -> Result<Datum> {
+    let col = target
+        .meta
+        .column(attnum)
+        .ok_or_else(|| PgError::internal(format!("DEFAULT refers to unknown attribute {attnum}")))?;
+    match &col.default {
+        None => Ok(Datum::Null),
+        Some(d) => {
+            let empty: &[Datum] = &[];
+            eval::eval(ex, d, empty)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pgarbor_types::TypeId;
+
+    #[test]
+    fn slot_maps_attnum_to_index() {
+        assert_eq!(slot(1, 3).unwrap(), 0);
+        assert_eq!(slot(3, 3).unwrap(), 2);
+    }
+
+    #[test]
+    fn slot_rejects_out_of_range_attnums() {
+        assert!(slot(0, 3).is_err());
+        assert!(slot(-1, 3).is_err());
+        assert!(slot(4, 3).is_err());
+    }
+
+    #[test]
+    fn assigned_attnums_includes_generated_columns() {
+        let spec = UpdateSpec {
+            assignments: vec![(2, BoundExpr::null(TypeId::of(0)))],
+            generated: vec![(4, BoundExpr::null(TypeId::of(0)))],
+        };
+        assert_eq!(assigned_attnums(&spec), vec![2, 4]);
+    }
+
+    #[test]
+    fn serialization_failure_message_and_state() {
+        let e = serialization_failure();
+        assert!(e.sqlstate == SqlState::SERIALIZATION_FAILURE);
+        assert_eq!(e.message, "could not serialize access due to concurrent update");
+    }
 }

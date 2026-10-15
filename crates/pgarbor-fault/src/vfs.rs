@@ -253,6 +253,17 @@ impl Vfs for FaultVfs {
         Ok(())
     }
 
+    fn rename_noreplace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.gate(OpKind::Rename, from)?;
+        let mut ns = lock_ns(&self.ns);
+        if ns.live.contains_key(to) {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "file exists"));
+        }
+        let id = ns.live.remove(from).ok_or_else(|| not_found(from))?;
+        ns.live.insert(to.to_path_buf(), id);
+        ns.pending_dir_ops.push(DirOp::Rename { from: from.to_path_buf(), to: to.to_path_buf() });
+        Ok(())
+    }
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         self.gate(OpKind::Remove, path)?;
         let mut ns = lock_ns(&self.ns);

@@ -1,6 +1,6 @@
 # Amendment request pgarbor-branches-01: BranchRecord v1 fields and byte format
 
-Status: PROPOSED (architect, pgarbor-branches). Already implemented in the v1 skeleton
+Status: ACCEPTED (2026-10-15, lead engineer delegation to Codex storage safety owner). Previously proposed (architect, pgarbor-branches). Already implemented in the v1 skeleton
 (`crates/pgarbor-branches/src/record.rs`, `keys.rs`, `meta.rs`).
 
 ## Problem
@@ -44,3 +44,9 @@ delete and restore; commits compare it), `deleted_at_seq`, `deleted_unix_ms`, `r
   `purge` subcommands are new.
 - **ARCHITECTURE.md §6**: replace the field list with a reference to
   `contracts/crates/pgarbor-branches.md`.
+
+## Steward decision (2026-10-15)
+
+Accepted: the implemented interface/layout is required for the existing dependency direction and
+safe storage/branch behavior. The owning crate contract records the adopted details. Storage
+publication/identity semantics are refined by storage-03 and branches-03 safety amendments.

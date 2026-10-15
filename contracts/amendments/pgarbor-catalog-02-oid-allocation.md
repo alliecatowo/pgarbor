@@ -1,6 +1,6 @@
 # Amendment request pgarbor-catalog-02: OID allocation is injected, not stored in space 3
 
-Status: PROPOSED (architect, pgarbor-catalog). Implements option (a) of pgarbor-core-01.
+Status: ACCEPTED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -33,3 +33,8 @@ per-branch allocator lives in space 3.
 
 pgarbor-core (unchanged: already provides `alloc::next_oid` with a seed callback), pgarbor (implements
 `OidSource`), ARCHITECTURE §9 wording.
+
+
+## Steward decision (2026-10-15)
+
+Accept the implemented `CatalogStore: KvWrite + OidSource`, standalone `WithOids`/MemKv sources, and `oid_seed` boundary. Engine integration must use the core allocator; assembled API adapters are not an end-to-end verification claim. Architecture §9 records allocation ownership.

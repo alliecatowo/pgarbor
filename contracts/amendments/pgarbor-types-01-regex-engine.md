@@ -1,7 +1,6 @@
 # Amendment request pgarbor-types-01: regular-expression engine for PostgreSQL ARE semantics
 
-Status: PROPOSED (architect, pgarbor-types). The v1 skeleton designs around it (lease TYP-17 writes a
-self-contained engine in `crates/pgarbor-types/src/text/regex.rs`).
+Status: ACCEPTED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -24,3 +23,8 @@ Pick one of:
 ## Affected crates
 
 pgarbor-types only (`text::regex` API is engine-agnostic: `compile`, `find_at`, `is_match`).
+
+
+## Steward decision (2026-10-15)
+
+Choose option 1: the existing self-contained ARE implementation with no added dependency. Its bounded backtracking/stack budget reports 2201B with `regular expression failed: regular expression is too complex`; the originally proposed 54001 is superseded by this observed implementation contract. This is an architecture/dependency decision, not proof of complete ARE equivalence.

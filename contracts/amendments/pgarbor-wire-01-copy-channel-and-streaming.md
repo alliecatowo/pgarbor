@@ -1,4 +1,4 @@
-Status: PROPOSED
+Status: DEFERRED (lead-engineer decision, 2026-10-15).
 Crate: pgarbor-wire
 Affects: pgarbor (embedded API), pgarbor-exec (copy.rs), pgarbor-wire (copy.rs, simple_query.rs)
 Leases: WIR-13 (copy), WIR-11 (simple_query), API-07/API-12 (pgarbor)
@@ -32,3 +32,7 @@ text (0) and zero column formats on the first `read_chunk` / `write_chunk` call.
 `PgError::unimplemented("WIR-13", ..)` until (a) lands because the type cannot be named. Single
 statement COPY works with the collecting `simple_query_raw`; multi-statement strings containing COPY
 are documented as a known gap (`contracts/crates/pgarbor-wire.md`).
+
+## Steward decision (2026-10-15)
+
+The complete ordered COPY streaming contract is not installed. Keep WIR-13 leased 0A000; do not install a zero-column lazy response or acknowledge COPY bytes without executing them. API reexports alone would not establish ordering. CLI COPY import/export remains unsupported.

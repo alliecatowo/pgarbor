@@ -140,11 +140,10 @@ def test_registry_names_and_defaults() -> None:
 def test_user_oids_same_oid_same_canonical_across_setup_and_steps() -> None:
     t = _fixture()
     REGISTRY["user_oids"].apply(t)
-    # 16385 first appears as the setup probe column's oid-typed value and then as a table_oid
-    # in the step; both spellings must resolve to k=1.
+    # Descriptor identities map consistently; oid-typed row values remain exact data.
     probe_col = t.setup[0].results[0].columns[0]
     assert probe_col.table_oid == 1_000_000_001
-    assert t.setup[0].results[0].rows[0][0] == "U1"
+    assert t.setup[0].results[0].rows[0][0] == "16385"
     pid_col = t.steps[0].results[0].columns[0]
     assert pid_col.table_oid == 1_000_000_001
 
@@ -155,7 +154,7 @@ def test_user_oids_different_oids_get_different_values() -> None:
     # 16390 (second distinct OID, first seen in step 0's table_oid of column "o") is k=2.
     o_col = t.steps[0].results[0].columns[7]
     assert o_col.table_oid == 1_000_000_002
-    assert t.steps[0].results[0].rows[0][7] == "U2"
+    assert t.steps[0].results[0].rows[0][7] == "16390"
     assert o_col.table_oid != 1_000_000_001
 
 
@@ -163,7 +162,7 @@ def test_user_oids_acceptance_pair() -> None:
     t = _fixture()
     REGISTRY["user_oids"].apply(t)
     assert t.setup[0].results[0].columns[0].table_oid == 1000000001
-    assert t.setup[0].results[0].rows[0][0] == "U1"
+    assert t.setup[0].results[0].rows[0][0] == "16385"
 
 
 def test_user_oids_param_type_oids_canonicalized_and_builtin_kept() -> None:
@@ -220,7 +219,7 @@ def test_user_oids_skips_non_oid_text_and_values_above_uint32() -> None:
     )])
     REGISTRY["user_oids"].apply(t)
     rows = t.steps[0].results[0].rows
-    assert rows[0] == ["U1", "16385"]  # text column of type 25 is never an oid value
+    assert rows[0] == ["16385", "16385"]  # neither OID nor text data has allocation provenance
     assert rows[1] == ["4294967296", "abc"]  # above uint32 is not an OID
 
 
@@ -342,7 +341,7 @@ def test_apply_case_normalizers_scopes_step_normalizers_and_returns_same_object(
     # Step 0 timestamps masked; setup gets only defaults (timestamp column absent there).
     assert t.steps[0].results[0].rows[0][1] == "<timestamp>"
     # Default user_oids applied to setup and steps.
-    assert t.setup[0].results[0].rows[0][0] == "U1"
+    assert t.setup[0].results[0].rows[0][0] == "16385"
     assert t.steps[0].results[0].columns[0].table_oid == 1_000_000_001
 
 

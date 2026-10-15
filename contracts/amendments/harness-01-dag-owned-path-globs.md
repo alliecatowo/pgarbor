@@ -1,4 +1,4 @@
-Status: PROPOSED
+Status: ACCEPTED (2026-10-15, lead-engineer assembly review)
 Crate: harness
 Affects: contracts/dag/task_graph.v1.json
 Leases: HAR-01..HAR-31, FAC-01..FAC-19
@@ -27,3 +27,7 @@ nothing breaks before this is applied. Until then, the mismatch is cosmetic.
 ## Affected crates
 None (Rust). Affects the harness lease file `contracts/leases/harness.json` (already written
 against the new paths).
+
+## Steward decision
+
+Accepted. Applied owned task globs and epic path scopes to the actual Python packages; protected oracle scripts remain protected.

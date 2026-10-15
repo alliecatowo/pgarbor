@@ -41,6 +41,7 @@ use crate::error;
 use crate::format::consts::PageKind;
 #[allow(unused_imports)]
 use crate::format::page::{encode_page, Page, PageRef};
+use crate::format::consts::max_page_count;
 use crate::format::superblock::Superblock;
 use crate::pager::{PageSink, PageSource, Pager};
 use pgarbor_common::{CommitSeq, KvIter, PageId, PgError, Result};
@@ -92,6 +93,9 @@ impl<'c> WriteTxn<'c> {
         // Another writer may have poisoned the container while we waited.
         inner.check_writable()?;
         let st = inner.current();
+        if st.sb.commit_seq.0 >= u64::MAX - 1 {
+            return Err(error::corrupt("commit sequence exhausted"));
+        }
         Ok(WriteTxn {
             inner,
             guard,
@@ -338,6 +342,9 @@ impl PageSink for WriteTxn<'_> {
     fn alloc_page(&mut self) -> Result<PageId> {
         if let Some(id) = self.free_private.pop() {
             return Ok(id);
+        }
+        if self.next_page >= max_page_count(self.base.page_size) {
+            return Err(error::corrupt("page allocation limit reached"));
         }
         let id = PageId(self.next_page);
         self.next_page += 1;

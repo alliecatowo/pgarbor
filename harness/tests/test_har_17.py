@@ -131,6 +131,8 @@ def ok(text: str = "ok\n") -> tuple[str, Optional[int], bool]:
 def test_identical_output_passes_both_families(env, monkeypatch):
     sched = make_schedule([["test_setup"], ["boolean"]])
     env.expect_all(["test_setup", "boolean"], "ok\n")
+    env.base("test_setup", "ok\n")
+    env.base("boolean", "ok\n")
     env.psql(monkeypatch, {"test_setup": ok(), "boolean": ok()})
     results = run(env, sched)
     assert [r.test for r in results] == ["test_setup", "boolean"]

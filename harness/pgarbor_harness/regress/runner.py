@@ -210,12 +210,26 @@ def _judge(name: str, gi: int, test: RegressTest, regress_dir: Path, host: str, 
         extra["target_alive"] = alive
         if alive is False:
             return done(Outcome.CRASH, Outcome.CRASH, "crash", "crash")
+    if run.exit_code == 2 or CONNECTION_LOST_TEXT in text:
+        return done(Outcome.BLOCKED, Outcome.BLOCKED, "connection_lost", "connection_lost")
+    if run.exit_code != 0:
+        extra["launcher_stderr"] = run.stderr
+        return done(Outcome.HARNESS_ERROR, Outcome.HARNESS_ERROR,
+                    "psql_execution_failed", "psql_execution_failed")
+    if not run.out_file.is_file():
+        return done(Outcome.HARNESS_ERROR, Outcome.HARNESS_ERROR,
+                    "missing_result_artifact", "missing_result_artifact")
     if _corrupt(text):
         return done(Outcome.CORRUPTION, Outcome.CORRUPTION, "corruption", "corruption")
 
     off_cmp = compare_output(run.out_file, _candidates(regress_dir, test))
+    base_path = baseline_dir / f"{name}.out" if baseline_dir is not None else None
     if off_cmp.identical:
-        return done(Outcome.PASS, Outcome.PASS, "", "")
+        if base_path is None or not base_path.is_file():
+            return done(Outcome.PASS, Outcome.BLOCKED, "", "reference_missing")
+        base_cmp = compare_output(run.out_file, [base_path])
+        return done(Outcome.PASS, Outcome.PASS if base_cmp.identical else Outcome.MISMATCH,
+                    "", "" if base_cmp.identical else "mismatch", diff_text=base_cmp.unified)
     off_text = off_cmp.unified
     diff_lines = max(off_cmp.diff_lines, 0)
     off_outcome = Outcome.UNSUPPORTED if _unsupported(off_text) else Outcome.MISMATCH
@@ -299,7 +313,7 @@ def _record_one(name: str, test: RegressTest, regress_dir: Path, host: str, port
         return "FAIL", False, run.out_file
     identical = compare_output(run.out_file, _candidates(regress_dir, test)).identical
     # exit 2 means the oracle connection was lost; never record that as a baseline.
-    usable = run.exit_code in (0, 1)
+    usable = run.exit_code == 0
     return ("PASS" if identical else "FAIL"), usable, run.out_file
 
 

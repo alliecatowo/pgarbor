@@ -2,7 +2,8 @@
 
 Status: RATIFIED skeleton (contract freeze). Leases: `contracts/leases/pgarbor-storage.json` (STO-01..STO-21).
 Amendments: `contracts/amendments/pgarbor-storage-01-root-resolver.md`,
-`contracts/amendments/pgarbor-storage-02-vfs-and-lock-io.md`.
+`contracts/amendments/pgarbor-storage-02-vfs-and-lock-io.md`,
+`contracts/amendments/pgarbor-storage-03-safe-publication-and-recovery.md` (accepted safety refinements).
 
 ## Purpose
 
@@ -22,6 +23,7 @@ catalogs or branch records (ARCHITECTURE §1, §5).
 | `TreeWriter` | `KvRead + KvWrite` over one tree inside a `WriteTxn` (`root()` after writes) |
 | `WriteBatch` | ordered `BTreeMap<Vec<u8>, Option<Vec<u8>>>` (ARCHITECTURE §7 overlay shape) |
 | `RootResolver`, `NamedRoot`, `NoNestedRoots`, `PrefixU64Roots` | how storage finds/rewrites roots embedded in directory values (amendment 01) |
+| `container::recovery::reidentify` | assign a fresh UUID to a closed unpublished private file (branches-02) |
 | `ExportBuilder`, `ExportOptions`, `ExportReport` | write a new standalone `.pga` from snapshot trees (`copy_tree`, `copy_directory`, `build_tree`, `put`, `finish(dir_root)`) |
 | `FileIo`, `Vfs`, `OsFile/OsVfs`, `MemFile/MemVfs`, `OpenMode`, `LockMode` | byte and name I/O (amendment 02) |
 | `DoctorReport`, `SpaceReport`, `Issue`, `doctor::{verify_file, inspect_page}` | `pgarbor doctor`, `pgarbor inspect --space` (JSON via serde) |
@@ -68,7 +70,9 @@ let seq = w.commit()?;                                               // ack COMM
    `snapshot()` never blocks on the writer.
 5. **One process per file.** Read-write open takes an exclusive advisory lock (fs2/flock); read-only takes a
    shared one. Contention → 55006.
-6. **Fail closed.** Unknown format version / required feature bit / no valid superblock / truncated committed
+6. **Fail closed.** Pathname identity is revalidated after locking; a retired inode is retried.
+   Temp files use exclusive creation; no-replace exports publish atomically (amendment 03).
+   Unknown format version / required feature bit / no valid superblock / truncated committed
    region → XX001 and refuse to open.
 7. **Empty tree = `PageId::NONE`.** Trees never contain empty leaves; internal nodes always have >= 1
    separator.
@@ -84,6 +88,8 @@ let seq = w.commit()?;                                               // ack COMM
 [4096, 8192)    superblock slot 1
 8192 + (n-1)*ps page n (n >= 1), ps = page_size (power of two, 4096..=65536, default 8192)
 valid length    8192 + page_count * ps; anything beyond is an uncommitted tail (truncated on writable open)
+page_count      < floor((i64::MAX - 8192) / ps), reserving address headroom
+commit_seq      1..u64::MAX (exclusive); writers refuse advancement from u64::MAX-1
 ```
 
 ### Superblock slot

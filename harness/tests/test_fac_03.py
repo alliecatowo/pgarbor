@@ -67,11 +67,11 @@ def test_rust_forbidden_outside_cfg_test_only(tmp_path: Path) -> None:
     assert forbidden[0]["text"] == f"todo{BANG}(1);"
 
 
-def test_rust_marker_inside_cfg_test_is_still_counted(tmp_path: Path) -> None:
+def test_rust_marker_inside_cfg_test_is_not_production_inventory(tmp_path: Path) -> None:
     src = f"#[cfg(test)]\nmod t {{\n    fn x() {{ PgError::{U}(\"CAT-01\", \"probe\"); }}\n}}\n"
     p = _write(tmp_path, "crates/pgarbor-x/src/t.rs", src)
     markers, _ = scan_file(p, "crates/pgarbor-x/src/t.rs")
-    assert [(m.line, m.lease_id) for m in markers] == [(3, "CAT-01")]
+    assert markers == []
 
 
 def test_python_markers_and_bare_raise_forbidden(tmp_path: Path) -> None:
@@ -175,3 +175,16 @@ def test_delta_rejects_foreign_document() -> None:
 
     with pytest.raises(ValueError):
         delta({"format": "other"}, {"format": "pgarbor-inventory/1", "total": 0})
+
+
+def test_rust_inventory_keeps_production_after_test_module(tmp_path):
+    sample = (f'fn before() {{ PgError::{U}("STO-01", "before"); }}\n'
+              '#[cfg(test)]\nmod tests {\n'
+              ' const BRACE: &str = "}"; /* nested { /* } */ } */\n'
+              ' const RAW: &str = r#"}"#;\n'
+              f' fn test() {{ PgError::{U}("CAT-01", "example"); }}\n'
+              '}\n'
+              f'fn after() {{ PgError::{U}("STO-02", "after"); }}\n')
+    path = _write(tmp_path, "crates/probe/src/a.rs", sample)
+    markers, _ = scan_file(path, "crates/probe/src/a.rs")
+    assert [(m.lease_id, m.line) for m in markers] == [("STO-01", 1), ("STO-02", 8)]

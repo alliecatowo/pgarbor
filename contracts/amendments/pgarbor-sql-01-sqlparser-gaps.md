@@ -1,6 +1,6 @@
 # Amendment request pgarbor-sql-01: sqlparser 0.63 gaps and how pgarbor-sql routes around them
 
-Status: PROPOSED (architect, pgarbor-sql). No Cargo change needed now; documents a standing decision and
+Status: ACCEPTED (lead-engineer decision, 2026-10-15).
 the conditions under which the dependency should be forked or upgraded.
 
 ## Problem
@@ -29,3 +29,7 @@ real clients send:
 ## Affected crates
 
 pgarbor-sql (parser_extra, classify, binder), workspace Cargo.toml (future).
+
+## Steward decision (2026-10-15)
+
+Keep sqlparser pinned at 0.63.0 and the explicit extras parser/classification. Unsupported constructs remain leased 0A000; no dependency fork or grammar-fidelity claim is approved.

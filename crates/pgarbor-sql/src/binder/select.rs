@@ -56,11 +56,20 @@
 //! [`bind_query_statement`] wraps `bind_query` in `BoundStatement::Query`, and turns
 //! `SELECT ... INTO [TEMP] t` into `BoundStatement::CreateTableAs` via
 //! `ddl_table::bind_select_into` (TEMP: 0A000).
-use pgarbor_common::{PgError, Result};
-use sqlparser::ast::{OrderByExpr, Query, Select};
+use pgarbor_common::{PgError, Result, SqlState};
+use sqlparser::ast::{
+    Distinct, Ident, LimitClause, LockClause, LockType, NonBlock, ObjectName, ObjectNamePart, OrderByExpr, OrderByKind, Query,
+    Select, SelectFlavor, SetExpr, Table, TableFactor, TableWithJoins,
+};
 
-use super::context::Binder;
-use crate::ir::{BoundQuery, BoundSelect, BoundStatement, OutputColumn, SortKey};
+use super::context::{Binder, BoundArg, ExprCtx};
+use super::scope::{QueryScope, ScopeKind};
+use super::{coerce, cte, ddl_table, expr, from, group, order, scope, setop, target, values, window};
+use crate::diag;
+use crate::ir::{
+    BoundExpr, BoundQuery, BoundSelect, BoundStatement, DistinctSpec, LockStrength, LockWait, LockingClause, OutputColumn,
+    QueryBody, SortKey, TargetEntry,
+};
 
 /// Options for [`bind_query`].
 // CONTRACT
@@ -88,26 +97,551 @@ pub struct SelectBlock {
 }
 
 /// Bind a complete query expression (module docs).
-#[allow(unused_variables)]
 pub fn bind_query(b: &mut Binder, q: &Query, qctx: &QueryCtx) -> Result<BoundQuery> {
-    Err(PgError::unimplemented("SQL-16", "query binding (select::bind_query)"))
+    if let Err(e) = b.enter() {
+        b.leave();
+        return Err(e);
+    }
+    let cte_base = b.cte_frames.len();
+    let scope_base = b.scopes.len();
+    let result = bind_query_levels(b, q, qctx, cte_base);
+    b.cte_frames.truncate(cte_base);
+    b.scopes.truncate(scope_base);
+    b.leave();
+    result
 }
 
 /// Bind one simple SELECT block together with the ORDER BY that belongs to it (module docs).
-#[allow(unused_variables)]
 pub fn bind_select_block(b: &mut Binder, sel: &Select, order_by: &[OrderByExpr], keep_unknown_outputs: bool) -> Result<SelectBlock> {
-    Err(PgError::unimplemented("SQL-16", "SELECT block binding (select::bind_select_block)"))
+    with_scope(b, ScopeKind::Select, |b| bind_select_in_scope(b, sel, order_by, keep_unknown_outputs))
 }
 
 /// Top-level `Statement::Query`: query or `SELECT INTO`.
-#[allow(unused_variables)]
 pub fn bind_query_statement(b: &mut Binder, q: &Query) -> Result<BoundStatement> {
-    Err(PgError::unimplemented("SQL-16", "query statement binding (select::bind_query_statement)"))
+    if let SetExpr::Select(sel) = &*q.body {
+        if let Some(into) = sel.into.as_ref() {
+            return ddl_table::bind_select_into(b, q, into);
+        }
+    }
+    let ctx = QueryCtx { column_aliases: Vec::new(), top_level: true, keep_unknown_outputs: false };
+    let bq = bind_query(b, q, &ctx)?;
+    Ok(BoundStatement::Query(Box::new(bq)))
 }
 
 /// Bind a query that is used as a sub-select source (derived table, view body, CTE body) with
 /// optional column aliases; thin wrapper over [`bind_query`] that sets `top_level = false`.
-#[allow(unused_variables)]
 pub fn bind_subselect(b: &mut Binder, q: &Query, column_aliases: &[String]) -> Result<BoundQuery> {
-    Err(PgError::unimplemented("SQL-16", "sub-select binding (select::bind_subselect)"))
+    let ctx = QueryCtx { column_aliases: column_aliases.to_vec(), top_level: false, keep_unknown_outputs: false };
+    bind_query(b, q, &ctx)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Query levels (WITH, body, tail, locking)
+// ---------------------------------------------------------------------------------------------
+
+/// Runs `f` with a fresh query scope pushed; the scope stack is restored on every path.
+fn with_scope<T>(b: &mut Binder, kind: ScopeKind, f: impl FnOnce(&mut Binder) -> Result<T>) -> Result<T> {
+    let base = b.scopes.len();
+    b.scopes.push(QueryScope::new(kind));
+    let out = f(b);
+    b.scopes.truncate(base);
+    out
+}
+
+fn bind_query_levels(b: &mut Binder, q: &Query, qctx: &QueryCtx, cte_base: usize) -> Result<BoundQuery> {
+    reject_query_clauses(q)?;
+    let mut ctes = match q.with.as_ref() {
+        Some(with) => cte::bind_with(b, with, qctx.top_level)?,
+        None => Vec::new(),
+    };
+    let order_items = order_by_items(q)?;
+    let mut bq = match &*q.body {
+        SetExpr::Query(inner) => bind_parenthesized(b, q, inner, qctx)?,
+        _ => bind_plain_body(b, q, qctx, order_items)?,
+    };
+    if q.with.is_some() {
+        // The frame pushed by `bind_with` is still present here (the caller truncates it).
+        if let Some(frame) = b.cte_frames.get(cte_base) {
+            for entry in &frame.entries {
+                if let Some(bound) = ctes.get_mut(entry.index as usize) {
+                    bound.ref_count = entry.ref_count;
+                }
+            }
+        }
+        bq.ctes = ctes;
+    }
+    apply_output_aliases(&mut bq.output, &qctx.column_aliases)?;
+    Ok(bq)
+}
+
+/// A parenthesized query used as the whole body: its ORDER BY / LIMIT / OFFSET / FETCH / locking
+/// clauses of the outer level are merged into it (PG `insertSelectOptions`), so no synthetic
+/// wrapper level is needed.
+fn bind_parenthesized(b: &mut Binder, q: &Query, inner: &Query, qctx: &QueryCtx) -> Result<BoundQuery> {
+    if q.with.is_some() && inner.with.is_some() {
+        return Err(diag::syntax("multiple WITH clauses not allowed", None));
+    }
+    let child = QueryCtx {
+        column_aliases: Vec::new(),
+        top_level: qctx.top_level,
+        keep_unknown_outputs: qctx.keep_unknown_outputs,
+    };
+    let outer_tail = q.order_by.is_some() || q.limit_clause.is_some() || q.fetch.is_some() || !q.locks.is_empty();
+    if !outer_tail {
+        return bind_query(b, inner, &child);
+    }
+    let merged = merge_parenthesized(q, inner)?;
+    bind_query(b, &merged, &child)
+}
+
+fn merge_parenthesized(outer: &Query, inner: &Query) -> Result<Query> {
+    let mut merged = inner.clone();
+    if let Some(ob) = outer.order_by.as_ref() {
+        if inner.order_by.is_some() {
+            return Err(diag::syntax("multiple ORDER BY clauses not allowed", None));
+        }
+        merged.order_by = Some(ob.clone());
+    }
+    merged.limit_clause = merge_limit(outer.limit_clause.as_ref(), inner.limit_clause.as_ref())?;
+    if let Some(fetch) = outer.fetch.as_ref() {
+        if inner.fetch.is_some() {
+            return Err(diag::syntax("multiple LIMIT clauses not allowed", None));
+        }
+        merged.fetch = Some(fetch.clone());
+    }
+    if !outer.locks.is_empty() {
+        merged.locks.extend(outer.locks.iter().cloned());
+    }
+    Ok(merged)
+}
+
+fn merge_limit(outer: Option<&LimitClause>, inner: Option<&LimitClause>) -> Result<Option<LimitClause>> {
+    match (outer, inner) {
+        (None, None) => Ok(None),
+        (Some(o), None) => Ok(Some(o.clone())),
+        (None, Some(i)) => Ok(Some(i.clone())),
+        (
+            Some(LimitClause::LimitOffset { limit: ol, offset: oo, limit_by: olb }),
+            Some(LimitClause::LimitOffset { limit: il, offset: io, limit_by: ilb }),
+        ) => {
+            if !olb.is_empty() || !ilb.is_empty() {
+                return Err(diag::syntax_error_near("BY", None));
+            }
+            if ol.is_some() && il.is_some() {
+                return Err(diag::syntax("multiple LIMIT clauses not allowed", None));
+            }
+            if oo.is_some() && io.is_some() {
+                return Err(diag::syntax("multiple OFFSET clauses not allowed", None));
+            }
+            Ok(Some(LimitClause::LimitOffset {
+                limit: ol.clone().or_else(|| il.clone()),
+                offset: oo.clone().or_else(|| io.clone()),
+                limit_by: Vec::new(),
+            }))
+        }
+        _ => Err(diag::syntax_error_near(",", None)),
+    }
+}
+
+/// Body of a query that is not a parenthesized query: SELECT block, VALUES, set operation or TABLE.
+fn bind_plain_body(b: &mut Binder, q: &Query, qctx: &QueryCtx, order_items: &[OrderByExpr]) -> Result<BoundQuery> {
+    match &*q.body {
+        SetExpr::Select(sel) => {
+            let block = bind_select_block(b, sel, order_items, qctx.keep_unknown_outputs)?;
+            let (limit, offset, with_ties) = bind_tail(b, q, !block.order_by.is_empty())?;
+            let locking = bind_locking(b, &q.locks, LockSite::Select(&block.select))?;
+            Ok(BoundQuery {
+                ctes: Vec::new(),
+                body: QueryBody::Select(Box::new(block.select)),
+                output: block.output,
+                order_by: block.order_by,
+                limit,
+                offset,
+                limit_with_ties: with_ties,
+                locking,
+            })
+        }
+        SetExpr::Values(v) => {
+            let bv = with_scope(b, ScopeKind::Empty, |b| values::bind_values_body(b, v, None))?;
+            let output = values::values_output_columns(&bv, &[]);
+            let order_by = order::bind_order_by_output(b, order_items, &output)?;
+            let (limit, offset, with_ties) = bind_tail(b, q, !order_by.is_empty())?;
+            let locking = bind_locking(b, &q.locks, LockSite::Values)?;
+            Ok(BoundQuery {
+                ctes: Vec::new(),
+                body: QueryBody::Values(bv),
+                output,
+                order_by,
+                limit,
+                offset,
+                limit_with_ties: with_ties,
+                locking,
+            })
+        }
+        SetExpr::SetOperation { op, set_quantifier, left, right } => {
+            let child = QueryCtx { column_aliases: Vec::new(), top_level: false, keep_unknown_outputs: qctx.keep_unknown_outputs };
+            let setop_bq = setop::bind_set_operation(b, op, set_quantifier, &**left, &**right, &child)?;
+            let BoundQuery { body, output, .. } = setop_bq;
+            let order_by = order::bind_order_by_output(b, order_items, &output)?;
+            let (limit, offset, with_ties) = bind_tail(b, q, !order_by.is_empty())?;
+            let locking = bind_locking(b, &q.locks, LockSite::SetOp)?;
+            Ok(BoundQuery { ctes: Vec::new(), body, output, order_by, limit, offset, limit_with_ties: with_ties, locking })
+        }
+        SetExpr::Table(t) => {
+            let (body, output) = bind_table_body(b, t)?;
+            let order_by = order::bind_order_by_output(b, order_items, &output)?;
+            let (limit, offset, with_ties) = bind_tail(b, q, !order_by.is_empty())?;
+            let site = match &body {
+                QueryBody::Select(s) => LockSite::Select(&**s),
+                _ => LockSite::SetOp,
+            };
+            let locking = bind_locking(b, &q.locks, site)?;
+            Ok(BoundQuery { ctes: Vec::new(), body, output, order_by, limit, offset, limit_with_ties: with_ties, locking })
+        }
+        SetExpr::Query(_) => Err(PgError::internal("binder: parenthesized query reached the plain query body")),
+        SetExpr::Insert(_) => Err(diag::syntax_error_near("INSERT", None)),
+        SetExpr::Update(_) => Err(diag::syntax_error_near("UPDATE", None)),
+        SetExpr::Delete(_) => Err(diag::syntax_error_near("DELETE", None)),
+        SetExpr::Merge(_) => Err(diag::syntax_error_near("MERGE", None)),
+    }
+}
+
+/// `LIMIT` / `OFFSET` / `FETCH`, bound without any column namespace.
+fn bind_tail(b: &mut Binder, q: &Query, has_order: bool) -> Result<(Option<BoundExpr>, Option<BoundExpr>, bool)> {
+    let (limit, offset, with_ties) =
+        with_scope(b, ScopeKind::Empty, |b| order::bind_limit_clause(b, q.limit_clause.as_ref(), q.fetch.as_ref()))?;
+    if with_ties && !has_order {
+        return Err(diag::syntax("WITH TIES cannot be specified without ORDER BY clause", None));
+    }
+    Ok((limit, offset, with_ties))
+}
+
+/// `TABLE name` (and `TABLE schema.name`): the same as `SELECT * FROM name`.
+fn bind_table_body(b: &mut Binder, t: &Table) -> Result<(QueryBody, Vec<OutputColumn>)> {
+    let name = match t.table_name.as_ref() {
+        Some(n) => n.clone(),
+        None => return Err(diag::syntax_error_near("TABLE", None)),
+    };
+    let mut parts: Vec<ObjectNamePart> = Vec::with_capacity(2);
+    if let Some(schema) = t.schema_name.as_ref() {
+        parts.push(ObjectNamePart::Identifier(Ident::new(schema.clone())));
+    }
+    parts.push(ObjectNamePart::Identifier(Ident::new(name)));
+    let twj = TableWithJoins {
+        relation: TableFactor::Table {
+            name: ObjectName(parts),
+            alias: None,
+            args: None,
+            with_hints: Vec::new(),
+            version: None,
+            with_ordinality: false,
+            partitions: Vec::new(),
+            json_path: None,
+            sample: None,
+            index_hints: Vec::new(),
+        },
+        joins: Vec::new(),
+    };
+    with_scope(b, ScopeKind::Select, |b| {
+        let from_items = from::bind_from_clause(b, std::slice::from_ref(&twj))?;
+        let stars = scope::expand_star(b, None, None)?;
+        let mut target_list: Vec<TargetEntry> = Vec::with_capacity(stars.len());
+        for (col_name, expr) in stars {
+            let origin = target::origin_of(b, &expr)?;
+            target_list.push(TargetEntry { expr, name: col_name, junk: false, origin });
+        }
+        let output: Vec<OutputColumn> = target_list
+            .iter()
+            .map(|t| OutputColumn { name: t.name.clone(), ty: t.expr.ty, origin: t.origin })
+            .collect();
+        let range_table = std::mem::take(&mut b.scope_mut()?.range_table);
+        let select = BoundSelect { range_table, from: from_items, target_list, ..BoundSelect::empty() };
+        Ok((QueryBody::Select(Box::new(select)), output))
+    })
+}
+
+/// Output column aliases (`WITH x(a, b) AS (...)`): renames the leading columns.
+fn apply_output_aliases(output: &mut [OutputColumn], aliases: &[String]) -> Result<()> {
+    if aliases.is_empty() {
+        return Ok(());
+    }
+    if aliases.len() > output.len() {
+        return Err(PgError::new(
+            SqlState::INVALID_COLUMN_REFERENCE,
+            format!("WITH query has {} columns available but {} columns specified", output.len(), aliases.len()),
+        ));
+    }
+    for (col, name) in output.iter_mut().zip(aliases.iter()) {
+        col.name = name.clone();
+    }
+    Ok(())
+}
+
+/// The query-level ORDER BY items (`ORDER BY ALL` is not PostgreSQL syntax).
+fn order_by_items(q: &Query) -> Result<&[OrderByExpr]> {
+    match q.order_by.as_ref() {
+        None => {
+            let empty: &[OrderByExpr] = &[];
+            Ok(empty)
+        }
+        Some(ob) => match &ob.kind {
+            OrderByKind::Expressions(items) => Ok(items.as_slice()),
+            OrderByKind::All(_) => Err(diag::syntax_error_near("ALL", None)),
+        },
+    }
+}
+
+/// Non-PostgreSQL query clauses: syntax errors naming the keyword (42601).
+fn reject_query_clauses(q: &Query) -> Result<()> {
+    if q.for_clause.is_some() {
+        return Err(diag::syntax_error_near("FOR", None));
+    }
+    if q.settings.is_some() {
+        return Err(diag::syntax_error_near("SETTINGS", None));
+    }
+    if q.format_clause.is_some() {
+        return Err(diag::syntax_error_near("FORMAT", None));
+    }
+    if !q.pipe_operators.is_empty() {
+        return Err(diag::syntax_error_near("|>", None));
+    }
+    if let Some(lc) = q.limit_clause.as_ref() {
+        match lc {
+            LimitClause::LimitOffset { limit, limit_by, .. } => {
+                if !limit_by.is_empty() {
+                    return Err(diag::syntax_error_near("BY", None));
+                }
+                if limit.is_some() && q.fetch.is_some() {
+                    return Err(diag::syntax_error_near("FETCH", None));
+                }
+            }
+            LimitClause::OffsetCommaLimit { .. } => return Err(diag::syntax_error_near(",", None)),
+        }
+    }
+    if let Some(ob) = q.order_by.as_ref() {
+        if ob.interpolate.is_some() {
+            return Err(diag::syntax_error_near("INTERPOLATE", None));
+        }
+        match &ob.kind {
+            OrderByKind::All(_) => return Err(diag::syntax_error_near("ALL", None)),
+            OrderByKind::Expressions(items) => {
+                if items.iter().any(|item| item.with_fill.is_some()) {
+                    return Err(diag::syntax_error_near("WITH", None));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// SELECT-level syntax that PostgreSQL does not have (42601), or that is not supported (0A000).
+fn reject_select_extensions(sel: &Select) -> Result<()> {
+    if sel.into.is_some() {
+        return Err(diag::syntax("SELECT ... INTO is not allowed here", None));
+    }
+    if sel.top.is_some() {
+        return Err(diag::syntax_error_near("TOP", None));
+    }
+    if sel.prewhere.is_some() {
+        return Err(diag::syntax_error_near("PREWHERE", None));
+    }
+    if !sel.connect_by.is_empty() {
+        return Err(diag::syntax_error_near("CONNECT", None));
+    }
+    if sel.qualify.is_some() {
+        return Err(diag::syntax_error_near("QUALIFY", None));
+    }
+    if !sel.cluster_by.is_empty() {
+        return Err(diag::syntax_error_near("CLUSTER", None));
+    }
+    if !sel.distribute_by.is_empty() {
+        return Err(diag::syntax_error_near("DISTRIBUTE", None));
+    }
+    if !sel.sort_by.is_empty() {
+        return Err(diag::syntax_error_near("SORT", None));
+    }
+    if !sel.lateral_views.is_empty() {
+        return Err(diag::syntax_error_near("LATERAL", None));
+    }
+    if sel.exclude.is_some() {
+        return Err(diag::syntax_error_near("EXCLUDE", None));
+    }
+    if sel.value_table_mode.is_some() {
+        return Err(diag::syntax_error_near("AS", None));
+    }
+    if !matches!(sel.flavor, SelectFlavor::Standard) {
+        return Err(diag::syntax_error_near("FROM", None));
+    }
+    if sel.select_modifiers.is_some() {
+        return Err(diag::syntax_error_near("SELECT", None));
+    }
+    if !sel.optimizer_hints.is_empty() {
+        return Err(diag::unsupported_construct("optimizer hints", None));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// SELECT block (PG transformSelectStmt order)
+// ---------------------------------------------------------------------------------------------
+
+fn bind_select_in_scope(b: &mut Binder, sel: &Select, order_items: &[OrderByExpr], keep_unknown_outputs: bool) -> Result<SelectBlock> {
+    reject_select_extensions(sel)?;
+    // Named WINDOW definitions are bound before the target list so that `OVER w` can refer to them.
+    if !sel.named_window.is_empty() {
+        window::bind_window_clause(b, &sel.named_window)?;
+    }
+    let from_items = from::bind_from_clause(b, &sel.from)?;
+    b.scope_mut()?.aggs_allowed_here = true;
+    let mut target_list = target::bind_target_list(b, &sel.projection, ExprCtx::select_list())?;
+    let where_ = match sel.selection.as_ref() {
+        Some(e) => Some(expr::bind_boolean(b, e, ExprCtx::where_(), "WHERE")?),
+        None => None,
+    };
+    let mut having = match sel.having.as_ref() {
+        Some(e) => Some(expr::bind_boolean(b, e, ExprCtx::having(), "HAVING")?),
+        None => None,
+    };
+    let group_by = group::bind_group_by(b, &sel.group_by, &mut target_list)?;
+    let distinct_hint = if matches!(sel.distinct, Some(Distinct::Distinct)) { DistinctSpec::All } else { DistinctSpec::None };
+    let sort_keys = order::bind_order_by(b, order_items, &mut target_list, &distinct_hint)?;
+    let distinct = order::bind_distinct(b, sel.distinct.as_ref(), &mut target_list, &sort_keys)?;
+    b.scope_mut()?.aggs_allowed_here = false;
+    group::resolve_pending_groupings(b, &group_by, &mut target_list, having.as_mut())?;
+    let windows = std::mem::take(&mut b.scope_mut()?.windows);
+    let has_aggs = b.scope()?.has_aggs;
+    group::check_grouping(b, &group_by, &target_list, having.as_ref(), &windows, has_aggs)?;
+    if !keep_unknown_outputs {
+        for entry in target_list.iter_mut() {
+            if !entry.junk && entry.expr.ty.oid == pgarbor_types::oids::UNKNOWN {
+                let arg = BoundArg::new(entry.expr.clone(), None);
+                entry.expr = coerce::resolve_unknown_output(b, &arg)?;
+            }
+        }
+    }
+    let output: Vec<OutputColumn> = target_list
+        .iter()
+        .filter(|t| !t.junk)
+        .map(|t| OutputColumn { name: t.name.clone(), ty: t.expr.ty, origin: t.origin })
+        .collect();
+    let sc = b.scope_mut()?;
+    let range_table = std::mem::take(&mut sc.range_table);
+    let select = BoundSelect {
+        range_table,
+        from: from_items,
+        where_,
+        target_list,
+        group_by,
+        having,
+        distinct,
+        windows,
+        has_aggs,
+        has_windows: sc.has_windows,
+        has_target_srfs: sc.has_target_srfs,
+        has_sublinks: sc.has_sublinks,
+    };
+    Ok(SelectBlock { select, order_by: sort_keys, output })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Locking clauses
+// ---------------------------------------------------------------------------------------------
+
+/// The query body a locking clause is attached to.
+enum LockSite<'a> {
+    Select(&'a BoundSelect),
+    Values,
+    SetOp,
+}
+
+fn bind_locking(b: &mut Binder, locks: &[LockClause], site: LockSite<'_>) -> Result<Vec<LockingClause>> {
+    let mut out: Vec<LockingClause> = Vec::with_capacity(locks.len());
+    for lock in locks {
+        let clause = match lock.lock_type {
+            LockType::Update => "FOR UPDATE",
+            LockType::Share => "FOR SHARE",
+        };
+        let strength = match lock.lock_type {
+            LockType::Update => LockStrength::Update,
+            LockType::Share => LockStrength::Share,
+        };
+        match &site {
+            LockSite::Values => {
+                return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{clause} cannot be applied to VALUES")));
+            }
+            LockSite::SetOp => return Err(diag::locking_not_allowed(clause, "UNION/INTERSECT/EXCEPT", None)),
+            LockSite::Select(s) => check_select_lockable(s, clause)?,
+        }
+        let wait = match lock.nonblock {
+            None => LockWait::Block,
+            Some(NonBlock::Nowait) => LockWait::NoWait,
+            Some(NonBlock::SkipLocked) => LockWait::SkipLocked,
+        };
+        let of = match (&site, lock.of.as_ref()) {
+            (LockSite::Select(s), Some(name)) => {
+                let qn = b.qual(name)?;
+                match s.range_table.iter().position(|entry| entry.alias == qn.name) {
+                    Some(idx) => vec![idx as u32 + 1],
+                    None => return Err(diag::locking_relation_missing(&qn.name, clause, qn.pos)),
+                }
+            }
+            _ => Vec::new(),
+        };
+        out.push(LockingClause { strength, wait, of });
+    }
+    Ok(out)
+}
+
+/// PG `CheckSelectLocking`: which SELECT features forbid `FOR UPDATE` / `FOR SHARE`.
+fn check_select_lockable(s: &BoundSelect, clause: &str) -> Result<()> {
+    let what = if !matches!(s.distinct, DistinctSpec::None) {
+        "DISTINCT clause"
+    } else if !s.group_by.exprs.is_empty() || s.group_by.sets.is_some() {
+        "GROUP BY clause"
+    } else if s.having.is_some() {
+        "HAVING clause"
+    } else if s.has_aggs {
+        "aggregate functions"
+    } else if s.has_windows {
+        "window functions"
+    } else if s.has_target_srfs {
+        "set-returning functions in the target list"
+    } else {
+        return Ok(());
+    };
+    Err(diag::locking_not_allowed(clause, what, None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::parse_expr_text;
+
+    fn lim(text: &str) -> LimitClause {
+        let expr = parse_expr_text(text).expect("test expression parses");
+        LimitClause::LimitOffset { limit: Some(expr), offset: None, limit_by: Vec::new() }
+    }
+
+    #[test]
+    fn merge_limit_rejects_two_limits() {
+        let a = lim("1");
+        let b = lim("2");
+        let err = merge_limit(Some(&a), Some(&b)).expect_err("two LIMIT clauses must fail");
+        assert_eq!(err.message, "multiple LIMIT clauses not allowed");
+    }
+
+    #[test]
+    fn merge_limit_keeps_single_limit() {
+        let a = lim("1");
+        let merged = merge_limit(Some(&a), None).expect("single limit merges");
+        assert_eq!(merged, Some(a));
+    }
+
+    #[test]
+    fn output_alias_count_is_checked() {
+        let mut output: Vec<OutputColumn> = Vec::new();
+        assert!(apply_output_aliases(&mut output, &[]).is_ok());
+        let err = apply_output_aliases(&mut output, &["a".to_string()]).expect_err("more aliases than columns");
+        assert_eq!(err.message, "WITH query has 0 columns available but 1 columns specified");
+    }
 }

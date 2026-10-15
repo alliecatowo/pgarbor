@@ -39,9 +39,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use pgarbor::Session;
-use pgarbor_common::{PgError, Result};
+use pgarbor_common::{PgError, Result, SqlState, Severity};
 
+use crate::backend::{Backend, CopyResponse};
+use crate::buf::MsgReader;
+use crate::consts::{F_COPY_DATA, F_COPY_DONE, F_COPY_FAIL};
 use crate::error::{WireError, WireResult};
+use crate::framing::{Frame, Polled};
 use crate::session_loop::SharedIo;
 
 /// Progress shared between the channel (inside the session) and the wire loop.
@@ -62,9 +66,25 @@ pub struct CopyHandle {
 
 impl CopyHandle {
     /// End-of-statement hook (module docs). Resets the shared state for the next statement.
-    #[allow(unused_variables)]
     pub fn finish_statement(&self, ok: bool, io: &SharedIo) -> WireResult<()> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-13", "COPY statement end (CopyHandle::finish_statement)")))
+        let send_done = {
+            let mut state = self.shared.borrow_mut();
+            let send_done = ok && state.started && state.direction_out && !state.finished;
+            if send_done {
+                state.finished = true;
+            }
+            send_done
+        };
+        if send_done {
+            let mut conn = io.borrow_mut();
+            conn.send(&Backend::CopyDone)?;
+            conn.flush()?;
+        }
+        let mut state = self.shared.borrow_mut();
+        state.started = false;
+        state.direction_out = false;
+        state.finished = false;
+        Ok(())
     }
 }
 
@@ -82,13 +102,68 @@ impl WireCopyChannel {
 
     /// COPY IN: next chunk (`None` = CopyDone). Module docs.
     pub fn read_chunk(&mut self) -> Result<Option<Vec<u8>>> {
-        Err(PgError::unimplemented("WIR-13", "COPY IN read (WireCopyChannel::read_chunk)"))
+        {
+            let mut state = self.shared.borrow_mut();
+            if state.finished {
+                return Ok(None);
+            }
+            if !state.started {
+                let response = Backend::CopyInResponse(CopyResponse { overall_format: 0, column_formats: Vec::new() });
+                let mut conn = self.io.borrow_mut();
+                conn.send(&response).map_err(wire_to_pg)?;
+                conn.flush().map_err(wire_to_pg)?;
+                state.started = true;
+                state.direction_out = false;
+            }
+        }
+        loop {
+            let polled = self.io.borrow_mut().poll_raw(None).map_err(wire_to_pg)?;
+            match polled {
+                Polled::Ready(Frame { tag: F_COPY_DATA, body }) => return Ok(Some(body)),
+                Polled::Ready(Frame { tag: F_COPY_DONE, .. }) => {
+                    self.shared.borrow_mut().finished = true;
+                    return Ok(None);
+                }
+                Polled::Ready(Frame { tag: F_COPY_FAIL, body }) => {
+                    let mut reader = MsgReader::new(&body);
+                    let message = reader.read_cstr()?.to_owned();
+                    reader.finish()?;
+                    return Err(PgError::new(SqlState::QUERY_CANCELED, format!("COPY from stdin failed: {message}")));
+                }
+                Polled::Ready(Frame { tag: b'H' | b'S', .. }) => continue,
+                Polled::Ready(Frame { tag, .. }) => return Err(PgError::new(
+                    SqlState::PROTOCOL_VIOLATION,
+                    format!("unexpected message type 0x{tag:02X} during COPY from stdin"),
+                )),
+                Polled::Eof => return Err(PgError::new(SqlState::PROTOCOL_VIOLATION, "unexpected EOF on client connection with an open transaction").with_severity(Severity::Fatal)),
+                Polled::TimedOut => continue,
+            }
+        }
     }
 
     /// COPY OUT: send one chunk. Module docs.
-    #[allow(unused_variables)]
     pub fn write_chunk(&mut self, data: &[u8]) -> Result<()> {
-        Err(PgError::unimplemented("WIR-13", "COPY OUT write (WireCopyChannel::write_chunk)"))
+        let mut state = self.shared.borrow_mut();
+        if state.finished {
+            return Ok(());
+        }
+        let mut conn = self.io.borrow_mut();
+        if !state.started {
+            conn.send(&Backend::CopyOutResponse(CopyResponse { overall_format: 0, column_formats: Vec::new() }))
+                .map_err(wire_to_pg)?;
+            state.started = true;
+            state.direction_out = true;
+        }
+        conn.send(&Backend::CopyData(data.to_vec())).map_err(wire_to_pg)
+    }
+}
+
+fn wire_to_pg(error: WireError) -> PgError {
+    match error {
+        WireError::Pg(e) => e,
+        WireError::Io(e) => PgError::io("COPY protocol I/O", &e),
+        WireError::Closed => PgError::new(SqlState::CONNECTION_FAILURE, "connection closed by peer"),
+        WireError::Shutdown => PgError::new(SqlState::ADMIN_SHUTDOWN, "terminating connection due to administrator command").with_severity(Severity::Fatal),
     }
 }
 

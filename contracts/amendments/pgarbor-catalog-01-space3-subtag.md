@@ -1,6 +1,6 @@
 # Amendment request pgarbor-catalog-01: catalog metadata keys inside KV space 3
 
-Status: PROPOSED (architect, pgarbor-catalog). Implemented in `persist::keys` (frozen on-disk v1).
+Status: ACCEPTED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -29,3 +29,8 @@ branches, resets and rollbacks (`cache::CatalogCache`).
 
 pgarbor-core (must not use the `cat:` prefix; `TxnKv` locks these keys like any other: the version key
 doubles as the DDL serialization lock, see contracts/crates/pgarbor-catalog.md), ARCHITECTURE §4 wording.
+
+
+## Steward decision (2026-10-15)
+
+Accept the implemented `cat:` namespace reservation and version/bootstrap layouts in `persist/keys.rs` and `persist/version.rs`. The random stamp is a caller obligation, not a proof of globally collision-free identity. Architecture §4 now records the reservation.

@@ -156,3 +156,7 @@ are frozen, so workers never wait for each other (tests that need an unfinished 
 
 Frozen and implemented (not leased): `lib.rs`, `error.rs`, `result.rs`, `txn.rs`, `memtxn.rs`, `context.rs`, `runtime.rs`,
 `build.rs`, `execute.rs`, `ddl_driver.rs`.
+
+## Assembly decisions (2026-10-15)
+
+Steward decisions: exec-01 NULL-distinct unique key suffix accepted; exec-02 integration invariants accepted with limits in its decision. Unsupported deferred constraints must return leased 0A000, and mixed-type join keys use nested loops.

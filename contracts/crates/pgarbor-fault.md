@@ -22,6 +22,10 @@ Phase 1 gate): "fuzzed crash/restart never violates acknowledged-commit or root-
 | `WorkloadSpec`, `WorkOp`, `generate`, `Executor`, `StepOutcome`, `RunSummary` | deterministic workloads executed through the real storage API |
 | `scheduler::{run_scenario, crash_matrix, explore, count_mutating_ops, repro_line, env_repro}`, `Scenario`, `ScenarioReport`, `MatrixReport` | crash scheduler / property driver |
 
+Storage safety amendment `contracts/amendments/pgarbor-storage-03-safe-publication-and-recovery.md`
+also applies: FaultFile supplies live object identity, and FaultVfs no-replace publication uses
+the existing Rename fault/durability operation with the destination check under the namespace mutex.
+
 ## Disk model (CONTRACT)
 
 - Each file: `durable` bytes, `current` bytes (reads), ordered `pending` ops (writes, set_len).

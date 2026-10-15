@@ -41,14 +41,18 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-use pgarbor::{FormatCode, Session};
-use pgarbor_common::PgError;
+use pgarbor::{FormatCode, Session, TxnStatus};
+use pgarbor_common::{PgError, Severity, SqlState};
 
 use crate::conn_io::ConnIo;
 use crate::error::{WireError, WireResult};
+use crate::frontend::Frontend;
 use crate::param_report::ParamReporter;
 use crate::shared::Shared;
+use crate::framing::Polled;
+use crate::{extended, notify_out, result_encode, simple_query};
 
 /// Connection I/O shared with the COPY channel (single-threaded: `Rc<RefCell<..>>`).
 pub type SharedIo = Rc<RefCell<ConnIo>>;
@@ -85,13 +89,163 @@ impl<'a> SessionCtx<'a> {
 /// Parse a GUC value in SHOW form into milliseconds: plain integer (`"0"`, `"5000"` = ms) or integer
 /// with unit `us|ms|s|min|h|d` (`"5s"` -> 5000, `"1min"` -> 60000, `"1h"`, `"1d"`). Returns 0 for
 /// unparsable input (treated as disabled).
-#[allow(unused_variables)]
 pub fn parse_pg_duration_ms(value: &str) -> pgarbor_common::Result<u64> {
-    Err(PgError::unimplemented("WIR-16", "GUC duration parsing (session_loop::parse_pg_duration_ms)"))
+    let value = value.trim();
+    let split = value.find(|c: char| !c.is_ascii_digit()).unwrap_or(value.len());
+    if split == 0 { return Ok(0); }
+    let Ok(number) = value[..split].parse::<u64>() else { return Ok(0); };
+    let unit = value[split..].trim();
+    let multiplier: u64 = match unit {
+        "" | "ms" => 1,
+        "us" => return Ok(number / 1000),
+        "s" => 1_000,
+        "min" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return Ok(0),
+    };
+    Ok(number.checked_mul(multiplier).unwrap_or(0))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action { Ignore, Sync, Query, Extended, Terminate, FunctionCall, Password }
+
+fn classify(msg: &Frontend, skipping: bool) -> Action {
+    if skipping { return if matches!(msg, Frontend::Sync) { Action::Sync } else { Action::Ignore }; }
+    match msg {
+        Frontend::Query(_) => Action::Query,
+        Frontend::Parse { .. } | Frontend::Bind { .. } | Frontend::Describe { .. }
+        | Frontend::Execute { .. } | Frontend::Close { .. } | Frontend::Flush => Action::Extended,
+        Frontend::Sync => Action::Sync,
+        Frontend::Terminate => Action::Terminate,
+        Frontend::CopyData(_) | Frontend::CopyDone | Frontend::CopyFail(_) => Action::Ignore,
+        Frontend::FunctionCall(_) => Action::FunctionCall,
+        Frontend::Password(_) => Action::Password,
+    }
+}
+
+fn send_fatal(io: &mut ConnIo, reporter: &mut ParamReporter, error: &PgError) -> WireResult<()> {
+    match result_encode::send_error_cycle(io, reporter, &[], error, &[]) {
+        Ok(()) => io.flush(),
+        Err(WireError::Pg(e)) if matches!(e.severity, Severity::Fatal | Severity::Panic) => io.flush(),
+        Err(other) => Err(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_values() {
+        for (input, expected) in [("0", 0), ("5000", 5000), ("5s", 5000), ("1min", 60_000),
+            ("250ms", 250), ("1h", 3_600_000), ("1d", 86_400_000), ("garbage", 0)] {
+            assert_eq!(parse_pg_duration_ms(input).ok(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn dispatch_table_and_skip_until_sync() {
+        let cases = [
+            (Frontend::Query(String::new()), Action::Query),
+            (Frontend::Parse { name: String::new(), query: String::new(), param_oids: vec![] }, Action::Extended),
+            (Frontend::Bind { portal: String::new(), statement: String::new(), param_formats: vec![], params: vec![], result_formats: vec![] }, Action::Extended),
+            (Frontend::Execute { portal: String::new(), max_rows: 0 }, Action::Extended),
+            (Frontend::Describe { kind: crate::frontend::TargetKind::Statement, name: String::new() }, Action::Extended),
+            (Frontend::Close { kind: crate::frontend::TargetKind::Portal, name: String::new() }, Action::Extended),
+            (Frontend::Sync, Action::Sync), (Frontend::Flush, Action::Extended),
+            (Frontend::Terminate, Action::Terminate), (Frontend::CopyData(vec![]), Action::Ignore),
+            (Frontend::CopyDone, Action::Ignore), (Frontend::CopyFail(String::new()), Action::Ignore),
+            (Frontend::FunctionCall(vec![]), Action::FunctionCall), (Frontend::Password(vec![]), Action::Password),
+        ];
+        for (msg, expected) in cases {
+            assert_eq!(classify(&msg, false), expected);
+            assert_eq!(classify(&msg, true), if matches!(msg, Frontend::Sync) { Action::Sync } else { Action::Ignore });
+        }
+    }
 }
 
 /// The command loop (module docs).
-#[allow(unused_variables)]
 pub fn run(ctx: &mut SessionCtx<'_>, session: &mut Session) -> WireResult<()> {
-    Err(WireError::Pg(PgError::unimplemented("WIR-16", "command loop (session_loop::run)")))
+    let mut idle_since = Instant::now();
+    loop {
+        if ctx.shared.is_stopping() {
+            let error = PgError::new(SqlState::ADMIN_SHUTDOWN, "terminating connection due to administrator command")
+                .with_severity(Severity::Fatal);
+            let mut io = ctx.io.borrow_mut();
+            send_fatal(&mut io, &mut ctx.reporter, &error)?;
+            return Ok(());
+        }
+
+        if !ctx.skipping_until_sync && session.txn_status() == TxnStatus::Idle {
+            let mut io = ctx.io.borrow_mut();
+            notify_out::deliver(&mut io, session)?;
+        }
+
+        let polled = {
+            let mut io = ctx.io.borrow_mut();
+            io.poll(Some(notify_out::poll_interval(ctx.shared, session)))
+        };
+        match polled {
+            Ok(Polled::Eof) => return Ok(()),
+            Ok(Polled::TimedOut) => {
+                let status = session.txn_status();
+                let (setting, state, message) = if status != TxnStatus::Idle {
+                    ("idle_in_transaction_session_timeout", SqlState(*b"25P03"), "terminating connection due to idle-in-transaction timeout")
+                } else {
+                    ("idle_session_timeout", SqlState(*b"57P05"), "terminating connection due to idle-session timeout")
+                };
+                let configured = session.setting(setting).ok().and_then(|v| parse_pg_duration_ms(&v).ok()).unwrap_or(0);
+                if configured > 0 && idle_since.elapsed() >= Duration::from_millis(configured) {
+                    let err = PgError::new(state, message).with_severity(Severity::Fatal);
+                    let mut io = ctx.io.borrow_mut();
+                    send_fatal(&mut io, &mut ctx.reporter, &err)?;
+                    return Ok(());
+                }
+                continue;
+            }
+            Err(WireError::Pg(error)) => {
+                if matches!(error.severity, Severity::Fatal | Severity::Panic) {
+                    return Err(WireError::Pg(error));
+                }
+                let extended = ctx.skipping_until_sync;
+                {
+                    let mut io = ctx.io.borrow_mut();
+                    result_encode::send_error_cycle(&mut io, &mut ctx.reporter, &[], &error, &[])?;
+                    if !extended { result_encode::finish_cycle(&mut io, &mut ctx.reporter, session.txn_status())?; }
+                }
+                if extended { ctx.skipping_until_sync = true; }
+                continue;
+            }
+            Err(e) => return Err(e),
+            Ok(Polled::Ready(msg)) => {
+                idle_since = Instant::now();
+                match classify(&msg, ctx.skipping_until_sync) {
+                    Action::Ignore => continue,
+                    Action::Sync => extended::handle(ctx, session, msg)?,
+                    Action::Query => {
+                        if let Frontend::Query(sql) = msg { simple_query::handle(ctx, session, &sql)?; }
+                    }
+                    Action::Extended => extended::handle(ctx, session, msg)?,
+                    Action::Terminate => return Ok(()),
+                    Action::FunctionCall => {
+                        let err = PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "fastpath function calls are not supported");
+                        let mut io = ctx.io.borrow_mut();
+                        result_encode::send_error_cycle(&mut io, &mut ctx.reporter, &[], &err, &[])?;
+                        result_encode::finish_cycle(&mut io, &mut ctx.reporter, session.txn_status())?;
+                    }
+                    Action::Password => {
+                        let err = PgError::new(SqlState::PROTOCOL_VIOLATION, "invalid frontend message type 112").with_severity(Severity::Fatal);
+                        let mut io = ctx.io.borrow_mut();
+                        send_fatal(&mut io, &mut ctx.reporter, &err)?;
+                        return Ok(());
+                    }
+                }
+                if !ctx.skipping_until_sync && session.txn_status() == TxnStatus::Idle {
+                    let mut io = ctx.io.borrow_mut();
+                    notify_out::deliver(&mut io, session)?;
+                }
+            }
+        }
+    }
 }

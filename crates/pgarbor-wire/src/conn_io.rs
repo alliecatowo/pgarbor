@@ -16,10 +16,9 @@
 //! measured from `ConnIo::new`.
 use std::time::{Duration, Instant};
 
-use pgarbor_common::PgError;
-
-use crate::backend::Backend;
+use crate::backend::{encode_backend, Backend};
 use crate::config::ServerConfig;
+use crate::consts::{CANCEL_REQUEST_CODE, GSSENC_REQUEST_CODE, MAX_STARTUP_PACKET_LEN, SSL_REQUEST_CODE};
 use crate::error::{WireError, WireResult};
 use crate::framing::{Frame, FrameReader, FrameWriter, Polled};
 use crate::frontend::Frontend;
@@ -40,9 +39,19 @@ pub struct ConnIo {
 impl ConnIo {
     /// Wrap `stream`: `try_clone` for the writer half, apply `tcp_nodelay`, capture the peer.
     /// `cfg.max_frame_bytes` bounds frames, `cfg.transcript` enables recording.
-    #[allow(unused_variables)]
     pub fn new(stream: Stream, conn_id: u64, cfg: &ServerConfig) -> WireResult<ConnIo> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-06", "create connection I/O (ConnIo::new)")))
+        let peer = stream.peer_info();
+        stream.set_nodelay(cfg.tcp_nodelay)?;
+        let writer_stream = stream.try_clone()?;
+        Ok(ConnIo {
+            reader: FrameReader::new(stream, cfg.max_frame_bytes),
+            writer: FrameWriter::new(writer_stream),
+            peer,
+            conn_id,
+            seq: 0,
+            started: Instant::now(),
+            transcript: cfg.transcript.clone(),
+        })
     }
 
     pub fn peer(&self) -> &PeerInfo {
@@ -56,14 +65,20 @@ impl ConnIo {
     /// Queue a backend message (module docs). Encode with `backend::encode_backend` into a scratch
     /// buffer first so the transcript can record the exact body (`bytes[5..]`), then
     /// `FrameWriter::push_raw`-style append and auto-flush past `AUTO_FLUSH_BYTES`.
-    #[allow(unused_variables)]
     pub fn send(&mut self, msg: &Backend) -> WireResult<()> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-06", "queue a backend message (ConnIo::send)")))
+        let mut bytes = Vec::new();
+        encode_backend(msg, &mut bytes)?;
+        self.record(TranscriptDirection::ServerToClient, Some(msg.tag()), msg.name(), &bytes[5..]);
+        self.writer.push_raw(&bytes);
+        if self.writer.pending() > crate::framing::AUTO_FLUSH_BYTES {
+            self.writer.flush()?;
+        }
+        Ok(())
     }
 
     /// Flush buffered output.
     pub fn flush(&mut self) -> WireResult<()> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-06", "flush output (ConnIo::flush)")))
+        self.writer.flush()
     }
 
     /// Send + flush (used for auth requests and fatal errors).
@@ -73,9 +88,13 @@ impl ConnIo {
     }
 
     /// Wait up to `timeout` for one decoded frontend message (module docs). `Eof` = clean close.
-    #[allow(unused_variables)]
     pub fn poll(&mut self, timeout: Option<Duration>) -> WireResult<Polled<Frontend>> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-06", "poll a frontend message (ConnIo::poll)")))
+        match self.poll_raw(timeout)? {
+            Polled::Ready(frame) => crate::frontend::decode_frontend(frame.tag, &frame.body)
+                .map(Polled::Ready).map_err(WireError::Pg),
+            Polled::TimedOut => Ok(Polled::TimedOut),
+            Polled::Eof => Ok(Polled::Eof),
+        }
     }
 
     /// Blocking receive; EOF -> `WireError::Closed`.
@@ -89,24 +108,49 @@ impl ConnIo {
 
     /// Next RAW frame without decoding (authentication reads `p` messages by context, COPY mode
     /// needs the tag to produce PG's `unexpected message type` error). Records it like `poll`.
-    #[allow(unused_variables)]
     pub fn poll_raw(&mut self, timeout: Option<Duration>) -> WireResult<Polled<Frame>> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-06", "poll a raw frame (ConnIo::poll_raw)")))
+        if self.writer.pending() > 0 {
+            self.writer.flush()?;
+        }
+        match self.reader.poll_frame(timeout)? {
+            Polled::Ready(frame) => {
+                let name = match crate::frontend::decode_frontend(frame.tag, &frame.body) {
+                    Ok(frontend) => frontend.name(),
+                    Err(_) => "Invalid",
+                };
+                self.record(TranscriptDirection::ClientToServer, Some(frame.tag), name, &frame.body);
+                Ok(Polled::Ready(frame))
+            }
+            Polled::TimedOut => Ok(Polled::TimedOut),
+            Polled::Eof => Ok(Polled::Eof),
+        }
     }
 
     /// Read the untagged first packet (`FrameReader::poll_startup`) and record it (`tag = None`,
     /// body = the bytes after the length field). The recorded name is derived from the leading
     /// Int32 code: `"SSLRequest"`, `"GSSENCRequest"`, `"CancelRequest"`, otherwise `"StartupMessage"`.
-    #[allow(unused_variables)]
     pub fn poll_startup(&mut self, timeout: Option<Duration>) -> WireResult<Polled<Vec<u8>>> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-06", "read the startup packet (ConnIo::poll_startup)")))
+        if self.writer.pending() > 0 {
+            self.writer.flush()?;
+        }
+        match self.reader.poll_startup(timeout, MAX_STARTUP_PACKET_LEN)? {
+            Polled::Ready(packet) => {
+                let name = startup_name(&packet);
+                self.record(TranscriptDirection::ClientToServer, None, name, &packet);
+                Ok(Polled::Ready(packet))
+            }
+            Polled::TimedOut => Ok(Polled::TimedOut),
+            Polled::Eof => Ok(Polled::Eof),
+        }
     }
 
     /// Answer an SSLRequest / GSSENCRequest: write the single byte (`b'N'`) immediately, flushed,
     /// recorded as `SSLResponse`.
-    #[allow(unused_variables)]
     pub fn write_ssl_answer(&mut self, answer: u8) -> WireResult<()> {
-        Err(WireError::Pg(PgError::unimplemented("WIR-06", "write the SSL answer byte (ConnIo::write_ssl_answer)")))
+        self.writer.push_raw(&[answer]);
+        self.writer.flush()?;
+        self.record(TranscriptDirection::ServerToClient, None, "SSLResponse", &[answer]);
+        Ok(())
     }
 
     /// True when the reader holds unconsumed bytes (pipelining).
@@ -120,7 +164,6 @@ impl ConnIo {
     }
 
     /// Best-effort flush, then close both directions.
-    #[allow(unused_variables)]
     pub fn shutdown(&mut self) {
         let _ = self.writer.flush();
         let _ = self.writer.stream().shutdown_both();
@@ -141,5 +184,28 @@ impl ConnIo {
             t.0.record(entry);
         }
         self.seq += 1;
+    }
+}
+
+fn startup_name(packet: &[u8]) -> &'static str {
+    match packet.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes) {
+        Some(SSL_REQUEST_CODE) => "SSLRequest",
+        Some(GSSENC_REQUEST_CODE) => "GSSENCRequest",
+        Some(CANCEL_REQUEST_CODE) => "CancelRequest",
+        _ => "StartupMessage",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_packet_names_use_request_codes() {
+        assert_eq!(startup_name(&SSL_REQUEST_CODE.to_be_bytes()), "SSLRequest");
+        assert_eq!(startup_name(&GSSENC_REQUEST_CODE.to_be_bytes()), "GSSENCRequest");
+        assert_eq!(startup_name(&CANCEL_REQUEST_CODE.to_be_bytes()), "CancelRequest");
+        assert_eq!(startup_name(&[0, 3, 0, 0]), "StartupMessage");
+        assert_eq!(startup_name(&[1, 2]), "StartupMessage");
     }
 }

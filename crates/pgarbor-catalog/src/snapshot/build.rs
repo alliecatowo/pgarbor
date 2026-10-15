@@ -73,6 +73,41 @@ fn insert_type(idx: &mut SnapshotIndexes, ns: Oid, name: &str, oid: Oid, r: User
     Ok(())
 }
 
+// Bound all recursive metadata resolution, including domain -> array -> element edges.
+// See accepted amendment pgarbor-catalog-06-domain-graph-safety.
+const MAX_TYPE_RESOLUTION_DEPTH: usize = 64;
+
+fn validate_type_graph(data: &CatalogData, idx: &SnapshotIndexes) -> Result<()> {
+    for &start in idx.user_types.keys() {
+        let mut seen = std::collections::HashSet::new();
+        let mut oid = start;
+        loop {
+            if pgarbor_types::catalog_data::builtin_type(oid).is_some() {
+                break;
+            }
+            if !seen.insert(oid) {
+                return Err(PgError::corruption(format!("catalog is corrupt: type {start} has a cyclic base type")));
+            }
+            if seen.len() > MAX_TYPE_RESOLUTION_DEPTH {
+                return Err(PgError::corruption(format!("catalog is corrupt: type {start} exceeds the type resolution depth limit")));
+            }
+            match idx.user_types.get(&oid) {
+                Some(UserTypeRef::Type(t)) => {
+                    let ty = data.types.get(t).ok_or_else(|| corrupt("type", start, "type", *t))?;
+                    match &ty.def {
+                        TypeDef::Domain { base, .. } => oid = base.oid,
+                        TypeDef::Enum { .. } => break,
+                    }
+                }
+                Some(UserTypeRef::TypeArray(element)) => oid = *element,
+                Some(UserTypeRef::RowType(_)) | Some(UserTypeRef::RowTypeArray(_)) => break,
+                None => return Err(corrupt("type", start, "base type", oid)),
+            }
+        }
+    }
+    Ok(())
+}
+
 fn sort_lists<K>(map: &mut HashMap<K, Vec<Oid>>) {
     for v in map.values_mut() {
         v.sort_unstable();
@@ -278,6 +313,7 @@ impl CatalogSnapshot {
             }
         }
 
+        validate_type_graph(&data, &idx)?;
         Ok(CatalogSnapshot::from_parts(version, data, idx))
     }
 
@@ -588,4 +624,54 @@ mod tests {
         assert_eq!(s.class_in_namespace(2200, "a"), Some(ClassRef::Sequence(16385)));
         assert!(s.namespace_by_name("public").is_some());
     }
+
+    fn domain(oid: Oid, base: Oid) -> crate::model::TypeObj {
+        crate::model::TypeObj {
+            oid, name: format!("d{oid}"), namespace: 11, owner: 10,
+            array_type: oid + 1, array_type_name: None, acl: None,
+            def: TypeDef::Domain { base: pgarbor_types::TypeId::new(base, -1), not_null: false,
+                default: None, collation: 0, ndims: 0 },
+        }
+    }
+
+    fn check_graph_both_paths(types: Vec<crate::model::TypeObj>, valid: bool) {
+        let mut data = CatalogData::default();
+        let mut kv = pgarbor_common::MemKv::default();
+        for ty in types {
+            crate::persist::put_object(&mut kv, &crate::model::CatalogObject::Type(ty.clone())).expect("encoded row");
+            data.types.insert(ty.oid, ty);
+        }
+        for result in [CatalogSnapshot::build(CatalogVersion::ZERO, data), CatalogSnapshot::load(&kv)] {
+            if valid {
+                let snap = result.expect("valid domain chain");
+                let env = crate::CatalogEnv::with_default_path(snap);
+                env.user_type_info(16384).expect("type metadata").expect("domain type");
+            } else {
+                assert_eq!(result.expect_err("invalid domain graph").sqlstate.code(), "XX001");
+            }
+        }
+    }
+
+    #[test]
+    fn domain_graph_rejects_cycles_and_missing_bases() {
+        check_graph_both_paths(vec![domain(16384, 16384)], false);
+        check_graph_both_paths(vec![domain(16384, 16386), domain(16386, 16384)], false);
+        check_graph_both_paths(vec![domain(16384, 999999)], false);
+        // Resolving a domain's array metadata also resolves its element domain.
+        check_graph_both_paths(vec![domain(16384, 16385)], false);
+        check_graph_both_paths(vec![domain(16384, 16387), domain(16386, 16385)], false);
+    }
+
+    #[test]
+    fn domain_graph_accepts_valid_chains_and_bounds_depth() {
+        check_graph_both_paths(vec![domain(16384, 23)], true);
+        check_graph_both_paths(vec![domain(16384, 16386), domain(16386, 23)], true);
+        let chain = |len: usize| (0..len).map(|i| {
+            domain(16384 + 2 * i as u32, if i + 1 == len { 23 } else { 16386 + 2 * i as u32 })
+        }).collect();
+        // The implicit array introduces one additional metadata-resolution edge.
+        check_graph_both_paths(chain(MAX_TYPE_RESOLUTION_DEPTH - 1), true);
+        check_graph_both_paths(chain(MAX_TYPE_RESOLUTION_DEPTH + 1), false);
+    }
+
 }

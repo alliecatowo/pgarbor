@@ -78,7 +78,9 @@ Every other consumer:
      never reported as PASS.
 4. **Write locks.**
    - Every `TxnKv` write takes a key lock, except `put_fresh` and the sequence keyspace.
-   - The `LockOutcome` is computed from a fresh head taken *after* the grant.
+   - The `LockOutcome` is computed from a fresh head taken *after* every grant or reuse; the
+     held-key cache skips only lock-manager acquisition (accepted amendment
+     `pgarbor-core-03-reused-key-lock-outcomes`).
    - RR/SERIALIZABLE turn `Changed` into 40001 (`...concurrent update` or `...concurrent delete`).
 5. **Commit.**
    - An empty overlay causes no storage write.

@@ -198,7 +198,7 @@ def test_malformed_review_line_is_a_violation(repo: Path, stubs: dict[str, Any])
 def test_manifest_exception_fails_closed(repo: Path, stubs: dict[str, Any],
                                          monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(paths: Any) -> ManifestCheck:
-        raise NotImplementedError("HAR-05: check manifest")
+        raise RuntimeError("synthetic manifest failure")
 
     monkeypatch.setattr(harness_manifest, "check", boom)
     report = guard.check_campaign_preconditions(repo)
@@ -267,7 +267,7 @@ def test_selftest_failure_refuses(repo: Path, stubs: dict[str, Any]) -> None:
 def test_selftest_exception_refuses(repo: Path, stubs: dict[str, Any],
                                     monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(fixtures: Any = None) -> SelftestReport:
-        raise NotImplementedError("HAR-28: offline selftest")
+        raise RuntimeError("synthetic selftest failure")
 
     monkeypatch.setattr(harness_selftest, "run_offline", boom)
     report = guard.check_campaign_preconditions(repo)

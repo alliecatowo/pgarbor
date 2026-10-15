@@ -92,7 +92,9 @@ do, on recorded PG output.
   to `tests/expected/<family>/<case_id>.json`.
   - The path rule is `model.expected_path`. The format is `ExpectedFile` (`pgarbor-expected/1`),
     serialized with `model.canonical_json`: sorted keys, indent 2, UTF-8, trailing newline.
-  - The recorder runs each case twice. Nondeterminism or intent mismatch means nothing is written.
+  - The recorder runs each case twice. Nondeterminism, intent mismatch, failed setup or
+    missing setup observations mean nothing is written. Public single-case writes enforce
+    the same review gate and live oracle identity check as corpus writes (amendment harness-03).
 
 Example (abridged):
 
@@ -151,8 +153,9 @@ Row order:
 - otherwise a multiset comparison that keeps duplicates.
 
 Normalizers live in `compare.normalize.REGISTRY` and must be idempotent and documented with a
-justification. `user_oids` is the only default: a bijective canonical renumbering of OIDs
-≥ 16384 per transcript. The opt-ins are `timestamps`, `uuids`, `pids`, `xids`, `lsns` and
+justification. `user_oids` is the only default: a bijective canonical renumbering of descriptor
+OIDs ≥ 16384 per transcript. OID-typed row data stays exact until a separately reviewed
+allocated-object provenance schema exists (amendment harness-03-verifier-integrity). The opt-ins are `timestamps`, `uuids`, `pids`, `xids`, `lsns` and
 `explain_numbers`. SQLSTATE, NULL-ness, built-in type OIDs, transaction status and row
 multiplicity are never normalized. A new normalizer requires an amendment plus a selftest
 mutant.
@@ -234,7 +237,8 @@ CORRUPTION/CRASH tickets on storage, fault, branches or core files always sort f
    mutants with kill relations) must all be detected.
 5. Stub markers have the exact form `NotImplementedError("<LEASE-ID>: <what>")` and
    `PgError::unimplemented("<LEASE-ID>", ...)`. They are counted by `inventory` and must be
-   covered 1:1 by leases (`leases.validate_catalog`).
+   covered 1:1 by leases (`leases.validate_catalog`). Rust cfg(test) module constructor
+   examples are excluded from production inventory (amendment harness-03).
 
 ## 10. How downstream uses it
 

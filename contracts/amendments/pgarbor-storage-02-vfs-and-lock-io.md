@@ -1,6 +1,6 @@
 # Amendment request pgarbor-storage-02: `Vfs` trait and lock methods on `FileIo`
 
-Status: PROPOSED (architect, pgarbor-storage). Implemented in the v1 skeleton as `pgarbor_storage::io`.
+Status: ACCEPTED (2026-10-15, lead engineer delegation to Codex storage safety owner). Previously proposed (architect, pgarbor-storage). Implemented in the v1 skeleton as `pgarbor_storage::io`.
 
 ## Problem
 
@@ -34,3 +34,9 @@ bytes. Three required behaviours are not expressible with that surface:
   database file's directory, so detach/export can be fault-tested; reflink itself (platform ioctl) stays outside.
 - **pgarbor / pgarbor-cli**: pass `Arc<dyn Vfs>` through `OpenOptions` when embedding in wasm or tests.
 - **ARCHITECTURE.md §5**: replace the `FileIo` method list with a reference to this amendment.
+
+## Steward decision (2026-10-15)
+
+Accepted: the implemented interface/layout is required for the existing dependency direction and
+safe storage/branch behavior. The owning crate contract records the adopted details. Storage
+publication/identity semantics are refined by storage-03 and branches-03 safety amendments.

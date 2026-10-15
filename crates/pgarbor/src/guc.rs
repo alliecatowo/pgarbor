@@ -57,11 +57,31 @@
 //! `rows()` produces `SettingRow`s for `pg_settings` (`source` `default`, `session`, `client`,
 //! `configuration file`...; `reset_val`, `boot_val`, `pending_restart=false`).
 use std::cell::RefCell;
+use std::cmp::Ordering;
 
 use pgarbor_catalog::session::SettingRow;
-use pgarbor_common::{PgError, Result};
+use pgarbor_common::{PgError, Result, SqlState};
+use pgarbor_core::IsolationLevel;
+use pgarbor_types::datetime::tz::{parse_timezone_setting, setting_display};
 
-use crate::guc_def::GucDef;
+use crate::guc_def::{find_def, GucContext, GucDef, GucType, HIDDEN_DEFS, STARTUP_REPORT_ORDER};
+use crate::guc_value;
+
+/// 55P02 `cannot_change_runtime_param`.
+const CANT_CHANGE_PARAM: SqlState = SqlState(*b"55P02");
+/// 3B001 `invalid_savepoint_specification`.
+const INVALID_SAVEPOINT: SqlState = SqlState(*b"3B001");
+
+/// Parameters `RESET ALL` never touches (PG `GUC_NO_RESET_ALL`, `utils/misc/guc_tables.c`).
+const NO_RESET_ALL: &[&str] = &[
+    "seed",
+    "role",
+    "session_authorization",
+    "is_superuser",
+    "transaction_read_only",
+    "transaction_deferrable",
+    "transaction_isolation",
+];
 
 /// Where the current value came from (`pg_settings.source`).
 // CONTRACT
@@ -115,6 +135,12 @@ pub struct GucSlot {
 }
 
 /// One saved value on the transaction stack.
+///
+/// Entries are unique per (name, level). `value`/`source` hold the value in force before the first
+/// change made at `level`: the value an abort (or a commit of a `local` entry) restores.
+/// `local` marks a `SET LOCAL` in force at that level; `masked` holds the session value that a
+/// `SET LOCAL` replaced after a `SET` in the same level (PG `GUC_SET_LOCAL` + `masked`), restored at
+/// commit instead of `value`.
 #[derive(Clone, Debug)]
 pub(crate) struct GucSaved {
     pub(crate) name: String,
@@ -124,6 +150,8 @@ pub(crate) struct GucSaved {
     pub(crate) level: usize,
     /// The change was a `SET LOCAL` (undone at level end regardless of commit).
     pub(crate) local: bool,
+    /// Session value masked by a later `SET LOCAL` in the same level (see type docs).
+    pub(crate) masked: Option<(String, GucSource)>,
 }
 
 /// Interior state of [`GucTable`].
@@ -158,96 +186,223 @@ impl GucTable {
                 reset_source: GucSource::Default,
             })
             .collect();
-        GucTable { inner: RefCell::new(GucInner { slots, superuser, ..GucInner::default() }) }
+        let mut inner = GucInner { slots, superuser, ..GucInner::default() };
+        // `is_superuser` reflects the session user (read-only, reported at startup).
+        let su = if superuser { "on" } else { "off" };
+        if let Some(idx) = inner.slots.iter().position(|s| s.def.name == "is_superuser") {
+            inner.slots[idx].value = su.to_string();
+            inner.slots[idx].reset_val = su.to_string();
+        }
+        GucTable { inner: RefCell::new(inner) }
     }
 
     /// Apply startup assignments (`application_name`, `options -c`, role/database settings) as the
     /// session's reset values: value and `reset_val` both change, with `source`.
-    #[allow(unused_variables)]
     pub fn apply_startup(&self, name: &str, value: &str, source: GucSource) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "startup GUC assignment (GucTable::apply_startup)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        let idx = lookup(inner, name)?;
+        let def = inner.slots[idx].def;
+        check_settable(inner, def, true)?;
+        let text = validate_value(def, &inner.slots[idx].value, value)?;
+        let slot = &mut inner.slots[idx];
+        slot.value = text.clone();
+        slot.reset_val = text;
+        slot.source = source;
+        slot.reset_source = source;
+        Ok(())
     }
 
     /// Current value in SHOW form; unknown -> 42704.
-    #[allow(unused_variables)]
     pub fn show(&self, name: &str) -> Result<String> {
-        Err(PgError::unimplemented("API-02", "SHOW (GucTable::show)"))
+        let inner = self.inner.borrow();
+        let idx = lookup(&inner, name)?;
+        Ok(inner.slots[idx].value.clone())
     }
 
     /// `SET [LOCAL] name = values...` (values already rendered, `SetValue::Values`). Returns the new
     /// stored value.
-    #[allow(unused_variables)]
     pub fn set(&self, name: &str, values: &[String], scope: GucScope) -> Result<String> {
-        Err(PgError::unimplemented("API-02", "SET (GucTable::set)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        let idx = lookup(inner, name)?;
+        let def = inner.slots[idx].def;
+        check_settable(inner, def, false)?;
+        let text = guc_value::join_set_values(def, values)?;
+        let value = validate_value(def, &inner.slots[idx].value, &text)?;
+        assign(inner, idx, value.clone(), GucSource::Session, scope);
+        Ok(value)
     }
 
     /// `RESET name` / `SET name TO DEFAULT`.
-    #[allow(unused_variables)]
     pub fn reset(&self, name: &str, scope: GucScope) -> Result<String> {
-        Err(PgError::unimplemented("API-02", "RESET (GucTable::reset)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        let idx = lookup(inner, name)?;
+        let def = inner.slots[idx].def;
+        check_settable(inner, def, false)?;
+        let value = inner.slots[idx].reset_val.clone();
+        let source = inner.slots[idx].reset_source;
+        assign(inner, idx, value.clone(), source, scope);
+        Ok(value)
     }
 
     /// `RESET ALL`.
     pub fn reset_all(&self) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "RESET ALL (GucTable::reset_all)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        for idx in 0..inner.slots.len() {
+            let def = inner.slots[idx].def;
+            // PG ResetAllOptions: only SET-able contexts, only values set in this session, and not
+            // the GUC_NO_RESET_ALL exclusions.
+            if inner.slots[idx].source != GucSource::Session {
+                continue;
+            }
+            if !matches!(def.context, GucContext::User | GucContext::Superuser) {
+                continue;
+            }
+            if NO_RESET_ALL.iter().any(|n| n.eq_ignore_ascii_case(def.name)) {
+                continue;
+            }
+            let value = inner.slots[idx].reset_val.clone();
+            let source = inner.slots[idx].reset_source;
+            assign(inner, idx, value, source, GucScope::Session);
+        }
+        Ok(())
     }
 
     /// `SHOW ALL` rows `(name, setting, description)` sorted by name (hidden excluded).
     pub fn show_all(&self) -> Result<Vec<(String, String, String)>> {
-        Err(PgError::unimplemented("API-02", "SHOW ALL (GucTable::show_all)"))
+        let inner = self.inner.borrow();
+        let mut rows: Vec<(String, String, String)> = inner
+            .slots
+            .iter()
+            .filter(|s| !is_hidden(s.def))
+            .map(|s| (s.def.name.to_string(), s.value.clone(), s.def.short_desc.to_string()))
+            .collect();
+        rows.sort_by(|a, b| name_cmp(&a.0, &b.0));
+        Ok(rows)
     }
 
     /// `pg_settings` rows.
     pub fn setting_rows(&self) -> Result<Vec<SettingRow>> {
-        Err(PgError::unimplemented("API-02", "pg_settings rows (GucTable::setting_rows)"))
+        let inner = self.inner.borrow();
+        Ok(inner.slots.iter().filter(|s| !is_hidden(s.def)).map(setting_row).collect())
     }
 
     /// Open the transaction level (BEGIN / implicit transaction start). Idempotent per transaction.
     pub fn at_txn_start(&self) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "GUC transaction start (GucTable::at_txn_start)"))
+        let mut inner = self.inner.borrow_mut();
+        if inner.levels.is_empty() {
+            inner.levels.push(None);
+        }
+        Ok(())
     }
 
-    /// Transaction end: commit keeps session assignments, drops SET LOCAL ones; abort restores
+    /// Transaction end: commit keeps session assignments and drops SET LOCAL ones; abort restores
     /// everything saved. Queues ParameterStatus changes for reported parameters whose value changed.
-    #[allow(unused_variables)]
     pub fn at_txn_end(&self, commit: bool) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "GUC transaction end (GucTable::at_txn_end)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        if commit {
+            // Subtransactions still open are released first (PG COMMIT releases them all).
+            while inner.levels.len() > 1 {
+                let level = inner.levels.len();
+                merge_level(inner, level);
+                inner.levels.pop();
+            }
+            let entries = std::mem::take(&mut inner.saved);
+            for entry in entries {
+                if !entry.local {
+                    continue;
+                }
+                let idx = lookup(inner, &entry.name)?;
+                let (value, source) = match entry.masked {
+                    Some(masked) => masked,
+                    None => (entry.value, entry.source),
+                };
+                put(inner, idx, value, source);
+            }
+        } else {
+            let entries = std::mem::take(&mut inner.saved);
+            for entry in entries.into_iter().rev() {
+                restore(inner, entry)?;
+            }
+        }
+        inner.levels.clear();
+        inner.saved.clear();
+        Ok(())
     }
 
     /// SAVEPOINT: open a sub-level.
-    #[allow(unused_variables)]
     pub fn at_savepoint(&self, name: &str) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "GUC savepoint (GucTable::at_savepoint)"))
+        let mut inner = self.inner.borrow_mut();
+        if inner.levels.is_empty() {
+            inner.levels.push(None);
+        }
+        inner.levels.push(Some(name.to_string()));
+        Ok(())
     }
 
     /// ROLLBACK TO SAVEPOINT: undo changes of the named level and everything above; the level stays
     /// open (PG restarts the subtransaction).
-    #[allow(unused_variables)]
     pub fn at_rollback_to(&self, name: &str) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "GUC rollback to savepoint (GucTable::at_rollback_to)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        let pos = savepoint_index(inner, name)?;
+        undo_from(inner, pos + 1)?;
+        inner.levels.truncate(pos + 1);
+        Ok(())
     }
 
     /// RELEASE SAVEPOINT: merge the level into its parent.
-    #[allow(unused_variables)]
     pub fn at_release(&self, name: &str) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "GUC release savepoint (GucTable::at_release)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        let pos = savepoint_index(inner, name)?;
+        // RELEASE of an outer savepoint also releases every savepoint opened after it.
+        while inner.levels.len() > pos {
+            let level = inner.levels.len();
+            merge_level(inner, level);
+            inner.levels.pop();
+        }
+        Ok(())
     }
 
     /// Drain the queued ParameterStatus changes (module docs).
     pub fn take_reported_changes(&self) -> Vec<(String, String)> {
-        std::mem::take(&mut self.inner.borrow_mut().reported)
+        let raw = std::mem::take(&mut self.inner.borrow_mut().reported);
+        // One entry per name, keeping the last value, ordered by the position of that last change.
+        let mut out: Vec<(String, String)> = Vec::with_capacity(raw.len());
+        for (name, value) in raw.into_iter().rev() {
+            if !out.iter().any(|(n, _)| *n == name) {
+                out.push((name, value));
+            }
+        }
+        out.reverse();
+        out
     }
 
     /// Overwrite a value without validation or stack effects (session layer for `session_authorization`
     /// / `role` / `is_superuser` after it validated the role). Queues a report if `report`.
-    #[allow(unused_variables)]
     pub fn force_value(&self, name: &str, value: &str) -> Result<()> {
-        Err(PgError::unimplemented("API-02", "forced GUC value (GucTable::force_value)"))
+        let mut guard = self.inner.borrow_mut();
+        let inner: &mut GucInner = &mut guard;
+        let idx = lookup(inner, name)?;
+        put(inner, idx, value.to_string(), GucSource::Session);
+        Ok(())
     }
 
     /// The ParameterStatus set for a new connection, in `STARTUP_REPORT_ORDER`.
     pub fn startup_report(&self) -> Result<Vec<(String, String)>> {
-        Err(PgError::unimplemented("API-02", "startup ParameterStatus set (GucTable::startup_report)"))
+        let inner = self.inner.borrow();
+        let mut out = Vec::with_capacity(STARTUP_REPORT_ORDER.len());
+        for name in STARTUP_REPORT_ORDER {
+            let idx = lookup(&inner, name)?;
+            let slot = &inner.slots[idx];
+            out.push((slot.def.name.to_string(), slot.value.clone()));
+        }
+        Ok(out)
     }
 }
 
@@ -260,5 +415,651 @@ impl pgarbor_exec::GucAccess for GucTable {
     }
     fn settings(&self) -> Result<Vec<SettingRow>> {
         self.setting_rows()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Lookup and validation helpers
+// ---------------------------------------------------------------------------------------------
+
+fn unrecognized(name: &str) -> PgError {
+    PgError::new(SqlState::UNDEFINED_OBJECT, format!("unrecognized configuration parameter \"{name}\""))
+}
+
+/// Slot index of a parameter (case-insensitive name, hidden parameters included).
+fn lookup(inner: &GucInner, name: &str) -> Result<usize> {
+    let def = find_def(name).ok_or_else(|| unrecognized(name))?;
+    inner
+        .slots
+        .iter()
+        .position(|s| std::ptr::eq(s.def, def))
+        .ok_or_else(|| PgError::internal(format!("no GUC slot for \"{}\"", def.name)))
+}
+
+fn is_hidden(def: &GucDef) -> bool {
+    HIDDEN_DEFS.iter().any(|h| h.name == def.name)
+}
+
+fn name_cmp(a: &str, b: &str) -> Ordering {
+    a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+}
+
+/// Context check of a write (PG `set_config_option` permission checks). `startup` allows the
+/// connection-start-only contexts.
+fn check_settable(inner: &GucInner, def: &GucDef, startup: bool) -> Result<()> {
+    let name = def.name;
+    match def.context {
+        GucContext::Internal => {
+            Err(PgError::new(CANT_CHANGE_PARAM, format!("parameter \"{name}\" cannot be changed")))
+        }
+        GucContext::Postmaster => Err(PgError::new(
+            CANT_CHANGE_PARAM,
+            format!("parameter \"{name}\" cannot be changed without restarting the server"),
+        )),
+        GucContext::Sighup => Err(PgError::new(CANT_CHANGE_PARAM, format!("parameter \"{name}\" cannot be changed now"))),
+        GucContext::SuperuserBackend | GucContext::Backend => {
+            if startup {
+                Ok(())
+            } else {
+                Err(PgError::new(CANT_CHANGE_PARAM, format!("parameter \"{name}\" cannot be set after connection start")))
+            }
+        }
+        GucContext::Superuser => {
+            if inner.superuser {
+                Ok(())
+            } else {
+                Err(PgError::new(SqlState::INSUFFICIENT_PRIVILEGE, format!("permission denied to set parameter \"{name}\"")))
+            }
+        }
+        GucContext::User => Ok(()),
+    }
+}
+
+/// Validate and canonicalize a value for `def` (hooks by name, else `guc_value::normalize`).
+/// `current` is the present SHOW-form value (`DateStyle` keeps the parts not mentioned).
+fn validate_value(def: &GucDef, current: &str, text: &str) -> Result<String> {
+    let name = def.name;
+    if name.eq_ignore_ascii_case("DateStyle") {
+        return parse_datestyle(text, current);
+    }
+    if name.eq_ignore_ascii_case("TimeZone") {
+        return timezone_value(text);
+    }
+    if name.eq_ignore_ascii_case("client_encoding") {
+        return client_encoding_value(text);
+    }
+    if name.eq_ignore_ascii_case("transaction_isolation") || name.eq_ignore_ascii_case("default_transaction_isolation") {
+        return isolation_value(def, text);
+    }
+    let value = guc_value::normalize(def, text)?;
+    if name.eq_ignore_ascii_case("application_name") {
+        return Ok(clean_ascii(&value));
+    }
+    Ok(value)
+}
+
+/// `TimeZone` hook: `LOCAL`/`DEFAULT` mean `UTC`; otherwise the types crate resolves the zone and
+/// its SHOW form is returned.
+fn timezone_value(text: &str) -> Result<String> {
+    if text.eq_ignore_ascii_case("LOCAL") || text.eq_ignore_ascii_case("DEFAULT") {
+        return Ok("UTC".to_string());
+    }
+    let setting = parse_timezone_setting(text)?;
+    Ok(setting_display(&setting))
+}
+
+/// `client_encoding` hook: only the UTF8 aliases are accepted (`UTF-8`, `utf_8`, `unicode`...).
+fn client_encoding_value(text: &str) -> Result<String> {
+    let key: String = text.chars().filter(|c| *c != '-' && *c != '_').map(|c| c.to_ascii_lowercase()).collect();
+    if key == "utf8" || key == "unicode" {
+        Ok("UTF8".to_string())
+    } else {
+        Err(PgError::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("invalid value for parameter \"client_encoding\": \"{text}\""),
+        ))
+    }
+}
+
+/// `transaction_isolation` / `default_transaction_isolation` hook (`core::IsolationLevel::parse`
+/// with the parameter name of the variable being set).
+fn isolation_value(def: &GucDef, text: &str) -> Result<String> {
+    match IsolationLevel::parse(text) {
+        Ok(level) => Ok(level.as_pg_str().to_string()),
+        Err(_) => Err(PgError::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("invalid value for parameter \"{}\": \"{text}\"", def.name),
+        )
+        .with_hint("Available values: serializable, repeatable read, read committed, read uncommitted.")),
+    }
+}
+
+/// `application_name` hook: each non-printable (or non-ASCII) byte becomes `?` (PG `pg_clean_ascii`).
+fn clean_ascii(text: &str) -> String {
+    text.bytes().map(|b| if (0x20..0x7f).contains(&b) { b as char } else { '?' }).collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DsStyle {
+    Iso,
+    Sql,
+    Postgres,
+    German,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DsOrder {
+    Ymd,
+    Dmy,
+    Mdy,
+}
+
+impl DsStyle {
+    fn as_str(self) -> &'static str {
+        match self {
+            DsStyle::Iso => "ISO",
+            DsStyle::Sql => "SQL",
+            DsStyle::Postgres => "Postgres",
+            DsStyle::German => "German",
+        }
+    }
+}
+
+impl DsOrder {
+    fn as_str(self) -> &'static str {
+        match self {
+            DsOrder::Ymd => "YMD",
+            DsOrder::Dmy => "DMY",
+            DsOrder::Mdy => "MDY",
+        }
+    }
+}
+
+fn ds_style_word(word: &str) -> Option<DsStyle> {
+    match word {
+        "iso" => Some(DsStyle::Iso),
+        "sql" => Some(DsStyle::Sql),
+        "postgres" => Some(DsStyle::Postgres),
+        "german" => Some(DsStyle::German),
+        _ => None,
+    }
+}
+
+fn ds_order_word(word: &str) -> Option<DsOrder> {
+    match word {
+        "ymd" => Some(DsOrder::Ymd),
+        "dmy" | "european" | "euro" => Some(DsOrder::Dmy),
+        "mdy" | "us" | "noneuropean" | "noneuro" => Some(DsOrder::Mdy),
+        _ => None,
+    }
+}
+
+/// Words of a list value: separated by commas or whitespace.
+fn ds_words<'a>(text: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+    text.split(|c: char| c == ',' || c.is_ascii_whitespace()).filter(|w| !w.is_empty())
+}
+
+fn ds_conflict(text: &str) -> PgError {
+    PgError::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid value for parameter \"DateStyle\": \"{text}\""))
+        .with_detail("Conflicting \"datestyle\" specifications.")
+}
+
+/// `DateStyle` hook (PG `check_datestyle`): `ISO|SQL|Postgres|German` and `MDY|DMY|YMD` (with the
+/// synonyms `US`, `NonEuropean`, `European`, `Euro`, `DEFAULT`), in any order. Parts not mentioned keep
+/// the current value; `German` without an explicit order implies `DMY`. Stored as `Style, Order`.
+fn parse_datestyle(text: &str, current: &str) -> Result<String> {
+    let mut style = DsStyle::Iso;
+    let mut order = DsOrder::Mdy;
+    for word in ds_words(current) {
+        let lower = word.to_ascii_lowercase();
+        if let Some(s) = ds_style_word(&lower) {
+            style = s;
+        } else if let Some(o) = ds_order_word(&lower) {
+            order = o;
+        }
+    }
+
+    let mut have_style: Option<DsStyle> = None;
+    let mut have_order: Option<DsOrder> = None;
+    for word in ds_words(text) {
+        let lower = word.to_ascii_lowercase();
+        if lower == "default" {
+            if have_style.is_none() {
+                have_style = Some(DsStyle::Iso);
+            }
+            if have_order.is_none() {
+                have_order = Some(DsOrder::Mdy);
+            }
+        } else if let Some(s) = ds_style_word(&lower) {
+            if have_style.is_some_and(|prev| prev != s) {
+                return Err(ds_conflict(text));
+            }
+            have_style = Some(s);
+        } else if let Some(o) = ds_order_word(&lower) {
+            if have_order.is_some_and(|prev| prev != o) {
+                return Err(ds_conflict(text));
+            }
+            have_order = Some(o);
+        } else {
+            return Err(PgError::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("invalid value for parameter \"DateStyle\": \"{text}\""),
+            )
+            .with_detail(format!("Unrecognized key word: \"{word}\".")));
+        }
+    }
+
+    if let Some(s) = have_style {
+        style = s;
+        if s == DsStyle::German && have_order.is_none() {
+            order = DsOrder::Dmy;
+        }
+    }
+    if let Some(o) = have_order {
+        order = o;
+    }
+    Ok(format!("{}, {}", style.as_str(), order.as_str()))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Stack maintenance
+// ---------------------------------------------------------------------------------------------
+
+/// Store a value in a slot, queueing a ParameterStatus change when a reported parameter changes.
+fn put(inner: &mut GucInner, idx: usize, value: String, source: GucSource) {
+    let slot = &mut inner.slots[idx];
+    if slot.value != value && slot.def.report {
+        inner.reported.push((slot.def.name.to_string(), value.clone()));
+    }
+    slot.value = value;
+    slot.source = source;
+}
+
+/// Undo one saved entry: the slot gets back its prior value and source.
+fn restore(inner: &mut GucInner, entry: GucSaved) -> Result<()> {
+    let idx = lookup(inner, &entry.name)?;
+    put(inner, idx, entry.value, entry.source);
+    Ok(())
+}
+
+/// Level index of the most recent savepoint called `name` (>= 1; the transaction level is never named).
+fn savepoint_index(inner: &GucInner, name: &str) -> Result<usize> {
+    inner
+        .levels
+        .iter()
+        .rposition(|l| l.as_deref() == Some(name))
+        .filter(|&i| i >= 1)
+        .ok_or_else(|| PgError::new(INVALID_SAVEPOINT, format!("savepoint \"{name}\" does not exist")))
+}
+
+/// Record and apply an assignment at the current level (PG `set_config_option` + `push_old_value`).
+/// Outside any transaction a session assignment is permanent; `SET LOCAL` has no lasting effect.
+fn assign(inner: &mut GucInner, idx: usize, value: String, source: GucSource, scope: GucScope) {
+    let level = inner.levels.len();
+    if level > 0 {
+        let name = inner.slots[idx].def.name.to_string();
+        let prior = (inner.slots[idx].value.clone(), inner.slots[idx].source);
+        let found = inner.saved.iter().position(|e| e.level == level && e.name == name);
+        match (found, scope) {
+            (Some(i), GucScope::Session) => {
+                // Session value wins over an earlier SET LOCAL at this level: commit keeps it.
+                let e = &mut inner.saved[i];
+                e.local = false;
+                e.masked = None;
+            }
+            (Some(i), GucScope::Local) => {
+                // First SET LOCAL after a SET masks the session value; later ones change nothing.
+                let e = &mut inner.saved[i];
+                if !e.local {
+                    e.local = true;
+                    e.masked = Some(prior);
+                }
+            }
+            (None, GucScope::Session) => {
+                inner.saved.push(GucSaved { name, value: prior.0, source: prior.1, level, local: false, masked: None });
+            }
+            (None, GucScope::Local) => {
+                inner.saved.push(GucSaved { name, value: prior.0, source: prior.1, level, local: true, masked: None });
+            }
+        }
+    } else if scope == GucScope::Local {
+        return;
+    }
+    put(inner, idx, value, source);
+}
+
+/// Undo every entry at `level` or above (ROLLBACK TO), newest first.
+fn undo_from(inner: &mut GucInner, level: usize) -> Result<()> {
+    let all = std::mem::take(&mut inner.saved);
+    let (undo, keep): (Vec<GucSaved>, Vec<GucSaved>) = all.into_iter().partition(|e| e.level >= level);
+    inner.saved = keep;
+    for entry in undo.into_iter().rev() {
+        restore(inner, entry)?;
+    }
+    Ok(())
+}
+
+/// Merge the entries of `level` into its parent level (RELEASE, and COMMIT of open subtransactions).
+fn merge_level(inner: &mut GucInner, level: usize) {
+    let all = std::mem::take(&mut inner.saved);
+    let (children, mut rest): (Vec<GucSaved>, Vec<GucSaved>) = all.into_iter().partition(|e| e.level == level);
+    let parent_level = level - 1;
+    for child in children {
+        let found = rest.iter().position(|e| e.level == parent_level && e.name == child.name);
+        match found {
+            Some(i) => {
+                let merged = merge_entries(&rest[i], child);
+                rest[i] = merged;
+            }
+            None => {
+                let mut moved = child;
+                moved.level = parent_level;
+                rest.push(moved);
+            }
+        }
+    }
+    inner.saved = rest;
+}
+
+/// Combine a child-level entry into the parent-level entry for the same variable. The prior value
+/// is the parent's; the resulting commit behaviour follows the newest session value.
+fn merge_entries(parent: &GucSaved, child: GucSaved) -> GucSaved {
+    let (local, masked) = if !child.local {
+        (false, None)
+    } else if let Some(m) = child.masked.clone() {
+        (true, Some(m))
+    } else if parent.local {
+        (true, parent.masked.clone())
+    } else {
+        (true, Some((child.value.clone(), child.source)))
+    };
+    GucSaved {
+        name: parent.name.clone(),
+        value: parent.value.clone(),
+        source: parent.source,
+        level: parent.level,
+        local,
+        masked,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Row builders
+// ---------------------------------------------------------------------------------------------
+
+/// Integer parameters are reported in base units (`pg_settings.setting`), others as stored.
+fn base_text(def: &GucDef, text: &str) -> String {
+    if def.vartype == GucType::Int {
+        if let Ok(v) = guc_value::parse_int(def, text) {
+            return v.to_string();
+        }
+    }
+    text.to_string()
+}
+
+fn opt_text(s: &str) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+fn context_str(context: GucContext) -> &'static str {
+    match context {
+        GucContext::Internal => "internal",
+        GucContext::Postmaster => "postmaster",
+        GucContext::Sighup => "sighup",
+        GucContext::SuperuserBackend => "superuser-backend",
+        GucContext::Backend => "backend",
+        GucContext::Superuser => "superuser",
+        GucContext::User => "user",
+    }
+}
+
+fn vartype_str(vartype: GucType) -> &'static str {
+    match vartype {
+        GucType::Bool => "bool",
+        GucType::Int => "integer",
+        GucType::Real => "real",
+        GucType::String => "string",
+        GucType::Enum => "enum",
+    }
+}
+
+fn setting_row(slot: &GucSlot) -> SettingRow {
+    let def = slot.def;
+    SettingRow {
+        name: def.name.to_string(),
+        setting: Some(base_text(def, &slot.value)),
+        unit: opt_text(def.unit),
+        category: def.category.to_string(),
+        short_desc: def.short_desc.to_string(),
+        extra_desc: opt_text(def.extra_desc),
+        context: context_str(def.context).to_string(),
+        vartype: vartype_str(def.vartype).to_string(),
+        source: slot.source.as_str().to_string(),
+        min_val: opt_text(def.min_val),
+        max_val: opt_text(def.max_val),
+        enumvals: if def.vartype == GucType::Enum {
+            Some(def.enumvals.iter().map(|s| s.to_string()).collect())
+        } else {
+            None
+        },
+        boot_val: Some(base_text(def, def.boot_val)),
+        reset_val: Some(base_text(def, &slot.reset_val)),
+        sourcefile: None,
+        sourceline: None,
+        pending_restart: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expect_err_sqlstate(result: Result<String>, code: &str) -> PgError {
+        match result {
+            Ok(v) => panic!("expected error {code}, got Ok({v})"),
+            Err(e) => {
+                assert_eq!(e.sqlstate.code(), code);
+                e
+            }
+        }
+    }
+
+    #[test]
+    fn datestyle_parts_and_defaults() {
+        assert_eq!(parse_datestyle("SQL, DMY", "ISO, MDY").expect("valid"), "SQL, DMY");
+        assert_eq!(parse_datestyle("SQL", "ISO, MDY").expect("valid"), "SQL, MDY");
+        assert_eq!(parse_datestyle("postgres, dmy", "ISO, MDY").expect("valid"), "Postgres, DMY");
+        assert_eq!(parse_datestyle("German", "ISO, MDY").expect("valid"), "German, DMY");
+        assert_eq!(parse_datestyle("German, MDY", "ISO, DMY").expect("valid"), "German, MDY");
+        assert_eq!(parse_datestyle("US", "ISO, DMY").expect("valid"), "ISO, MDY");
+        assert_eq!(parse_datestyle("European", "SQL, MDY").expect("valid"), "SQL, DMY");
+        assert_eq!(parse_datestyle("DEFAULT", "SQL, DMY").expect("valid"), "ISO, MDY");
+        assert_eq!(parse_datestyle("", "SQL, DMY").expect("valid"), "SQL, DMY");
+    }
+
+    #[test]
+    fn datestyle_errors() {
+        let e = expect_err_sqlstate(parse_datestyle("foo", "ISO, MDY").map(|_| String::new()), "22023");
+        assert_eq!(e.message, "invalid value for parameter \"DateStyle\": \"foo\"");
+        assert_eq!(e.detail.as_deref(), Some("Unrecognized key word: \"foo\"."));
+        let c = expect_err_sqlstate(parse_datestyle("iso, sql", "ISO, MDY").map(|_| String::new()), "22023");
+        assert_eq!(c.detail.as_deref(), Some("Conflicting \"datestyle\" specifications."));
+    }
+
+    #[test]
+    fn client_encoding_aliases() {
+        assert_eq!(client_encoding_value("UTF-8").expect("alias"), "UTF8");
+        assert_eq!(client_encoding_value("unicode").expect("alias"), "UTF8");
+        let e = expect_err_sqlstate(client_encoding_value("latin1").map(|_| String::new()), "22023");
+        assert_eq!(e.message, "invalid value for parameter \"client_encoding\": \"latin1\"");
+    }
+
+    #[test]
+    fn isolation_names() {
+        let def = find_def("transaction_isolation").expect("defined");
+        assert_eq!(isolation_value(def, "Serializable").expect("level"), "serializable");
+        let e = expect_err_sqlstate(isolation_value(def, "bogus").map(|_| String::new()), "22023");
+        assert_eq!(e.hint.as_deref(), Some("Available values: serializable, repeatable read, read committed, read uncommitted."));
+    }
+
+    #[test]
+    fn application_name_is_cleaned() {
+        assert_eq!(clean_ascii("a\u{1}b c"), "a?b c");
+        assert_eq!(clean_ascii("é"), "??");
+    }
+
+    #[test]
+    fn merge_session_parent_with_local_child_masks_session_value() {
+        let parent = GucSaved {
+            name: "x".to_string(),
+            value: "1".to_string(),
+            source: GucSource::Default,
+            level: 1,
+            local: false,
+            masked: None,
+        };
+        let child = GucSaved {
+            name: "x".to_string(),
+            value: "2".to_string(),
+            source: GucSource::Session,
+            level: 2,
+            local: true,
+            masked: None,
+        };
+        let merged = merge_entries(&parent, child);
+        assert_eq!(merged.level, 1);
+        assert_eq!(merged.value, "1");
+        assert!(merged.local);
+        assert_eq!(merged.masked, Some(("2".to_string(), GucSource::Session)));
+    }
+
+    #[test]
+    fn startup_report_has_fifteen_entries_in_order() {
+        let table = GucTable::new(true);
+        let report = table.startup_report().expect("report");
+        assert_eq!(report.len(), STARTUP_REPORT_ORDER.len());
+        for (got, want) in report.iter().zip(STARTUP_REPORT_ORDER.iter()) {
+            assert_eq!(got.0.to_ascii_lowercase(), want.to_ascii_lowercase());
+        }
+        let server_version = report.iter().find(|(n, _)| n == "server_version").map(|(_, v)| v.as_str());
+        assert_eq!(server_version, Some("18.6"));
+    }
+
+    #[test]
+    fn is_superuser_reflects_session_user() {
+        assert_eq!(GucTable::new(true).show("is_superuser").expect("known"), "on");
+        assert_eq!(GucTable::new(false).show("is_superuser").expect("known"), "off");
+    }
+
+    #[test]
+    fn unknown_parameter_is_42704() {
+        let table = GucTable::new(true);
+        let e = table.show("foo").expect_err("unknown");
+        assert_eq!(e.sqlstate.code(), "42704");
+        assert_eq!(e.message, "unrecognized configuration parameter \"foo\"");
+    }
+
+    #[test]
+    fn show_all_excludes_hidden_and_is_sorted() {
+        let rows = GucTable::new(true).show_all().expect("rows");
+        assert_eq!(rows.len(), 399);
+        assert!(rows.iter().all(|r| r.0 != "is_superuser"));
+        assert!(rows.windows(2).all(|w| name_cmp(&w[0].0, &w[1].0) != Ordering::Greater));
+    }
+
+    #[test]
+    fn take_reported_changes_keeps_last_value_per_name() {
+        let table = GucTable::new(true);
+        {
+            let mut inner = table.inner.borrow_mut();
+            inner.reported.push(("a".to_string(), "1".to_string()));
+            inner.reported.push(("b".to_string(), "2".to_string()));
+            inner.reported.push(("a".to_string(), "3".to_string()));
+        }
+        assert_eq!(
+            table.take_reported_changes(),
+            vec![("b".to_string(), "2".to_string()), ("a".to_string(), "3".to_string())]
+        );
+        assert!(table.take_reported_changes().is_empty());
+    }
+
+    #[test]
+    fn savepoint_errors_are_3b001() {
+        let table = GucTable::new(true);
+        table.at_txn_start().expect("begin");
+        let e = table.at_release("nope").expect_err("missing");
+        assert_eq!(e.sqlstate.code(), "3B001");
+        assert_eq!(e.message, "savepoint \"nope\" does not exist");
+    }
+
+    #[test]
+    #[ignore = "needs API-01"]
+    fn set_show_and_session_abort() {
+        let table = GucTable::new(true);
+        table.set("work_mem", &["4MB".to_string()], GucScope::Session).expect("set");
+        assert_eq!(table.show("work_mem").expect("show"), "4MB");
+        table.at_txn_start().expect("begin");
+        table.set("work_mem", &["9MB".to_string()], GucScope::Session).expect("set");
+        table.at_txn_end(false).expect("abort");
+        assert_eq!(table.show("work_mem").expect("show"), "4MB");
+    }
+
+    #[test]
+    #[ignore = "needs API-01"]
+    fn set_local_reverts_at_commit() {
+        let table = GucTable::new(true);
+        table.at_txn_start().expect("begin");
+        table.set("work_mem", &["8MB".to_string()], GucScope::Local).expect("set local");
+        assert_eq!(table.show("work_mem").expect("show"), "8MB");
+        table.at_txn_end(true).expect("commit");
+        assert_eq!(table.show("work_mem").expect("show"), "4MB");
+    }
+
+    #[test]
+    #[ignore = "needs API-01"]
+    fn set_then_set_local_commit_keeps_session_value() {
+        let table = GucTable::new(true);
+        table.at_txn_start().expect("begin");
+        table.set("work_mem", &["2MB".to_string()], GucScope::Session).expect("set");
+        table.set("work_mem", &["8MB".to_string()], GucScope::Local).expect("set local");
+        table.at_txn_end(true).expect("commit");
+        assert_eq!(table.show("work_mem").expect("show"), "2MB");
+    }
+
+    #[test]
+    #[ignore = "needs API-01"]
+    fn savepoint_rollback_restores_inner_change() {
+        let table = GucTable::new(true);
+        table.at_txn_start().expect("begin");
+        table.at_savepoint("s").expect("savepoint");
+        table.set("work_mem", &["2MB".to_string()], GucScope::Session).expect("set");
+        table.at_rollback_to("s").expect("rollback to");
+        assert_eq!(table.show("work_mem").expect("show"), "4MB");
+        table.at_txn_end(true).expect("commit");
+    }
+
+    #[test]
+    #[ignore = "needs API-01"]
+    fn set_errors_match_pg() {
+        let table = GucTable::new(true);
+        let e = table.set("foo", &["1".to_string()], GucScope::Session).expect_err("unknown");
+        assert_eq!(e.sqlstate.code(), "42704");
+        let e = table.set("max_connections", &["5".to_string()], GucScope::Session).expect_err("postmaster");
+        assert_eq!(e.sqlstate.code(), "55P02");
+        assert_eq!(e.message, "parameter \"max_connections\" cannot be changed without restarting the server");
+        let e = table.set("server_version", &["x".to_string()], GucScope::Session).expect_err("internal");
+        assert_eq!(e.message, "parameter \"server_version\" cannot be changed");
+    }
+
+    #[test]
+    #[ignore = "needs API-01"]
+    fn application_name_reports_cleaned_value() {
+        let table = GucTable::new(true);
+        table.set("application_name", &["x y".to_string()], GucScope::Session).expect("set");
+        assert_eq!(table.take_reported_changes(), vec![("application_name".to_string(), "x y".to_string())]);
     }
 }

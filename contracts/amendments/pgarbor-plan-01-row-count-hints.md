@@ -1,6 +1,6 @@
 # Amendment request pgarbor-plan-01: approximate table row counts for the planner
 
-Status: PROPOSED (architect, pgarbor-plan). Requirement on pgarbor (embedded API) / pgarbor-core.
+Status: DEFERRED (lead-engineer decision, 2026-10-15).
 
 ## Problem
 
@@ -20,3 +20,7 @@ cost-based choices change.
 ## Affected crates
 
 pgarbor (fills `table_rows`), pgarbor-core / pgarbor-storage (provide the counts), pgarbor-plan (consumes).
+
+## Steward decision (2026-10-15)
+
+PlanContext accepts optional caller hints; no storage counts exist and API supplies an empty map. Estimates are explicitly heuristic planner costs, never reported as measured statistics. Adding durable counts requires a later storage amendment.

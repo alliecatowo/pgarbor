@@ -64,6 +64,16 @@ impl OsFile {
 }
 
 impl FileIo for OsFile {
+    fn identity(&self) -> io::Result<(u64, u64)> {
+        #[cfg(unix)] {
+            use std::os::unix::fs::MetadataExt;
+            let m = self.file.metadata()?;
+            Ok((m.dev(), m.ino()))
+        }
+        #[cfg(not(unix))] {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "file identity unsupported on this platform"))
+        }
+    }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         #[cfg(unix)]
         {
@@ -166,6 +176,22 @@ impl Vfs for OsVfs {
     }
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         std::fs::rename(from, to)
+    }
+    fn rename_noreplace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        #[cfg(any(target_os = "linux", target_os = "android"))] {
+            use std::os::unix::ffi::OsStrExt;
+            let src = std::ffi::CString::new(from.as_os_str().as_bytes())
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
+            let dst = std::ffi::CString::new(to.as_os_str().as_bytes())
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
+            // SAFETY: both paths are valid NUL-terminated strings for the call duration.
+            let rc = unsafe { libc::renameat2(libc::AT_FDCWD, src.as_ptr(), libc::AT_FDCWD, dst.as_ptr(), libc::RENAME_NOREPLACE) };
+            if rc == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android")))] {
+            let _ = (from, to);
+            Err(io::Error::new(io::ErrorKind::Unsupported, "atomic no-replace rename unsupported on this platform"))
+        }
     }
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)

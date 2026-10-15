@@ -34,6 +34,11 @@ pub enum LockMode {
 /// - Errors are plain `io::Error`s. ENOSPC MUST be `io::Error::from_raw_os_error(28)` so that
 ///   `PgError::io` maps it to SQLSTATE 53100 (fault injectors construct it that way too).
 pub trait FileIo: Send + Sync + fmt::Debug {
+    /// Stable identity while the handle lives: (implementation/device, object/inode).
+    /// Implementations lacking identity support fail closed during recovery.
+    fn identity(&self) -> io::Result<(u64, u64)> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "file identity unsupported"))
+    }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize>;
     fn write_at(&self, offset: u64, buf: &[u8]) -> io::Result<usize>;
     fn sync_data(&self) -> io::Result<()>;

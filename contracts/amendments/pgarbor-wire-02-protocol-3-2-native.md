@@ -1,4 +1,4 @@
-Status: PROPOSED
+Status: ACCEPTED (lead-engineer decision, 2026-10-15).
 Crate: pgarbor-wire
 Affects: contracts/ARCHITECTURE.md section 12, pgarbor-wire, pgarbor (SessionOptions.cancel_key_len)
 Leases: WIR-03 (startup packet), WIR-08 (startup flow)
@@ -17,3 +17,7 @@ Wire transcript parity (WIRE-12) is measured against PG18, so PGArbor does the s
 * major != 3 -> FATAL 0A000 `unsupported frontend protocol N.M: server supports 3.0 to 3.2`.
 
 Section 12 is amended accordingly; no frozen Rust item changes.
+
+## Steward decision (2026-10-15)
+
+Accept native 3.0 and 3.2 protocol representations implemented by startup_flow/startup_packet. Protocol conformance remains unverified without live PG18 and independent client execution; no oracle results changed.

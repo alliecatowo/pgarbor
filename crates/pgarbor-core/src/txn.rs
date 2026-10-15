@@ -25,7 +25,7 @@
 //! # Key locks and LockOutcome (TXN-09)
 //! `lock_key(key, mode, policy)`:
 //! 1. Fast path: `held_keys[key]` exists with a mode at least as strong (ForUpdate > ForNoKeyUpdate
-//!    > ForShare > ForKeyShare) → `Unchanged` without touching the lock manager.
+//!    > ForShare > ForKeyShare) → skip the lock manager, but still compute step 4.
 //! 2. `locks.acquire(session, Transaction{txn, current_subxact}, Key{branch, db, key}, mode,
 //!    policy, limits)`; `NotAvailable` → `LockOutcome::NotAvailable`.
 //! 3. Record `held_keys[key] = (mode, current_subxact)`.
@@ -312,20 +312,17 @@ impl Txn {
 
     /// Lock a data-tree key (module docs).
     pub fn lock_key(&mut self, key: &[u8], mode: LockMode, policy: WaitPolicy) -> Result<LockOutcome> {
-        if let Some(h) = self.held_keys.get(key) {
-            if strength(h.mode) >= strength(mode) {
-                return Ok(LockOutcome::Unchanged);
+        let already_held = self.held_keys.get(key).is_some_and(|h| strength(h.mode) >= strength(mode));
+        if !already_held {
+            let subxact = self.current_subxact();
+            let tag = LockTag::Key { branch: self.branch, database: self.database, key: key.to_vec() };
+            let scope = LockScope::Transaction { txn: self.id, subxact };
+            let res = self.engine.locks().acquire(&self.session, scope, &tag, mode, policy, &self.limits)?;
+            if res == AcquireResult::NotAvailable {
+                return Ok(LockOutcome::NotAvailable);
             }
+            self.held_keys.insert(key.to_vec(), HeldKey { mode, subxact });
         }
-        let subxact = self.current_subxact();
-        let tag = LockTag::Key { branch: self.branch, database: self.database, key: key.to_vec() };
-        let scope = LockScope::Transaction { txn: self.id, subxact };
-        let res = self.engine.locks().acquire(&self.session, scope, &tag, mode, policy, &self.limits)?;
-        if res == AcquireResult::NotAvailable {
-            return Ok(LockOutcome::NotAvailable);
-        }
-        // The cache keeps the strongest mode; only reached when the request is stronger anyway.
-        self.held_keys.insert(key.to_vec(), HeldKey { mode, subxact });
         if self.snapshot.is_none() {
             return Ok(LockOutcome::Unchanged);
         }

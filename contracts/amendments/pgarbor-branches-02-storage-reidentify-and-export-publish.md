@@ -1,7 +1,6 @@
 # Amendment request pgarbor-branches-02: storage re-identify + export publish hook
 
-Status: PROPOSED (architect, pgarbor-branches). The skeleton currently works around both problems
-inside pgarbor-branches.
+Status: ACCEPTED IN PART (2026-10-15, lead engineer delegation to Codex storage safety owner).
 
 ## Problem
 
@@ -30,3 +29,15 @@ inside pgarbor-branches.
 
 pgarbor-storage (new API). pgarbor-branches: BR-11 switches to the storage API, and BR-10 can drop
 the extra rename. No on-disk format change.
+
+## Steward decision (2026-10-15)
+
+Accept storage-owned reidentify: implemented as the proposed recovery::reidentify function,
+returning Superblock. The branch reidentify_file function remains a compatibility wrapper.
+It additionally revalidates pathname identity after locking before changing slots.
+
+Reject the proposed public finish_in_place/callback publication alternatives for now. Keep the
+intermediate file, which permits verification through the existing Container API. branches-03
+adds a stable destination guard across construction, verification and publication, and keeps
+the verified file locked until publication completes. This closes the actual race without a
+callback or leaked temporary-handle lifecycle API. No on-disk format change.

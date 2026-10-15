@@ -85,7 +85,9 @@ pub trait KvWrite: KvRead {
 **Keyspace of one branch tree.** Every key starts with a 4-byte big-endian *space id*:
 - `0x0000_0001` catalog (owned by pgarbor-catalog, layout in catalog contract)
 - `0x0000_0002` sequences state (owned by pgarbor-core::sequence)
-- `0x0000_0003` branch-local metadata (next OID counters, etc.)
+- `0x0000_0003` branch-local metadata. The catalog owns only `[space id] + b"cat:"`
+  (version/bootstrap and standalone-tool OID counters; catalog amendments 01/02). Engine OID and
+  row-ID counters are in-memory, seeded from committed maxima (core amendment 01).
 - `oid >= 16384`: relation data. Table rows: `[relid][rowid: u64 BE]` → encoded tuple.
   Index entries: `[index relid][memcomparable key][rowid u64 BE if non-unique]` → rowid u64 BE.
 - System catalog relation OIDs < 16384 never hold row data (pg_catalog views are virtual).
@@ -138,10 +140,13 @@ db_path_hint, created_unix_ms, crc32c}`; resolution validates db_uuid, errors lo
   that PG would abort. This is a KNOWN INCOMPATIBILITY recorded in `docs/compatibility/KNOWN_GAPS.md`
   and the inventory (`serializable_ssi = UNIMPLEMENTED`), never reported as PASS.
 - **Row/key locks** (`LockManager`): every write (`put`/`delete` on relation data or unique index keys,
-  catalog rows) first takes an exclusive key lock (branch_id, key). Conflict → wait on the holder;
+  catalog rows) first takes an exclusive key lock (branch_id, key). Fresh allocated table-row
+  keys may use `put_fresh` without a key lock; unique keys and UPDATE/DELETE still lock (core-01).
+  Conflict → wait on the holder;
   wait-for graph cycle → `40P01 deadlock_detected` for the requester; `lock_timeout` GUC (ms, 0 = ∞)
   → `55P03`. After acquiring, `Txn` compares latest committed value vs snapshot value:
-  `LockOutcome::{Unchanged, Changed(Option<Vec<u8>>)}`. RC callers re-evaluate; RR callers raise
+  `LockOutcome::{Unchanged, Changed(Option<Vec<u8>>)}` on every grant or reuse; held-key caches
+  skip only manager acquisition (core-03). RC callers re-evaluate; RR callers raise
   `40001` ("could not serialize access due to concurrent update").
 - Commit: take the container write mutex (short), re-read branch head, apply overlay to the head tree
   (keys are locked, so no lost updates), write new `BranchRecord.data_root`, container commit,
@@ -161,19 +166,29 @@ db_path_hint, created_unix_ms, crc32c}`; resolution validates db_uuid, errors lo
 ("char"), `Record(Vec<Datum>)`.
 Text I/O: `type_input(TypeId, &str) -> Result<Datum>` / `type_output(TypeId, &Datum) -> Result<String>`
 byte-exact with PG18 under the pinned GUCs. Binary: `type_send`/`type_recv` per PG `*send/*recv`.
+JSON input is limited to 128 open containers (types-05); excess nesting returns 54001 before
+constructing trees unsafe for recursive consumers.
 Tuple storage encoding (`tuple::encode_row/decode_row`) is engine-internal, versioned (leading u8).
 Memcomparable encoding (`keycodec::encode_key`) preserves PG ordering for the default collation,
 NULLS LAST ascending; used for index keys.
 
 ## 9. Catalog — ARCH-08, CAT-*
 
-Catalog rows are stored under space 1: `[0,0,0,1][kind u8][oid u32 BE]` → serialized object
-(serde_json bytes, versioned). Kinds: namespace, class (table/index/view/sequence), type (enum/domain/
-composite), constraint, attrdef, database, role, description. `CatalogSnapshot::load(&dyn KvRead)`
-builds an immutable in-memory view; `CatalogTxn` writes through `&mut dyn KvWrite`.
-Built-in objects (pg_catalog namespace 11, public 2200, information_schema, built-in types/procs,
-role `postgres` oid 10, database oid 5 `postgres`) are compiled-in constants with PG18's OIDs.
-pg_catalog / information_schema relations are **virtual**: generated rows from `CatalogSnapshot`.
+Catalog rows use space 1 (`00 00 00 01`), accepted catalog amendment 05:
+- Objects: `[space][kind u8][oid u32 BE]`; kinds `n` namespace, `r` relation,
+  `i` index, `S` sequence, `t` enum/domain, `c` constraint, `f` function, `a` role,
+  `m` role membership and `d` database.
+- Descriptions: `[space][b'D'][classoid u32 BE][objoid u32 BE][objsubid u32 BE ^ 0x80000000]`.
+- Values: `[0x01]` followed by model JSON. Unknown versions fail closed. Column defaults
+  (including attrdef OIDs) are embedded in relations; composite rowtypes are derived.
+`CatalogSnapshot::load(&dyn KvRead)` builds an immutable view and validates the domain/array
+metadata graph (catalog-06). `CatalogTxn` writes through `CatalogStore: KvWrite + OidSource`.
+The engine supplies core's non-transactional OID allocator seeded by `persist::oid_seed`;
+standalone tools may use the catalog's `cat:next_oid` counter (catalog-02).
+Builtin objects use compiled-in PostgreSQL 18 OIDs. `pg_catalog` and `information_schema`
+relations are virtual. CAT-39 statistics scans return leased 0A000 until genuine counter
+collection exists (catalog-07). Other incomplete builtin metadata remains a documented gap,
+not a guarantee that every virtual catalog column has PostgreSQL fidelity.
 
 ## 10. SQL → plan → exec — ARCH-05
 

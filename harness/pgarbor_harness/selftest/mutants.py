@@ -62,6 +62,7 @@ ObservationMutant = Callable[..., Optional[Transcript]]
 #: name -> expected outcome when applied (CONTRACT for selftest.run).
 EXPECTED_OUTCOME: dict[str, Outcome] = {
     "change_value": Outcome.MISMATCH,
+    "change_oid_value": Outcome.MISMATCH,
     "null_to_empty": Outcome.MISMATCH,
     "empty_to_null": Outcome.MISMATCH,
     "change_type_oid": Outcome.MISMATCH,
@@ -129,6 +130,19 @@ def _change_value(t: Transcript, case: Optional[Case] = None) -> Optional[Transc
                     if isinstance(v, str):
                         row[c] = v + "x"
                         return m
+    return None
+
+
+def _change_oid_value(t: Transcript, case: Optional[Case] = None) -> Optional[Transcript]:
+    m = copy.deepcopy(t)
+    for step in _all_steps(m):
+        for result in step.results:
+            for i, col in enumerate(result.columns):
+                if col.type_oid == 26:
+                    for row in result.rows:
+                        if i < len(row) and isinstance(row[i], str) and row[i].isdigit():
+                            row[i] = str(int(row[i]) + 10000)
+                            return m
     return None
 
 
@@ -338,6 +352,7 @@ def _corrupt(t: Transcript, case: Optional[Case] = None) -> Optional[Transcript]
 
 _OBSERVATION: dict[str, ObservationMutant] = {
     "change_value": _change_value,
+    "change_oid_value": _change_oid_value,
     "null_to_empty": _null_to_empty,
     "empty_to_null": _empty_to_null,
     "change_type_oid": _change_type_oid,

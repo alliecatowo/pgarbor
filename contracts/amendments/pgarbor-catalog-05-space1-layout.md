@@ -1,6 +1,6 @@
 # Amendment request pgarbor-catalog-05: catalog space-1 key layout (refines ARCHITECTURE §9)
 
-Status: PROPOSED (architect, pgarbor-catalog). Implemented in `persist::keys` / `persist::codec` (frozen on-disk v1).
+Status: ACCEPTED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -31,3 +31,8 @@ Values are `[0x01]` + `serde_json` (versioned, fail-closed on unknown version by
 ## Affected crates
 
 ARCHITECTURE §9 wording only (no other crate reads space 1).
+
+
+## Steward decision (2026-10-15)
+
+Accept the implemented version-1 byte layouts in persist/keys.rs and persist/codec.rs, including 17-byte description keys and embedded attrdef/rowtype OIDs. Architecture §9 now describes those bytes; no stored data migration is introduced.

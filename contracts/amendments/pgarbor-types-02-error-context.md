@@ -1,6 +1,6 @@
 # Amendment request pgarbor-types-02: `PgError.context` field (CONTEXT error field)
 
-Status: PROPOSED (architect, pgarbor-types). The v1 skeleton omits CONTEXT.
+Status: DEFERRED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -21,3 +21,8 @@ The wire layer sends it as field `W`, and the oracle comparator ignores it unles
 pgarbor-common (struct field + builder), pgarbor-wire (emit `W`), pgarbor-types (json::parse errors),
 pgarbor-exec (COPY, function-call contexts). Adding a field breaks every struct-literal construction of
 `PgError`. All current code uses `PgError::new`, so the change is source-compatible in practice.
+
+
+## Steward decision (2026-10-15)
+
+Defer until common error storage, JSON/COPY/function producers, API transport and wire W propagation are implemented together with regression tests. PgError currently has no CONTEXT field. The comparator remains strict whenever its existing message/context policy requests comparison; the proposal to ignore context by default is not accepted. No oracle/comparator weakening is authorized.

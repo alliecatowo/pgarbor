@@ -1,6 +1,6 @@
 # Amendment request pgarbor-sql-02: operator class lookup by name
 
-Status: PROPOSED (architect, pgarbor-sql). Requirement on pgarbor-catalog (`resolve.rs` / `env.rs`).
+Status: DEFERRED (lead-engineer decision, 2026-10-15).
 
 ## Problem
 
@@ -24,3 +24,7 @@ Errors for the binder to raise: 42704 `operator class "x" does not exist for acc
 ## Affected crates
 
 pgarbor-catalog, pgarbor-sql (`ddl_index.rs`).
+
+## Steward decision (2026-10-15)
+
+The assembled binder resolves compiled-in btree opclasses directly in ddl_index.rs. A new catalog public API is unnecessary for this slice and is not promised. Custom/non-btree lookup remains unsupported.

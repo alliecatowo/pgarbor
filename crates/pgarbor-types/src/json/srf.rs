@@ -89,8 +89,8 @@ enum Src {
     Jsonb,
 }
 
-/// Maximum nesting depth (matches the JSON parser contract).
-const MAX_DEPTH: u32 = 6400;
+/// Maximum nesting depth (matches the parser safety amendment).
+const MAX_DEPTH: u32 = 128;
 
 /// A parsed JSON value that remembers the raw text of containers and numbers.
 #[derive(Debug)]

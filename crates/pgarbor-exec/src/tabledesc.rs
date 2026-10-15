@@ -23,13 +23,21 @@
 //! (`error::relation_vanished`).
 use std::rc::Rc;
 
-use pgarbor_catalog::model::{FkAction, FkMatch, GeneratedKind, IdentityKind, RelKind};
-use pgarbor_common::{Oid, PgError, Result};
-use pgarbor_sql::ir::BoundExpr;
+use pgarbor_catalog::model::{
+    Column, Constraint, ConstraintKind, FkAction, FkMatch, GeneratedKind, IdentityKind, Index, IndexKey, IndexMethod,
+    RelKind,
+};
+use pgarbor_catalog::CatalogSnapshot;
+use pgarbor_common::{Oid, PgError, Result, SqlState};
+use pgarbor_sql::binder::context::{BindContext, BindSession, Binder, ExprCtx};
+use pgarbor_sql::binder::stored::bind_stored_expr;
+use pgarbor_sql::ir::{BoundExpr, ExprKind};
+use pgarbor_sql::source::SourceMap;
 use pgarbor_types::keycodec::KeyColumn;
 use pgarbor_types::{Datum, TypeId};
 
 use crate::context::{ExecContext, SessionEnv};
+use crate::error::relation_vanished;
 
 /// One attribute slot of a table.
 // CONTRACT
@@ -209,16 +217,190 @@ impl TableDesc {
 }
 
 /// Cached description of table `oid` (module docs, "Building").
-#[allow(unused_variables)]
 pub fn table_desc(cx: &ExecContext, oid: Oid) -> Result<Rc<TableDesc>> {
-    Err(PgError::unimplemented("EXE-01", "table description (tabledesc::table_desc)"))
+    let cached = cx.stmt.tables.borrow().get(&oid).cloned();
+    if let Some(hit) = cached {
+        return Ok(hit);
+    }
+    let desc = Rc::new(build_table_desc(&cx.se, oid)?);
+    cx.stmt.tables.borrow_mut().insert(oid, Rc::clone(&desc));
+    Ok(desc)
 }
 
 /// Same as [`table_desc`] but from a snapshot taken from `se.env` without a cache (used while the
 /// `ExecContext` is mutably borrowed elsewhere, and by DDL follow-ups right after a catalog change).
-#[allow(unused_variables)]
 pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
-    Err(PgError::unimplemented("EXE-01", "table description build (tabledesc::build_table_desc)"))
+    let snap = se.env.snapshot();
+    let rel = snap.relation(oid).ok_or_else(|| relation_vanished(oid))?;
+    // Row storage is what DML and table-shaped DDL need; views, indexes, sequences, ... have none.
+    if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
+        return Err(relation_vanished(oid));
+    }
+    let schema = namespace_name(snap, rel.namespace)?;
+    let cols = rel.columns.iter().map(|c| col_desc(se, c)).collect::<Result<Vec<ColDesc>>>()?;
+    let indexes = index_descs(se, snap, oid)?;
+    let checks = check_descs(se, snap, oid)?;
+    let fks_out = snap
+        .constraints_of(oid)
+        .into_iter()
+        .filter(|c| c.kind == ConstraintKind::ForeignKey && c.enforced)
+        .map(|c| fk_desc(snap, c))
+        .collect::<Result<Vec<FkDesc>>>()?;
+    let fks_in = snap
+        .foreign_keys_referencing(oid)
+        .into_iter()
+        .filter(|c| c.kind == ConstraintKind::ForeignKey && c.enforced)
+        .map(|c| fk_desc(snap, c))
+        .collect::<Result<Vec<FkDesc>>>()?;
+    Ok(TableDesc {
+        oid,
+        schema,
+        name: rel.name.clone(),
+        kind: rel.kind,
+        cols,
+        indexes,
+        checks,
+        fks_out,
+        fks_in,
+    })
+}
+
+/// Schema name of a namespace OID (a missing namespace is catalog corruption: XX000).
+fn namespace_name(snap: &CatalogSnapshot, oid: Oid) -> Result<String> {
+    snap.namespace(oid)
+        .map(|n| n.name.clone())
+        .ok_or_else(|| PgError::internal(format!("cache lookup failed for namespace {oid}")))
+}
+
+/// (schema, relation name) of a relation OID.
+fn qualified_rel_name(snap: &CatalogSnapshot, oid: Oid) -> Result<(String, String)> {
+    let rel = snap.relation(oid).ok_or_else(|| relation_vanished(oid))?;
+    Ok((namespace_name(snap, rel.namespace)?, rel.name.clone()))
+}
+
+/// One attribute slot. `missing` is parsed from the stored text with the column type's input function.
+fn col_desc(se: &SessionEnv, c: &Column) -> Result<ColDesc> {
+    let missing = match (&c.missing_value, c.dropped) {
+        (Some(text), false) => Some(pgarbor_types::io::input(&se.io_ctx(), c.type_id, text)?),
+        _ => None,
+    };
+    Ok(ColDesc {
+        attnum: c.attnum,
+        name: c.name.clone(),
+        ty: c.type_id,
+        not_null: c.not_null,
+        dropped: c.dropped,
+        generated: c.generated,
+        identity: c.identity.map(|i| i.kind),
+        missing,
+    })
+}
+
+/// Valid btree indexes of `table`: primary key first, then other unique, then the rest; ties by OID
+/// (`constraints_of`/`indexes_of` are OID-sorted, and the sort below is stable).
+fn index_descs(se: &SessionEnv, snap: &CatalogSnapshot, table: Oid) -> Result<Vec<IndexDesc>> {
+    let mut indexes: Vec<&Index> = snap
+        .indexes_of(table)
+        .into_iter()
+        .filter(|i| i.method == IndexMethod::Btree && i.valid)
+        .collect();
+    indexes.sort_by_key(|i| (index_group(i), i.oid));
+    indexes.into_iter().map(|i| index_desc(se, snap, table, i)).collect()
+}
+
+fn index_group(i: &Index) -> u8 {
+    if i.primary {
+        0
+    } else if i.unique {
+        1
+    } else {
+        2
+    }
+}
+
+fn index_desc(se: &SessionEnv, snap: &CatalogSnapshot, table: Oid, i: &Index) -> Result<IndexDesc> {
+    let mut keys = Vec::with_capacity(i.key_columns().len());
+    let mut key_cols = Vec::with_capacity(i.key_columns().len());
+    for k in i.key_columns() {
+        keys.push(index_key_desc(se, table, k)?);
+        key_cols.push(KeyColumn { ty: k.type_id, desc: k.descending, nulls_first: k.nulls_first });
+    }
+    let predicate = i.predicate.as_ref().map(|p| bound_row_expr(se, &p.sql, table)).transpose()?;
+    let constraint = i.constraint.and_then(|co| snap.constraint(co).map(|c| (co, c.name.clone())));
+    Ok(IndexDesc {
+        oid: i.oid,
+        name: i.name.clone(),
+        unique: i.unique,
+        primary: i.primary,
+        nulls_not_distinct: i.nulls_not_distinct,
+        keys,
+        key_cols,
+        predicate,
+        constraint,
+    })
+}
+
+fn index_key_desc(se: &SessionEnv, table: Oid, k: &IndexKey) -> Result<IdxKeyDesc> {
+    let (expr, label) = match &k.expr {
+        Some(stored) => (Some(bound_row_expr(se, &stored.sql, table)?), stored.sql.clone()),
+        None => (None, k.name.clone()),
+    };
+    Ok(IdxKeyDesc { column: k.column, expr, ty: k.type_id, descending: k.descending, nulls_first: k.nulls_first, label })
+}
+
+/// Enforced CHECK constraints of `table`, bound over the full row (`NOT NULL` is a column flag).
+fn check_descs(se: &SessionEnv, snap: &CatalogSnapshot, table: Oid) -> Result<Vec<CheckDesc>> {
+    let mut out = Vec::new();
+    for c in snap.constraints_of(table) {
+        if c.kind != ConstraintKind::Check || !c.enforced {
+            continue;
+        }
+        let stored = c
+            .check
+            .as_ref()
+            .ok_or_else(|| PgError::internal(format!("cache lookup failed for constraint {}", c.oid)))?;
+        out.push(CheckDesc {
+            oid: c.oid,
+            name: c.name.clone(),
+            expr: bound_row_expr(se, &stored.sql, table)?,
+            validated: c.validated,
+        });
+    }
+    Ok(out)
+}
+
+fn fk_desc(snap: &CatalogSnapshot, c: &Constraint) -> Result<FkDesc> {
+    let fk = c
+        .fk
+        .as_ref()
+        .ok_or_else(|| PgError::internal(format!("cache lookup failed for constraint {}", c.oid)))?;
+    let (fk_schema, fk_table_name) = qualified_rel_name(snap, c.table)?;
+    let (ref_schema, ref_table_name) = qualified_rel_name(snap, fk.ref_table)?;
+    Ok(FkDesc {
+        oid: c.oid,
+        name: c.name.clone(),
+        fk_table: c.table,
+        fk_schema,
+        fk_table_name,
+        cols: c.columns.clone(),
+        ref_table: fk.ref_table,
+        ref_schema,
+        ref_table_name,
+        ref_cols: fk.ref_columns.clone(),
+        ref_index: fk.ref_index,
+        on_update: fk.on_update,
+        on_delete: fk.on_delete,
+        match_type: fk.match_type,
+        deferrable: c.deferrable,
+        initially_deferred: c.initially_deferred,
+        validated: c.validated,
+        delete_set_columns: fk.delete_set_columns.clone(),
+    })
+}
+
+/// Bind stored text and rewrite its column references to table-row inputs.
+fn bound_row_expr(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr> {
+    columns_to_input_refs(bind_stored_text(se, sql, rel_oid)?)
 }
 
 /// Parse and bind catalog expression TEXT (`StoredExpr::sql`) in the scope of relation `rel_oid`:
@@ -228,16 +410,261 @@ pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
 /// appropriate). Columns bind to `Column{levels_up:0, rt_index:1, attnum}`; apply
 /// [`columns_to_input_refs`] to make the result executable over a table row. Bind failure of stored
 /// text is an internal error XX000 `could not bind stored expression`.
-#[allow(unused_variables)]
 pub fn bind_stored_text(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr> {
-    Err(PgError::unimplemented("EXE-01", "stored expression binding (tabledesc::bind_stored_text)"))
+    let ctx = BindContext {
+        env: &se.env,
+        session: BindSession { database: se.services.database_name() },
+        io_config: se.io.clone(),
+        statement_timestamp: se.txn_ts,
+        declared_params: Vec::new(),
+    };
+    let src = SourceMap::new(sql);
+    let mut binder = Binder::new(&ctx, &src);
+    match bind_stored_expr(&mut binder, sql, rel_oid, ExprCtx::check()) {
+        Ok(expr) => Ok(expr),
+        // Unimplemented features of a stored expression keep their 0A000 so they are not masked.
+        Err(e) if e.sqlstate == SqlState::FEATURE_NOT_SUPPORTED => Err(e),
+        Err(_) => Err(PgError::internal("could not bind stored expression")),
+    }
 }
 
 /// Rewrite bind-time `Column{levels_up: 0, rt_index: 1, attnum}` into `InputRef(attnum - 1)` (uses
 /// `BoundExpr::transform` from `pgarbor_sql::ir::expr_walk`). Other column references (outer
 /// levels, rt_index != 1, whole-row, system columns) are an error XX000 (they cannot occur in
 /// stored table expressions). Sub-links are not allowed in stored expressions either.
-#[allow(unused_variables)]
 pub fn columns_to_input_refs(expr: BoundExpr) -> Result<BoundExpr> {
-    Err(PgError::unimplemented("EXE-01", "column to input-ref rewrite (tabledesc::columns_to_input_refs)"))
+    expr.transform(&mut |node: BoundExpr| -> Result<BoundExpr> {
+        let BoundExpr { kind, ty } = node;
+        match kind {
+            ExprKind::Column(c) => {
+                if c.levels_up == 0 && c.rt_index == 1 && c.attnum >= 1 {
+                    Ok(BoundExpr::input_ref((c.attnum - 1) as u32, ty))
+                } else {
+                    Err(PgError::internal("could not bind stored expression: unexpected column reference"))
+                }
+            }
+            ExprKind::OuterRef(_) | ExprKind::SubLink(_) | ExprKind::SubPlan(_) => {
+                Err(PgError::internal("could not bind stored expression: unexpected sub-query or outer reference"))
+            }
+            other => Ok(BoundExpr { kind: other, ty }),
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use pgarbor_catalog::ddl::spec::{ColumnSpec, ConstraintSpec, ConstraintSpecKind, CreateTableSpec};
+    use pgarbor_catalog::model::{DropBehavior, Persistence, StoredExpr};
+    use pgarbor_catalog::{testing, CatalogEnv};
+    use pgarbor_common::MemKv;
+    use pgarbor_types::context::IoConfig;
+
+    use super::*;
+    use crate::context::{NoGuc, NoServices};
+    use crate::memtxn::MemTxn;
+
+    /// CREATE TABLE `name` in the creation schema of `env`; returns its OID and the next env.
+    fn make_table(
+        kv: &mut MemKv,
+        env: &CatalogEnv,
+        name: &str,
+        columns: Vec<ColumnSpec>,
+        constraints: Vec<ConstraintSpec>,
+    ) -> Result<(Oid, CatalogEnv)> {
+        let spec = CreateTableSpec {
+            namespace: env.creation_namespace()?,
+            name: name.to_string(),
+            owner: env.current_user(),
+            kind: RelKind::Table,
+            persistence: Persistence::Permanent,
+            columns,
+            constraints,
+            options: Vec::new(),
+            if_not_exists: false,
+            inherits: Vec::new(),
+        };
+        let mut oid = 0;
+        let (_, next) = testing::run(kv, env, |t| {
+            oid = t.create_table(&spec)?.map(|c| c.table).unwrap_or(0);
+            Ok(())
+        })?;
+        Ok((oid, next))
+    }
+
+    fn session<'a>(env: CatalogEnv, guc: &'a NoGuc, services: &'a NoServices, rng: &'a Cell<u64>) -> SessionEnv<'a> {
+        SessionEnv::new(env, IoConfig::default(), guc, services, rng, 0, 0)
+    }
+
+    fn pk(columns: &[&str]) -> ConstraintSpec {
+        ConstraintSpec::new(ConstraintSpecKind::PrimaryKey {
+            columns: columns.iter().map(|s| s.to_string()).collect(),
+            include: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn describes_keys_and_foreign_keys() -> Result<()> {
+        let (mut kv, env) = testing::bootstrapped()?;
+        let (parent, env) = make_table(&mut kv, &env, "p", vec![ColumnSpec::new("id", TypeId::INT4)], vec![pk(&["id"])])?;
+        let fk = ConstraintSpec::new(ConstraintSpecKind::ForeignKey {
+            columns: vec!["pid".into()],
+            ref_table: parent,
+            ref_columns: Vec::new(),
+            on_update: FkAction::NoAction,
+            on_delete: FkAction::NoAction,
+            match_type: FkMatch::Simple,
+            delete_set_columns: Vec::new(),
+        });
+        let (child, env) = make_table(
+            &mut kv,
+            &env,
+            "c",
+            vec![
+                ColumnSpec::new("a", TypeId::INT4),
+                ColumnSpec::new("b", TypeId::TEXT),
+                ColumnSpec::new("pid", TypeId::INT4),
+            ],
+            vec![pk(&["a"]), fk],
+        )?;
+        let (guc, services, rng) = (NoGuc, NoServices, Cell::new(1u64));
+        let se = session(env, &guc, &services, &rng);
+
+        let td = build_table_desc(&se, child)?;
+        assert_eq!(td.schema, "public");
+        assert_eq!(td.name, "c");
+        assert_eq!(td.ncols(), 3);
+        assert_eq!(td.indexes.len(), 1);
+        let pk_idx = td.primary_index().expect("primary key index");
+        assert!(pk_idx.primary && pk_idx.unique);
+        assert_eq!(pk_idx.keys[0].column, Some(1));
+        assert_eq!(pk_idx.key_cols.len(), 1);
+        assert!(pk_idx.constraint.is_some());
+        assert_eq!(td.fks_out.len(), 1);
+        let fk_out = &td.fks_out[0];
+        assert_eq!((fk_out.fk_table_name.as_str(), fk_out.ref_table_name.as_str()), ("c", "p"));
+        assert_eq!(fk_out.cols, vec![3]);
+        assert_eq!(fk_out.ref_cols, vec![1]);
+        assert_eq!(fk_out.ref_table, parent);
+        assert!(td.fks_in.is_empty());
+
+        let pd = build_table_desc(&se, parent)?;
+        assert_eq!(pd.fks_in.len(), 1);
+        assert_eq!(pd.fks_in[0].name, fk_out.name);
+        assert_eq!(pd.fks_in[0].fk_table_name, "c");
+        assert!(pd.fks_out.is_empty());
+        assert!(pd.checks.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn primary_index_is_listed_before_other_unique_indexes() -> Result<()> {
+        let (mut kv, env) = testing::bootstrapped()?;
+        let unique = ConstraintSpec::new(ConstraintSpecKind::Unique {
+            columns: vec!["b".into()],
+            include: Vec::new(),
+            nulls_not_distinct: false,
+        });
+        let (t, env) = make_table(
+            &mut kv,
+            &env,
+            "t",
+            vec![ColumnSpec::new("a", TypeId::INT4), ColumnSpec::new("b", TypeId::TEXT)],
+            vec![unique, pk(&["a"])],
+        )?;
+        let (guc, services, rng) = (NoGuc, NoServices, Cell::new(1u64));
+        let se = session(env, &guc, &services, &rng);
+        let td = build_table_desc(&se, t)?;
+        assert_eq!(td.indexes.len(), 2);
+        assert!(td.indexes[0].primary);
+        assert!(td.indexes[1].unique && !td.indexes[1].primary);
+        assert_eq!(td.indexes[1].keys[0].column, Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_values_and_dropped_slots() -> Result<()> {
+        let (mut kv, env) = testing::bootstrapped()?;
+        let (t, env) = make_table(
+            &mut kv,
+            &env,
+            "t",
+            vec![ColumnSpec::new("a", TypeId::INT4), ColumnSpec::new("gone", TypeId::TEXT)],
+            Vec::new(),
+        )?;
+        let mut added = ColumnSpec::new("b", TypeId::INT4);
+        added.default = Some(StoredExpr::new("5"));
+        added.fast_default = Some("5".into());
+        let (_, env) = testing::run(&mut kv, &env, |x| x.add_column(t, &added, false).map(|_| ()))?;
+        let (_, env) = testing::run(&mut kv, &env, |x| x.drop_column(t, "gone", DropBehavior::Restrict, false).map(|_| ()))?;
+        let (guc, services, rng) = (NoGuc, NoServices, Cell::new(1u64));
+        let se = session(env, &guc, &services, &rng);
+
+        let td = build_table_desc(&se, t)?;
+        assert_eq!(td.ncols(), 3);
+        assert!(td.cols[1].dropped);
+        assert!(td.cols[0].missing.is_none());
+        assert_eq!(td.cols[2].missing, Some(Datum::Int4(5)));
+        // A stored row written before ADD COLUMN has one value: the dropped slot is NULL, `b` = 5.
+        assert_eq!(td.complete_row(vec![Datum::Int4(1)]), vec![Datum::Int4(1), Datum::Null, Datum::Int4(5)]);
+        assert_eq!(td.complete_row(vec![Datum::Int4(1), Datum::Text("x".into()), Datum::Int4(9), Datum::Null]).len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn table_desc_is_cached_per_statement() -> Result<()> {
+        let (mut kv, env) = testing::bootstrapped()?;
+        let (t, env) = make_table(&mut kv, &env, "t", vec![ColumnSpec::new("a", TypeId::INT4)], Vec::new())?;
+        let (guc, services, rng) = (NoGuc, NoServices, Cell::new(1u64));
+        let se = session(env, &guc, &services, &rng);
+        let mut txn = MemTxn::new();
+        let cx = ExecContext::new(&mut txn, se);
+        let first = table_desc(&cx, t)?;
+        let second = table_desc(&cx, t)?;
+        assert!(Rc::ptr_eq(&first, &second));
+        assert_eq!(first.name, "t");
+        assert!(table_desc(&cx, t + 100_000).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn columns_become_input_refs() -> Result<()> {
+        let e = columns_to_input_refs(BoundExpr::column(0, 1, 2, TypeId::INT4))?;
+        assert!(matches!(e.kind, ExprKind::InputRef(1)));
+        assert!(columns_to_input_refs(BoundExpr::column(1, 1, 1, TypeId::INT4)).is_err());
+        assert!(columns_to_input_refs(BoundExpr::column(0, 2, 1, TypeId::INT4)).is_err());
+        assert!(columns_to_input_refs(BoundExpr::column(0, 1, 0, TypeId::INT4)).is_err());
+        Ok(())
+    }
+
+    // Needs SQL-29 (stored expression binding). Evaluating the CHECK over a row is left to EXE-31 tests.
+    #[test]
+    #[ignore = "needs SQL-29"]
+    fn check_constraint_binds_over_row() -> Result<()> {
+        let (mut kv, env) = testing::bootstrapped()?;
+        let check = ConstraintSpec::new(ConstraintSpecKind::Check {
+            expr: StoredExpr::new("(a > 0)"),
+            columns: vec!["a".into()],
+            no_inherit: false,
+        });
+        let (t, env) = make_table(
+            &mut kv,
+            &env,
+            "t",
+            vec![ColumnSpec::new("a", TypeId::INT4), ColumnSpec::new("b", TypeId::TEXT)],
+            vec![pk(&["a"]), check],
+        )?;
+        let (guc, services, rng) = (NoGuc, NoServices, Cell::new(1u64));
+        let se = session(env, &guc, &services, &rng);
+        let td = build_table_desc(&se, t)?;
+        assert_eq!(td.ncols(), 2);
+        assert_eq!(td.primary_index().and_then(|i| i.keys[0].column), Some(1));
+        assert_eq!(td.checks.len(), 1);
+        assert!(td.checks[0].validated);
+        assert!(td.checks[0].expr.any(&mut |e: &BoundExpr| matches!(e.kind, ExprKind::InputRef(0))));
+        assert!(!td.checks[0].expr.any(&mut |e: &BoundExpr| matches!(e.kind, ExprKind::Column(_))));
+        Ok(())
+    }
 }

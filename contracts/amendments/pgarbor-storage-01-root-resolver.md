@@ -1,6 +1,6 @@
 # Amendment request pgarbor-storage-01: `RootResolver` for roots embedded in directory values
 
-Status: PROPOSED (architect, pgarbor-storage). Implemented in the v1 skeleton as `pgarbor_storage::roots`.
+Status: ACCEPTED (2026-10-15, lead engineer delegation to Codex storage safety owner). Previously proposed (architect, pgarbor-storage). Implemented in the v1 skeleton as `pgarbor_storage::roots`.
 
 ## Problem
 
@@ -51,3 +51,9 @@ Storage ships `NoNestedRoots` and `PrefixU64Roots` (test convention: value = 8-b
 - An empty tree is `PageId::NONE`; trees never contain empty leaves.
 - Reader pins (STORE-13) are process-local and not needed for safety in format v1 (append-only; old snapshots
   keep the old file generation's `Arc<Pager>` across compaction).
+
+## Steward decision (2026-10-15)
+
+Accepted: the implemented interface/layout is required for the existing dependency direction and
+safe storage/branch behavior. The owning crate contract records the adopted details. Storage
+publication/identity semantics are refined by storage-03 and branches-03 safety amendments.

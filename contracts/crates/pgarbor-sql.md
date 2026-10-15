@@ -167,3 +167,7 @@ type of parameter $1` 42P18, `INSERT has more expressions than target columns` 4
 Frozen and implemented (not leased): `source.rs`, `names.rs`, `diag.rs`, `classify.rs`, `extra_stmt.rs`,
 `ir/{expr,expr_walk,query,stmt}.rs`, `binder/context.rs`, the data types in `binder/{scope,cte,params,select,
 values,ddl_constraint,expr_func,target_table}.rs` (marked `// CONTRACT`), `deparse/mod.rs`.
+
+## Assembly decisions (2026-10-15)
+
+Steward decisions: amendment sql-01 accepted (pinned parser + explicit gaps); sql-02 catalog API deferred, builtin btree lookup stays in binder/ddl_index.rs.

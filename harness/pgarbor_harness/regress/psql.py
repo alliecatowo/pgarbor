@@ -130,6 +130,7 @@ def run_psql(test: str, sql_file: Path, host: str, port: int, db: str, regress_d
     results_dir = out_dir.resolve() / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     out_file = results_dir / f"{test}.out"
+    out_file.unlink(missing_ok=True)  # A previous launch must never supply this run's evidence.
     argv = psql_argv(test, host, port, db, regress_dir, out_dir)
     stdin = sql_file.read_bytes()
     run = runner if runner is not None else _default_runner

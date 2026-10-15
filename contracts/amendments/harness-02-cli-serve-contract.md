@@ -1,4 +1,4 @@
-Status: PROPOSED
+Status: ACCEPTED (2026-10-15, lead-engineer assembly review)
 Crate: harness
 Affects: pgarbor-cli
 Leases: HAR-11 (PgarborTarget), FAC-09 (campaign); pgarbor-cli leases
@@ -45,3 +45,7 @@ request is filed instead of guessing silently. The defaults are encoded in
 ## Affected crates
 pgarbor-cli (argv, signals, exit codes), pgarbor-wire (options/ParameterStatus),
 pgarbor (isolation helper function, optional).
+
+## Steward decision
+
+Accepted. The frozen CLI contract adopts create/serve argv, readiness line and signal semantics. PgarborCommand already matches that grammar and checks TCP plus SELECT 1. Real implementation coverage requires the independent opt-in lifecycle gate in harness/tests/test_real_pgarbor_target.py; adapter wiring alone proves no SQL compatibility.

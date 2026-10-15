@@ -6,7 +6,7 @@
 //! 2. `st = inner.current()`; `src = Snapshot::new(st.pager.clone(), st.sb, None)`.
 //! 3. `ExportBuilder::create_internal(vfs, path, sibling_path(path, COMPACT_TEMP_SUFFIX), opts)`
 //!    with page_size, db_uuid, created_unix_ms of `st.sb`, `commit_seq = st.sb.commit_seq + 1`,
-//!    `sync = inner.sync`. (A stale temp file is replaced.) The temp file is locked Exclusive.
+//!    `sync = inner.sync`. (An existing temp name is refused.) The temp file is locked Exclusive.
 //! 4. `new_dir = builder.copy_directory(&src, st.sb.directory_root, resolver)`; then each
 //!    `extra_roots` entry via `builder.copy_tree` (memo shares pages with the directory's trees).
 //! 5. `(file, new_sb) = builder.finish_in_place(new_dir)` — slots written, `sync_all` (Full).
@@ -54,6 +54,9 @@ pub(crate) fn compact(
     inner.check_writable()?;
 
     let st = inner.current();
+    if st.sb.commit_seq.0 >= u64::MAX - 1 {
+        return Err(error::corrupt("commit sequence exhausted"));
+    }
     let src = Snapshot::new(st.pager.clone(), st.sb, None);
     let old_file_len = st.pager.file_len()?;
     let tmp = sibling_path(&inner.path, COMPACT_TEMP_SUFFIX);
@@ -72,16 +75,13 @@ pub(crate) fn compact(
     let (file, new_sb, new_dir, remapped) =
         match build_compacted(inner, &src, &st, &tmp, resolver, opts, &ex_opts) {
             Ok(v) => v,
-            Err(e) => {
-                let _ = inner.vfs.remove_file(&tmp);
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
 
     // Step 6: atomic rename; the temp handle (and its lock) becomes the container's file.
     if let Err(e) = inner.vfs.rename(&tmp, &inner.path) {
-        drop(file);
         let _ = inner.vfs.remove_file(&tmp);
+        drop(file);
         return Err(error::rename_failed(&tmp, &inner.path, &e));
     }
 

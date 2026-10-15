@@ -14,8 +14,7 @@ skeleton files never contain those).
 
 Also counts forbidden placeholders that ARCHITECTURE §0.1 bans (reported separately, never
 part of UNIMPLEMENTED): Rust ``todo!(``, ``unimplemented!(``, ``panic!(`` outside
-``#[cfg(test)]`` modules (approximation: lines after a ``#[cfg(test)]`` line in the same file
-are skipped), Python NotImplementedError raised WITHOUT a ``"<LEASE-ID>: "`` message prefix, ``pass  # TODO``.
+``#[cfg(test)]`` modules (balanced module bodies, strings/comments skipped), Python NotImplementedError raised WITHOUT a ``"<LEASE-ID>: "`` message prefix, ``pass  # TODO``.
 
 ``inventory(repo_root)`` -> document (canonical JSON at runs/<campaign>/inventory.json)::
 
@@ -46,7 +45,6 @@ _RUST_MARKER_RE = re.compile(
 )
 _PY_MARKER_RE = re.compile(r'NotImplementedError\(\s*"([A-Z][A-Z0-9]{1,9}-\d{2,3}):\s*([^"]*)"')
 _RUST_FORBIDDEN_RE = re.compile(r"(?<![A-Za-z0-9_])(todo|unimplemented|panic)!\(")
-_RUST_CFG_TEST = "#[cfg(test)]"
 _PY_BARE_RAISE_RE = re.compile(r"raise\s+(NotImplementedError)\b")
 _PY_PASS_TODO_RE = re.compile(r"\s*pass\s*#\s*TODO\b")
 _UNESCAPE_RE = re.compile(r'\\([\\"])')
@@ -78,20 +76,60 @@ def _finding(text: str, rel: str, pos: int, kind: str) -> dict[str, Any]:
     return {"file": rel, "line": _line_of(text, pos), "kind": kind, "text": _line_text(text, pos)}
 
 
+def _without_rust_test_modules(text: str) -> str:
+    """Blank cfg(test) modules, preserving offsets and production items after them.
+
+    Skip strings/comments while balancing module braces: an example containing "}" must
+    not move the test/production boundary. Unknown/unclosed modules remain inventoried.
+    """
+    chars = list(text)
+    module = re.compile(r"#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+\s*\{")
+    token = re.compile(
+        r'//[^\n]*|/\*|b?r(?P<hashes>\#*)"|b?"(?:\\.|[^"\\])*"'
+        r"|'(?:\\.|[^'\\\n])'|[{}]", re.DOTALL)
+    for match in module.finditer(text):
+        depth, pos, end = 1, match.end(), None
+        while depth:
+            found = token.search(text, pos)
+            if found is None:
+                break
+            value, pos = found.group(), found.end()
+            if value == "/*":
+                nesting = 1
+                while nesting:
+                    comment = re.search(r"/\*|\*/", text[pos:])
+                    if comment is None:
+                        pos = len(text)
+                        break
+                    pos += comment.end()
+                    nesting += 1 if comment.group() == "/*" else -1
+            elif found.group("hashes") is not None:
+                closing = '"' + found.group("hashes")
+                close = text.find(closing, pos)
+                pos = len(text) if close < 0 else close + len(closing)
+            elif value == "{":
+                depth += 1
+            elif value == "}":
+                depth -= 1
+                if depth == 0:
+                    end = pos
+        if end is not None:
+            for i in range(match.start(), end):
+                if chars[i] != "\n":
+                    chars[i] = " "
+    return "".join(chars)
+
+
 def _scan_rust(text: str, rel: str) -> tuple[list[Marker], list[dict[str, Any]]]:
+    # Constructor examples in cfg(test) modules are test data, not production stubs.
+    production = _without_rust_test_modules(text)
     markers = [
-        Marker(rel, _line_of(text, m.start()), m.group(1), _UNESCAPE_RE.sub(r"\1", m.group(2)))
-        for m in _RUST_MARKER_RE.finditer(text)
+        Marker(rel, _line_of(production, m.start()), m.group(1), _UNESCAPE_RE.sub(r"\1", m.group(2)))
+        for m in _RUST_MARKER_RE.finditer(production)
     ]
     forbidden: list[dict[str, Any]] = []
-    in_test = False
-    for lineno, raw in enumerate(text.split("\n"), 1):
+    for lineno, raw in enumerate(production.split("\n"), 1):
         line = raw.rstrip("\r")
-        if in_test:
-            continue
-        if line.strip().startswith(_RUST_CFG_TEST):
-            in_test = True
-            continue
         for fm in _RUST_FORBIDDEN_RE.finditer(line):
             forbidden.append(
                 {"file": rel, "line": lineno, "kind": f"rust-{fm.group(1)}", "text": line.strip()}

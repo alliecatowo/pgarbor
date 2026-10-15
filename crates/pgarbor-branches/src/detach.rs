@@ -9,7 +9,8 @@
 //!   `fallback_reason = Some(reason)` (the CLI prints that the copy incurs data-proportional I/O).
 //!
 //! # `reflink_detach` steps (temp = `sibling_path(dest, DETACH_TEMP_SUFFIX)`)
-//! 1. Validate `opts.target_name`; dest exists && !overwrite → `destination_exists`; remove stale temp.
+//! 1. Validate target/destination; acquire the stable publication guard and clean only
+//!    exclusively locked, identity-checked stale temporaries.
 //! 2. BARRIER: unless `container.is_read_only()`, `let w = container.begin_write()?` and keep it
 //!    alive across steps 3-4 (no commit or spill can be mid-write, so the file's committed state
 //!    equals the latest snapshot). Then `snap = container.snapshot()`, `rec = directory::resolve`.
@@ -36,9 +37,9 @@ use crate::reflink::{self, CloneOutcome};
 use crate::resolver::BranchRootResolver;
 use pgarbor_common::{BranchId, CommitSeq, DatabaseUuid, PgError, Result};
 use pgarbor_storage::format::superblock::now_unix_ms;
-use pgarbor_storage::format::{choose_slot, random_db_uuid, slot_offset, SUPERBLOCK_SLOT_SIZE};
+use pgarbor_storage::format::random_db_uuid;
 use pgarbor_storage::io::sibling_path;
-use pgarbor_storage::{CompactOptions, Container, LockMode, OpenMode, OpenOptions, SyncMode, VerifyLevel, Vfs};
+use pgarbor_storage::{CompactOptions, Container, OpenOptions, SyncMode, VerifyLevel, Vfs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -103,13 +104,6 @@ fn io_err(what: &str, path: &Path, e: &std::io::Error) -> PgError {
     PgError::io(&format!("could not {what} \"{}\"", path.display()), e)
 }
 
-fn remove_if_exists(vfs: &dyn Vfs, path: &Path) -> Result<()> {
-    if vfs.exists(path).map_err(|e| io_err("access file", path, &e))? {
-        vfs.remove_file(path).map_err(|e| io_err("remove file", path, &e))?;
-    }
-    Ok(())
-}
-
 /// Detach per `opts.strategy` (module docs).
 pub fn detach_branch(container: &Container, branch: &BranchRef, dest: &Path, opts: &DetachOptions) -> Result<DetachReport> {
     if opts.strategy == DetachStrategy::Copy {
@@ -160,7 +154,8 @@ pub fn reflink_detach(
     if !opts.overwrite && vfs.exists(dest).map_err(|e| io_err("access file", dest, &e))? {
         return Err(error::destination_exists(dest));
     }
-    remove_if_exists(&*vfs, &temp)?;
+    let _publication = export::PublicationGuard::acquire(&vfs, dest)?;
+    export::remove_stale_temp(&vfs, &temp)?;
 
     // 2. Barrier: the writer lock keeps commits and spills out while the clone is taken.
     let barrier = if container.is_read_only() { None } else { Some(container.begin_write()?) };
@@ -189,7 +184,7 @@ pub fn reflink_detach(
     };
     let result = finish_clone(&vfs, &temp, dest, opts, &rec, new_uuid, new_id, &origin);
     if result.is_err() {
-        let _ = vfs.remove_file(&temp);
+        let _ = export::remove_stale_temp(&vfs, &temp);
     }
     result.map(Ok)
 }
@@ -218,7 +213,7 @@ fn finish_clone(
         compacted = true;
     }
     c.close()?;
-    let published = export::verify_and_publish(vfs, temp, dest, opts, &new_rec)?;
+    let published = export::verify_and_publish_owned(vfs, temp, dest, opts, &new_rec)?;
     Ok(DetachReport::from_parts(
         dest,
         StrategyUsed::Reflink,
@@ -238,26 +233,9 @@ fn finish_clone(
 /// `db_uuid = new_uuid`; write `sb.encode()` at slot offset `choice.slot * 4096` and 4096 zero bytes
 /// at the OTHER slot (two valid slots with different UUIDs are refused by `choose_slot`, so the
 /// older slot must be erased); `sync_data` when `sync == Full`.
-/// See amendment `pgarbor-branches-02` (proposes moving this into storage as `reidentify`).
+/// Compatibility wrapper for storage-owned `recovery::reidentify` (branches-02 accepted).
 pub fn reidentify_file(vfs: &dyn Vfs, path: &Path, new_uuid: DatabaseUuid, sync: SyncMode) -> Result<()> {
-    let f = vfs.open(path, OpenMode::ReadWrite).map_err(|e| pgarbor_storage::error::open_failed(path, &e))?;
-    match f.try_lock(LockMode::Exclusive) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(pgarbor_storage::error::locked(path)),
-        Err(e) => return Err(io_err("lock file", path, &e)),
-    }
-    let slots = pgarbor_storage::container::read_slots(&*f, path)?;
-    let choice = choose_slot(path, &slots)?;
-    let mut sb = choice.superblock;
-    sb.db_uuid = new_uuid;
-    let image = sb.encode()?;
-    f.write_all_at(slot_offset(choice.slot), &image).map_err(|e| pgarbor_storage::error::write_failed(path, &e))?;
-    let zeros = vec![0u8; SUPERBLOCK_SLOT_SIZE];
-    f.write_all_at(slot_offset(1 - choice.slot), &zeros).map_err(|e| pgarbor_storage::error::write_failed(path, &e))?;
-    if sync == SyncMode::Full {
-        f.sync_data().map_err(|e| pgarbor_storage::error::fsync_failed(path, &e))?;
-    }
-    let _ = f.unlock();
+    pgarbor_storage::container::recovery::reidentify(vfs, path, new_uuid, sync)?;
     Ok(())
 }
 

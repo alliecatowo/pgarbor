@@ -90,6 +90,12 @@ impl Superblock {
                 self.directory_root.0, self.page_count
             )));
         }
+        if self.page_count >= max_page_count(self.page_size) {
+            return Err(error::corrupt("page count exceeds addressable storage limit"));
+        }
+        if self.commit_seq.0 == u64::MAX {
+            return Err(error::corrupt("commit sequence exhausted"));
+        }
         let mut out = vec![0u8; SUPERBLOCK_SLOT_SIZE];
         out[0..8].copy_from_slice(&SUPERBLOCK_MAGIC);
         out[8..12].copy_from_slice(&self.format_version.to_le_bytes());
@@ -162,6 +168,12 @@ impl Superblock {
         }
         if commit_seq == 0 {
             return Ok(SlotStatus::Invalid("invalid commit sequence 0".into()));
+        }
+        if commit_seq == u64::MAX {
+            return Ok(SlotStatus::Invalid("commit sequence exhausted".into()));
+        }
+        if page_count >= max_page_count(page_size) {
+            return Ok(SlotStatus::Invalid("page count exceeds addressable storage limit".into()));
         }
         if reserved0 != 0 || reserved1 != 0 {
             return Ok(SlotStatus::Invalid("reserved field is nonzero".into()));

@@ -30,8 +30,9 @@ results (for async steps: the matching ``wait`` step carries the results):
   * ``notice``: at least one notice received during the step
   * ``expect_blocked``: equals ``blocked_observed``.
 
-Recording is never done by feature workers; ``record_corpus`` refuses to run unless the
-environment variable ``PGARBOR_ORACLE_REVIEW=1`` is set or ``dry_run`` is True (dry run
+Recording is never done by feature workers; both public write entry points enforce live
+oracle verification. ``record_case`` requires the review gate; ``record_corpus`` refuses
+unless the environment variable ``PGARBOR_ORACLE_REVIEW=1`` is set or ``dry_run`` is True (dry run
 records into a temp dir and reports what would change).
 """
 
@@ -187,7 +188,13 @@ def check_intent(case: Case, transcript: Transcript) -> list[str]:
 def _oracle_faults(case: Case, transcript: Transcript) -> list[str]:
     """Reasons the recording is unusable (step 6 of the module algorithm)."""
     faults: list[str] = []
+    if case.setup and not transcript.setup:
+        faults.append("setup: missing reference observations")
     for obs in transcript.setup:
+        if not obs.results and not _faulted(obs):
+            faults.append("setup: missing reference results")
+        if any(r.kind == "error" or r.error is not None for r in obs.results):
+            faults.append(f"setup: SQL error {_sqlstates(obs.results)}")
         if obs.harness_error is not None:
             faults.append(f"setup: harness_error: {obs.harness_error}")
         if obs.timed_out:
@@ -232,6 +239,10 @@ def _record_one(pool: OraclePool, case: Case, identity: ReferenceIdentity,
         return RecordResult(case.id, RecordStatus.ORACLE_ERROR,
                             messages=[f"execution failed: {type(exc).__name__}: {exc}"])
 
+    faults = _oracle_faults(case, first) + _oracle_faults(case, second)
+    if faults:
+        return RecordResult(case.id, RecordStatus.ORACLE_ERROR, messages=faults)
+
     first = apply_case_normalizers(case, first.zero_timings())
     second = apply_case_normalizers(case, second.zero_timings())
 
@@ -267,14 +278,27 @@ def _record_one(pool: OraclePool, case: Case, identity: ReferenceIdentity,
     return RecordResult(case.id, RecordStatus.WRITTEN, path.as_posix())
 
 
-def record_case(pool: OraclePool, case: Case, identity: ReferenceIdentity, expected_root: Path,
-                allow_overwrite: bool = False) -> RecordResult:
-    """Record one case per the module algorithm."""
+def _record_verified_case(pool: OraclePool, case: Case, identity: ReferenceIdentity,
+                          expected_root: Path, allow_overwrite: bool = False) -> RecordResult:
+    """Private worker: caller has checked the review gate and live oracle identity."""
     try:
         return _record_one(pool, case, identity, expected_root, allow_overwrite)
     except Exception as exc:  # filesystem or serialization failure
         return RecordResult(case.id, RecordStatus.ORACLE_ERROR,
                             messages=[f"record failed: {type(exc).__name__}: {exc}"])
+
+
+def record_case(pool: OraclePool, case: Case, identity: ReferenceIdentity, expected_root: Path,
+                allow_overwrite: bool = False) -> RecordResult:
+    """Public single-case write entry: enforce review and verify the live oracle identity."""
+    if os.environ.get(REVIEW_ENV) != "1":
+        raise PermissionError(f"recording requires {REVIEW_ENV}=1 (the oracle review path)")
+    pool.start()
+    doc, fingerprint = verify_live(pool.container)
+    verified = ReferenceIdentity(str(doc["image_digest"]), str(doc["server_version"]), fingerprint)
+    if identity != verified:
+        raise ValueError("caller reference identity differs from the verified live oracle")
+    return _record_verified_case(pool, case, verified, expected_root, allow_overwrite)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -332,7 +356,7 @@ def record_corpus(pool: OraclePool, cases: Iterable[Case], expected_root: Path,
 
     if not dry_run:
         def work(case: Case) -> RecordResult:
-            return record_case(pool, case, identity, expected_root, allow_overwrite)
+            return _record_verified_case(pool, case, identity, expected_root, allow_overwrite)
 
         return _run_all(work, case_list, jobs)
 
@@ -340,7 +364,7 @@ def record_corpus(pool: OraclePool, cases: Iterable[Case], expected_root: Path,
         scratch = Path(tmp)
 
         def dry_work(case: Case) -> RecordResult:
-            scratch_result = record_case(pool, case, identity, scratch, allow_overwrite=True)
+            scratch_result = _record_verified_case(pool, case, identity, scratch, allow_overwrite=True)
             return _compare_with_real(scratch_result, scratch, expected_root)
 
         return _run_all(dry_work, case_list, jobs)

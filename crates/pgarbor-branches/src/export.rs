@@ -13,8 +13,8 @@
 //!    branches with several databases")`).
 //! 2. `opts.target_name` validated (42602). `dest` exists and `!opts.overwrite` →
 //!    `error::destination_exists(dest)` (check with `vfs.exists`).
-//! 3. `tmp = sibling_path(dest, DETACH_TEMP_SUFFIX)`; if it exists, `vfs.remove_file(tmp)` (stale
-//!    leftover of a crashed export; storage recovery only cleans temps of the file it opens).
+//! 3. Acquire the stable destination PublicationGuard; remove an unlocked, identity-checked
+//!    stale `tmp = sibling_path(dest, DETACH_TEMP_SUFFIX)` while holding that guard.
 //! 4. `ExportBuilder::create(vfs, &tmp, &ExportOptions { page_size: opts.page_size.unwrap_or(
 //!    snap page size), db_uuid: Some(new_uuid), sync: opts.sync, overwrite: false, ..default })`
 //!    where `new_uuid = opts.new_db_uuid.unwrap_or_else(random_db_uuid)`.
@@ -40,12 +40,79 @@ use pgarbor_common::{BranchId, CommitSeq, DatabaseUuid, PgError, Result};
 use pgarbor_storage::format::consts::file_len_for;
 use pgarbor_storage::format::superblock::{now_unix_ms, random_db_uuid};
 use pgarbor_storage::io::{parent_dir, sibling_path};
-use pgarbor_storage::{Container, ExportBuilder, ExportOptions, OpenOptions, SyncMode, Vfs};
-use std::path::Path;
+use pgarbor_storage::{FileIo, LockMode, OpenMode, Container, ExportBuilder, ExportOptions, OpenOptions, SyncMode, Vfs};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Suffix of the intermediate file export/detach build and verify before renaming to `dest`.
 pub const DETACH_TEMP_SUFFIX: &str = ".detach-tmp";
+
+/// Serializes the entire build/verify/publication lifecycle for one destination.
+/// Unlike a database inode, this lock is never replaced during publication.
+pub(crate) struct PublicationGuard {
+    vfs: Arc<dyn Vfs>,
+    path: PathBuf,
+    file: Box<dyn FileIo>,
+}
+impl PublicationGuard {
+    pub(crate) fn acquire(vfs: &Arc<dyn Vfs>, dest: &Path) -> Result<Self> {
+        let path = sibling_path(dest, ".detach-guard");
+        for _ in 0..16 {
+            let (file, created) = match vfs.open(&path, OpenMode::CreateNew) {
+                Ok(f) => (f, true),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    match vfs.open(&path, OpenMode::ReadWrite) {
+                        Ok(f) => (f, false),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(e) => return Err(pgarbor_storage::error::open_failed(&path, &e)),
+                    }
+                }
+                Err(e) => return Err(pgarbor_storage::error::open_failed(&path, &e)),
+            };
+            match file.try_lock(LockMode::Exclusive) {
+                Ok(()) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(pgarbor_storage::error::locked(&path)),
+                Err(e) => return Err(pgarbor_storage::error::open_failed(&path, &e)),
+            }
+            if !vfs.is_current_file(&path, file.as_ref()).map_err(|e| pgarbor_storage::error::open_failed(&path, &e))? {
+                continue;
+            }
+            if created {
+                return Ok(Self { vfs: vfs.clone(), path, file });
+            }
+            // A stale guard from a crash is retired while locked. A creator paused
+            // before flock must revalidate identity before touching any export file.
+            vfs.remove_file(&path).map_err(|e| pgarbor_storage::error::write_failed(&path, &e))?;
+        }
+        Err(pgarbor_storage::error::locked(&path))
+    }
+}
+impl Drop for PublicationGuard {
+    fn drop(&mut self) {
+        if self.vfs.is_current_file(&self.path, self.file.as_ref()).unwrap_or(false) {
+            let _ = self.vfs.remove_file(&self.path);
+        }
+    }
+}
+
+/// Call only while holding the publication guard. Never unlink a live temp owner.
+pub(crate) fn remove_stale_temp(vfs: &Arc<dyn Vfs>, path: &Path) -> Result<()> {
+    let file = match vfs.open(path, OpenMode::ReadWrite) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(pgarbor_storage::error::open_failed(path, &e)),
+    };
+    match file.try_lock(LockMode::Exclusive) {
+        Ok(()) => {},
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(pgarbor_storage::error::locked(path)),
+        Err(e) => return Err(pgarbor_storage::error::open_failed(path, &e)),
+    }
+    if vfs.is_current_file(path, file.as_ref()).map_err(|e| pgarbor_storage::error::open_failed(path, &e))? {
+        vfs.remove_file(path).map_err(|e| pgarbor_storage::error::write_failed(path, &e))?;
+    }
+    Ok(())
+}
+
 
 /// Copy-strategy export (module docs). Returns a report with `strategy_used = Copy`.
 pub fn export_branch(container: &Container, branch: &BranchRef, dest: &Path, opts: &DetachOptions) -> Result<DetachReport> {
@@ -61,13 +128,10 @@ pub fn export_branch(container: &Container, branch: &BranchRef, dest: &Path, opt
     if !opts.overwrite && dest_exists(&vfs, dest)? {
         return Err(error::destination_exists(dest));
     }
-    // 3. Remove a stale temp left behind by a crashed export.
+    let _publication = PublicationGuard::acquire(&vfs, dest)?;
+    // Only a holder of the stable destination guard may clean a stale temp.
     let tmp = sibling_path(dest, DETACH_TEMP_SUFFIX);
-    match vfs.remove_file(&tmp) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(pgarbor_storage::error::write_failed(&tmp, &e)),
-    }
+    remove_stale_temp(&vfs, &tmp)?;
 
     let now = now_unix_ms();
     let new_uuid = opts.new_db_uuid.unwrap_or_else(random_db_uuid);
@@ -84,12 +148,12 @@ pub fn export_branch(container: &Container, branch: &BranchRef, dest: &Path, opt
     let new_rec = match write_export(&vfs, &snap, &rec, &tmp, new_uuid, new_id, now, &origin, opts) {
         Ok(r) => r,
         Err(e) => {
-            let _ = vfs.remove_file(&tmp);
+            let _ = remove_stale_temp(&vfs, &tmp);
             return Err(e);
         }
     };
     // 7. Reopen-verify, then publish.
-    let published = verify_and_publish(&vfs, &tmp, dest, opts, &new_rec)?;
+    let published = verify_and_publish_owned(&vfs, &tmp, dest, opts, &new_rec)?;
     Ok(DetachReport::from_parts(dest, StrategyUsed::Copy, None, origin, &new_rec, &published, false))
 }
 
@@ -174,9 +238,9 @@ pub struct PublishedFile {
 /// 2. Directory check on `c.snapshot().directory()`: `check_format == Ready`, the default branch
 ///    is `expected.id` with name `expected.name` and the same `data_root` mapping (resolve by id),
 ///    exactly one `B` record. Mismatch → `export_verify_failed`.
-/// 3. Collect `PublishedFile` (`space_report` for garbage pages), then drop `c` (releases the lock).
+/// 3. Collect `PublishedFile` (`space_report` for garbage pages); retain `c` and its lock.
 /// 4. Re-check `dest` existence vs `opts.overwrite` (race) → `destination_exists`.
-/// 5. `vfs.rename(tmp, dest)` (`pgarbor_storage::error::rename_failed`); if `opts.sync == Full`,
+/// 5. Atomically publish with no-replace unless overwrite=true; if `opts.sync == Full`,
 ///    `vfs.sync_dir(parent_dir(dest))` (`fsync_failed`).
 /// On any error before the rename: remove `tmp` best-effort and return the error.
 pub fn verify_and_publish(
@@ -186,10 +250,18 @@ pub fn verify_and_publish(
     opts: &DetachOptions,
     expected: &BranchRecord,
 ) -> Result<PublishedFile> {
+    let _publication = PublicationGuard::acquire(vfs, dest)?;
+    verify_and_publish_owned(vfs, tmp, dest, opts, expected)
+}
+
+pub(crate) fn verify_and_publish_owned(
+    vfs: &Arc<dyn Vfs>, tmp: &Path, dest: &Path,
+    opts: &DetachOptions, expected: &BranchRecord,
+) -> Result<PublishedFile> {
     match verify_and_publish_inner(vfs, tmp, dest, opts, expected) {
         Ok(p) => Ok(p),
         Err(e) => {
-            let _ = vfs.remove_file(tmp);
+            let _ = remove_stale_temp(vfs, tmp);
             Err(e)
         }
     }
@@ -202,9 +274,9 @@ fn verify_and_publish_inner(
     opts: &DetachOptions,
     expected: &BranchRecord,
 ) -> Result<PublishedFile> {
+    let oo = OpenOptions { verify: opts.verify, sync: opts.sync, ..OpenOptions::default() };
+    let c = Container::open_with(Arc::clone(vfs), tmp, &oo)?;
     let published = {
-        let oo = OpenOptions { verify: opts.verify, sync: opts.sync, ..OpenOptions::default() };
-        let c = Container::open_with(Arc::clone(vfs), tmp, &oo)?;
         let report = c.verify(&BranchRootResolver, opts.verify)?;
         if let Some(first) = report.errors().next() {
             return Err(error::export_verify_failed(dest, &first.message));
@@ -237,7 +309,7 @@ fn verify_and_publish_inner(
         }
         let space = pgarbor_storage::doctor::space_report(&snap, &BranchRootResolver)?;
         let page_count = snap.page_count();
-        // `c` (and its lock) is released at the end of this block.
+        // `c` and its lock remain alive through final publication.
         let pf = PublishedFile {
             db_uuid: c.db_uuid(),
             page_count,
@@ -249,11 +321,15 @@ fn verify_and_publish_inner(
     if !opts.overwrite && dest_exists(vfs, dest)? {
         return Err(error::destination_exists(dest));
     }
-    vfs.rename(tmp, dest).map_err(|e| pgarbor_storage::error::rename_failed(tmp, dest, &e))?;
+    let publication = if opts.overwrite { vfs.rename(tmp, dest) } else { vfs.rename_noreplace(tmp, dest) };
+    publication.map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists {
+        error::destination_exists(dest)
+    } else { pgarbor_storage::error::rename_failed(tmp, dest, &e) })?;
     if opts.sync == SyncMode::Full {
         let dir = parent_dir(dest);
         vfs.sync_dir(&dir).map_err(|e| pgarbor_storage::error::fsync_failed(&dir, &e))?;
     }
+    drop(c); // Keep the verified inode locked through publication and directory sync.
     Ok(published)
 }
 

@@ -1,7 +1,6 @@
 # Amendment request pgarbor-types-04: IANA time zone rules (tzdata)
 
-Status: PROPOSED (architect, pgarbor-types). v1 supports UTC, fixed offsets, POSIX `UTC+n` strings and the
-PG "Default" abbreviation set. IANA region names return 0A000 (`datetime::tz`, lease TYP-25).
+Status: DEFERRED (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -24,3 +23,8 @@ Recommendation: option 1, with the version pinned to the oracle image's tzdata (
 ## Affected crates
 
 pgarbor-types (`datetime::tz`), pgarbor (TimeZone GUC validation), pgarbor-wire (startup TimeZone parameter).
+
+
+## Steward decision (2026-10-15)
+
+Defer IANA rule embedding/provider APIs and dependency changes. UTC, fixed offsets and the implemented abbreviation/POSIX subset remain supported; IANA conversions must retain leased TYP-25 0A000. The proposed oracle tzdata version is not verified by this review and is not newly ratified as an available dependency.

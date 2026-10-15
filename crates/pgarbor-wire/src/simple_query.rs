@@ -25,14 +25,56 @@
 //! Known gap (documented in `contracts/crates/pgarbor-wire.md`): the session returns all results after
 //! the whole string ran, so `COPY` inside a multi-statement string cannot interleave correctly (see
 //! amendment pgarbor-wire-01).
-use pgarbor::Session;
-use pgarbor_common::PgError;
+use pgarbor::{Session, Severity};
 
 use crate::error::{WireError, WireResult};
 use crate::session_loop::SessionCtx;
 
 /// Handle one Query message (module docs).
-#[allow(unused_variables)]
 pub fn handle(ctx: &mut SessionCtx<'_>, session: &mut Session, sql: &str) -> WireResult<()> {
-    Err(WireError::Pg(PgError::unimplemented("WIR-11", "simple Query handling (simple_query::handle)")))
+    let out = session.simple_query_raw(sql);
+
+    // COPY shares the connection I/O through its channel. Never retain a RefCell borrow while
+    // invoking the session, which may itself write COPY data.
+    if let Some(copy) = &ctx.copy {
+        let io = ctx.io.clone();
+        copy.finish_statement(out.error.is_none(), &io)?;
+    }
+
+    let mut encoding_error = false;
+    for statement in &out.statements {
+        let result = {
+            let mut io = ctx.io.borrow_mut();
+            crate::result_encode::send_statement_output(&mut io, session, &mut ctx.reporter, statement)
+        };
+        match result {
+            Ok(()) => {}
+            Err(WireError::Pg(e)) => {
+                let mut io = ctx.io.borrow_mut();
+                crate::result_encode::send_error_cycle(&mut io, &mut ctx.reporter, &[], &e, &[])?;
+                encoding_error = true;
+                break;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    if !encoding_error {
+        if let Some(err) = &out.error {
+            let mut io = ctx.io.borrow_mut();
+            crate::result_encode::send_error_cycle(
+                &mut io,
+                &mut ctx.reporter,
+                &out.error_notices,
+                err,
+                &out.error_param_status,
+            )?;
+            if matches!(err.severity, Severity::Fatal | Severity::Panic) {
+                return Err(WireError::Pg(err.clone()));
+            }
+        }
+    }
+
+    let mut io = ctx.io.borrow_mut();
+    crate::result_encode::finish_cycle(&mut io, &mut ctx.reporter, out.status)
 }

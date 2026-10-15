@@ -242,8 +242,9 @@ def test_clients_without_fixtures_is_blocked(cfg, tmp_path):
 
 
 def test_parse_client_lines():
-    out = 'noise\n{"test": "a", "status": "pass"}\n{"test": "b", "status": "fail", "detail": "d"}\n{bad'
-    assert campaign._parse_client_lines(out) == [("a", "pass", ""), ("b", "fail", "d")]
+    out = 'noise\nFIXTURE_RESULT {"name":"app","passed":2,"failed":0,"steps":2}\n'
+    assert campaign._parse_client_lines(out)[0][:2] == ("app", "pass")
+
 
 
 def test_dsn_quotes_credentials():

@@ -103,3 +103,7 @@ FORMAT XML (0A000), `ANALYZE` actuals collection (the executor feeds `ActualStat
 Frozen and implemented (not leased): `plan.rs`, `logical.rs`, `context.rs` and the small pure helpers inside leased
 files that are marked as fully implemented (`simplify::{split_conjuncts, make_and}`, `pushdown::{expr_relids,
 is_volatile}`, `planner::output_columns`, `explain::{PlanColumnNamer, is_shown}`).
+
+## Assembly decisions (2026-10-15)
+
+Steward decisions: amendments plan-01/02 deferred. Caller row hints and default estimates are heuristic only; no measured statistics or verified pg_amop metadata is claimed. Hash/merge joins require identical key types; mixed-type comparisons use the nested-loop fallback.

@@ -1,7 +1,6 @@
 # Amendment request pgarbor-core-01: non-transactional OID / row-id allocation
 
-Status: PROPOSED (architect, pgarbor-core). Implemented in the skeleton as
-`pgarbor_core::alloc::{next_oid, next_rowid, next_rowids, IdAllocator}` and `TxnKv::put_fresh`.
+Status: ACCEPTED WITH CLARIFICATIONS (2026-10-15, lead engineering review).
 
 ## Problem
 
@@ -35,3 +34,8 @@ deadlocks, plus one lock entry per inserted row.
 
 pgarbor-catalog (OID parameter or seed function), pgarbor-exec (uses `alloc` and `put_fresh`),
 ARCHITECTURE §4 and §7 wording.
+
+
+## Steward decision (2026-10-15)
+
+Accept in-memory per-branch/database allocators and put_fresh. Catalog injection is specifically the CatalogStore/OidSource design accepted by catalog-02, superseding the alternatives below. Monotonicity is per allocator lifetime; after reopen/reset, allocation reseeds from committed maxima and can reuse IDs from aborted/uncommitted work. No durable globally never-repeated-ID promise is made.

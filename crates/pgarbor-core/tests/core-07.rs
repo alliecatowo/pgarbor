@@ -239,3 +239,70 @@ fn deadlock_detected_once() {
     assert_eq!(errs[0].sqlstate.code(), "40P01");
     assert!(errs[0].detail.as_deref().unwrap_or("").contains("ShareLock on transaction"));
 }
+
+
+#[test]
+fn reused_key_lock_keeps_latest_committed_outcome() {
+    use pgarbor_core::{LockMode, WaitPolicy};
+    // A single frozen statement snapshot across concurrent insert, update and delete.
+    for iso in [IsolationLevel::ReadCommitted, IsolationLevel::RepeatableRead] {
+        for (old, new) in [(None, Some(&b"new"[..])), (Some(&b"old"[..]), Some(&b"new"[..])), (Some(&b"old"[..]), None)] {
+            let (_v, e) = new_engine();
+            let (sa, sb) = (session(&e, "main"), session(&e, "main"));
+            if let Some(old) = old {
+                let mut seed = begin(&e, &sb, IsolationLevel::ReadCommitted);
+                put(&mut seed, b"k", old);
+                seed.commit().unwrap();
+            }
+            let mut a = begin(&e, &sa, iso);
+            a.begin_statement().unwrap();
+            let original_seq = a.snapshot().unwrap().commit_seq;
+            let mut b = begin(&e, &sb, IsolationLevel::ReadCommitted);
+            b.begin_statement().unwrap();
+            if let Some(new) = new {
+                b.kv("UPDATE").put(b"k", new).unwrap();
+            } else {
+                b.kv("DELETE").delete(b"k").unwrap();
+            }
+            b.commit().unwrap();
+            let changed = LockOutcome::Changed(new.map(<[u8]>::to_vec));
+            for mode in [LockMode::ForKeyShare, LockMode::ForKeyShare, LockMode::ForUpdate, LockMode::ForUpdate] {
+                assert_eq!(a.lock_key(b"k", mode, WaitPolicy::Block).unwrap(), changed);
+                assert_eq!(a.kv("SELECT").get(b"k").unwrap(), old.map(<[u8]>::to_vec));
+                assert_eq!(a.snapshot().unwrap().commit_seq, original_seq);
+            }
+            if iso == IsolationLevel::RepeatableRead {
+                // A retry must not bypass serialization checking merely because we own the lock.
+                for _ in 0..2 {
+                    assert_eq!(a.lock_key_for_write(b"k").unwrap_err().sqlstate.code(), "40001");
+                }
+            } else {
+                a.kv("UPDATE").put(b"k", b"own").unwrap();
+                assert_eq!(a.kv("SELECT").get(b"k").unwrap(), Some(b"own".to_vec()));
+                assert_eq!(a.lock_key_for_write(b"k").unwrap(), changed);
+                assert_eq!(a.kv("SELECT").get(b"k").unwrap(), Some(b"own".to_vec()));
+            }
+            a.rollback().unwrap();
+        }
+    }
+}
+
+
+#[test]
+fn reused_key_lock_preserves_own_writes_under_rc_and_rr() {
+    for iso in [IsolationLevel::ReadCommitted, IsolationLevel::RepeatableRead] {
+        let (_v, e) = new_engine();
+        let sa = session(&e, "main");
+        let mut a = begin(&e, &sa, iso);
+        a.begin_statement().unwrap();
+        a.kv("INSERT").put(b"k", b"own").unwrap();
+        for _ in 0..2 {
+            assert_eq!(a.lock_key_for_write(b"k").unwrap(), LockOutcome::Unchanged);
+            assert_eq!(a.kv("SELECT").get(b"k").unwrap(), Some(b"own".to_vec()));
+        }
+        a.kv("DELETE").delete(b"k").unwrap();
+        assert_eq!(a.lock_key_for_write(b"k").unwrap(), LockOutcome::Unchanged);
+        assert_eq!(a.kv("SELECT").get(b"k").unwrap(), None);
+        a.rollback().unwrap();
+    }
+}

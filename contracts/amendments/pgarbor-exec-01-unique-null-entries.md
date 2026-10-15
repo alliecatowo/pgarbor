@@ -1,6 +1,6 @@
 # Amendment request pgarbor-exec-01: index entry layout for NULLs in unique indexes (extends ARCHITECTURE §4)
 
-Status: PROPOSED (architect, pgarbor-exec). Implemented as the documented on-disk layout in
+Status: ACCEPTED (lead-engineer decision, 2026-10-15).
 `crates/pgarbor-exec/src/index_key.rs` (frozen v1).
 
 ## Problem
@@ -27,3 +27,7 @@ insert would overwrite the first entry (or be rejected as a duplicate).
 
 pgarbor-exec (`index_key`, `index_maint`, `node_scan`, `fk`), ARCHITECTURE §4 wording. No change in
 pgarbor-types (keycodec) or pgarbor-catalog.
+
+## Steward decision (2026-10-15)
+
+Accept the rowid suffix for distinct NULL unique entries, as implemented in index_key.rs. All readers consume rowid from values; default NULL-distinct and NULLS NOT DISTINCT must be covered by SQL regressions.

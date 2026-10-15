@@ -115,3 +115,7 @@ wording. Lock errors are enriched with the owner (`serve_registry`) and a remedy
 
 Frozen and implemented (not leased): `lib.rs`, `main.rs`, `cli.rs`, `exit.rs`, `ctx.rs`, `reports.rs`, `signals.rs`, `confirm.rs`,
 `dispatch.rs`, `transcript_file.rs`, `cmd/mod.rs`, `cmd/version.rs`, `cmd/branch/mod.rs`.
+
+## Assembly decisions (2026-10-15)
+
+Steward decisions: cli-01 existing Unix atomic signal handlers accepted. COPY streaming deferred with wire-01. Init failure cleanup must preserve concurrent creators: without a file ownership token, a failed create may leave an incomplete file and must report failure; never unlink an unproven pathname.

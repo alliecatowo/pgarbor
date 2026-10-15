@@ -83,7 +83,9 @@ this crate; the executor receives `FollowUp`s for them.
    (`nextval('t_id_seq'::regclass)`, `(c > 0)`); the binder (pgarbor-sql) produces it. A rename that
    changes the text goes through `ExprRewriter` (amendment 04). Known divergence: a `regclass` literal
    inside a default is fixed at creation time (PG re-prints it per search_path).
-6. **No panics, no silent stubs.** Unimplemented behavior is `Err(PgError::unimplemented("CAT-NN", ..))`.
+6. **No panics, no silent stubs.** Snapshot construction/load rejects missing base types,
+   cyclic domain/array metadata paths and paths above 64 user metadata nodes with XX001
+   (accepted amendment `pgarbor-catalog-06-domain-graph-safety`). Unimplemented behavior is `Err(PgError::unimplemented("CAT-NN", ..))`.
 7. **Statement atomicity is the transaction layer's job.** `CatalogTxn` writes through; on `Err` the
    caller rolls back to its statement savepoint.
 
@@ -124,8 +126,9 @@ Classification of all 213 relations (checked by `gen/classify_vrel.py`):
   pg_user, pg_group, pg_auth_members, pg_database, pg_db_role_setting, pg_tablespace, pg_collation, pg_am,
   pg_opclass, pg_opfamily, pg_extension, pg_available_extensions(+_versions), pg_inherits, pg_sequence,
   pg_rewrite, pg_tables, pg_views, pg_matviews, pg_indexes, pg_sequences, pg_settings, pg_stat_activity,
-  pg_locks, pg_prepared_statements, pg_cursors, pg_stat_ssl, pg_stat_gssapi, 18 per-relation pg_stat*/
-  pg_statio* views (zero counters), and 48 information_schema views;
+  pg_locks, pg_prepared_statements, pg_cursors, pg_stat_ssl, pg_stat_gssapi, and 48 information_schema views;
+- CAT-39: 18 per-relation pg_stat*/pg_statio* views expose schemas but scanning returns leased
+  0A000 until real counter collection exists (accepted amendment 07);
 - correctly EMPTY (`vrel/empty.rs`, 69 relations, each with a justification: triggers, policies, foreign
   data, publications, large objects, security labels, planner statistics, replication, progress views, ...);
 - UNSUPPORTED (`vrel/unsupported.rs`, 29 relations): scanning raises `0A000` instead of lying.
@@ -152,7 +155,7 @@ oracle (SQLSTATE always; message text deterministic). Catalog corruption is `XX0
   `persist::bootstrap` when creating `main`, supplies `stamp` and `OidSource`.
 - **pgarbor-cli / branches:** `diff::diff_schemas(&a, &b)` for `branch diff`.
 
-## Documented divergences and known gaps (also in docs/compatibility/KNOWN_GAPS.md when created)
+## Documented divergences and known gaps (also in docs/compatibility/KNOWN_GAPS.md)
 
 - no TOAST tables (`reltoastrelid` 0); `relfrozenxid`/`relminmxid` are constants; `relpages`/`reltuples`
   are static (-1 / 0);
@@ -167,7 +170,7 @@ oracle (SQLSTATE always; message text deterministic). Catalog corruption is `XX0
   policies, event triggers, FDWs, publications, extended statistics, text search objects, ALTER DEFAULT
   PRIVILEGES, GRANT ON PARAMETER, CREATE DATABASE, EXCLUDE constraints and non-btree index methods are
   unsupported (0A000 at DDL or absent catalog rows);
-- statistics views report zero counters (no collection); `relation_size` needs `SessionInfo`;
+- CAT-39 statistics views are unsupported (0A000); `relation_size` needs `SessionInfo`;
 - a comment removal on a builtin object re-exposes the compiled-in description.
 
 ## Non-goals

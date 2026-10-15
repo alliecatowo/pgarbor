@@ -25,6 +25,7 @@ use crate::format::consts::{
     PAGES_OFFSET, SUPERBLOCK_SLOT_SIZE,
 };
 use crate::format::page::{decode_page, encode_page, Page, PageRef};
+use crate::format::consts::max_page_count;
 use crate::format::superblock::{now_unix_ms, random_db_uuid, Superblock};
 use crate::gc::copy::TreeCopier;
 use crate::io::{parent_dir, FileIo, LockMode, OpenMode, Vfs};
@@ -120,8 +121,8 @@ impl ExportBuilder {
     }
 
     /// Shared constructor (compaction passes its own temp path and `overwrite = true`). Steps:
-    /// validate page size; existence check of `dest` per `overwrite`; remove a stale `tmp` if it
-    /// exists; `vfs.open(tmp, CreateTruncate)`; `try_lock(Exclusive)` (WouldBlock →
+    /// validate page size; existence check of `dest` per `overwrite`;
+    /// `vfs.open(tmp, CreateNew)`; `try_lock(Exclusive)` (WouldBlock →
     /// `error::locked(tmp)`); `set_len(PAGES_OFFSET)` (both slots zero = not yet a valid
     /// database, so a crash leaves an unopenable temp, never a half-valid file); build `sb` =
     /// `Superblock::new_empty(..)` with `commit_seq = opts.commit_seq`; `next_page = 1`.
@@ -138,7 +139,7 @@ impl ExportBuilder {
             )
             .with_detail("Page size must be a power of two between 4096 and 65536."));
         }
-        if opts.commit_seq.0 == 0 {
+        if opts.commit_seq.0 == 0 || opts.commit_seq.0 == u64::MAX {
             return Err(PgError::internal("export commit sequence must be at least 1"));
         }
         if !opts.overwrite {
@@ -147,12 +148,7 @@ impl ExportBuilder {
                 return Err(error::open_failed(dest, &std::io::Error::from(std::io::ErrorKind::AlreadyExists)));
             }
         }
-        match vfs.remove_file(&tmp) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(error::write_failed(&tmp, &e)),
-        }
-        let file = vfs.open(&tmp, OpenMode::CreateTruncate).map_err(|e| error::open_failed(&tmp, &e))?;
+        let file = vfs.open(&tmp, OpenMode::CreateNew).map_err(|e| error::open_failed(&tmp, &e))?;
         // From here on, a failure must not leave the temp file behind.
         let setup = match file.try_lock(LockMode::Exclusive) {
             Ok(()) => file.set_len(PAGES_OFFSET).map_err(|e| error::truncate_failed(&tmp, PAGES_OFFSET, &e)),
@@ -160,9 +156,16 @@ impl ExportBuilder {
             Err(e) => Err(error::open_failed(&tmp, &e)),
         };
         if let Err(e) = setup {
-            drop(file);
-            let _ = vfs.remove_file(&tmp);
+            // Cleanup while holding ownership; never unlink a replacement pathname.
+            if file.try_lock(LockMode::Exclusive).is_ok()
+                && vfs.is_current_file(&tmp, file.as_ref()).unwrap_or(false)
+            {
+                let _ = vfs.remove_file(&tmp);
+            }
             return Err(e);
+        }
+        if !vfs.is_current_file(&tmp, file.as_ref()).map_err(|e| error::open_failed(&tmp, &e))? {
+            return Err(error::locked(&tmp));
         }
         let mut sb = Superblock::new_empty(
             opts.page_size,
@@ -286,7 +289,7 @@ impl ExportBuilder {
         let sync = self.opts.sync == SyncMode::Full;
         let len = file_len_for(ps, page_count);
         let tmp = self.tmp_path.clone();
-        let file = match self.file.take() {
+        let file = match self.file.as_ref() {
             Some(f) => f,
             None => return Err(PgError::internal("export builder used after finish")),
         };
@@ -308,11 +311,12 @@ impl ExportBuilder {
         if sync {
             file.sync_all().map_err(|e| error::fsync_failed(&tmp, &e))?;
         }
+        let file = self.file.take().ok_or_else(|| PgError::internal("export builder used after finish"))?;
         self.finished = true;
         Ok((file, sb))
     }
 
-    /// Complete the export: `finish_in_place`, then `vfs.rename(tmp, dest)`
+    /// Complete the export: `finish_in_place`, then atomic publication (no-replace unless overwrite)
     /// (`error::rename_failed`), then `sync_dir(parent_dir(dest))` (Full), drop the handle
     /// (unlock). On any failure the temp file is removed best-effort and `dest` is untouched
     /// (unless the failure is the final dir sync, after which dest is complete but its name may
@@ -322,12 +326,18 @@ impl ExportBuilder {
         let tmp = self.tmp_path.clone();
         let dest = self.final_path.clone();
         let sync = self.opts.sync == SyncMode::Full;
+        let overwrite = self.opts.overwrite;
         let pages_copied = self.copier.pages_copied;
         let (file, sb) = self.finish_in_place(directory_root)?;
-        if let Err(e) = vfs.rename(&tmp, &dest) {
-            drop(file);
+        let publication = if overwrite { vfs.rename(&tmp, &dest) } else { vfs.rename_noreplace(&tmp, &dest) };
+        if let Err(e) = publication {
             let _ = vfs.remove_file(&tmp);
-            return Err(error::rename_failed(&tmp, &dest, &e));
+            drop(file);
+            return Err(if e.kind() == std::io::ErrorKind::AlreadyExists {
+                error::open_failed(&dest, &e)
+            } else {
+                error::rename_failed(&tmp, &dest, &e)
+            });
         }
         drop(file);
         if sync {
@@ -347,7 +357,14 @@ impl ExportBuilder {
     /// Abandon: drop the handle and remove the temp file.
     pub fn abort(mut self) -> Result<()> {
         self.finished = true;
-        self.file = None;
+        // Keep the lock until the name has been removed. Unlock-then-unlink allows
+        // recovery to recycle the name and makes us remove another builder's file.
+        if let Some(file) = self.file.as_ref() {
+            if !self.vfs.is_current_file(&self.tmp_path, file.as_ref())
+                .map_err(|e| error::open_failed(&self.tmp_path, &e))? {
+                return Ok(());
+            }
+        }
         match self.vfs.remove_file(&self.tmp_path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -359,8 +376,12 @@ impl ExportBuilder {
 impl Drop for ExportBuilder {
     fn drop(&mut self) {
         if !self.finished {
+            if let Some(file) = self.file.as_ref() {
+                if self.vfs.is_current_file(&self.tmp_path, file.as_ref()).unwrap_or(false) {
+                    let _ = self.vfs.remove_file(&self.tmp_path);
+                }
+            }
             self.file = None;
-            let _ = self.vfs.remove_file(&self.tmp_path);
         }
     }
 }
@@ -394,6 +415,9 @@ impl PageSink for ExportBuilder {
     fn alloc_page(&mut self) -> Result<PageId> {
         if let Some(id) = self.free.pop() {
             return Ok(id);
+        }
+        if self.next_page >= max_page_count(self.sb.page_size) {
+            return Err(error::corrupt("page allocation limit reached"));
         }
         let id = PageId(self.next_page);
         self.next_page += 1;

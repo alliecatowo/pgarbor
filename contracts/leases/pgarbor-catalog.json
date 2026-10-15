@@ -1187,20 +1187,21 @@
     "crates/pgarbor-catalog/src/vrel/stats.rs"
    ],
    "model_tier": "haiku",
-   "summary": "Per-relation pg_stat*/pg_statio* views with zero counters.",
-   "spec": "Implement per the module docs; share one row-building helper across the 18 relations (they differ in which relations they list and which columns exist; use `builtin::system_rel` column names and set unlisted counters to 0 / NULL as documented). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "summary": "Per-relation pg_stat*/pg_statio* schemas; scans fail closed until counters exist.",
+   "spec": "Accepted amendment pgarbor-catalog-07-statistics-fail-closed supersedes zero-counter synthesis. Preserve public relation schemas and registry. Every scan returns PgError::unimplemented(\"CAT-39\", \"statistics counter collection\") until real measurements are connected. Never return fake zero/NULL counters or an empty success. Test every registered view before and after creating a table with an index. Do not modify oracle cases or expected outputs.",
    "reads": [
     "contracts/crates/pgarbor-catalog.md",
     "crates/pgarbor-catalog/src/vrel/mod.rs",
-    "crates/pgarbor-catalog/src/builtin/system_rels.rs"
+    "crates/pgarbor-catalog/src/builtin/system_rels.rs",
+    "contracts/amendments/pgarbor-catalog-07-statistics-fail-closed.md"
    ],
    "depends_on_leases": [
     "CAT-28"
    ],
    "acceptance": [
-    "pg_stat_user_tables has one row per user table with seq_scan 0 and NULL last_* timestamps; sys variants list only pg_catalog/information_schema relations",
-    "pg_statio_user_sequences lists sequences with blks_read 0",
-    "all rows match the schema column count"
+    "All 18 registered statistics views retain their PostgreSQL schemas.",
+    "Each statistics scan returns leased SQLSTATE 0A000 with or without user relations.",
+    "No synthetic statistics rows are returned."
    ]
   },
   {

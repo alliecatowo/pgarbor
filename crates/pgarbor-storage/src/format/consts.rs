@@ -111,6 +111,13 @@ pub fn file_len_for(page_size: u32, page_count: u64) -> u64 {
     PAGES_OFFSET + page_count * page_size as u64
 }
 
+/// Largest page count whose file length fits a signed OS file offset. Reserve one page
+/// for the next allocation; writers separately refuse exhausted allocation/sequence counters.
+/// Caller supplies a validated nonzero page size.
+pub fn max_page_count(page_size: u32) -> u64 {
+    (i64::MAX as u64 - PAGES_OFFSET) / u64::from(page_size)
+}
+
 // CONTRACT
 /// Maximum payload bytes in one page.
 pub fn payload_capacity(page_size: u32) -> usize {

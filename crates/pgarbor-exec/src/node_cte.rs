@@ -9,7 +9,8 @@
 //!
 //! ## `ensure_cte(ex, id)` (lazy evaluation)
 //! * `Done`: nothing. `Running` (a non-recursive CTE referencing itself cannot happen): XX000.
-//! * `CteBodyRt::Query(op)`: take the operator out (see runtime module docs), set `Running`, drain it
+//! * `CteBodyRt::Query(op)` (WITH RECURSIVE; PG semantics):
+//!   take the operator out (see runtime module docs), set `Running`, drain it
 //!   into a `Vec<Row>`, store `rows = Rc::new(..)`, `Done`.
 //! * `CteBodyRt::Recursive{non_recursive, recursive, union_all}` (WITH RECURSIVE; PG semantics):
 //!   `result = []`; run the non-recursive term fully: its rows (de-duplicated against everything so far
@@ -33,36 +34,484 @@
 //!   columns; `filter` over it.
 //! * `WorkTableScan{cte_id, filter}`: yields the rows currently in `ctes[cte_id].worktable` (a snapshot
 //!   cloned at (re)scan time); `rescan` re-reads the work table. Output row = CTE columns.
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use pgarbor_common::{PgError, Result};
-use pgarbor_plan::plan::{CteDef, CteScan, PlanNode, WorkTableScan};
+use pgarbor_plan::plan::{CteBodyPlan, CteDef, CteScan, OutCol, Plan, PlanNode, WorkTableScan};
+use pgarbor_sql::ir::BoundExpr;
+use pgarbor_types::{Datum, TypeId};
 
 use crate::build::BuildCtx;
-use crate::runtime::{CteRt, Executor, RowSource};
+use crate::eval::eval_opt_qual;
+use crate::runtime::{CteBodyRt, CteRt, CteState, Executor, Row, RowSource};
+use crate::sortutil::row_key_bytes;
 
-#[allow(unused_variables)]
-pub fn build_cte_scan(node: &PlanNode, n: &CteScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
-    Err(PgError::unimplemented("EXE-15", "CteScan node (node_cte::build_cte_scan)"))
+/// `CteScan` operator (module docs).
+struct CteScanOp {
+    cte_id: u32,
+    filter: Option<BoundExpr>,
+    /// Shared buffer, taken on the first `next` after construction (CTE evaluated by then).
+    rows: Option<Rc<Vec<Row>>>,
+    pos: usize,
+    skipped: u32,
 }
 
-#[allow(unused_variables)]
+impl RowSource for CteScanOp {
+    fn next(&mut self, ex: &mut Executor) -> Result<Option<Row>> {
+        if self.rows.is_none() {
+            ensure_cte(ex, self.cte_id)?;
+            let idx = cte_index(ex, self.cte_id)?;
+            self.rows = Some(Rc::clone(&ex.rt.ctes[idx].rows));
+        }
+        loop {
+            let row = match self.rows.as_ref().and_then(|r| r.get(self.pos)) {
+                Some(r) => r.clone(),
+                None => return Ok(None),
+            };
+            self.pos += 1;
+            if eval_opt_qual(ex, &self.filter, &row)? {
+                return Ok(Some(row));
+            }
+            ex.tick(&mut self.skipped)?;
+        }
+    }
+
+    fn rescan(&mut self, _ex: &mut Executor, _params: &[Datum]) -> Result<()> {
+        self.pos = 0;
+        Ok(())
+    }
+}
+
+/// `WorkTableScan` operator (module docs).
+struct WorkTableScanOp {
+    cte_id: u32,
+    filter: Option<BoundExpr>,
+    /// Snapshot of the work table, taken at (re)scan time.
+    snap: Option<Vec<Row>>,
+    pos: usize,
+    skipped: u32,
+}
+
+impl RowSource for WorkTableScanOp {
+    fn next(&mut self, ex: &mut Executor) -> Result<Option<Row>> {
+        if self.snap.is_none() {
+            self.snap = Some(snapshot_worktable(ex, self.cte_id)?);
+        }
+        loop {
+            let row = match self.snap.as_ref().and_then(|r| r.get(self.pos)) {
+                Some(r) => r.clone(),
+                None => return Ok(None),
+            };
+            self.pos += 1;
+            if eval_opt_qual(ex, &self.filter, &row)? {
+                return Ok(Some(row));
+            }
+            ex.tick(&mut self.skipped)?;
+        }
+    }
+
+    fn rescan(&mut self, ex: &mut Executor, _params: &[Datum]) -> Result<()> {
+        self.snap = Some(snapshot_worktable(ex, self.cte_id)?);
+        self.pos = 0;
+        Ok(())
+    }
+}
+
+/// Index of CTE `id` in `Runtime::ctes` (normally `id` itself).
+fn cte_index(ex: &Executor, id: u32) -> Result<usize> {
+    if let Some(c) = ex.rt.ctes.get(id as usize) {
+        if c.id == id {
+            return Ok(id as usize);
+        }
+    }
+    ex.rt
+        .ctes
+        .iter()
+        .position(|c| c.id == id)
+        .ok_or_else(|| PgError::internal(format!("unknown CTE id {id}")))
+}
+
+/// Copy of the current work table of CTE `id`.
+fn snapshot_worktable(ex: &Executor, id: u32) -> Result<Vec<Row>> {
+    let idx = cte_index(ex, id)?;
+    let guard = ex.rt.ctes[idx].worktable.borrow();
+    Ok((*guard).clone())
+}
+
+/// Definition of CTE `id` in the plan.
+fn def_for(plan: &Plan, id: u32) -> Result<&CteDef> {
+    plan.ctes
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| PgError::internal(format!("unknown CTE id {id} in plan")))
+}
+
+/// The scan node must produce exactly the CTE's columns.
+fn check_width(node: &PlanNode, def: &CteDef) -> Result<()> {
+    if node.width() != def.columns.len() {
+        return Err(PgError::internal(format!(
+            "scan of CTE \"{}\" produces {} columns but the CTE has {}",
+            def.name,
+            node.width(),
+            def.columns.len()
+        )));
+    }
+    Ok(())
+}
+
+pub fn build_cte_scan(node: &PlanNode, n: &CteScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
+    let def = def_for(b.plan, n.cte_id)?;
+    check_width(node, def)?;
+    Ok(Box::new(CteScanOp { cte_id: n.cte_id, filter: n.filter.clone(), rows: None, pos: 0, skipped: 0 }))
+}
+
 pub fn build_worktable_scan(node: &PlanNode, n: &WorkTableScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
-    Err(PgError::unimplemented("EXE-15", "WorkTableScan node (node_cte::build_worktable_scan)"))
+    let def = def_for(b.plan, n.cte_id)?;
+    if !matches!(def.body, CteBodyPlan::Recursive { .. }) {
+        return Err(PgError::internal(format!(
+            "work table scan of CTE \"{}\" outside a recursive CTE",
+            def.name
+        )));
+    }
+    check_width(node, def)?;
+    Ok(Box::new(WorkTableScanOp { cte_id: n.cte_id, filter: n.filter.clone(), snap: None, pos: 0, skipped: 0 }))
 }
 
 /// Runtime form of one CTE definition (module docs).
-#[allow(unused_variables)]
 pub fn build_cte_rt(def: &CteDef, b: &mut BuildCtx) -> Result<CteRt> {
-    Err(PgError::unimplemented("EXE-15", "CTE runtime construction (node_cte::build_cte_rt)"))
+    let body = match &def.body {
+        CteBodyPlan::Query(node) => CteBodyRt::Query(b.child(node)?),
+        CteBodyPlan::Recursive { non_recursive, recursive, union_all } => {
+            let nr = b.child(non_recursive)?;
+            let rec = b.child(recursive)?;
+            CteBodyRt::Recursive { non_recursive: nr, recursive: rec, union_all: *union_all }
+        }
+        CteBodyPlan::Modify(node) => CteBodyRt::Modify(b.child(node)?),
+    };
+    Ok(CteRt {
+        id: def.id,
+        name: def.name.clone(),
+        columns: def.columns.clone(),
+        materialize: def.materialize,
+        body,
+        state: CteState::Pending,
+        rows: Rc::new(Vec::new()),
+        worktable: Rc::new(RefCell::new(Vec::new())),
+    })
+}
+
+/// Drain an operator to exhaustion, polling interrupts every 1024 rows.
+fn drain_rows(ex: &mut Executor, op: &mut dyn RowSource) -> Result<Vec<Row>> {
+    let mut out: Vec<Row> = Vec::new();
+    let mut ticks: u32 = 0;
+    while let Some(row) = op.next(ex)? {
+        out.push(row);
+        ex.tick(&mut ticks)?;
+    }
+    Ok(out)
+}
+
+/// Duplicate elimination for `UNION` (`!union_all`) recursion: keys over all columns, NULLs equal.
+struct Dedup {
+    union_all: bool,
+    types: Vec<TypeId>,
+    slots: Vec<usize>,
+    seen: HashSet<Vec<u8>>,
+}
+
+impl Dedup {
+    fn new(columns: &[OutCol], union_all: bool) -> Dedup {
+        Dedup {
+            union_all,
+            types: columns.iter().map(|c| c.ty).collect(),
+            slots: (0..columns.len()).collect(),
+            seen: HashSet::new(),
+        }
+    }
+
+    /// `true` when `row` is new (and remembers it). Always `true` for `UNION ALL`.
+    fn admit(&mut self, ex: &Executor, row: &[Datum]) -> Result<bool> {
+        if self.union_all {
+            return Ok(true);
+        }
+        let key = row_key_bytes(ex, &self.types, &self.slots, row)?;
+        Ok(self.seen.insert(key))
+    }
+}
+
+/// Iterate a recursive CTE until its working table is empty (module docs).
+fn run_recursive(
+    ex: &mut Executor,
+    idx: usize,
+    non_recursive: &mut dyn RowSource,
+    recursive: &mut dyn RowSource,
+    union_all: bool,
+) -> Result<Vec<Row>> {
+    let mut dedup = Dedup::new(&ex.rt.ctes[idx].columns, union_all);
+    let worktable = Rc::clone(&ex.rt.ctes[idx].worktable);
+    let mut result: Vec<Row> = Vec::new();
+    let mut ticks: u32 = 0;
+
+    let first = drain_rows(ex, non_recursive)?;
+    let mut working: Vec<Row> = Vec::with_capacity(first.len());
+    for row in first {
+        ex.tick(&mut ticks)?;
+        if dedup.admit(ex, &row)? {
+            result.push(row.clone());
+            working.push(row);
+        }
+    }
+
+    while !working.is_empty() {
+        ex.check_interrupts()?;
+        *worktable.borrow_mut() = working;
+        recursive.rescan(ex, &[])?;
+        let produced = drain_rows(ex, recursive)?;
+        let mut next_rows: Vec<Row> = Vec::with_capacity(produced.len());
+        for row in produced {
+            ex.tick(&mut ticks)?;
+            if dedup.admit(ex, &row)? {
+                result.push(row.clone());
+                next_rows.push(row);
+            }
+        }
+        working = next_rows;
+    }
+    worktable.borrow_mut().clear();
+    Ok(result)
+}
+
+/// Run one CTE body to completion (the body is owned by the caller while it runs).
+fn run_body(ex: &mut Executor, idx: usize, body: &mut CteBodyRt) -> Result<Vec<Row>> {
+    match body {
+        CteBodyRt::Query(op) | CteBodyRt::Modify(op) => drain_rows(ex, &mut **op),
+        CteBodyRt::Recursive { non_recursive, recursive, union_all } => {
+            run_recursive(ex, idx, &mut **non_recursive, &mut **recursive, *union_all)
+        }
+        CteBodyRt::Taken => Err(PgError::internal("CTE body is already being evaluated")),
+    }
 }
 
 /// Execute CTE `id` if still pending (module docs).
-#[allow(unused_variables)]
 pub fn ensure_cte(ex: &mut Executor, id: u32) -> Result<()> {
-    Err(PgError::unimplemented("EXE-15", "CTE evaluation (node_cte::ensure_cte)"))
+    let idx = cte_index(ex, id)?;
+    match ex.rt.ctes[idx].state {
+        CteState::Done => return Ok(()),
+        CteState::Running => {
+            return Err(PgError::internal(format!(
+                "CTE \"{}\" is referenced while it is being evaluated",
+                ex.rt.ctes[idx].name
+            )))
+        }
+        CteState::Pending => {}
+    }
+    // Take the body out so the operators can run while the CTE runtime is borrowed by `ex`.
+    let mut body = std::mem::replace(&mut ex.rt.ctes[idx].body, CteBodyRt::Taken);
+    ex.rt.ctes[idx].state = CteState::Running;
+    let result = run_body(ex, idx, &mut body);
+    ex.rt.ctes[idx].body = body;
+    match result {
+        Ok(rows) => {
+            ex.rt.ctes[idx].rows = Rc::new(rows);
+            ex.rt.ctes[idx].state = CteState::Done;
+            Ok(())
+        }
+        Err(e) => {
+            ex.rt.ctes[idx].state = CteState::Pending;
+            Err(e)
+        }
+    }
 }
 
 /// Run all data-modifying CTEs to completion (module docs).
-#[allow(unused_variables)]
 pub fn run_modify_ctes(ex: &mut Executor) -> Result<()> {
-    Err(PgError::unimplemented("EXE-15", "data-modifying CTE execution (node_cte::run_modify_ctes)"))
+    let mut ids: Vec<u32> = ex
+        .rt
+        .ctes
+        .iter()
+        .filter(|c| matches!(c.body, CteBodyRt::Modify(_)))
+        .map(|c| c.id)
+        .collect();
+    ids.sort_unstable();
+    for id in ids {
+        ensure_cte(ex, id)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    use pgarbor_types::context::IoConfig;
+
+    use crate::context::{ExecContext, NoGuc, NoServices, SessionEnv};
+    use crate::memtxn::MemTxn;
+    use crate::runtime::Runtime;
+
+    /// Source yielding fixed rows; counts `next` calls.
+    struct Fixed {
+        rows: Vec<Row>,
+        pos: usize,
+        calls: Rc<Cell<u32>>,
+    }
+
+    impl RowSource for Fixed {
+        fn next(&mut self, _ex: &mut Executor) -> Result<Option<Row>> {
+            self.calls.set(self.calls.get() + 1);
+            let r = self.rows.get(self.pos).cloned();
+            self.pos += 1;
+            Ok(r)
+        }
+        fn rescan(&mut self, _ex: &mut Executor, _params: &[Datum]) -> Result<()> {
+            self.pos = 0;
+            Ok(())
+        }
+    }
+
+    /// Recursive term: for each working-table row `n < limit` yields `n + 1`.
+    struct Succ {
+        wt: Rc<RefCell<Vec<Row>>>,
+        limit: i32,
+        out: Vec<Row>,
+        pos: usize,
+    }
+
+    impl RowSource for Succ {
+        fn next(&mut self, _ex: &mut Executor) -> Result<Option<Row>> {
+            let r = self.out.get(self.pos).cloned();
+            self.pos += 1;
+            Ok(r)
+        }
+        fn rescan(&mut self, _ex: &mut Executor, _params: &[Datum]) -> Result<()> {
+            let limit = self.limit;
+            let next: Vec<Row> = self
+                .wt
+                .borrow()
+                .iter()
+                .filter_map(|r| match r.first() {
+                    Some(Datum::Int4(n)) if *n < limit => Some(vec![Datum::Int4(*n + 1)]),
+                    _ => None,
+                })
+                .collect();
+            self.out = next;
+            self.pos = 0;
+            Ok(())
+        }
+    }
+
+    fn int_cte(id: u32, body: CteBodyRt, wt: Rc<RefCell<Vec<Row>>>) -> CteRt {
+        CteRt {
+            id,
+            name: format!("c{id}"),
+            columns: vec![OutCol { name: "n".into(), ty: TypeId::INT4 }],
+            materialize: true,
+            body,
+            state: CteState::Pending,
+            rows: Rc::new(Vec::new()),
+            worktable: wt,
+        }
+    }
+
+    /// Build a session around `ctes`, run `steps`, and hand the CTE runtimes back.
+    fn exec_ctes(ctes: Vec<CteRt>, steps: impl FnOnce(&mut Executor) -> Result<()>) -> Result<Vec<CteRt>> {
+        let (_kv, env) = pgarbor_catalog::testing::bootstrapped()?;
+        let g = NoGuc;
+        let s = NoServices;
+        let cell = Cell::new(12345);
+        let se = SessionEnv::new(env, IoConfig::default(), &g, &s, &cell, 0, 0);
+        let mut txn = MemTxn::new();
+        let mut cx = ExecContext::new(&mut txn, se);
+        let mut rt = Runtime::default();
+        rt.ctes = ctes;
+        let mut ex = Executor::new(&mut rt, &mut cx);
+        steps(&mut ex)?;
+        drop(ex);
+        Ok(rt.ctes)
+    }
+
+    fn int_rows(rows: &Rc<Vec<Row>>) -> Vec<i32> {
+        rows.iter()
+            .map(|r| match r.first() {
+                Some(Datum::Int4(n)) => *n,
+                _ => -1,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recursive_union_all_yields_1_to_5() -> Result<()> {
+        let wt = Rc::new(RefCell::new(Vec::new()));
+        let calls = Rc::new(Cell::new(0));
+        let nonrec = Fixed { rows: vec![vec![Datum::Int4(1)]], pos: 0, calls };
+        let rec = Succ { wt: Rc::clone(&wt), limit: 5, out: Vec::new(), pos: 0 };
+        let body = CteBodyRt::Recursive { non_recursive: Box::new(nonrec), recursive: Box::new(rec), union_all: true };
+        let ctes = exec_ctes(vec![int_cte(0, body, wt)], |ex| ensure_cte(ex, 0))?;
+        assert_eq!(ctes[0].state, CteState::Done);
+        assert_eq!(int_rows(&ctes[0].rows), vec![1, 2, 3, 4, 5]);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_cte_is_executed_once() -> Result<()> {
+        let calls = Rc::new(Cell::new(0));
+        let q = Fixed { rows: vec![vec![Datum::Int4(7)]], pos: 0, calls: Rc::clone(&calls) };
+        let wt = Rc::new(RefCell::new(Vec::new()));
+        let ctes = exec_ctes(vec![int_cte(0, CteBodyRt::Query(Box::new(q)), wt)], |ex| {
+            ensure_cte(ex, 0)?;
+            ensure_cte(ex, 0)
+        })?;
+        // One row plus the terminating `None`, drained exactly once.
+        assert_eq!(calls.get(), 2);
+        assert_eq!(int_rows(&ctes[0].rows), vec![7]);
+        Ok(())
+    }
+
+    #[test]
+    fn unreferenced_modify_cte_runs_eagerly() -> Result<()> {
+        let calls = Rc::new(Cell::new(0));
+        let m = Fixed { rows: Vec::new(), pos: 0, calls: Rc::clone(&calls) };
+        let wt = Rc::new(RefCell::new(Vec::new()));
+        let ctes = exec_ctes(vec![int_cte(0, CteBodyRt::Modify(Box::new(m)), wt)], run_modify_ctes)?;
+        assert!(calls.get() >= 1);
+        assert_eq!(ctes[0].state, CteState::Done);
+        Ok(())
+    }
+
+    #[test]
+    fn cte_scan_replays_after_rescan() -> Result<()> {
+        let calls = Rc::new(Cell::new(0));
+        let q = Fixed { rows: vec![vec![Datum::Int4(1)], vec![Datum::Int4(2)]], pos: 0, calls };
+        let wt = Rc::new(RefCell::new(Vec::new()));
+        exec_ctes(vec![int_cte(0, CteBodyRt::Query(Box::new(q)), wt)], |ex| {
+            let mut op = CteScanOp { cte_id: 0, filter: None, rows: None, pos: 0, skipped: 0 };
+            let first = drain_rows(ex, &mut op)?;
+            assert_eq!(first.len(), 2);
+            op.rescan(ex, &[])?;
+            let again = drain_rows(ex, &mut op)?;
+            assert_eq!(again.len(), 2);
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "needs EXE-22"]
+    fn union_recursion_deduplicates() -> Result<()> {
+        let calls = Rc::new(Cell::new(0));
+        let nonrec = Fixed {
+            rows: vec![vec![Datum::Int4(1)], vec![Datum::Int4(1)], vec![Datum::Int4(2)]],
+            pos: 0,
+            calls,
+        };
+        let rec = Fixed { rows: Vec::new(), pos: 0, calls: Rc::new(Cell::new(0)) };
+        let wt = Rc::new(RefCell::new(Vec::new()));
+        let body = CteBodyRt::Recursive { non_recursive: Box::new(nonrec), recursive: Box::new(rec), union_all: false };
+        let ctes = exec_ctes(vec![int_cte(0, body, wt)], |ex| ensure_cte(ex, 0))?;
+        assert_eq!(int_rows(&ctes[0].rows), vec![1, 2]);
+        Ok(())
+    }
 }

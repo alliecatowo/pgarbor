@@ -1,6 +1,6 @@
 # Amendment request pgarbor-plan-02: btree strategy and hash support metadata for the planner
 
-Status: PROPOSED (architect, pgarbor-plan). Requirement on pgarbor-types (generator `gen/gen_tables.py`).
+Status: DEFERRED (lead-engineer decision, 2026-10-15).
 
 ## Problem
 
@@ -29,3 +29,7 @@ heuristic (same type, or int2/int4/int8, float4/float8, text-like, datetime fami
 ## Affected crates
 
 pgarbor-types (generator + `catalog_data`), pgarbor-plan (`index.rs`, `join.rs`, `agg.rs`).
+
+## Steward decision (2026-10-15)
+
+No verified pg_amop extraction is available in this environment. Do not fabricate catalog metadata or regenerate oracle output. Existing heuristics remain a compatibility risk; mixed-type hash/merge keys must fall back to nested loops until their equality/hash equivalence is proven.

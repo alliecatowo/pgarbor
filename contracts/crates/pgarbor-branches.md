@@ -151,7 +151,10 @@ overlay two trees in one transaction (amendment pgarbor-core-02).
 
 - **Copy strategy.** `ExportBuilder` copies only the pages reachable from the branch's roots. It
   writes `<dest>.detach-tmp`, reopens and verifies it, then renames it to `dest` and syncs the
-  directory.
+  directory. A stable `.detach-guard` serializes builders across copy/reflink paths; guard
+  reclamation and temporary cleanup require exclusive locks and pathname identity checks.
+  No-replace publication is atomic, and the verified file stays locked through publication
+  (accepted amendment branches-03).
 - **Reflink strategy.** Linux `FICLONE`, macOS `clonefile`.
   1. Hold the container writer (`begin_write`) as a barrier while cloning the whole file.
   2. Re-identify the temp file: new UUID in one slot, the other slot zeroed.
@@ -199,4 +202,4 @@ overlay two trees in one transaction (amendment pgarbor-core-02).
 - Reflink on macOS is written but is not compiled by the Linux CI `cargo check`.
 - Windows: no reflink and no directory fsync.
 - Only database oid 5 exists per branch. CREATE DATABASE is unimplemented.
-- `reidentify_file` lives here until amendment pgarbor-branches-02 moves it into storage.
+- `reidentify_file` delegates to storage recovery::reidentify (branches-02).
