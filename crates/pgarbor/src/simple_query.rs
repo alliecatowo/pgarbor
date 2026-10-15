@@ -49,8 +49,8 @@ struct StepFailure {
 
 /// Wall-clock time in unix milliseconds for `pg_stat_activity` (0 if the clock is before 1970).
 fn now_unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    pgarbor_common::time::SystemTime::now()
+        .duration_since(pgarbor_common::time::UNIX_EPOCH)
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
 }

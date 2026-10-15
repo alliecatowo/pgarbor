@@ -1,7 +1,7 @@
 //! Small shared value types of the transactional core. CONTRACT. Data only, fully implemented.
 use pgarbor_common::{CommitSeq, PgError, Result, SqlState};
 use std::fmt;
-use std::time::Instant;
+use pgarbor_common::time::Instant;
 
 // CONTRACT
 /// Backend process id as PostgreSQL reports it (`pg_backend_pid()`, `pg_stat_activity.pid`,

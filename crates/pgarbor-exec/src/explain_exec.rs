@@ -20,7 +20,7 @@
 //!    table); TEXT and YAML: one row per output line; JSON: ONE row whose value is
 //!    `Datum::Json(lines.join("\n"))` with column type `json`; XML: whatever the planner returns (0A000).
 //!    Tag `EXPLAIN`.
-use std::time::Instant;
+use pgarbor_common::time::Instant;
 
 use pgarbor_common::{PgError, Result, SqlState};
 use pgarbor_plan::explain_fmt::{render_analyze, ActualStats, NodeActual};

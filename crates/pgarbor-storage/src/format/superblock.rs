@@ -354,15 +354,15 @@ pub fn random_db_uuid() -> DatabaseUuid {
         // SAFETY: buffer is valid for 16 writable bytes; flags 0 = blocking urandom pool.
         let _ = unsafe { libc::getrandom(out.as_mut_ptr() as *mut libc::c_void, out.len(), 0) };
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = pgarbor_common::time::SystemTime::now()
+        .duration_since(pgarbor_common::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     for half in 0..2 {
         let mut h = RandomState::new().build_hasher();
         h.write_u64(now);
         h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
-        h.write_u32(std::process::id());
+        h.write_u32(pgarbor_common::time::process_id());
         h.write_usize(half);
         let mix = h.finish().to_le_bytes();
         for i in 0..8 {
@@ -376,8 +376,8 @@ pub fn random_db_uuid() -> DatabaseUuid {
 
 /// Current wall-clock time in Unix milliseconds (0 if the clock is before 1970).
 pub fn now_unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    pgarbor_common::time::SystemTime::now()
+        .duration_since(pgarbor_common::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }

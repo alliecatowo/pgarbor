@@ -58,11 +58,31 @@ const M_PI: f64 = std::f64::consts::PI;
 
 /// Special functions that Rust's `std` does not provide. These resolve to the platform libm, the
 /// same library PostgreSQL calls.
+#[cfg(not(target_arch = "wasm32"))]
 unsafe extern "C" {
     safe fn erf(x: f64) -> f64;
     safe fn erfc(x: f64) -> f64;
     safe fn tgamma(x: f64) -> f64;
     safe fn lgamma(x: f64) -> f64;
+}
+
+/// wasm32 has no platform libm: use the pure-Rust `libm` crate (results may differ from glibc in the
+/// last ulp; the oracle comparison is only authoritative for native builds).
+#[cfg(target_arch = "wasm32")]
+fn erf(x: f64) -> f64 {
+    libm::erf(x)
+}
+#[cfg(target_arch = "wasm32")]
+fn erfc(x: f64) -> f64 {
+    libm::erfc(x)
+}
+#[cfg(target_arch = "wasm32")]
+fn tgamma(x: f64) -> f64 {
+    libm::tgamma(x)
+}
+#[cfg(target_arch = "wasm32")]
+fn lgamma(x: f64) -> f64 {
+    libm::lgamma(x)
 }
 
 // ---------------------------------------------------------------------------------------------

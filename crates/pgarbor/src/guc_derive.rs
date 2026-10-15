@@ -20,7 +20,8 @@
 //! Reference: PG 18 `utils/adt/datetime.c` (`check_datestyle`), `utils/misc/guc.c` (`config_enum_lookup_by_name`,
 //! boolean and integer GUC parsing), `access/transam/xact.c` (`DefaultXactIsoLevel`, `DefaultXactReadOnly`,
 //! `DefaultXactDeferrable`).
-use std::time::{Duration, Instant};
+use std::time::{Duration};
+use pgarbor_common::time::{Instant};
 
 use pgarbor_catalog::SearchPath;
 use pgarbor_common::{PgError, Result, SqlState};

@@ -252,7 +252,7 @@ impl Instrumented {
 
 impl RowSource for Instrumented {
     fn next(&mut self, ex: &mut Executor) -> Result<Option<Row>> {
-        let t0 = std::time::Instant::now();
+        let t0 = pgarbor_common::time::Instant::now();
         let r = self.inner.next(ex)?;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         let mut s = self.stats.borrow_mut();

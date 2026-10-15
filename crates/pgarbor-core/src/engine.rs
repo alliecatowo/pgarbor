@@ -48,7 +48,11 @@ use pgarbor_branches::{
 };
 use pgarbor_common::{BranchId, Oid, PageId, Result, TxnId};
 use pgarbor_storage::format::superblock::now_unix_ms;
-use pgarbor_storage::{CompactOptions, CompactReport, Container, OsVfs, Snapshot, TreeSnapshot, Vfs};
+#[cfg(not(target_arch = "wasm32"))]
+use pgarbor_storage::OsVfs;
+#[cfg(target_arch = "wasm32")]
+use pgarbor_storage::MemVfs;
+use pgarbor_storage::{CompactOptions, CompactReport, Container, Snapshot, TreeSnapshot, Vfs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -138,7 +142,17 @@ impl Engine {
     }
 
     fn vfs_of(options: &EngineOptions) -> Arc<dyn Vfs> {
-        options.vfs.clone().unwrap_or_else(|| Arc::new(OsVfs))
+        options.vfs.clone().unwrap_or_else(|| {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                Arc::new(OsVfs)
+            }
+            // wasm32 has no OS file system: the default VFS is memory-only.
+            #[cfg(target_arch = "wasm32")]
+            {
+                Arc::new(MemVfs::new())
+            }
+        })
     }
 
     /// Open an existing `.pga`: `Container::open_with(vfs, path, &OpenOptions{read_only, sync,

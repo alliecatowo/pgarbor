@@ -24,7 +24,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use pgarbor_common::time::{SystemTime, UNIX_EPOCH};
 
 use pgarbor_catalog::session::{ActivityRow, CursorRow, LockRow, PreparedStatementRow, SettingRow, SizeKind};
 use pgarbor_catalog::CatalogEnv;

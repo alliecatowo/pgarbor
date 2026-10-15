@@ -6,7 +6,7 @@ use crate::types::{SessionId, SubXactId};
 use pgarbor_common::TxnId;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Instant;
+use pgarbor_common::time::Instant;
 
 // CONTRACT
 /// Lifetime of a held lock.

@@ -32,7 +32,7 @@
 //!   `Session`... derive from `Txn`'s start time `started_unix_ms` via activity `xact_start_ms`);
 //!   statement = now at statement start. (`now()` must be stable inside a transaction.)
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use pgarbor_common::time::{SystemTime, UNIX_EPOCH};
 
 use pgarbor_catalog::{invalidation, CatalogEnv};
 use pgarbor_common::{PgError, Result};

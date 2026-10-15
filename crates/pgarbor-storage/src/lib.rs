@@ -54,6 +54,8 @@ pub use container::{
 pub use doctor::{DoctorReport, Issue, IssueSeverity, SpaceReport};
 pub use export::{ExportBuilder, ExportOptions, ExportReport};
 pub use format::{PageKind, SlotStatus, Superblock};
-pub use io::{FileIo, LockMode, MemFile, MemVfs, OpenMode, OsFile, OsVfs, Vfs};
+pub use io::{FileIo, LockMode, MemFile, MemVfs, OpenMode, Vfs};
+#[cfg(not(target_arch = "wasm32"))]
+pub use io::{OsFile, OsVfs};
 pub use pager::{Page, PageCache, PageRef, PageSink, PageSource, Pager};
 pub use roots::{NamedRoot, NoNestedRoots, PrefixU64Roots, RootResolver};

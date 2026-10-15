@@ -65,8 +65,8 @@ impl Database {
     /// Wrap an engine (shared by the constructors and by tests).
     pub(crate) fn from_engine(engine: Arc<Engine>, opts: OpenOptions, path: PathBuf) -> Database {
         const PG_EPOCH_OFFSET_US: i64 = 946_684_800_000_000;
-        let now_us = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now_us = pgarbor_common::time::SystemTime::now()
+            .duration_since(pgarbor_common::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as i64)
             .unwrap_or(0);
         Database {
