@@ -1,0 +1,1458 @@
+{
+ "crate": "pgarbor-sql",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "SQL-01",
+   "task_ids": [
+    "SQL-01",
+    "SQL-02"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/parser.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Statement splitting and parsing with sqlparser 0.63 (PostgreSqlDialect), source spans, PG syntax errors.",
+   "spec": "Implement `parse`, `parse_expr_text` following the algorithm in the module docs: tokenize the whole string with `Tokenizer::new(&PostgreSqlDialect{}, sql).tokenize_with_location()`, split on top-level `Token::SemiColon`, build `Parser::new(&dialect).with_recursion_limit(RECURSION_LIMIT).with_tokens_with_locations(chunk_tokens_plus_eof)`, call `parse_statement()`, require EOF, route extras to `parser_extra`. Read sqlparser `src/parser/mod.rs` (`parse_statements`, `parse_statement`, `peek_token`, `expected`) and `src/tokenizer.rs` (`Token`, `TokenWithSpan`, `Location`, `Span`). Byte ranges come from `SourceMap::byte_offset`; the statement `pos` from `SourceMap::char_pos`. Errors go through `syntax_error::{translate_parser_error, translate_tokenizer_error}` (SQL-03; call them, do not reimplement) and `classify::check_supported`. Handle `BEGIN ATOMIC` function bodies as the docs say. Required unit tests: the list at the end of the module docs. `parse_expr_text` must accept `pg_get_expr` output such as `nextval('s'::regclass)`, `'x'::character varying`, `(a > 0)`, `ARRAY[1, 2]`, `(a)::text`. Replace every `Err(PgError::unimplemented(\"SQL-01\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/source.rs",
+    "crates/pgarbor-sql/src/classify.rs",
+    "crates/pgarbor-sql/src/syntax_error.rs",
+    "crates/pgarbor-sql/src/parser_extra.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/../parser/mod.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/../tokenizer.rs"
+   ],
+   "depends_on_leases": [
+    "SQL-02",
+    "SQL-03"
+   ],
+   "acceptance": [
+    "`select 1; select 2` -> 2 RawStatements with text `select 1` / `select 2`, pos 1 and 11",
+    "`select ';'; select 2` and `select $$a;b$$` do not split inside literals",
+    "`` (empty), `;;` and `-- c` parse to zero statements",
+    "`select 1 2` -> 42601 `syntax error at or near \"2\"` position 10 and nothing is returned for the earlier statements of the same string",
+    "`refresh materialized view v` -> Parsed::Extra; `show tables` follows classify; `create trigger ...` -> 0A000 at parse time",
+    "`create function f() returns int language sql begin atomic select 1; select 2; end` is ONE statement"
+   ]
+  },
+  {
+   "lease_id": "SQL-03",
+   "task_ids": [
+    "SQL-01",
+    "SQL-13"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/syntax_error.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] sqlparser/tokenizer error -> PostgreSQL syntax error (message, position, SQLSTATE 42601).",
+   "spec": "Implement `translate_parser_error` and `translate_tokenizer_error` per the rules in the module docs, using `location_from_message`, `SourceMap::{char_pos, byte_offset, slice, end_pos}` and `diag::{syntax_error_near, syntax_error_eof, unterminated, syntax}`. To print the offending token exactly as PG does, slice the SOURCE text between the token's `span.start` and `span.end` (do not use `Token`'s Display, which re-renders). RecursionLimitExceeded -> 54001 with the HINT from the docs. The `Result` wrapper in the signatures is only for the placeholder; return `Ok(error_value)` always. Unit tests with the oracle fixtures listed in the docs (build the inputs by running the real sqlparser in the test: tokenize + parse and feed the error). Replace every `Err(PgError::unimplemented(\"SQL-03\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "crates/pgarbor-sql/src/diag.rs",
+    "crates/pgarbor-sql/src/source.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/../parser/mod.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/../tokenizer.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`select 1 2` -> message `syntax error at or near \"2\"`, position 10",
+    "`selec 1` -> near \"selec\" position 1",
+    "`select (` -> `syntax error at end of input` position 9",
+    "`select 'abc` -> `unterminated quoted string at or near \"'abc\"` position 8",
+    "`select 1 from` -> end of input position 14",
+    "multi-line input: position counts characters across newlines"
+   ]
+  },
+  {
+   "lease_id": "SQL-04",
+   "task_ids": [
+    "SQL-14",
+    "SQL-07"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/dispatch.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Statement dispatch: bind_statement, bind_inner_statement, extras routing, parameter finalization.",
+   "spec": "Implement the three functions following the routing table in the module docs. `bind_statement`: create `Binder::new(ctx, &stmt.source)`, `classify::check_supported`, route, `params::finalize`, assemble `BindOutput`. `bind_inner_statement` is a big `match` over `sqlparser::ast::Statement`: Query -> `select::bind_query_statement`; Insert(ins) -> `insert::bind_insert`; Update/Delete -> `update_delete`; CreateTable -> `ddl_table::bind_create_table`; ... every Handled family of `classify` MUST have an arm; a family that classify calls Handled but has no arm is an internal error `PgError::internal(\"statement not routed: ...\")` (never a silent fallback). Use `stmt.text` for PREPARE. Empty statements are never passed (parse drops them). Unit tests: bind `BEGIN`, `SELECT 1`, `SHOW search_path` through `bind` using `pgarbor_catalog::testing` for the env (later leases make the full flow work; test what is available). Replace every `Err(PgError::unimplemented(\"SQL-04\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/classify.rs",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/parser.rs"
+   ],
+   "depends_on_leases": [
+    "SQL-01",
+    "SQL-06"
+   ],
+   "acceptance": [
+    "`BEGIN` binds to Transaction(Begin) without reading the catalog",
+    "an unsupported family reaching the router yields XX000, not a panic",
+    "param_types of `SELECT 1` is empty; of `SELECT $1::int` is [int4]",
+    "notices raised while binding appear in BindOutput.notices"
+   ]
+  },
+  {
+   "lease_id": "SQL-05",
+   "task_ids": [
+    "SQL-03",
+    "SQL-08"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/scope.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Query scopes, FROM namespace, column resolution (qualified/unqualified/outer/whole-row/system), star expansion.",
+   "spec": "Implement the five functions per the module docs (PG `parse_relation.c` / `parse_expr.c transformColumnRef` / `parse_target.c ExpandColumnRefStar`). Details: unqualified lookup iterates `namespace` items with `cols_visible`, skipping `lateral_only` items unless `lateral_ok`; duplicate matches within one scope = 42702; `levels_up` = distance of the scope found; results shift nothing (the NsColumn expr has levels_up 0: set `levels_up` on the returned `Column`). Qualified lookup: NsItem alias match (and schema match for `schema.table.col`); a column that exists in a different, non-visible item gives the `invalid_from_reference` error. Whole-row reference: `Column{attnum: 0}` typed with the relation rowtype (`Relation::rowtype`) or `record`. System columns: `tableoid` (oid), `ctid` (0A000 `ctid` is not supported), `xmin/xmax/cmin/cmax` 0A000. Always call `mark_access` on the entry (`select_cols`). Set `BoundExpr::column_at(.., pos)` so the grouping check can report positions. Unit tests with hand-built scopes (construct `Binder` via `pgarbor_catalog::testing`), covering ambiguity, outer scope, hidden join columns, star expansion order, dropped columns skipped. Replace every `Err(PgError::unimplemented(\"SQL-05\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_relation.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`select a from t1, t2` with both having `a` -> 42702 `column reference \"a\" is ambiguous` at the identifier",
+    "`select t1.zz from t1` -> 42703 `column t1.zz does not exist`; `select zz` -> `column \"zz\" does not exist`",
+    "`select nope.a from t1` -> 42P01 `missing FROM-clause entry for table \"nope\"`",
+    "a correlated reference from a sub-select resolves with levels_up = 1",
+    "`select *` over an empty FROM -> 42601 `SELECT * with no tables specified is not valid`",
+    "`select t from t` yields a whole-row Column with attnum 0 of the rowtype"
+   ]
+  },
+  {
+   "lease_id": "SQL-06",
+   "task_ids": [
+    "SQL-12",
+    "SQL-05"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/params.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Parameter ($n) typing: declared types, inference, finalization (42P18, 42P08).",
+   "spec": "Implement `bind_param`, `resolve_param`, `finalize` per the docs. `text` arrives as `$3` (strip `$`, parse u32; non-numeric or `?`/`:x` placeholders -> 42601 syntax error near the placeholder). `bind_param` grows `ParamTable.types`/`declared` with None up to n and updates `max_referenced`; returns `BoundExpr::param(n, ty)` where ty is the known type or `TypeId::UNKNOWN`. `resolve_param` returns the retyped node (`BoundExpr::param(n, target)`), recording the type; conflict -> 42P08 `inconsistent types deduced for parameter $1` DETAIL `integer versus text` (use `Binder::type_name`). `finalize` returns `Vec<TypeId>` of length `count()`; first unresolved -> 42P18 `could not determine data type of parameter $N` (no position). Unit tests with a `Binder` from `pgarbor_catalog::testing`. Replace every `Err(PgError::unimplemented(\"SQL-06\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/diag.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "declared [int4] and `$1` used: type int4, never re-pinned",
+    "`$2` used first then `$1`: both slots exist; finalize errors on `$1` if unresolved",
+    "`$1` pinned int4 then pinned text -> 42P08 with DETAIL `integer versus text`",
+    "`$0` and `$65536` -> 42P02 `there is no parameter $0`",
+    "finalize with nothing referenced returns []"
+   ]
+  },
+  {
+   "lease_id": "SQL-07",
+   "task_ids": [
+    "SQL-03"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/types.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] sqlparser DataType/ObjectName -> pgarbor_types TypeName/TypeId, array dims, typmods.",
+   "spec": "Implement `data_type_to_type_name`, `resolve_data_type`, `resolve_type_by_name` using the conversion table in the module docs and `pgarbor_types::names::{TypeName, resolve_type_name}` (read `crates/pgarbor-types/src/names.rs` for exactly which spellings it expects: lower-case multi-word names like `double precision`, `character varying`, `timestamp with time zone`). Read sqlparser `DataType` (`src/ast/data_type.rs`) for every variant: map the PostgreSQL ones, reject the rest per the table. Interval fields -> `interval_range` bits: use the constants in `pgarbor_types::datetime` (`interval_fields`). Error positions via `pos`. Unit tests for each row of the table (use `parse_one` on `SELECT CAST(x AS <type>)` and extract the DataType) including `numeric(10,2)`, `varchar(5)[]`, `timestamp(3) with time zone`, `interval year to month`, `public.mood`, `\"MyType\"`. Replace every `Err(PgError::unimplemented(\"SQL-07\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/data_type.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`numeric(10,2)` -> TypeId{numeric, typmod for (10,2)}",
+    "`int[]`/`integer ARRAY`/`int[3][4]` -> int4[] with ndims 1/1/2",
+    "`timestamp(3) with time zone` -> timestamptz typmod 3",
+    "unknown type `nope` -> 42704 `type \"nope\" does not exist`",
+    "`tinyint` -> 42704 (not a syntax error)"
+   ]
+  },
+  {
+   "lease_id": "SQL-08",
+   "task_ids": [
+    "SQL-03"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/literal.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Literal binding: integers/numerics/strings/NULL/booleans/typed strings/escape strings.",
+   "spec": "Implement per the typing rules in the docs (PG `make_const`, `scan.l`). Use `pgarbor_types::numeric` (`Numeric::from_decimal`/string parse in `numeric::io`) for numeric literals and `pgarbor_types::io::input(&b.io_ctx(), ty, text)` for typed strings; keep scale of `1.50`. sqlparser `Value` variants: `Number(String, bool)`, `SingleQuotedString`, `EscapedStringLiteral`, `DollarQuotedString`, `NationalStringLiteral`, `HexStringLiteral`, `Boolean`, `Null`, `Placeholder`, `UnicodeStringLiteral`. Placeholder -> delegate to `params::bind_param`. Negative folding: when `negate` is set apply the sign before range classification so `-2147483648` is int4. Unit tests for every bullet of the docs. Replace every `Err(PgError::unimplemented(\"SQL-08\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/params.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/numeric/io.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/scan.l"
+   ],
+   "depends_on_leases": [
+    "SQL-06",
+    "SQL-07"
+   ],
+   "acceptance": [
+    "`2147483647` int4, `2147483648` int8, `9223372036854775808` numeric",
+    "`-2147483648` (negate=true) is int4",
+    "`1.50` numeric with dscale 2; `1e3` numeric 1000",
+    "`'abc'` -> Const(Text) typed unknown; `NULL` -> Const(Null) typed unknown",
+    "`DATE '2020-01-01'` -> Const(Date) ; `DATE 'xx'` -> 22007 at the string position",
+    "`E'a\\\\nb'` decodes the newline"
+   ]
+  },
+  {
+   "lease_id": "SQL-09",
+   "task_ids": [
+    "SQL-03",
+    "SQL-12"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/coerce.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Bind-time coercion: unknown literals/params, implicit/assignment/explicit casts, common types, boolean/specific coercion.",
+   "spec": "Implement all functions per the numbered rules in the module docs. Core: `try_coerce` (rules 1-8). Unknown `Const(Text)` -> `io::input(&b.io_ctx(), target, s)` returning `Const` of the target (wrap `CoerceToDomain` for domain targets; read `crates/pgarbor-types/src/io.rs` domain handling); attach `arg.pos` to input errors lacking a position (`diag::with_position`). Unknown `Param` -> `params::resolve_param`. Typed expr: same oid and (target typmod -1 or equal) -> unchanged; else `cast::plan_cast(env, from, to, ctx)` -> `coerce::make_cast_node`; constant operands of non-erroring immutable casts fold via `cast::cast_datum` with a `FuncCtx` (`TestSession`). `coerce_to_common` uses `resolve::coerce::{select_common_type, select_common_typmod, verify_common_type}`. Error texts and SQLSTATEs from `diag`. Unit tests for each rule using `pgarbor_catalog::testing` env. Replace every `Err(PgError::unimplemented(\"SQL-09\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/params.rs",
+    "crates/pgarbor-sql/src/binder/literal.rs",
+    "crates/pgarbor-types/src/cast/lookup.rs",
+    "crates/pgarbor-types/src/resolve/coerce.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_coerce.c"
+   ],
+   "depends_on_leases": [
+    "SQL-06",
+    "SQL-08"
+   ],
+   "acceptance": [
+    "`select 1 + 'x'` path: coercing unknown 'x' to int4 -> 22P02 `invalid input syntax for type integer: \"x\"` at the literal position",
+    "int4 -> numeric implicit cast produces a Cast node with form Implicit; numeric -> int4 is None in Implicit context and Some in Assignment",
+    "coerce_to_boolean of an int4 expr -> 42804 `argument of WHERE must be type boolean, not type integer`",
+    "coerce_to_common([int4, numeric], \"UNION\") -> numeric; [int4, text] -> 42804 `UNION types integer and text cannot be matched`",
+    "all-unknown inputs resolve to text",
+    "coerce to a domain over int with CHECK wraps CoerceToDomain"
+   ]
+  },
+  {
+   "lease_id": "SQL-10",
+   "task_ids": [
+    "SQL-03"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/expr.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Expression dispatcher, column references, casts.",
+   "spec": "Implement `bind_expr`, `bind_arg`, `bind_boolean`, `bind_column_ref`, `bind_cast` per the dispatch table in the docs: simple arms are written here, the rest call the frozen functions in `expr_ops`, `expr_func`, `expr_misc`, `expr_sublink`, `literal`, `params`. Read sqlparser `Expr` (`src/ast/mod.rs`) for exact variant fields. Use `b.enter()/b.leave()` around recursion. Positions: `b.pos(e)` (Spanned). Column references: build the candidate order of the docs on top of `scope::resolve_column` (use `want_error = false` for probing steps, then produce the final error from the LAST attempt: PG reports the error of the whole-name interpretation: `column \"a.b\" does not exist` style per `errorMissingColumn`). Unsupported Expr variants -> `PgError::unimplemented(\"SQL-10\", \"<variant>\")` naming the construct or 42601 for non-PG syntax. Unit tests: literals, nested parentheses, casts, boolean coercion, unsupported variants. Replace every `Err(PgError::unimplemented(\"SQL-10\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/binder/literal.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_expr.c"
+   ],
+   "depends_on_leases": [
+    "SQL-05",
+    "SQL-08",
+    "SQL-09"
+   ],
+   "acceptance": [
+    "`select (1)` binds to int4 const; `(1)::bigint` casts",
+    "`x::notatype` -> 42704 at the type",
+    "`select a.b.c` with 3 unresolvable parts -> 42P01/42703 per PG order",
+    "a Wildcard in an expression position -> 42601",
+    "`$1::int` pins the parameter to int4 and returns a Param typed int4"
+   ]
+  },
+  {
+   "lease_id": "SQL-11",
+   "task_ids": [
+    "SQL-03"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/expr_ops.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Operators: binary/unary, AND/OR/NOT, comparison, BETWEEN, IN lists, LIKE/ILIKE/SIMILAR, ANY/ALL arrays, IS tests, row comparison, AT TIME ZONE.",
+   "spec": "Implement per the module docs. `make_op` is the core: `pgarbor_types::ops::{builtin_operator_candidates, resolve_operator}`, then coerce args to the resolved operand types with `coerce::try_coerce` (Implicit) and build `OpExpr` with `op_ref`. Operator-name table is in the docs. Read PG `parse_oper.c`, `parse_expr.c` (`transformAExprOp`, `transformAExprIn`, `transformAExprBetween`, `make_row_comparison_op`). Error positions: operator token position (`op_pos`) falls back to the left operand. `BinaryOperator` variants: read sqlparser `src/ast/operator.rs`. Unit tests per bullet with the SQLSTATEs. Replace every `Err(PgError::unimplemented(\"SQL-11\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-types/src/resolve/oper.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/operator.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_oper.c"
+   ],
+   "depends_on_leases": [
+    "SQL-09",
+    "SQL-10"
+   ],
+   "acceptance": [
+    "`1 + 1.5` -> Op(numeric +) with the int4 argument wrapped in an Implicit Cast",
+    "`1 + 'x'` -> 22P02 at the literal; `1 + true` -> 42883 `operator does not exist: integer + boolean` with the HINT, position at `+`",
+    "`a IN (1,2,3)` -> ScalarArrayOp(use_or, `=`) over ArrayExpr; `NOT IN` -> use_or false, `<>`",
+    "`x BETWEEN 1 AND 3` -> `x >= 1 AND x <= 3`; left-nested ANDs flatten, BETWEEN's AND stays nested",
+    "`(a,b) < (1,2)` -> RowCompare; arity mismatch 42601 `unequal number of entries in row expressions`",
+    "`b LIKE 'x%'` -> Op `~~`; `b ILIKE` -> `~~*`; `b NOT LIKE` -> `!~~`"
+   ]
+  },
+  {
+   "lease_id": "SQL-12",
+   "task_ids": [
+    "SQL-03"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/expr_func.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Function calls: resolution, named args, variadic, defaults, special syntax, SQL value functions, SRF placement.",
+   "spec": "Implement per the module docs steps 1-7 and special syntax. Resolution: `env.function_candidates(schema, name)` + `pgarbor_types::resolve::func::{resolve_function, FuncCall}` (read `crates/pgarbor-types/src/resolve/func.rs` carefully: `coerce_to` is in call order, `arg_order` maps declared params to call args, `nvariadic`, `ndefaults_used`). Defaults: builtin `BuiltinProc::arg_defaults` is comma-separated SQL text of the TRAILING defaults: parse with `parser::parse_expr_text` and bind with `expr::bind_expr` in an empty scope. `proc_info` reads `catalog_data::builtin_proc` or the catalog `Function`. Aggregates go to `expr_agg::bind_aggregate` (SQL-13), windows to `bind_window_call`. Read PG `parse_func.c`. EXTRACT field names lower-case text. Unit tests: abs(-1), lower('A'), `substring('abc' from 2 for 1)`, `count(*)` routed, 42883 messages, `now()` volatility Stable, SRF in WHERE 0A000. Replace every `Err(PgError::unimplemented(\"SQL-12\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-sql/src/binder/expr_agg.rs",
+    "crates/pgarbor-types/src/resolve/func.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_func.c"
+   ],
+   "depends_on_leases": [
+    "SQL-09",
+    "SQL-10",
+    "SQL-13"
+   ],
+   "acceptance": [
+    "`abs('1')` resolves to the float8 overload (unknown literal preference); `length(1)` -> 42883 `function length(integer) does not exist` + HINT",
+    "`coalesce(NULL, 1)` is NOT routed here but to expr_misc",
+    "named notation `f(b => 1, a => 2)` reorders by declared parameter names",
+    "a call with fewer args than declared appends defaults",
+    "`generate_series(1,3)` in WHERE -> 0A000 `set-returning functions are not allowed in WHERE`",
+    "`CURRENT_TIMESTAMP(3)` has type timestamptz with typmod 3"
+   ]
+  },
+  {
+   "lease_id": "SQL-14",
+   "task_ids": [
+    "SQL-03"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/expr_misc.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] CASE, COALESCE/NULLIF/GREATEST/LEAST, ARRAY[], ROW, subscripts, field selection, COLLATE, INTERVAL literals.",
+   "spec": "Implement per the module docs (PG `parse_expr.c` functions listed there). Common type resolution via `coerce::coerce_to_common` with the context words from the docs. CASE always sets `default` (typed NULL when no ELSE). ARRAY element/array type lookup: `TypeEnv::type_info(oid)` (`array_oid`/elem) or `catalog_data`; read `crates/pgarbor-types/src/registry.rs`. Subscript chains come from sqlparser `Expr::CompoundFieldAccess` (read its `AccessExpr`/`Subscript` definitions). Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-14\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-types/src/registry.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_expr.c"
+   ],
+   "depends_on_leases": [
+    "SQL-09",
+    "SQL-10"
+   ],
+   "acceptance": [
+    "`case when true then 1 else 'a' end` -> 22P02 `invalid input syntax for type integer: \"a\"` at the literal (unknown adopts the common type); `case when 1 then 1 end` -> 42804 `argument of CASE/WHEN must be type boolean, not type integer`",
+    "`coalesce(1, 'x'::text)` -> 42804 `COALESCE types integer and text cannot be matched`",
+    "`array[1, 2.5]` has type numeric[]; `array[]` -> 42P18 `cannot determine type of empty array`",
+    "`(array[1,2])[1]` int4; `(array[1,2])[1:2]` int4[]",
+    "`row(1,'a')` is record with fields f1,f2; `(r).f1` on a composite value selects field 1",
+    "`nullif(1)` -> 42601"
+   ]
+  },
+  {
+   "lease_id": "SQL-16",
+   "task_ids": [
+    "SQL-07",
+    "SQL-10"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/select.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Query expressions: WITH/body/ORDER BY/LIMIT/locking orchestration and the SELECT block algorithm.",
+   "spec": "Implement per the module docs (PG `transformSelectStmt` order is normative). Wire together `cte`, `from`, `target`, `group`, `window`, `order`, `setop`, `values`, `expr::bind_boolean`. Keep the scope stack discipline: push before FROM, pop after building `BoundSelect`, even on error paths (use a helper that restores `b.scopes.len()`). Output columns: non-junk target entries with names from the entries and origin from `target::origin_of`. `keep_unknown_outputs` per the docs. Unsupported SELECT-level clauses listed in the docs -> 42601/0A000 naming them. Unit tests: `SELECT 1`, `SELECT a FROM t WHERE a > 1`, `SELECT a+1 AS x FROM t ORDER BY x`, `VALUES (1)`, set operation arity errors, DISTINCT. Replace every `Err(PgError::unimplemented(\"SQL-16\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/from.rs",
+    "crates/pgarbor-sql/src/binder/target.rs",
+    "crates/pgarbor-sql/src/binder/group.rs",
+    "crates/pgarbor-sql/src/binder/order.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/analyze.c"
+   ],
+   "depends_on_leases": [
+    "SQL-17",
+    "SQL-19",
+    "SQL-20",
+    "SQL-21",
+    "SQL-23",
+    "SQL-24",
+    "SQL-46"
+   ],
+   "acceptance": [
+    "`select 1` -> BoundQuery with one output column `?column?` int4",
+    "`select 'a'` output type text (unknown resolved)",
+    "`select a from t where a` -> 42804 argument of WHERE must be type boolean",
+    "`select * from t order by 3` with 2 columns -> 42P10 `ORDER BY position 3 is not in select list`",
+    "the scope stack is empty after bind_query returns Err"
+   ]
+  },
+  {
+   "lease_id": "SQL-17",
+   "task_ids": [
+    "SQL-08"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/from.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] FROM items: relations, views (expanded), CTE refs, sub-selects, table functions, VALUES, aliases.",
+   "spec": "Implement per the module docs (PG `parse_clause.c transformFromClauseItem` and `parse_relation.c addRangeTableEntry*`). Relation resolution `env.resolve_relation(schema, name)`; relation kinds via `Relation::kind` (`RelKind`). View expansion: `parser::parse_one(&rel.view.as_ref()?.query.sql)`... read `crates/pgarbor-catalog/src/model/relation.rs` for `ViewDef`; bind the `Statement::Query` with `select::bind_subselect(b, q, &view_column_names)`. Function scans: output column naming per `chooseScalarFunctionAlias` (read parse_relation.c). Namespace registration through `scope::{add_range_entry, add_namespace_for_range}`. Unit tests with created tables/views through `pgarbor_catalog::testing::run`. Replace every `Err(PgError::unimplemented(\"SQL-17\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/cte.rs",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-sql/src/binder/expr_func.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_clause.c"
+   ],
+   "depends_on_leases": [
+    "SQL-05",
+    "SQL-12",
+    "SQL-46"
+   ],
+   "acceptance": [
+    "`from t` registers rt entry 1 with the relation columns incl. dropped flagged",
+    "`from t as x(a,b)` renames the first columns; extra alias -> 42P10 `table \"x\" has 3 columns available but 4 columns specified`",
+    "`from nope` -> 42P01 `relation \"nope\" does not exist` at the name",
+    "a view in FROM expands to RangeKind::Subquery with the view's column names",
+    "`from generate_series(1,3) g` -> Function entry, one column named g of type int4",
+    "`from (select 1) s` without alias is allowed (PG 16+), alias unnamed_subquery"
+   ]
+  },
+  {
+   "lease_id": "SQL-19",
+   "task_ids": [
+    "SQL-07"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/target.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] SELECT/RETURNING target lists: star expansion, output names (FigureColname), column origin.",
+   "spec": "Implement per the module docs. `figure_colname` is a pure AST walk: read PG `FigureColnameInternal` in `parse_target.c` for the full table and verify uncertain cases by reasoning from it. `bind_target_list`: per item bind with `expr::bind_expr`, aliases through `Binder::ident`; wildcards via `scope::expand_star`; qualified wildcard that names a composite expression -> `expr_misc::expand_composite`. `origin_of`: strip implicit relabel casts then look at `Column{levels_up:0}` -> the range entry kind (`RangeKind::Relation{oid}` -> origin; `Subquery` -> the sub-select's output `origin`). Unit tests for every naming rule in the docs. Replace every `Err(PgError::unimplemented(\"SQL-19\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_target.c"
+   ],
+   "depends_on_leases": [
+    "SQL-05",
+    "SQL-10",
+    "SQL-14"
+   ],
+   "acceptance": [
+    "`select a, b as c, a+1, count(*), 1::int, 'x'::text, case when true then 1 end from t` names: a, c, ?column?, count, int4, text, case",
+    "`select *` over two tables lists columns of both in FROM order",
+    "`select t.* from t` expands only t",
+    "a plain column selected through a view has origin = base table column",
+    "`select exists(select 1)` is named exists"
+   ]
+  },
+  {
+   "lease_id": "SQL-21",
+   "task_ids": [
+    "SQL-10"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/order.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] ORDER BY, DISTINCT/DISTINCT ON, LIMIT/OFFSET/FETCH binding.",
+   "spec": "Implement per the module docs (PG `findTargetlistEntrySQL92/99`, `transformSortClause`, `transformDistinctOnClause`, `transformLimitClause`). Target-list entries come from the `target_list: &mut Vec<TargetEntry>`; new junk entries are appended with `junk: true` and the same name `?column?`. Structural equality for reuse: `BoundExpr` PartialEq. Sort operator: default ordering via the type's `<`/`>` is implicit (`using_op: None`); resolve `USING` operators with `expr_ops::resolve_named_op`. Unit tests listing every error text in the docs. Replace every `Err(PgError::unimplemented(\"SQL-21\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/target.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/query.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_clause.c"
+   ],
+   "depends_on_leases": [
+    "SQL-10",
+    "SQL-09"
+   ],
+   "acceptance": [
+    "`order by 3` with 2 columns -> 42P10 position error; `order by 'a'` -> 42601 `non-integer constant in ORDER BY`",
+    "output alias wins: `select a as b from t order by b` sorts the alias",
+    "`select distinct a from t order by b` -> 42P10 `for SELECT DISTINCT, ORDER BY expressions must appear in select list`",
+    "`distinct on (a) ... order by b` -> 42P10 `SELECT DISTINCT ON expressions must match initial ORDER BY expressions`",
+    "`limit 'a'` -> 22P02 invalid input syntax for type bigint at the literal; `limit all` = no limit; negative constants are accepted at bind time",
+    "default NULLS: ASC -> nulls_first false, DESC -> true"
+   ]
+  },
+  {
+   "lease_id": "SQL-24",
+   "task_ids": [
+    "SQL-07"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/values.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] VALUES lists (standalone and INSERT source) with common types and DEFAULT.",
+   "spec": "Implement `bind_values_body` per the module docs. Read sqlparser `Values { explicit_row, rows }`. Standalone mode: per-column `coerce::coerce_to_common(cells, \"VALUES\")`. Insert mode (`insert_targets` Some): cell-by-cell `coerce::coerce_assignment`, `Expr::Identifier(DEFAULT)` -> `SetToDefault` (sqlparser represents the DEFAULT keyword as `Expr::Identifier(Ident{value:\"DEFAULT\", quote_style:None})`? verify in sqlparser `parse_insert` source; handle both that and any dedicated variant). Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-24\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/analyze.c"
+   ],
+   "depends_on_leases": [
+    "SQL-09",
+    "SQL-10"
+   ],
+   "acceptance": [
+    "`values (1,'a'),(2,'b')` types [int4, text]",
+    "`values (1),(1,2)` -> 42601 `VALUES lists must all be the same length`",
+    "`values (1),(2.5)` -> numeric column",
+    "INSERT mode: `values (1, default)` -> SetToDefault for the second target",
+    "INSERT mode cell/target count mismatch -> 42601 `INSERT has more expressions than target columns`"
+   ]
+  },
+  {
+   "lease_id": "SQL-25",
+   "task_ids": [
+    "SQL-05"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/target_table.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] DML target resolution and TargetTable construction (defaults, generated, identity, CHECKs).",
+   "spec": "Implement per the module docs. Read `crates/pgarbor-catalog/src/model/relation.rs` (`Relation`, `Column`: default/generated/identity fields) and `model/constraint.rs`. Defaults: `parser::parse_expr_text(&col.default.sql)` then `stored::bind_stored_expr`, then `coerce::coerce_assignment`. Identity default: `nextval('<schema.seq>'::regclass)` built as a FuncCall of builtin `nextval(regclass)` with a regclass Const of the identity sequence OID (look up with `snapshot.sequences_owned_by(table, attnum)`). Only bind defaults when `bind_defaults`. Unit tests with tables created through the catalog test harness. Replace every `Err(PgError::unimplemented(\"SQL-25\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/stored.rs",
+    "crates/pgarbor-sql/src/binder/from.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs"
+   ],
+   "depends_on_leases": [
+    "SQL-29",
+    "SQL-17"
+   ],
+   "acceptance": [
+    "table with `id serial` -> TargetColumn.default is nextval('t_id_seq'::regclass)",
+    "view/matview/sequence targets raise 0A000 / 42809 per the docs",
+    "CHECK constraints listed with bound boolean exprs; NOT ENFORCED omitted",
+    "alias `insert into t as x`: later `t.c` reference gives 42P01 invalid reference",
+    "UPDATE/DELETE (`bind_defaults=false`) do not bind defaults"
+   ]
+  },
+  {
+   "lease_id": "SQL-26",
+   "task_ids": [
+    "SQL-05"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/insert.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] INSERT binding: column list, VALUES/SELECT/DEFAULT VALUES, OVERRIDING, identity/generated rules, RETURNING.",
+   "spec": "Implement per the module docs (PG `transformInsertStmt`). Source query binding hides the target (`RangeEntry::visible=false`). Uses `target_table::open_target_table`, `values::bind_values_body`, `select::bind_query` (keep_unknown_outputs), `coerce::coerce_assignment`, `on_conflict::bind_on_conflict`, `update_delete::bind_returning`. The coercing projection for query sources: build a `BoundQuery` whose body is `QueryBody::Select` with one `RangeKind::Subquery` range entry (columns from the inner query output) and target entries `Cast(column)`; give it `output` matching the target column types. Unit tests per bullet incl. all error texts. Replace every `Err(PgError::unimplemented(\"SQL-26\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/target_table.rs",
+    "crates/pgarbor-sql/src/binder/values.rs",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-sql/src/binder/on_conflict.rs",
+    "crates/pgarbor-sql/src/binder/update_delete.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/analyze.c"
+   ],
+   "depends_on_leases": [
+    "SQL-25",
+    "SQL-24",
+    "SQL-27",
+    "SQL-28",
+    "SQL-16"
+   ],
+   "acceptance": [
+    "`insert into t(a,b) values (1,'x')` -> InsertSource::Values with cells typed int4/text and columns [1,2]",
+    "`insert into t values (1,2,3)` for a 2-column table -> 42601 `INSERT has more expressions than target columns` at the surplus `3`",
+    "`insert into t(a) values ('x')` with a int -> 22P02 at the literal",
+    "`insert into t(zz)` -> 42703 `column \"zz\" of relation \"t\" does not exist`",
+    "identity ALWAYS column given a value -> 428C9 `cannot insert a non-DEFAULT value into column \"id\"` + DETAIL + HINT",
+    "`insert into t default values` -> DefaultValues; `returning *` outputs the table columns"
+   ]
+  },
+  {
+   "lease_id": "SQL-27",
+   "task_ids": [
+    "SQL-05"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/on_conflict.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] INSERT ... ON CONFLICT: arbiter inference, excluded pseudo relation, DO UPDATE.",
+   "spec": "Implement per the module docs. Arbiter inference uses `env.snapshot().indexes_of(table)`; consider only `unique && valid && predicate.is_none()` btree indexes whose key columns (as attnum sets) equal the inferred column set; `ON CONSTRAINT name` via `constraints_of(table)` (`Constraint::index`). `excluded` entry: build with `from::relation_range_entry` and set `RangeKind::Relation.pseudo = Some(PseudoRelation::Excluded)`, alias `excluded`; namespace-register it. Assignments via `update_delete::bind_assignments`. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-27\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/update_delete.rs",
+    "crates/pgarbor-sql/src/binder/insert.rs",
+    "crates/pgarbor-sql/src/binder/from.rs",
+    "crates/pgarbor-catalog/src/model/index.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_clause.c"
+   ],
+   "depends_on_leases": [
+    "SQL-25",
+    "SQL-28"
+   ],
+   "acceptance": [
+    "`on conflict (id) do nothing` finds the PK index; `on conflict (b)` without a unique index on b -> 42P10 `there is no unique or exclusion constraint matching the ON CONFLICT specification`",
+    "`on conflict do nothing` -> any_unique true, no indexes",
+    "`on conflict do update set ...` without target -> 42601 with HINT `For example, ON CONFLICT (column_name).`",
+    "`excluded.c` resolves inside the SET value and WHERE",
+    "`on conflict on constraint nope` -> 42704 `constraint \"nope\" for table \"t\" does not exist`"
+   ]
+  },
+  {
+   "lease_id": "SQL-28",
+   "task_ids": [
+    "SQL-06"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/update_delete.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] UPDATE / DELETE binding, SET assignments, RETURNING.",
+   "spec": "Implement per the module docs (PG `transformUpdateStmt`, `transformDeleteStmt`, `transformAssignedExpr`, `transformReturningList`). sqlparser shapes: `Update { table: TableWithJoins, assignments, from: Option<UpdateTableFromKind>, selection, returning }` and `Delete { from: FromTable, using: Option<Vec<TableWithJoins>>, selection, returning }`; `AssignmentTarget::{ColumnName, Tuple}`. The target is range entry 1 (opened via `target_table::open_target_table`), FROM/USING items afterwards through `from::bind_from_clause`. `SET (a,b) = (SELECT ...)`: bind the sub-select with `expr_sublink::bind_scalar...`-style helper producing `SubLink{kind: Row}` after checking the column count. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-28\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/target_table.rs",
+    "crates/pgarbor-sql/src/binder/from.rs",
+    "crates/pgarbor-sql/src/binder/target.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/analyze.c"
+   ],
+   "depends_on_leases": [
+    "SQL-25",
+    "SQL-17",
+    "SQL-19"
+   ],
+   "acceptance": [
+    "`update t set a = a + 1 where id = 3` -> assignments [attnum 1: Op], where_ boolean",
+    "`update t set zz = 1` -> 42703 `column \"zz\" of relation \"t\" does not exist`",
+    "`update t set a = 1, a = 2` -> 42601 `multiple assignments to same column \"a\"`",
+    "`update t set t.a = 1` -> 42703 `column \"t\" of relation \"t\" does not exist` + HINT `SET target columns cannot be qualified with the relation name.`",
+    "generated column target -> 428C9 `column \"g\" can only be updated to DEFAULT`",
+    "`delete from t using u where t.a = u.a returning t.*` binds with two range entries"
+   ]
+  },
+  {
+   "lease_id": "SQL-29",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/stored.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Stored expressions: rebinding catalog text, StoredExpr construction with canonical text and dependencies.",
+   "spec": "Implement per the module docs. `store_expr` calls `deparse::expr::deparse_expr` (SQL-43) with a `DeparseCtx` whose namer maps `Column{rt_index:1, attnum}` through `column_names`; `collect_dependencies` builds `pgarbor_catalog::ObjectAddress` values (`ObjectAddress::column(table, attnum)`, `::relation`, `::new(ObjClass::Proc/Type, oid)`); regclass constants: a `Const(Datum::Oid)` typed `regclass` depends on that relation. `table_expr_scope` pushes a `QueryScope::new(ScopeKind::TableExpr)` with one synthetic `RangeEntry` (kind `Relation{oid: 0, schema: \"\", name: table_name, rel_kind: Table, only: false, pseudo: None}`). `bind_ddl_expr`: bind with `expr::bind_expr`, coerce with `coerce::coerce_assignment` when `target` is Some, collect referenced attnums via `BoundExpr::collect_columns(0, ..)` in first-reference order. Unit tests: default `nextval('s')` -> text `nextval('s'::regclass)` with the sequence dependency; check `(a > 0)`; rebind of `'x'::text`. Replace every `Err(PgError::unimplemented(\"SQL-29\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-sql/src/deparse/expr.rs",
+    "crates/pgarbor-sql/src/deparse/mod.rs",
+    "crates/pgarbor-catalog/src/model/common.rs"
+   ],
+   "depends_on_leases": [
+    "SQL-05",
+    "SQL-10",
+    "SQL-43"
+   ],
+   "acceptance": [
+    "bind_ddl_expr of `a > 0` over columns [(a,int4)] returns text `(a > 0)` and columns_ref [1]",
+    "default `nextval('s')` stores `nextval('s'::regclass)` and depends on the sequence OID",
+    "an expression using a user function lists the function dependency",
+    "bind_stored_expr of the stored text returns the same tree as the original bind (round trip)",
+    "a sub-select inside a CHECK is rejected with 0A000 `cannot use subquery in check constraint`"
+   ]
+  },
+  {
+   "lease_id": "SQL-30",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_table.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] CREATE TABLE (columns, serial, identity, generated, defaults), CREATE TABLE AS, SELECT INTO.",
+   "spec": "Implement per the module docs (PG `transformCreateStmt`, `transformColumnDefinition`). Read sqlparser `CreateTable` (`src/ast/ddl.rs` + `src/ast/helpers/stmt_create_table.rs`), `ColumnDef`, `ColumnOption`/`ColumnOptionDef` (name + option), `TableConstraint`. Build the table scope with `stored::table_expr_scope` for DEFAULT/CHECK/generated expressions (columns declared so far; generated expressions may reference earlier or later columns: declare all columns first). Constraints through `ddl_constraint`. Serial: type names arrive as `DataType::Custom(ObjectName)` with names `serial`, `bigserial`, `smallserial`, `serial2/4/8`. Namespace: `env.creation_namespace_for(schema, name)`. Unit tests: simple table, serial, identity, generated, duplicate column, pseudo-type column, TEMP -> 0A000, IF NOT EXISTS. Replace every `Err(PgError::unimplemented(\"SQL-30\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/stored.rs",
+    "crates/pgarbor-sql/src/binder/ddl_constraint.rs",
+    "crates/pgarbor-sql/src/binder/types.rs",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_utilcmd.c"
+   ],
+   "depends_on_leases": [
+    "SQL-29",
+    "SQL-31",
+    "SQL-07",
+    "SQL-16"
+   ],
+   "acceptance": [
+    "`create table t(id serial primary key, name text not null default 'x')` -> columns [id: int4 serial Some(Int), name: text not_null, default text `'x'::text`], one PK constraint",
+    "`create table t(a int, a int)` -> 42701 `column \"a\" specified more than once`",
+    "`create table t(a anyelement)` -> 42P16 `column \"a\" has pseudo-type anyelement`",
+    "`create temp table` -> 0A000",
+    "`create table t as select 1 a` -> CreateTableAs with column a int4, with_data true",
+    "identity: `id int generated always as identity (start 5)` -> IdentitySpec{Always, start 5}"
+   ]
+  },
+  {
+   "lease_id": "SQL-31",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_constraint.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Table and column constraints -> ConstraintSpec (PK, UNIQUE, CHECK, FOREIGN KEY).",
+   "spec": "Implement per the module docs. Read sqlparser `TableConstraint` variants (`PrimaryKey(PrimaryKeyConstraint)`, `Unique(UniqueConstraint)`, `ForeignKey(ForeignKeyConstraint)`, `Check(CheckConstraint)`), their `characteristics: Option<ConstraintCharacteristics>`, and `ColumnOption::{PrimaryKey, Unique, ForeignKey, Check}`. CHECK: `stored::table_expr_scope` + `stored::bind_ddl_expr` with `ExprCtx::check()` and boolean coercion. FK referenced table: `env.resolve_relation`; self reference sentinel from `pgarbor_catalog::ddl::spec` (read its docs: `SELF_REL`). `FkAction` / `FkMatch` enums live in the catalog model. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-31\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/stored.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_utilcmd.c"
+   ],
+   "depends_on_leases": [
+    "SQL-29"
+   ],
+   "acceptance": [
+    "`primary key (a, b)` -> PrimaryKey{columns:[a,b]}; `unique nulls not distinct (a)` sets nulls_not_distinct",
+    "`check (a > 0)` -> Check{expr text `(a > 0)`, columns [a]}; `check (a)` with int a -> 42804 `argument of CHECK must be type boolean, not type integer`",
+    "`references u(id) on delete cascade on update set null` -> FkAction values",
+    "`deferrable initially deferred` on PK sets both flags; on CHECK -> 42601 `misplaced DEFERRABLE clause`",
+    "`foreign key (a) references nope` -> 42P01"
+   ]
+  },
+  {
+   "lease_id": "SQL-40",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/utility_session.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Transaction control, SET/RESET/SHOW, DISCARD, SET CONSTRAINTS binding.",
+   "spec": "Implement per the module docs. Read sqlparser `Statement::StartTransaction`, `Commit`, `Rollback`, `Savepoint`, `ReleaseSavepoint`, `Set` (enum `Set` in `src/ast/mod.rs`), `Reset`, `ShowVariable`, `Discard`, `TransactionMode`, `TransactionIsolationLevel`. GUC value rendering: string literal -> contents; identifiers keep their text; numbers as written; `ON`/`OFF`/`TRUE`/`FALSE` as the word given. Unit tests per bullet. This file is on the critical path of every client (drivers send BEGIN/COMMIT/SET). Replace every `Err(PgError::unimplemented(\"SQL-40\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/gram.y"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY` -> Begin{isolation Serializable, read_only Some(true)}",
+    "`COMMIT AND CHAIN` -> Commit{chain:true}; `ROLLBACK TO SAVEPOINT s` -> RollbackToSavepoint(\"s\")",
+    "`SET search_path = public, \"X\"` -> Set{name \"search_path\", values [\"public\",\"X\"]}",
+    "`SET TIME ZONE 'UTC'` -> name \"timezone\"; `SET LOCAL x = 1` scope Local",
+    "`SHOW ALL` -> Show(None); `SHOW TIME ZONE` -> Show(Some(\"timezone\"))",
+    "`RESET ALL` -> Reset(None); `DISCARD ALL` -> Discard(All)"
+   ]
+  },
+  {
+   "lease_id": "SQL-41",
+   "task_ids": [
+    "SQL-05",
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/utility.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] PREPARE/EXECUTE/DEALLOCATE, EXPLAIN, LISTEN/NOTIFY, LOCK, maintenance statements, EXECUTE argument coercion.",
+   "spec": "Implement per the module docs (PG `prepare.c`, `explain_state.c ParseExplainOptionList`). PREPARE must bind the inner statement with a nested `ParamTable` seeded from the declared types: swap `b.params` with a fresh `ParamTable::new(&declared)`, bind, finalize via `params::finalize`, swap back. Read sqlparser `Statement::Prepare/Execute/Deallocate/Explain/LISTEN/UNLISTEN/NOTIFY/Lock/Vacuum/Analyze`. `coerce_execute_args` builds a throwaway `Binder` from a `BindContext`. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-41\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/dispatch.rs",
+    "crates/pgarbor-sql/src/binder/params.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/prepare.c"
+   ],
+   "depends_on_leases": [
+    "SQL-04",
+    "SQL-06",
+    "SQL-09"
+   ],
+   "acceptance": [
+    "`prepare p (int) as select $1` -> BoundPrepare{param_types [int4]}; `prepare p as select $1 is null` -> 42P18",
+    "`execute p(1)` -> BoundExecute with args; coerce_execute_args with a count mismatch -> 42601 `wrong number of parameters for prepared statement \"p\"` DETAIL `Expected 1 parameters but got 2.`",
+    "`explain (analyze, format json) select 1` -> options analyze true, format Json",
+    "`explain (foo) select 1` -> 42601 `unrecognized EXPLAIN option \"foo\"`",
+    "`notify ch, 'payload'` -> Notify; `lock table t in share mode nowait` -> BoundLock",
+    "`vacuum full t` -> Maintenance{Vacuum, [t oid]}"
+   ]
+  },
+  {
+   "lease_id": "SQL-43",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/deparse/expr.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Expression deparser (ruleutils get_rule_expr) producing canonical pg_get_expr text.",
+   "spec": "Implement `deparse_expr`, `deparse_const`, `function_display_name`, `type_display_name` following the rules and oracle fixtures in the module docs; read PG `ruleutils.c` functions named there. Use `DeparseCtx.namer` for variables; `pgarbor_types::names::format_type` for type names; `pgarbor_types::io::output` for constant text (e.g. numeric `1.5`); quoting via `pgarbor_types::text::format::quote_identifier`; literal quoting (`'` doubled, `E'..'` for backslashes). Precedence: this deparser is FULLY parenthesized like non-pretty ruleutils, so no precedence table is needed; follow `isSimpleNode` for what stays bare. Exhaustive `match` over `ExprKind`. Unit tests: every fixture in the docs and these: `(a + 1)`, `'abc'::text`, `'-5'::integer`, `NULL::text`, `now()`, `(a)::numeric` explicit, implicit cast hidden, `(a = ANY (ARRAY[1, 2, 3]))`, `CASE WHEN ... END`, `count(*)`, `lower(b)`. Replace every `Err(PgError::unimplemented(\"SQL-43\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/deparse/mod.rs",
+    "crates/pgarbor-sql/src/ir/expr.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "crates/pgarbor-types/src/text/format.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/ruleutils.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "numeric default 1.5 on a float8 column (Const numeric under an Implicit cast) prints `1.5`; `-1.5` prints `'-1.5'::numeric`",
+    "`5::text` explicit prints `(5)::text`; `'x'||'y'` prints `('x'::text || 'y'::text)`",
+    "`nextval('s'::regclass)` function with regclass const prints as in the docs",
+    "IN list prints `(a = ANY (ARRAY[1, 2, 3]))`; NOT IN prints `(a <> ALL ('{1,2}'::integer[]))` for a Const array operand",
+    "text constant with quote/backslash: `'it''s'::text`, `E'a\\\\b'::text`",
+    "round trip: deparse then `parser::parse_expr_text` succeeds for every fixture"
+   ]
+  },
+  {
+   "lease_id": "SQL-02",
+   "task_ids": [
+    "SQL-01"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/parser_extra.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Hand parser for PostgreSQL statements missing from sqlparser (REFRESH, REINDEX, CLUSTER, CHECKPOINT, SET CONSTRAINTS, DO, ALTER SEQUENCE/DOMAIN/DATABASE, DROP/REASSIGN OWNED, recognized-unsupported commands).",
+   "spec": "Implement `is_extra_statement` (decision table in the docs) and `parse_extra` using `sqlparser::parser::Parser` as a token cursor (`with_tokens_with_locations`, `parse_keyword`, `parse_keywords`, `parse_one_of_keywords`, `expect_keyword`, `consume_token`, `parse_object_name(false)`, `parse_identifier`, `parse_literal_string`, `parse_expr`, `parse_data_type`, `parse_comma_separated`). Grammar: PostgreSQL `gram.y` productions named in the docs (read them in ~/develop/reference/postgres-18/src/backend/parser/gram.y). Option values of ALTER SEQUENCE keep their text with sign. Anything after the statement before EOF is a syntax error at that token (use `diag::syntax_error_near` with the token's source slice and `src.pos_of_span`). Unit tests: one per statement family with the exact AST expected, plus error positions. Replace every `Err(PgError::unimplemented(\"SQL-02\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "crates/pgarbor-sql/src/extra_stmt.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "crates/pgarbor-sql/src/source.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/gram.y"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`REFRESH MATERIALIZED VIEW CONCURRENTLY s.v WITH NO DATA` -> RefreshMaterializedView{concurrently:true, with_data:false}",
+    "`ALTER SEQUENCE IF EXISTS s RESTART WITH 5 OWNED BY t.c` -> two options in order",
+    "`ALTER DOMAIN d ADD CONSTRAINT c CHECK (VALUE > 0) NOT VALID` parses the check as an Expr",
+    "`DO $$ begin end $$ LANGUAGE plpgsql` and `DO LANGUAGE plpgsql 'x'` -> Do{language, code}",
+    "`CREATE RULE r AS ON ...` -> Unsupported{feature:\"CREATE RULE\"}",
+    "`CHECKPOINT x` -> syntax error near \"x\""
+   ]
+  },
+  {
+   "lease_id": "SQL-13",
+   "task_ids": [
+    "SQL-09"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/expr_agg.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Aggregates, window function calls, GROUPING(): levels, placement errors, FILTER/DISTINCT/ORDER BY/WITHIN GROUP.",
+   "spec": "Implement per the module docs. Read PG `parse_agg.c` (`check_agglevels_and_constraints` for the exact placement/error list, `check_agg_arguments` for level computation including nested sub-selects whose own `levels_up` must be adjusted). `aggregate_level` is a pure function: walk with `BoundExpr::walk`, for `SubLink` do not descend (its subquery columns are shifted by one level: compute with `levels_up - 1`). Track nesting with `Binder::agg_depth` (nested aggregate -> `diag::nested_aggregate`). `Aggref.kind` from `catalog_data::builtin_aggregate(oid)`. Update the owning scope's `has_aggs`/`has_windows` flags (`b.scopes[len-1-level]`). Unit tests for each placement error with the exact PG messages (see docs) and for level computation. Replace every `Err(PgError::unimplemented(\"SQL-13\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/expr_func.rs",
+    "crates/pgarbor-sql/src/binder/window.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_agg.c"
+   ],
+   "depends_on_leases": [
+    "SQL-22"
+   ],
+   "acceptance": [
+    "`select count(*) from t where count(*) > 1` -> 42803 `aggregate functions are not allowed in WHERE`",
+    "`sum(count(x))` -> 42803 `aggregate function calls cannot be nested`",
+    "`count(DISTINCT a, b)` accepted; `sum(a) FILTER (WHERE a > 0)` has filter Some(bool)",
+    "an aggregate over only outer columns inside a sub-select has levels_up 1 and marks the OUTER scope has_aggs",
+    "`row_number()` without OVER -> 42809 `window function row_number requires an OVER clause`",
+    "`percentile_cont(0.5) WITHIN GROUP (ORDER BY x)` -> kind OrderedSet with direct_args [0.5]"
+   ]
+  },
+  {
+   "lease_id": "SQL-15",
+   "task_ids": [
+    "SQL-08"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/expr_sublink.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Sub-select expressions: EXISTS, scalar, IN/ANY/ALL (subquery), ARRAY(subquery).",
+   "spec": "Implement per the table in the module docs. Bind the nested query with `select::bind_query` (QueryCtx top_level false) so enclosing scopes remain visible (correlation via levels_up). Resolve the per-column comparison operators with `expr_ops::resolve_named_op`. Mark `has_sublinks` on the enclosing scope. Reject when `!ec.sublinks_ok`. Unit tests with `pgarbor_catalog::testing` after creating tables through `testing::run`. Replace every `Err(PgError::unimplemented(\"SQL-15\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-sql/src/binder/expr_ops.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_expr.c"
+   ],
+   "depends_on_leases": [
+    "SQL-11",
+    "SQL-16"
+   ],
+   "acceptance": [
+    "`exists(select 1)` -> SubLink Exists bool",
+    "`(select 1, 2)` scalar -> 42601 `subquery must return only one column`",
+    "`a in (select b from u)` -> Any with `=` resolved on (a type, b type)",
+    "`a in (select a, b from u)` -> 42601 `subquery has too many columns`",
+    "a correlated reference inside the sub-select has levels_up 1"
+   ]
+  },
+  {
+   "lease_id": "SQL-18",
+   "task_ids": [
+    "SQL-08"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/join.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "JOIN binding: ON/USING/NATURAL, merged columns, namespace updates, LATERAL rules.",
+   "spec": "Implement per the module docs (PG `transformFromClauseItem` JoinExpr branch, `buildMergedJoinVar`, `transformJoinUsingClause`, `buildNSItemFromLists`). USING: for each name find the column in the left item's output and the right item's output (names from `NsItem.columns` of the left/right namespace items you just built; exactly one match each); build `l.c = r.c` with `expr_ops::make_op` (`=`) and coerce both sides to the common type for the merged column. FULL JOIN merged expr = `Coalesce` of the coerced pair. Update the namespace as the docs say (mark inputs `cols_visible=false`). Unit tests: inner/left/full USING column visibility, NATURAL with no common columns, duplicate USING names, ON referencing both sides, LATERAL right side. Replace every `Err(PgError::unimplemented(\"SQL-18\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/from.rs",
+    "crates/pgarbor-sql/src/binder/expr_ops.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_clause.c"
+   ],
+   "depends_on_leases": [
+    "SQL-05",
+    "SQL-11",
+    "SQL-17"
+   ],
+   "acceptance": [
+    "`t1 join t2 using (id)` then `select id` resolves to the merged column; `t1.id` and `t2.id` remain addressable; `select *` lists id once",
+    "FULL JOIN USING merged column is Coalesce(l.id, r.id)",
+    "`using (nope)` -> 42703 `column \"nope\" specified in USING clause does not exist in left table`",
+    "`natural join` without common columns behaves as CROSS JOIN",
+    "ON clause referencing a table outside the join -> 42P01 invalid reference to FROM-clause entry (diag::invalid_from_reference)"
+   ]
+  },
+  {
+   "lease_id": "SQL-20",
+   "task_ids": [
+    "SQL-09"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/group.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "GROUP BY / HAVING: grouping expressions, GROUPING SETS/ROLLUP/CUBE expansion, ungrouped-column check (42803).",
+   "spec": "Implement per the module docs. Study PG `parse_agg.c` `check_ungrouped_columns_walker` (the walker order matters for which column is reported first) and `parse_clause.c transformGroupClause*`, `expand_grouping_sets`. Use `BoundExpr::walk`/`transform` from `ir/expr_walk.rs`; grouping expression matching is structural `PartialEq` (positions are ignored by `ColumnRef` equality). Functional dependency on a primary key: `env.snapshot().primary_key(table_oid)` then check all key attnums appear as grouped plain columns of that same range entry. Unit tests for every error/rule in the docs. Replace every `Err(PgError::unimplemented(\"SQL-20\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/expr_agg.rs",
+    "crates/pgarbor-sql/src/ir/expr_walk.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_agg.c"
+   ],
+   "depends_on_leases": [
+    "SQL-05",
+    "SQL-13"
+   ],
+   "acceptance": [
+    "`select a, count(*) from t` -> 42803 `column \"t.a\" must appear in the GROUP BY clause or be used in an aggregate function` at `a`",
+    "`select a+1 from t group by a` passes; `select a from t group by a+1` fails",
+    "`group by 5` with 2 columns -> 42P10 `GROUP BY position 5 is not in select list`",
+    "`group by rollup(a,b)` expands to sets [[0,1],[0],[]]",
+    "primary-key functional dependency: `select t.b from t group by t.id` passes when id is the PK",
+    "`group by ()` is Some(vec![vec![]])"
+   ]
+  },
+  {
+   "lease_id": "SQL-22",
+   "task_ids": [
+    "SQL-09"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/window.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "WINDOW clause and OVER specifications with frame validation.",
+   "spec": "Implement per the module docs (PG `transformWindowDefinitions`, `transformFrameOffset`). Read sqlparser `WindowSpec`, `WindowFrame`, `WindowFrameBound`, `NamedWindowDefinition`, `NamedWindowExpr`. De-duplicate identical definitions by structural equality of the resulting `WindowDef` (ignore `name`). Offset typing for RANGE: look up the ordering column type (int2/int4/int8 -> same type offset; float4/8 -> float8; numeric -> numeric; date/timestamp/timestamptz -> interval; else 42P20 error text in the docs). Unit tests for the error list. Replace every `Err(PgError::unimplemented(\"SQL-22\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/scope.rs",
+    "crates/pgarbor-sql/src/binder/expr.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_clause.c"
+   ],
+   "depends_on_leases": [
+    "SQL-10",
+    "SQL-09"
+   ],
+   "acceptance": [
+    "`over ()` creates window 0 with default frame; two identical OVERs share one index",
+    "`over w` with `window w as (order by a)` reuses w; `over (w partition by b)` copies w and adds partition",
+    "`rows between unbounded following and current row` -> 42P20 `frame start cannot be UNBOUNDED FOLLOWING`",
+    "`range between 1 preceding and current row` over a text order key -> 42P20 `RANGE with offset PRECEDING/FOLLOWING is not supported for column type text`",
+    "`groups ...` without ORDER BY -> 42P20 `GROUPS mode requires an ORDER BY clause`"
+   ]
+  },
+  {
+   "lease_id": "SQL-23",
+   "task_ids": [
+    "SQL-08"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/setop.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "UNION/INTERSECT/EXCEPT binding with common type resolution; recursive union typing.",
+   "spec": "Implement per the module docs (PG `transformSetOperationTree`, `coerce_setop_columns`). Bind each side with `select::bind_query` (construct a `QueryCtx` default with `keep_unknown_outputs: true` so unknown literals can still adopt the other side's type, then resolve remaining unknowns to text via the common-type logic). Inserting casts: for a `Select` child wrap each target entry expression with `coerce::try_coerce`; for `Values` coerce cells; for a nested `SetOp` child retype `types` and rely on a wrapping Select (build a derived-table select over it with casts). Unit tests for count/type mismatch errors and unknown-literal handling (oracle: `select 1 union select 'a'` -> 22P02 `invalid input syntax for type integer: \"a\"` at the second literal, because the unknown literal adopts integer). Replace every `Err(PgError::unimplemented(\"SQL-23\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-sql/src/binder/coerce.rs",
+    "crates/pgarbor-sql/src/diag.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/analyze.c"
+   ],
+   "depends_on_leases": [
+    "SQL-09"
+   ],
+   "acceptance": [
+    "`select 1 union select 2.5` output numeric",
+    "`select 1 union select 'a'::text` -> 42804 `UNION types integer and text cannot be matched`",
+    "`select 1, 2 union select 3` -> 42601 `each UNION query must have the same number of columns`",
+    "`select null union select 1` -> int4",
+    "output names come from the LEFT side"
+   ]
+  },
+  {
+   "lease_id": "SQL-32",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_index.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE INDEX binding (columns, expressions, predicates, opclasses, INCLUDE, WITH).",
+   "spec": "Implement per the module docs. Read sqlparser `CreateIndex` and `IndexColumn` in `src/ast/mod.rs`/`ddl.rs`. Expression keys: `stored::table_expr_scope` over the table's live columns (use the relation's column names/types), `stored::bind_ddl_expr` with `ExprCtx::index_expr()`, then check immutability with `BoundExpr::volatility()` (42P17 messages in the docs). Operator classes by name: scan `pgarbor_catalog::builtin` opclass tables (read `builtin/` for `OPCLASSES` or `pg_opclass` source); if none is accessible, resolve the well-known btree opclass names with a local table and document the gap. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-32\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/stored.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/model/index.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/indexcmds.c"
+   ],
+   "depends_on_leases": [
+    "SQL-29"
+   ],
+   "acceptance": [
+    "`create index on t(a)` -> IndexSpec{name None, keys [column a]}",
+    "`create unique index i on t(lower(b)) where a > 0` -> expression key with expr_func_name Some(\"lower\"), predicate text `(a > 0)`",
+    "`using gin` -> 0A000; `using foo` -> 42704 `access method \"foo\" does not exist`",
+    "`create index public.i on t(a)` -> 42601 syntax error at the dot",
+    "index on a volatile function -> 42P17 `functions in index expression must be marked IMMUTABLE`"
+   ]
+  },
+  {
+   "lease_id": "SQL-33",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_alter.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "ALTER TABLE / VIEW / INDEX sub-commands -> AlterTableCmd with sequential evolving-schema binding.",
+   "spec": "Implement per the table in the module docs. Keep an in-memory copy of the relation's columns (`Vec<(name, TypeId, dropped, not_null, default...)>`) updated after each sub-command so later sub-commands bind against the new shape. ColumnDef binding for ADD COLUMN should reuse the same logic as CREATE TABLE: expose/duplicate the small helper (the CREATE TABLE file is another lease: do NOT edit it; copy the algorithm). `fast_default`: bind the default, and if `volatility() != Volatile` and the folded expression is a constant (`simplify`-style: evaluate with `pgarbor_types::func`/`cast` using a `TestSession` FuncCtx) set `fast_default` to `io::output` text, else `default_is_volatile` per volatility. Read sqlparser `AlterTable`, `AlterTableOperation`, `AlterColumnOperation`. Unit tests per table row. Replace every `Err(PgError::unimplemented(\"SQL-33\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/ddl_constraint.rs",
+    "crates/pgarbor-sql/src/binder/types.rs",
+    "crates/pgarbor-sql/src/binder/stored.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "crates/pgarbor-catalog/src/ddl/alter_table.rs",
+    "crates/pgarbor-catalog/src/ddl/alter_column.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/tablecmds.c"
+   ],
+   "depends_on_leases": [
+    "SQL-29",
+    "SQL-31",
+    "SQL-07"
+   ],
+   "acceptance": [
+    "`alter table t add column c int not null default 5` -> AddColumn with fast_default Some(\"5\")",
+    "`alter table t alter column a type bigint` -> AlterColumnType{needs_rewrite true}; `varchar(10)` -> `varchar(20)` needs_rewrite false",
+    "`alter table if exists nope add column c int` -> Noop with NOTICE `relation \"nope\" does not exist, skipping`",
+    "`alter table t add column b int, add check (b > 0)` binds the CHECK against the new column",
+    "`alter table v ...` on a view -> 42809 `\"v\" is not a table`"
+   ]
+  },
+  {
+   "lease_id": "SQL-34",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_alter_other.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "ALTER SCHEMA/FUNCTION/TYPE/ROLE/SEQUENCE/DOMAIN/DATABASE/MATERIALIZED VIEW and rename/owner/schema moves.",
+   "spec": "Implement per the table in the module docs; each function maps syntax to one `AlterAction` variant (`ir/stmt.rs`). Read sqlparser `AlterSchema`, `AlterFunction`, `AlterType`, `AlterRole`, `AlterUser` definitions in `src/ast/ddl.rs` and the `ExtraStatement` enums in `extra_stmt.rs`. Missing object with IF EXISTS -> `BoundStatement::Noop` with the NOTICE (use `pgarbor_catalog::errors` constructors or `PgError::notice(\"... does not exist, skipping\")`). Sequence option validation: reuse `ddl_objects::bind_sequence_options` (frozen signature). Unit tests per row. Replace every `Err(PgError::unimplemented(\"SQL-34\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "crates/pgarbor-sql/src/extra_stmt.rs",
+    "crates/pgarbor-sql/src/binder/ddl_objects.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/errors.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs"
+   ],
+   "depends_on_leases": [
+    "SQL-35"
+   ],
+   "acceptance": [
+    "`alter schema s rename to t` -> RenameSchema",
+    "`alter table t rename to u` is ddl_alter's; `alter sequence s restart with 5` -> Sequence action with restart",
+    "`alter type mood add value 'x' before 'y'` -> AddEnumValue{position Before}",
+    "`alter role r with nologin password 'p'` -> Role{changes can_login Some(false), password Some(Some)}",
+    "`alter domain d set not null` -> DomainNotNull{set:true}",
+    "unknown role in OWNER TO -> 42704 `role \"x\" does not exist`"
+   ]
+  },
+  {
+   "lease_id": "SQL-35",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_objects.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE SCHEMA/SEQUENCE/TYPE/DOMAIN/ROLE/DATABASE binding and sequence option validation.",
+   "spec": "Implement per the module docs. Sequence option validation follows PG `init_params` in `sequence.c`: compute defaults by increment sign and data type (smallint/int/bigint bounds), check ranges with the exact messages in the docs; numbers arrive as sqlparser `SequenceOptions`/`Expr` literals: parse to i128 then check against i64. `SequenceOptions`/`SeqBound` types are in `pgarbor_catalog::ddl::spec` (read them). Role options: read sqlparser `CreateRole`/`CreateUser` fields (`RoleOption` list). Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-35\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs",
+    "crates/pgarbor-catalog/src/ddl/sequence.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/sequence.c",
+    "~/develop/reference/postgres-18/src/backend/commands/typecmds.c"
+   ],
+   "depends_on_leases": [
+    "SQL-29",
+    "SQL-07"
+   ],
+   "acceptance": [
+    "`create sequence s increment 2 start 10 maxvalue 100` options resolved with minvalue default 1",
+    "`create sequence s minvalue 5 maxvalue 3` -> 22023 `MINVALUE (5) must be less than MAXVALUE (3)`",
+    "`create type mood as enum ('a','b')` -> CreateEnum; a label over 63 bytes -> 42622",
+    "`create domain d as int check (value > 0)` -> check text `(VALUE > 0)`",
+    "`create role r login password 'x' createdb` -> CreateRoleSpec{can_login, create_db, password Some}",
+    "`create schema pg_x` -> 42939 `unacceptable schema name \"pg_x\"`"
+   ]
+  },
+  {
+   "lease_id": "SQL-36",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_view.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "CREATE [MATERIALIZED] VIEW and REFRESH MATERIALIZED VIEW.",
+   "spec": "Implement per the module docs. The view text is `deparse::query::deparse_viewdef(env, &bound_query, &column_names, opts)` (SQL-44) and dependencies `deparse::query::query_dependencies` (SQL-44). Read sqlparser `CreateView` fields in `src/ast/mod.rs`/`ddl.rs`. Output column collations: leave None. Unit tests per bullet (call into deparse only through its frozen signatures; gate on SQL-44 with `#[ignore = \"needs SQL-44\"]`). Replace every `Err(PgError::unimplemented(\"SQL-36\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-sql/src/deparse/query.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/view.c"
+   ],
+   "depends_on_leases": [
+    "SQL-16",
+    "SQL-44"
+   ],
+   "acceptance": [
+    "`create view v as select a, b from t` -> ViewSpec{columns [a,b], query.sql starts with ` SELECT a,\\n    b\\n   FROM t;`}",
+    "`create view v(x, y) as select 1, 2` renames both columns; `create view v(x) as select 1, 2` is accepted (the second column keeps `?column?`); more names than columns -> 42601 `CREATE VIEW specifies more column names than columns`",
+    "unknown-typed output column resolves to text",
+    "`create view v as select $1` -> 42P02",
+    "`create materialized view m as select 1 with no data` -> materialized true, populated false",
+    "`refresh materialized view t` on a table -> 42809 `\"t\" is not a materialized view`"
+   ]
+  },
+  {
+   "lease_id": "SQL-37",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_function.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE FUNCTION/PROCEDURE, CALL, DO binding (definitions stored, not executed).",
+   "spec": "Implement per the module docs (PG `CreateFunction`, `interpret_function_parameter_list`, `compute_function_attributes`). Read sqlparser `CreateFunction` (fields: or_replace, temporary, name, args: Option<Vec<OperateFunctionArg>>, return_type, function_body: Option<CreateFunctionBody>, behavior, called_on_null, parallel, using, language, determinism_specifier, options...) in `src/ast/ddl.rs`, and `Function` model in `crates/pgarbor-catalog/src/model/function.rs` (`FuncArg`, `FuncKind`, `FuncVolatility`). Body text: `CreateFunctionBody::AsBeforeOptions(Expr::Value(...))` etc.: extract the string literal. Language OIDs: `pgarbor_catalog::builtin::LANGUAGES`. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-37\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-catalog/src/model/function.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/ddl.rs",
+    "crates/pgarbor-sql/src/binder/types.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/functioncmds.c"
+   ],
+   "depends_on_leases": [
+    "SQL-07",
+    "SQL-29"
+   ],
+   "acceptance": [
+    "`create function f(a int) returns int language sql as 'select a'` -> Function{args [a:int4], ret int4, kind Function, language sql, body \"select a\"}",
+    "`create function f(out x int, out y text) language sql as ...` -> ret record",
+    "`create procedure p() language plpgsql as $$ begin end $$` -> kind Procedure",
+    "unknown language -> 42704 `language \"x\" does not exist`",
+    "`call p()` on a function -> 42809 + HINT `To call a function, use SELECT.`"
+   ]
+  },
+  {
+   "lease_id": "SQL-38",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_drop.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "DROP (all kinds), TRUNCATE, COMMENT, DROP/REASSIGN OWNED, DROP DATABASE binding.",
+   "spec": "Implement per the module docs. Read sqlparser `Statement::Drop`, `DropFunction`, `DropDomain`, `DropProcedure`, `Truncate` (`TruncateTableTarget`), `Comment` (`CommentObject`). `DropTarget`/`DropKind` live in `pgarbor_catalog::ddl::drop_stmt` (the executor calls `drop_by_names`). Function argument types for DROP FUNCTION via `types::resolve_data_type`. COMMENT object addresses: resolve with `env.lookup_class` etc. and `ObjectAddress` constructors in `model/common.rs` (column comments use `sub_id`). Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-38\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-catalog/src/ddl/drop_stmt.rs",
+    "crates/pgarbor-catalog/src/model/common.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/dropcmds.c"
+   ],
+   "depends_on_leases": [
+    "SQL-07"
+   ],
+   "acceptance": [
+    "`drop table if exists a, b cascade` -> Drop{kind Table, targets [a,b], if_exists, cascade}",
+    "`drop index i` -> kind Index; `drop user r` -> Role; `drop database d` -> DropDatabase",
+    "`drop function f(int, text)` carries arg oids [23,25]",
+    "`truncate a, b restart identity cascade` -> BoundTruncate with resolved OIDs; truncating a view -> 42809 `\"v\" is not a table`",
+    "`comment on column t.c is 'x'` -> addr Relation oid sub_id attnum, text Some(\"x\"); `is null` -> None"
+   ]
+  },
+  {
+   "lease_id": "SQL-39",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/ddl_grant.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "GRANT / REVOKE of privileges and roles.",
+   "spec": "Implement per the module docs (PG `aclchk.c ExecuteGrantStmt`, `objectNamesToOids`). Read sqlparser `Statement::Grant`, `Revoke`, `Privileges`, `Action`, `GrantObjects`, `Grantee`/`GranteeName` in `src/ast/mod.rs` and `crates/pgarbor-catalog/src/acl.rs` (privilege bit constants `ACL_SELECT` ... and `privilege_mask`). One `GrantSpec` per object. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-39\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/mod.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/develop/reference/postgres-18/src/backend/catalog/aclchk.c"
+   ],
+   "depends_on_leases": [
+    "SQL-07"
+   ],
+   "acceptance": [
+    "`grant select, insert on t, u to r, public` -> 2 GrantSpecs each with grantees [r, 0] and SELECT|INSERT bits",
+    "`grant all on schema s to r with grant option` -> PrivilegeSet::All, grant_option",
+    "`grant select (a, b) on t to r` -> columns [1,2]",
+    "`grant truncate on sequence s to r` -> 0LP01 `invalid privilege type TRUNCATE for sequence`",
+    "`revoke grant option for select on t from r cascade` -> revoke with grant_option+cascade",
+    "`grant r1 to r2 with admin option` -> GrantRole membership with admin_option"
+   ]
+  },
+  {
+   "lease_id": "SQL-42",
+   "task_ids": [
+    "SQL-05"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/copy.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "COPY binding: table/query source, endpoints, options and defaults.",
+   "spec": "Implement per the module docs (PG `ProcessCopyOptions`, `DoCopy`). Read sqlparser `Statement::Copy`, `CopySource`, `CopyTarget`, `CopyOption`, `CopyLegacyOption` (`src/ast/mod.rs` near the `Copy` variant). Single-byte checks apply to the char value. Unit tests per bullet. COPY FROM STDIN (psql `\\copy`, drivers) is on the critical path: make the text-format defaults exact (delimiter TAB, null `\\N`). Replace every `Err(PgError::unimplemented(\"SQL-42\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/target_table.rs",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/copy.c"
+   ],
+   "depends_on_leases": [
+    "SQL-25",
+    "SQL-16"
+   ],
+   "acceptance": [
+    "`copy t (a, b) from stdin` -> CopyTarget::Table columns [1,2], endpoint Stdin, text defaults",
+    "`copy (select 1) to stdout with (format csv, header)` -> Query target, csv, header true, delimiter ','",
+    "`copy t from stdin (quote '\"')` in text mode -> 22023 `COPY QUOTE requires CSV mode`",
+    "`copy v from stdin` on a view -> 42809 `cannot copy to view \"v\"`",
+    "unknown column -> 42703 `column \"x\" of relation \"t\" does not exist`"
+   ]
+  },
+  {
+   "lease_id": "SQL-44",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/deparse/query.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Query deparser (ruleutils get_query_def): pg_get_viewdef text, nested queries, dependency extraction.",
+   "spec": "Implement `deparse_viewdef`, `deparse_query_inline`, `query_dependencies` reproducing the layouts in the module docs byte-for-byte (leading space, indentation widths, `;` terminator). Maintain a scope stack of range tables for variable naming with `RangeColumns` (qualify rule in the docs). Expression text through `deparse::expr::deparse_expr` (SQL-43). Relation names: schema-qualify unless visible in `env`'s search path (`CatalogEnv::qualified_class_name`/`schema_qualifier`). Unit tests: every fixture of the docs built from queries bound with the binder (gate with `#[ignore = \"needs SQL-16\"]` where the binder is required) plus hand-built `BoundQuery` fixtures for the simplest cases. Replace every `Err(PgError::unimplemented(\"SQL-44\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/deparse/mod.rs",
+    "crates/pgarbor-sql/src/deparse/expr.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "crates/pgarbor-catalog/src/resolve.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/ruleutils.c"
+   ],
+   "depends_on_leases": [
+    "SQL-43",
+    "SQL-16"
+   ],
+   "acceptance": [
+    "viewdef of `select t.a, t.b || 'x' as bx, count(*) over () n, u.d from t join u on t.a=u.a where t.a > 1 and t.b like 'z%'` equals the first oracle fixture exactly",
+    "single-table views print bare column names; joins/sub-selects print qualified names",
+    "ORDER BY/OFFSET/LIMIT order: ` OFFSET 1\\n LIMIT 3`",
+    "UNION ALL arms and CTE (`WITH q AS (\\n         SELECT 1 AS a\\n        )`) match the fixtures",
+    "query_dependencies of a view over t and a user function lists the relation, used columns and the function once each"
+   ]
+  },
+  {
+   "lease_id": "SQL-45",
+   "task_ids": [
+    "SQL-04"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/rewrite.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "ExprRewriter implementation: re-deparse stored expressions and view queries after renames.",
+   "spec": "Implement `rewrite_stored_expr` per the module docs. Strategy: parse `expr.sql` (expression or view query), AST-rewrite the OLD names to NEW names according to `NameChange` (Column: identifiers resolving to that column; Relation: relation names in FROM and in `regclass` string constants; Schema/RelationSchema: qualifiers; Type/Function: names in casts/calls), then bind in an env where those names resolve (the `env` argument is the snapshot AFTER the change) and deparse again with `deparse::expr`/`deparse::query`. Keep `depends_on` unchanged. If a rewrite cannot be performed (statement type unsupported) return the expression unchanged ONLY when it provably does not mention the name; otherwise error with `PgError::unimplemented(\"SQL-45\", ...)` naming the case. Unit tests with the fixtures in the docs (gate on SQL-43/44 with `#[ignore]` as needed). Replace every `Err(PgError::unimplemented(\"SQL-45\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/deparse/expr.rs",
+    "crates/pgarbor-sql/src/deparse/query.rs",
+    "crates/pgarbor-sql/src/binder/stored.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "contracts/amendments/pgarbor-catalog-04-sql-expression-rewriter.md"
+   ],
+   "depends_on_leases": [
+    "SQL-43",
+    "SQL-44",
+    "SQL-29"
+   ],
+   "acceptance": [
+    "rename column b->bb: `CHECK ((b <> ''::text))` text becomes `((bb <> ''::text))`",
+    "view ` SELECT a,\\n    b AS b\\n   FROM t;` after renaming column b of t -> ` SELECT a,\\n    bb AS b\\n   FROM t;`",
+    "sequence rename: default `nextval('s'::regclass)` -> `nextval('s2'::regclass)`",
+    "schema rename updates qualified regclass constants",
+    "an expression not mentioning the object is returned unchanged"
+   ]
+  },
+  {
+   "lease_id": "SQL-46",
+   "task_ids": [
+    "SQL-11"
+   ],
+   "files": [
+    "crates/pgarbor-sql/src/binder/cte.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "WITH clauses: visibility, RECURSIVE well-formedness, data-modifying CTEs.",
+   "spec": "Implement per the module docs (PG `parse_cte.c`: `transformWithClause`, `analyzeCTE`, `checkWellFormedRecursion`, `makeDependencyGraph` for ordering RECURSIVE siblings). Read sqlparser `With { recursive, cte_tables: Vec<Cte> }`, `Cte { alias: TableAlias, query: Box<Query>, from, materialized: Option<CteAsMaterialized> }`. Recursive terms: after binding the non-recursive term use `setop::bind_recursive_union`. DML bodies: `Query` whose body is `SetExpr::Insert/Update/Delete(Statement)` -> `dispatch::bind_inner_statement`. Reference counting via `CteEntry::ref_count`. Unit tests per bullet. Replace every `Err(PgError::unimplemented(\"SQL-46\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-sql.md",
+    "crates/pgarbor-sql/src/binder/select.rs",
+    "crates/pgarbor-sql/src/binder/setop.rs",
+    "crates/pgarbor-sql/src/binder/dispatch.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0/src/ast/query.rs",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_cte.c"
+   ],
+   "depends_on_leases": [
+    "SQL-23"
+   ],
+   "acceptance": [
+    "`with x as (select 1 a) select * from x` -> one BoundCte, ref_count 1, columns [a:int4]",
+    "duplicate name -> 42712 `WITH query name \"x\" specified more than once`",
+    "`with recursive r(n) as (select 1 union all select n+1 from r where n < 5) select * from r` -> recursive true, body SetOp(Union all)",
+    "self reference in the non-recursive term -> 42P19 `recursive reference to query \"r\" must not appear within its non-recursive term`",
+    "column alias count mismatch -> 42P10 `WITH query \"x\" has 1 columns available but 2 columns specified`",
+    "`with d as (delete from t returning *) select * from d` -> CteBody::Modify; nested WITH with DML -> 0A000"
+   ]
+  }
+ ]
+}

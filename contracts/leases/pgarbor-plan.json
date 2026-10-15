@@ -1,0 +1,542 @@
+{
+ "crate": "pgarbor-plan",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "PLN-01",
+   "task_ids": [
+    "PLAN-01"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/build.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] BoundQuery -> LogicalPlan: range scans, FROM tree, WHERE, project; assembly of agg/window/sort/limit stages.",
+   "spec": "Implement per the module docs; the helpers it calls (`agg::build_aggregate`, `window::build_windows`, `sort_limit::build_sort_limit_distinct`, `setop::build_setop`, `cte::*`, `join::order_join_tree`, `pushdown::push_down_quals`, `simplify::*`) are other leases with frozen signatures. `TableRef` from the catalog `Relation` (`env.snapshot().relation(oid)`: `col_types` by attnum-1, dropped columns `TypeId::of(0)`). Every `LogicalPlan.vars` entry for a scan is `BoundExpr::column(0, rt_index, attnum, ty)`. Keep `rels` sorted. LEVELS: at the start of each query block call `st.enter_level(range_names)` where `range_names` = `(alias, column names by attnum-1)` for every `RangeEntry` of that block (VALUES/set-op bodies register an empty list), set `LogicalPlan.level` on every plan node you create for the block to the returned id, and call `st.leave_level()` when the block is built (nested sub-queries, CTE bodies and sub-plans get their own fresh levels because they go through `build_query` again). Unit tests build `BoundQuery` values by hand or via `pgarbor_sql::{parse, bind}` against `pgarbor_catalog::testing` and assert the logical shape. Replace every `Err(PgError::unimplemented(\"PLN-01\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-plan/src/context.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/planmain.c",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/initsplan.c"
+   ],
+   "depends_on_leases": [
+    "PLN-02",
+    "PLN-03",
+    "PLN-06",
+    "PLN-07",
+    "PLN-08",
+    "PLN-09",
+    "PLN-10",
+    "PLN-11"
+   ],
+   "acceptance": [
+    "`select a from t where a > 1` -> Project(Scan{t, quals [a>1]})",
+    "`select * from t, u where t.a = u.a` -> a single Join with the equality as join qual (after ordering/pushdown)",
+    "`select 1` -> Project over Scan{OneRow}",
+    "a derived table becomes ScanSource::Subquery whose scan exposes the entry's columns; every node carries the level id of its block and `st.range_names[level]` holds that block's aliases/columns",
+    "view references are plain sub-queries; dependencies of every base table are recorded in PlannerState"
+   ]
+  },
+  {
+   "lease_id": "PLN-02",
+   "task_ids": [
+    "PLAN-02"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/simplify.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Expression simplification: constant folding, boolean normalization, qual lists.",
+   "spec": "Implement `simplify_expr` and `simplify_quals` per the module docs (PG `eval_const_expressions`). Evaluate immutable calls with `pgarbor_types::func::implementation(oid)?.call(&args, &ctx)` using a `FuncCtx { env: st.ctx.env, io: &IoConfig::default(), session: &TestSession::default(), arg_types, result_type, collation: 0 }`; casts via `cast::apply_cast(&plan, v, &ctx)`; operators via the implementing proc `OpRef.proc`. Child-first transformation with `BoundExpr::transform`. Never fold across a volatile/stable function or a sub-link. Unit tests per rule (build expressions with the `pgarbor_sql` binder or by hand). Replace every `Err(PgError::unimplemented(\"PLN-02\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-sql/src/ir/expr.rs",
+    "crates/pgarbor-sql/src/ir/expr_walk.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/util/clauses.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`1 + 2` folds to Const(3 int4)",
+    "`a > 1 + 1` becomes `a > 2`; `true AND x` -> x; `false AND x` -> false; `x OR true` -> true",
+    "`now()` is not folded; `1/0` surfaces 22012 at simplify time",
+    "`CASE WHEN true THEN 1 ELSE 2 END` -> 1; `COALESCE(NULL, x)` -> x",
+    "`NOT (a < 1)` -> `a >= 1`",
+    "params with param_values Some are folded; None leaves Param"
+   ]
+  },
+  {
+   "lease_id": "PLN-05",
+   "task_ids": [
+    "PLAN-03"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/index.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Access path selection: seq scan vs btree index scan with equality prefix + range + ordering.",
+   "spec": "Implement `choose_scan`, `match_index`, `find_param_index` per the module docs (PG `indxpath.c`, `nbtutils.c`). Indexes: `env.snapshot().indexes_of(table_oid)` (`Index` model: `keys`, `unique`, `valid`, `predicate`, `method`). Operator names via `OpRef.name`; commuting a `value op key` clause flips `<`<->`>`, `<=`<->`>=`. Key-type cast: build with `pgarbor_types::cast::plan_cast(env, from, key_ty, CastContext::Implicit)` and `pgarbor_sql::ir::{CastExpr, ExprKind::Cast}`. `IndexScan.index` (`IndexRef`) is copied from the catalog `Index`. `needed` initially all true. Virtual relations (`TableRef` for oid < 16384): produce `VirtualScan` with `eq_filters` for `col = const` conjuncts. Unit tests with a catalog created through `pgarbor_catalog::testing` (tables + PK + secondary index) and hand-built `LogicalScan`s. Replace every `Err(PgError::unimplemented(\"PLN-05\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-catalog/src/model/index.rs",
+    "crates/pgarbor-types/src/keycodec.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/path/indxpath.c"
+   ],
+   "depends_on_leases": [
+    "PLN-03"
+   ],
+   "acceptance": [
+    "`where id = 5` on a PK table -> IndexScan using the PK, bounds.eq [5], unique_point",
+    "`where a > 3 and a <= 10` on an indexed column -> lower (3, exclusive), upper (10, inclusive)",
+    "composite index (a,b): `a = 1 and b > 2` -> eq [1], lower on b; `b = 2` alone -> SeqScan",
+    "`where id = 5::int8` on an int4 key wraps the value in a cast to the key type",
+    "`order by a desc limit 3` with want_ordered_scan_for_limit -> Backward IndexScan, no filter",
+    "`enable_indexscan=false` -> SeqScan"
+   ]
+  },
+  {
+   "lease_id": "PLN-06",
+   "task_ids": [
+    "PLAN-04"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/join.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Join ordering and strategy selection: hash, merge, nested loop, index nested loop, LATERAL.",
+   "spec": "Implement `order_join_tree`, `extract_equi_keys`, `plan_join` per the module docs (PG `joinpath.c`, `createplan.c`). Equi-key extraction: `OpExpr` named `=` with resolved operator whose operand types are hashable/orderable (`compare::is_orderable`); verify operand relid containment with `pushdown::expr_relids`. Output slot bookkeeping: `PlanNode.vars` is concatenated outer ++ inner; for the RIGHT->LEFT swap restore the original column order with a `Project` whose exprs are the original `vars` order. Inner-side rescans: NestedLoop `inner_params` expressions are the outer-side expressions; rewrite the inner subtree's references with `BoundExpr::transform` to `OuterRef{0,i}`. Unit tests with hand-built logical plans: equi join -> HashJoin (smaller side builds), non-equi -> NestedLoop with Materialize, FULL JOIN without keys -> 0A000, PK lookup inner -> index nested loop. Replace every `Err(PgError::unimplemented(\"PLN-06\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-plan/src/index.rs",
+    "crates/pgarbor-plan/src/cost.rs",
+    "crates/pgarbor-plan/src/pushdown.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/path/joinpath.c",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/createplan.c"
+   ],
+   "depends_on_leases": [
+    "PLN-05",
+    "PLN-12",
+    "PLN-03"
+   ],
+   "acceptance": [
+    "`t join u on t.a = u.a` -> HashJoin with outer_keys [t.a], inner_keys [u.a] and the smaller estimated input as inner",
+    "`t join u on t.a + 1 < u.d` -> NestedLoop with qual and Materialize over the inner",
+    "`t left join u on t.a = u.a` -> HashJoin Left with u as inner",
+    "driving table with a selective filter + PK lookup on the other side -> NestedLoop with inner IndexScan whose eq value is OuterRef{0,0}",
+    "`t full join u on t.a < u.a` -> 0A000 `FULL JOIN is only supported with merge-joinable or hash-joinable join conditions`",
+    "three-way inner join reorders to start from the smallest filtered input"
+   ]
+  },
+  {
+   "lease_id": "PLN-09",
+   "task_ids": [
+    "PLAN-07"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/sort_limit.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Sort, Limit, Distinct planning; ordering reasoning; top-N.",
+   "spec": "Implement per the module docs (PG `pathkeys.c`, `create_ordered_paths`, `create_distinct_paths`, `create_limit_path`, `make_sort`). `ordering_satisfies` compares keys structurally (expr `PartialEq`, descending, nulls_first, using_op). Top-N: only when `count` is a constant after simplification (`BoundExpr::as_const` of Int8) and `with_ties` false; limit = count + offset (offset const). `build_sort_limit_distinct` uses `sort_key_specs` and appends the junk-stripping `LogicalProject` (exprs = `vars[..n_visible]`). Unit tests via hand-built plans. Replace every `Err(PgError::unimplemented(\"PLN-09\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/path/pathkeys.c",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/planner.c"
+   ],
+   "depends_on_leases": [
+    "PLN-13",
+    "PLN-05"
+   ],
+   "acceptance": [
+    "`order by a` over a plain scan -> Sort; over an index scan ordered by a -> no Sort",
+    "`order by a desc` over an ascending index -> Backward scan decision is index.rs's; here the Sort is skipped only when ordering matches exactly",
+    "`order by a limit 10 offset 5` -> Sort{limit Some(15)} under Limit",
+    "`select distinct b` -> Distinct Hashed; with ORDER BY b -> Sort + Distinct Sorted",
+    "`distinct on (a) ... order by a, b` -> Sort(a,b) then Distinct{Sorted, key_slots [a]}",
+    "WITH TIES keeps ties_keys = sort keys"
+   ]
+  },
+  {
+   "lease_id": "PLN-13",
+   "task_ids": [
+    "PLAN-01"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/planner.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Planner orchestration: plan_statement, logical->physical conversion, projections, output columns.",
+   "spec": "Implement per the module docs. `plan_logical` is a big match over `LogicalNode` delegating to the other leases' physical functions with frozen signatures. Maintain `PlanNode.vars`/`ordering`/`out` for every node you build (Filter/Project/scans): `vars` is what `setrefs` matches against. For `ScanSource::Subquery`, plan the child, then wrap it in a pass-through `Project` (exprs = child.vars unchanged, vars = `Column{0, rt_index, i+1}`, out from the range entry): NEVER overwrite the child's own `vars` (self-joins and nested levels reuse rt indexes). Do not elide identity projections (setrefs does). Set `st.cur_level = lp.level` while converting each logical node (restore on exit) and create every node with `st.new_node(..)`. Final assembly in `plan_statement`: `PlanDeps { relations, types, functions, uses_search_path: true }`, `catalog_version = ctx.env.snapshot().version()`. Run `explain::annotate_plan` iff `ctx.options.for_explain`, then `setrefs::finalize`. Unit tests: end-to-end through `pgarbor_sql::{parse,bind}` and `plan` for `select 1`, `select a from t where a > 1 order by a limit 3` (gate on other leases with `#[ignore = \"needs PLN-xx\"]`). Replace every `Err(PgError::unimplemented(\"PLN-13\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-plan/src/context.rs",
+    "crates/pgarbor-plan/src/build.rs",
+    "crates/pgarbor-plan/src/setrefs.rs",
+    "crates/pgarbor-plan/src/explain.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/planner.c",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/createplan.c"
+   ],
+   "depends_on_leases": [
+    "PLN-05",
+    "PLN-06",
+    "PLN-14",
+    "PLN-17"
+   ],
+   "acceptance": [
+    "`plan(Query select 1)` -> Plan{kind Select, root Result, output [?column? int4]}",
+    "plan of a utility statement -> XX000 `statement is not plannable`",
+    "output ColumnDesc carries table_oid/attnum for plain columns",
+    "deps.relations lists every base table read",
+    "plan.catalog_version equals the env snapshot version",
+    "a view joined with a table (`select * from u, v` where the view body is `select * from t where a > 1`) plans without error: the view scan keeps its filter in its own level's terms and the pass-through Project exposes it under the parent rt index"
+   ]
+  },
+  {
+   "lease_id": "PLN-14",
+   "task_ids": [
+    "PLAN-01"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/setrefs.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Final expression translation to executable form (Column -> InputRef, Aggref/WindowFunc/Grouping slots, sub-plan args).",
+   "spec": "Implement `finalize` and `verify_executable` per the module docs (PG `setrefs.c`). Design: scans translate their own quals against THEIR OWN `vars` (no rt_index anywhere in plan nodes: rt indexes restart per query level and self-joins share OIDs; never key state by rt_index); after translating a node and its children, delete `Project` nodes whose exprs are exactly `InputRef(0..n)` over a child of width n (identity elision, keep the Project's `out` names). Do not compute `needed` masks (leave all-true). A recursive function `fix_node(node: &mut PlanNode, ...)` processes the node's expressions with a closure built from the CHILD's `vars` (a `Vec<BoundExpr>`) via `BoundExpr::transform_down`-style top-down matching: at each subtree first test structural equality against every child var (hash/linear scan is fine), replace by `InputRef(i)`; otherwise recurse. Joins: concatenated vars (outer ++ inner) for join quals; separate for key lists. Make a single helper `for_each_expr_mut(node, f)` over every expression field of every `NodeKind` (exhaustive match). SubPlan bodies and CTE bodies: finalize recursively with their own `vars` trees (`Plan.subplans`, `Plan.ctes`). Clear `vars`/`ordering` at the end. Unit tests: hand-built trees for scan filter, project over scan, join qual, aggregate with having/aggref/grouping, window, correlated subplan args; and the error for an unmatched column. Replace every `Err(PgError::unimplemented(\"PLN-14\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-sql/src/ir/expr.rs",
+    "crates/pgarbor-sql/src/ir/expr_walk.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/setrefs.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`Column{rt 1, attnum 2}` over a scan of rt 1 becomes InputRef(1)",
+    "Project over a join: `t.a` -> InputRef(slot in outer) and `u.d` -> InputRef(outer.width + slot)",
+    "an Aggref in a Project above an Aggregate becomes InputRef(n_keys + k); a group expression subtree equal to a key becomes InputRef(key idx)",
+    "Grouping gets mask_slot Some(n_keys + n_aggs)",
+    "after finalize no Column/SubLink/Aggref/WindowFunc exists (verify_executable passes)",
+    "a pass-through Project over a filtered scan (sub-query boundary with parent rt 2 while the scan's filter uses inner rt 1) finalizes without error and the Project disappears",
+    "self join `t a, t b`: columns of each side map to the right slots (no OID/rt_index keyed state)",
+    "an unmatched Column -> XX000 `variable not found in subplan target list`"
+   ]
+  },
+  {
+   "lease_id": "PLN-15",
+   "task_ids": [
+    "PLAN-09"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/explain.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] EXPLAIN node labels and property annotation (deparsed quals, keys, join conditions).",
+   "spec": "Implement `node_label`, `annotate_node`, `annotate_plan` per the tables in the module docs; render expressions with `pgarbor_sql::deparse::expr::deparse_expr(&DeparseCtx{ env, catalog, namer: &PlanColumnNamer{..}, opts: DeparseOptions{explain:true,..} }, &expr)`. Qualification rules are in the module docs (scan quals: only VERBOSE; upper nodes: more than one relation entry across ALL levels of `st.range_names`, or VERBOSE; outer parameters always qualified): build a fresh `PlanColumnNamer` per property. `PlanColumnNamer.ranges` = `st.range_names[node.level]` (every node carries its query level; do not use any stack). Descending into a `NestedLoop` inner subtree or a sub-plan body push the rendered `inner_params` / `SubPlanRef::args` (deparsed with qualification) on `outer_params` so `OuterRef` renders as e.g. `u.a`; find the `SubPlanRef`s by walking the owning node's expressions. Aggregates/ window functions render with `deparse_expr`. Unit tests: golden strings for the fixtures in the docs, built from hand-made PlanNodes. Replace every `Err(PgError::unimplemented(\"PLN-15\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/explain_fmt.rs",
+    "crates/pgarbor-sql/src/deparse/mod.rs",
+    "crates/pgarbor-sql/src/deparse/expr.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/explain.c"
+   ],
+   "depends_on_leases": [
+    "PLN-16"
+   ],
+   "acceptance": [
+    "labels: `Seq Scan on t`, `Seq Scan on t x`, `Index Scan using t_pkey on t`, `Index Scan Backward using t_pkey on t`, `Hash Left Join`, `HashAggregate`, `GroupAggregate`, `Aggregate`, `HashSetOp Intersect All`",
+    "SeqScan filter -> prop `Filter: (a = 1)`; IndexScan -> `Index Cond: (a = 5)` and `Filter`",
+    "HashJoin -> `Hash Cond: (u.a = t.a)`; NestedLoop qual -> `Join Filter: ...`",
+    "Sort -> `Sort Key: b, a DESC`; Aggregate -> `Group Key: b`",
+    "`Result` with a constant-false one-time filter -> `One-Time Filter: false`",
+    "VERBOSE adds `Output:` lines and schema-qualified relation names"
+   ]
+  },
+  {
+   "lease_id": "PLN-16",
+   "task_ids": [
+    "PLAN-09"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/explain_fmt.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] EXPLAIN renderers: text (indentation, costs), JSON, YAML, XML, ANALYZE actuals.",
+   "spec": "Implement `render` and `render_analyze` per the module docs. Walk the finalized `Plan` (`PlanNode.kind` + `props` + `est`); labels from `explain::node_label` (frozen signature, SQL of PLN-15); the plan has already been annotated. Handle sub-plan / CTE blocks and the Hash node wrapper for hash joins in text. JSON: hand-written serializer producing exactly PG's key order and 2-space layout from the docs (do not use serde_json's pretty printer: it uses a different layout for arrays/empties; or use `serde_json::to_string_pretty` only after verifying equality with the fixtures). YAML as documented (note the trailing space after `Plan:`). XML may return `PgError::unimplemented(\"PLN-16\", \"EXPLAIN FORMAT XML\")`. Unit tests: the fixtures in `explain.rs` and `explain_fmt.rs` docs built from hand-made plans. Replace every `Err(PgError::unimplemented(\"PLN-16\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/explain.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/explain.c",
+    "~/develop/reference/postgres-18/src/backend/commands/explain_format.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "text format of the Hash Join fixture is byte-identical to the docs (including the `->  Hash` wrapper and 6-space child indentation)",
+    "COSTS ON appends `  (cost=0.00..2.25 rows=1 width=12)` with 2-decimal costs",
+    "JSON output of the Seq Scan fixture is byte-identical",
+    "YAML output of the fixture is byte-identical incl. `- Plan: ` trailing space",
+    "InitPlan/SubPlan/CTE blocks render per the docs"
+   ]
+  },
+  {
+   "lease_id": "PLN-17",
+   "task_ids": [
+    "PLAN-01",
+    "PLAN-05"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/build_dml.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] INSERT/UPDATE/DELETE/CTAS planning: row layouts, defaults, generated columns, ON CONFLICT, RETURNING.",
+   "spec": "Implement per the module docs; the row layouts are normative and match `plan.rs` (`InsertSpec`, `UpdateSpec`, `ModifyTableNode` docs). UPDATE/DELETE input: build with `build::build_range_scan(.., with_rowid=true)` for the target, `build::build_from_item` for FROM items, `join::order_join_tree` + `pushdown::push_down_quals`, then `planner::plan_logical`. Expression rewriting to `InputRef` forms for ModifyTable fields that are NOT translated by setrefs (checks, generated, defaults, ON CONFLICT exprs, returning when they only reference the target) \u2014 decide per field and document which ones `setrefs` handles (the docs of `plan.rs` fix the layouts; `setrefs` must also accept `InputRef` untouched). Use `BoundExpr::transform` to replace `Column{levels_up:0, rt_index: target}` -> `InputRef(attnum-1)`. Default expressions come bound from `TargetColumn::default`. Unit tests via `pgarbor_sql::{parse,bind}` + planner for each statement shape (gate on other leases with `#[ignore]`). Replace every `Err(PgError::unimplemented(\"PLN-17\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/build.rs",
+    "crates/pgarbor-plan/src/planner.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/createplan.c",
+    "~/develop/reference/postgres-18/src/backend/rewrite/rewriteHandler.c",
+    "~/develop/reference/postgres-18/src/backend/executor/nodeModifyTable.c"
+   ],
+   "depends_on_leases": [
+    "PLN-14"
+   ],
+   "acceptance": [
+    "`insert into t(a,b) values (1,'x')` -> ModifyTable Insert, input ValuesScan, InsertSpec.columns [1,2], defaults for the remaining live columns",
+    "`insert ... select` plans the query as input",
+    "`update t set b='z' where a=1` -> input layout `table row ++ rowid`, rowid_slot = ncols, one assignment (2, Const)",
+    "`update t set b = u.d from u where t.a = u.a` -> extra FROM columns after rowid; returning_extra_from set",
+    "`delete from t where a=1 returning a` -> returning expr InputRef(0)",
+    "`insert ... on conflict (a) do update set b = excluded.b` -> ConflictSpec with the existing++excluded layout"
+   ]
+  },
+  {
+   "lease_id": "PLN-03",
+   "task_ids": [
+    "PLAN-02"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/pushdown.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Predicate pushdown through joins, outer-join reduction, constant propagation.",
+   "spec": "Implement `is_strict_for_rels`, `push_down_quals`, `derive_constant_quals` per the module docs (PG `distribute_qual_to_rels`, `reduce_outer_joins`, `find_nonnullable_rels`). Strictness: a comparison/arithmetic `Op`, a strict `FuncCall` and `NullTest{is_null:false}`/`BooleanTest` over a nullable-side column are strict; `Coalesce`, `Case`, `NullTest{is_null:true}`, `DistinctFrom`, non-strict functions are not (use `OpRef.strict`/`FuncCallExpr.strict`). Work on `LogicalPlan` trees (`LogicalNode::Join/Scan/Filter`); keep `vars`/`out`/`rels` consistent when you restructure. Unit tests with hand-built logical plans for every rule incl. a LEFT JOIN with a WHERE qual on the nullable side (reduces to INNER and pushes down) and one with an ON qual on the preserved side (stays). Replace every `Err(PgError::unimplemented(\"PLN-03\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-sql/src/ir/expr_walk.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/initsplan.c",
+    "~/develop/reference/postgres-18/src/backend/optimizer/prep/prepjointree.c",
+    "~/develop/reference/postgres-18/src/backend/optimizer/path/equivclass.c"
+   ],
+   "depends_on_leases": [
+    "PLN-02"
+   ],
+   "acceptance": [
+    "`select * from t join u on t.a=u.a where t.b = 1` pushes `t.b = 1` into the t scan",
+    "`t left join u on t.a=u.a where u.c > 5` -> INNER join and `u.c > 5` pushed to u",
+    "`t left join u on t.a=u.a where u.c is null` stays above the LEFT join",
+    "`t left join u on t.a=u.a and u.c>5` pushes `u.c>5` into u (ON-qual on the nullable side)",
+    "`t join u on t.a=u.a where t.a = 5` derives `u.a = 5` on u",
+    "a volatile qual is not pushed below its lowest covering join"
+   ]
+  },
+  {
+   "lease_id": "PLN-04",
+   "task_ids": [
+    "PLAN-08"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/subplan.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Sub-links to sub-plans: correlation parameters, initplans, hashed ANY, EXISTS/IN pull-up.",
+   "spec": "Implement `process_sublinks`, `process_sublinks_in`, `pull_up_sublinks` per the module docs (PG `SS_process_sublinks`, `build_subplan`, `replace_correlation_vars_mutator`). The nested query is planned with `build::build_query` (which registers its own fresh query level) + `planner::plan_query_node` (but WITHOUT `setrefs`: the sub-plan tree keeps bind-time expressions until the global `setrefs::finalize` handles `st.subplans` too). Correlation: walk the nested `PlanNode` tree expressions with `BoundExpr::transform` and replace `Column{levels_up: 1}` by `OuterRef{0, i}` (dedup per column), `levels_up >= 2` by `levels_up - 1`. Because nodes store expressions in many fields, add a private helper that applies a closure to every expression of every node kind (match on `NodeKind`); keep it exhaustive. Assign `SubPlanDef.id = st.subplans.len()` BEFORE planning the body is wrong if inner sub-links get ids first: reserve the id after planning the body (PG numbering). Unit tests: uncorrelated scalar (is_initplan), correlated EXISTS (args = one column), NOT IN stays a sub-plan, nested correlation. Replace every `Err(PgError::unimplemented(\"PLN-04\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/context.rs",
+    "crates/pgarbor-sql/src/ir/expr.rs",
+    "crates/pgarbor-sql/src/ir/expr_walk.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/subselect.c"
+   ],
+   "depends_on_leases": [
+    "PLN-13"
+   ],
+   "acceptance": [
+    "`where a = (select max(d) from u)` -> SubPlan{Scalar, is_initplan true, args []}",
+    "`select (select max(d) from u where u.a = t.a) from t` -> correlated SubPlan with args [t.a] and an OuterRef{0,0} inside",
+    "`a in (select d from u)` uncorrelated -> kind Any, use_hash true",
+    "`not exists (...)` keeps the Not over an Exists SubPlan unless pulled up to an Anti join",
+    "ids are assigned in creation order: inner sub-plan first"
+   ]
+  },
+  {
+   "lease_id": "PLN-07",
+   "task_ids": [
+    "PLAN-05"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/agg.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Aggregation: Aggref collection, LogicalAggregate, strategy choice, AggCall construction.",
+   "spec": "Implement `collect_aggrefs`, `build_aggregate`, `plan_aggregate` per the module docs (PG `create_grouping_paths`, `create_agg_plan`). Structural dedup of aggrefs with `PartialEq`. The input plan is `planner::plan_logical(input)`; `AggCall` fields copy from `pgarbor_sql::ir::Aggref` (`agg`, `name`, `args`, `direct_args`, `distinct`, `filter`, `order_by` -> `SortKeySpec`, `star`); `result_type = aggref ty`. Output `out` names: group key `?column?` or the column name, aggregate function name. `PlanNode.vars` = group exprs ++ aggref exprs. Unit tests via hand-built logical plans. Replace every `Err(PgError::unimplemented(\"PLN-07\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-sql/src/ir/expr.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/planner.c"
+   ],
+   "depends_on_leases": [
+    "PLN-13",
+    "PLN-09"
+   ],
+   "acceptance": [
+    "`select count(*) from t` -> Aggregate Plain with one AggCall and no keys",
+    "`select b, sum(c) from t group by b` -> Hashed, group_keys [b]",
+    "input already ordered by b (index scan) -> Sorted without a Sort node",
+    "`having sum(c) > 1` -> AggregateNode.having Some; `having b > 1` (no aggregate) is pushed below as an input filter",
+    "two identical `count(*)` produce ONE AggCall"
+   ]
+  },
+  {
+   "lease_id": "PLN-08",
+   "task_ids": [
+    "PLAN-05"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/window.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Window planning: LogicalWindow stacking, required sort, WindowAggNode.",
+   "spec": "Implement `build_windows` and `plan_window` per the module docs (PG `create_window_paths`, `select_active_windows`). Sort requirement: partition keys ascending (nulls last) then the window order keys; use `sort_limit::ordering_satisfies` / `sort_limit::plan_sort`-style Sort construction (build the `Sort` node directly with `SortNode`). `WindowCall` from `pgarbor_sql::ir::WindowFunc`; `FrameSpec` from the `WindowDef` fields. Unit tests via hand-built logical plans. Replace every `Err(PgError::unimplemented(\"PLN-08\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-plan/src/sort_limit.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/planner.c"
+   ],
+   "depends_on_leases": [
+    "PLN-09",
+    "PLN-13"
+   ],
+   "acceptance": [
+    "`row_number() over (partition by b order by a)` -> Sort(b, a) + WindowAgg with one WindowCall",
+    "two windows with identical definitions share one WindowAgg",
+    "child already ordered by (b, a) -> no Sort",
+    "output vars = input vars ++ window funcs",
+    "frame_is_default preserved in FrameSpec"
+   ]
+  },
+  {
+   "lease_id": "PLN-10",
+   "task_ids": [
+    "PLAN-08"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/setop.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "UNION/INTERSECT/EXCEPT planning: Append, Distinct, SetOpNode.",
+   "spec": "Implement `build_setop` and `plan_setop` per the module docs (PG `prepunion.c`). Flatten nested UNION ALL children into one `Append`. Unit tests via hand-built logical plans. Replace every `Err(PgError::unimplemented(\"PLN-10\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/prep/prepunion.c"
+   ],
+   "depends_on_leases": [
+    "PLN-13",
+    "PLN-09"
+   ],
+   "acceptance": [
+    "`select a from t union all select a from u` -> Append with two children",
+    "`... union ...` -> Distinct(Hashed) over Append",
+    "`intersect all` -> SetOpNode{IntersectAll}",
+    "nested union all of three selects -> one Append with three children",
+    "output names from the left child"
+   ]
+  },
+  {
+   "lease_id": "PLN-11",
+   "task_ids": [
+    "PLAN-08"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/cte.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CTE planning: inline vs materialize, recursive union, data-modifying CTEs.",
+   "spec": "Implement per the module docs (PG `SS_process_ctes`, `inline_cte`). Recursive: plan the non-recursive term with `planner::plan_query_node`; the recursive term references `RangeKind::Cte{recursive_self:true}` which `plan_cte_reference` maps to `ScanSource::WorkTable`. `CteDef.columns` from `BoundCte.columns`. DML bodies via `build_dml::plan_dml_statement`. Unit tests via binder-produced `BoundCte`s. Replace every `Err(PgError::unimplemented(\"PLN-11\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/logical.rs",
+    "crates/pgarbor-plan/src/context.rs",
+    "crates/pgarbor-sql/src/ir/query.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/plan/subselect.c",
+    "~/develop/reference/postgres-18/src/backend/optimizer/prep/prepjointree.c"
+   ],
+   "depends_on_leases": [
+    "PLN-13",
+    "PLN-17"
+   ],
+   "acceptance": [
+    "single-reference non-recursive CTE is inlined as a subquery (no CteDef)",
+    "two references -> CteDef materialize true, two CteScans",
+    "`materialized` hint forces a CteDef; `not materialized` inlines every reference",
+    "recursive CTE -> CteBodyPlan::Recursive with a WorkTableScan in the recursive term",
+    "data-modifying CTE -> CteBodyPlan::Modify"
+   ]
+  },
+  {
+   "lease_id": "PLN-12",
+   "task_ids": [
+    "PLAN-06"
+   ],
+   "files": [
+    "crates/pgarbor-plan/src/cost.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Rule-based cardinality and cost estimates.",
+   "spec": "Implement per the module docs; constants in the docs. Pure functions. `selectivity` walks `BoundExpr` (Op names via `OpRef.name`, `NullTest`, `Bool`, `ScalarArrayOp`). Unit tests for each documented number. Replace every `Err(PgError::unimplemented(\"PLN-12\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build user-facing errors with the constructors in `crate::diag` (add nothing there: if one is missing use PgError::new with the exact PG text). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership and type errors, and use only APIs whose definitions you have READ in the files listed under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlparser-0.63.0, ~/develop/reference/postgres-18 for PostgreSQL behavior; cite PG source paths in comments, never copy code verbatim). Remove the `#[allow(unused_variables)]` attribute and `PgError::unimplemented` placeholders you replace; keep `// CONTRACT` comments and every signature. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need a catalog use `pgarbor_catalog::testing` (`let (mut kv, env) = testing::bootstrapped()?;` and `testing::run(&mut kv, &env, |t| ...)` to create tables; each statement's env must come from the previous `DdlResult::snapshot`) and tests of functions owned by other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`.",
+   "reads": [
+    "contracts/crates/pgarbor-plan.md",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/context.rs",
+    "crates/pgarbor-sql/src/ir/expr.rs",
+    "~/develop/reference/postgres-18/src/backend/optimizer/path/costsize.c",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/selfuncs.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "selectivity(a = 5) == 0.005; (a > 1) == 1/3; (a > 1 AND a < 9) == 0.005; IS NULL 0.005",
+    "AND multiplies, OR uses s1+s2-s1*s2, NOT is 1-s",
+    "table_rows uses PlanContext.table_rows when present else default_table_rows",
+    "join_rows(1000, 1000, Inner, 1, 0) is 1000*1000*0.005 clamped to >= 1",
+    "cost_node('sort', ..) grows n log n"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,1346 @@
+{
+ "crate": "pgarbor-exec",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "EXE-01",
+   "task_ids": [
+    "EXEC-01",
+    "EXEC-02"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/tabledesc.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] TableDesc: per-statement table description (columns, missing values, indexes, CHECKs, FKs) bound from the catalog snapshot.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-01\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `table_desc` (cache in `cx.stmt.tables`), `build_table_desc`, `bind_stored_text`, `columns_to_input_refs`. Catalog model: `pgarbor_catalog::{Relation, Column, Index, Constraint}` via `env.snapshot()` (`relation`, `indexes_of`, `constraints_of`, `foreign_keys_referencing`, `class`), names through `snapshot.namespace(oid)`. `Column::missing_value` is TEXT: parse with `pgarbor_types::io::input(&cx.se.io_ctx(), col.type_id, text)`. `bind_stored_text`: build `pgarbor_sql::BindContext{env:&se.env, session: BindSession{database: se.services.database_name()}, io_config: se.io.clone(), statement_timestamp: se.txn_ts, declared_params: vec![]}`, `SourceMap::new(sql)`, `Binder::new(&ctx,&src)`, call `binder::stored::bind_stored_expr(&mut b, sql, rel_oid, ExprCtx::check())`. `columns_to_input_refs` uses `BoundExpr::transform` (read `crates/pgarbor-sql/src/ir/expr_walk.rs`). Index ordering: primary first, then other unique, then rest, ties by OID; skip non-btree and `!valid`. Unit tests: build a table with `catalog::testing`, a PK, a CHECK, an FK pair and assert the description.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs",
+    "crates/pgarbor-catalog/src/model/index.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "crates/pgarbor-catalog/src/snapshot/core.rs",
+    "crates/pgarbor-sql/src/binder/stored.rs",
+    "crates/pgarbor-sql/src/binder/context.rs",
+    "crates/pgarbor-sql/src/ir/expr_walk.rs",
+    "crates/pgarbor-types/src/io.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`table_desc` of a table with columns (a int, b text), a PK on a, CHECK (a > 0) returns 2 cols, 1 primary IndexDesc keyed on attnum 1, 1 CheckDesc whose expr evaluates over `[Int4(1), Null]`",
+    "a column added with a constant default reports `missing = Some(default value)` and `complete_row` of a 1-value stored row fills it",
+    "dropped columns keep their slot with `dropped = true`",
+    "`fks_out`/`fks_in` list the same FK constraint from both tables with resolved names"
+   ]
+  },
+  {
+   "lease_id": "EXE-02",
+   "task_ids": [
+    "EXEC-02",
+    "EXEC-03"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/rowstore.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Heap row storage over Kv: keys, encode/decode with missing-value completion, insert/get/write/delete, lock_row, batched HeapCursor.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-02\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement every function of the file. Keys via `pgarbor_core::alloc::row_key`; values via `pgarbor_types::tuple::{encode_row, decode_row, decode_columns}`. `HeapCursor::next`: refill with `crate::txn::kv_scan_vec(&*ex.cx.txn, Bound::Excluded(last_key) or Included(prefix), Bound::Excluded(next_relid_prefix) or Unbounded, SCAN_BATCH)` where the range is `[relid BE 4 bytes, relid+1 BE 4 bytes)` (relid == u32::MAX -> upper Unbounded); stop when a batch is shorter than SCAN_BATCH. `lock_row` maps `LatestRead::{Locked{value,changed},NotAvailable}` to `RowLock`. `delete_relation_data` collects keys in SCAN_BATCH chunks then deletes them (do not delete while an iterator is alive). Unit tests with `MemTxn` and a hand-made `TableDesc` (construct the struct literal in the test).",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/tabledesc.rs",
+    "crates/pgarbor-core/src/alloc.rs",
+    "crates/pgarbor-types/src/tuple.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01"
+   ],
+   "acceptance": [
+    "insert 3 rows then a full `HeapCursor` scan returns them in rowid order across a SCAN_BATCH boundary (insert 600 rows)",
+    "a stored row with fewer values than ncols is completed with the column missing value, dropped slots Null",
+    "`delete_relation_data(relid)` removes exactly the keys with that 4-byte prefix and leaves neighbours",
+    "`lock_row` on a deleted key returns `RowLock::Gone` (MemTxn)"
+   ]
+  },
+  {
+   "lease_id": "EXE-03",
+   "task_ids": [
+    "EXEC-04",
+    "EXEC-11"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/index_key.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Index entry construction (unique/NULL suffix rules, partial predicates, expression keys) and scan key-interval arithmetic.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-03\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per the module docs (entry layout and 'Interval arithmetic' are exact byte contracts). `keycodec::encode_key_vec(env, &idx.key_cols, &values)` with `env = &ex.cx.se.env` (CatalogEnv implements TypeEnv). Expression keys: `eval::eval(ex, expr, row)`. Predicate: `eval::eval_bool3(..) == Some(true)`. `interval_for_bounds`: a NULL equality value or NULL bound returns `Ok(None)`; remember DESC mirrors the byte order; `prefix_upper_bound` is `pgarbor_common::kv::prefix_upper_bound`. Unit tests: ordering property tests of `interval_for_bounds` against hand-encoded keys for ASC/DESC, NULLS FIRST/LAST, inclusive/exclusive, no-bound sides.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-types/src/keycodec.rs",
+    "crates/pgarbor-common/src/kv.rs",
+    "contracts/amendments/pgarbor-exec-01-unique-null-entries.md"
+   ],
+   "depends_on_leases": [
+    "EXE-01"
+   ],
+   "acceptance": [
+    "unique index on (a): entry for a=1 has key `[oid][enc(1)]` and probe Some; entry for a=NULL has key `[oid][enc(NULL)][rowid]` and probe None",
+    "non-unique index entries always carry the rowid suffix",
+    "partial index with predicate false yields `make_entry == None`",
+    "`interval_for_bounds(eq=[], lower=(5,incl), upper=(9,excl))` on an ASC int4 column contains enc(5) and enc(8) but not enc(9) nor NULL; DESC mirrors",
+    "entry value roundtrip `rowid_of_entry_value(entry_value(n)) == n`"
+   ]
+  },
+  {
+   "lease_id": "EXE-04",
+   "task_ids": [
+    "EXEC-03",
+    "EXEC-11",
+    "EXEC-13"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/index_maint.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Index maintenance: insert/delete/update entries with race-safe unique checks, conflict probing, unique lookups, index build.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-04\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per the module docs. The unique check protocol (`lock_and_read_latest` on the probe) is mandatory; use `ExecTxn::put_fresh` only for entries of brand-new heap rows. Error values: `error::unique_violation` (23505) with `error::key_description(&cx.se.io_ctx(), labels, types, values)`; build violations use `error::unique_build_violation`. `build_index` scans with `rowstore::HeapCursor` and needs its own duplicate detection (HashSet of probe bytes). Unit tests with `MemTxn`: duplicate key insert, NULL keys allowed twice, update that changes a key, delete removes the entry, `find_conflict` finds the live row.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/index_key.rs",
+    "crates/pgarbor-exec/src/rowstore.rs",
+    "crates/pgarbor-exec/src/error.rs",
+    "contracts/amendments/pgarbor-exec-01-unique-null-entries.md",
+    "~/develop/reference/postgres-18/src/backend/access/nbtree/nbtinsert.c"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02",
+    "EXE-03"
+   ],
+   "acceptance": [
+    "inserting a second row with an existing primary-key value fails with 23505 `duplicate key value violates unique constraint \"t_pkey\"` DETAIL `Key (id)=(1) already exists.`",
+    "two rows with NULL in a unique column both insert",
+    "`update_entries` with an unchanged key performs no writes (assert via MemTxn contents)",
+    "`build_index` over duplicate rows fails with 23505 `could not create unique index` DETAIL `Key (a)=(1) is duplicated.`",
+    "`find_conflict` returns the conflicting rowid and image, `None` when absent"
+   ]
+  },
+  {
+   "lease_id": "EXE-05",
+   "task_ids": [
+    "EXEC-05"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/eval.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Expression evaluator dispatcher and control-flow kinds (AND/OR/CASE/COALESCE/NULLIF/GREATEST/tests/SQL value functions).",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-05\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `eval` as a `match &e.kind` that handles the kinds listed in the module docs and delegates the others to `eval_call`, `eval_cast`, `subplan` (those functions are other leases with frozen signatures). Use `pgarbor_types::logic::{and3, or3, not3, datum_to_bool3, bool3_to_datum}`, `compare::{cmp_datums, not_distinct}`. SqlValue functions: `pgarbor_types::cast::cast_datum` from timestamptz with `eval_call::with_func_ctx`. Unit tests build `BoundExpr` values by hand and run them through a `MemTxn`-backed `ExecContext` (see context.rs `SessionEnv::new`; use `pgarbor_catalog::testing::bootstrapped()` for the env).",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-sql/src/ir/expr.rs",
+    "crates/pgarbor-types/src/logic.rs",
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`false AND (1/0 = 1)` is FALSE without evaluating the division; `NULL AND false` is FALSE; `NULL OR true` is TRUE",
+    "CASE returns the first matching arm and never evaluates later arms",
+    "`COALESCE(NULL, 2, 1/0)` is 2",
+    "`GREATEST(1, NULL, 3)` is 3, `GREATEST(NULL, NULL)` is NULL",
+    "`ROW(1,NULL) IS NOT NULL` is FALSE and `IS NULL` is FALSE",
+    "`Param(2)` with one supplied parameter is 08P01"
+   ]
+  },
+  {
+   "lease_id": "EXE-06",
+   "task_ids": [
+    "EXEC-05",
+    "EXEC-17"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/eval_call.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Function and operator calls, ANY/ALL over arrays, row comparison; exec-owned vs catalog vs builtin routing.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-06\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. `pgarbor_types::func::implementation(oid)` returns `FuncHandle`; call with `handle.call(&args, &ctx)`. `FuncCtx` fields: env, io, session, arg_types, result_type, collation. Build `ExecSessionContext::new(&cx.se, &*cx.txn)` inside `with_func_ctx`. For External procs check `crate::session_fns::handles(handle.proc)` first and call `session_fns::call(ex, handle.proc, &args, &arg_types)`; otherwise `handle.call`. Cache handles in `ex.rt.funcs`. Unit tests: `int4pl` (oid 177) through an `Op`, strict NULL short circuit, `x = ANY(array)` three-valued cases from the docs, row comparison with NULLs.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-exec/src/session_fns.rs",
+    "crates/pgarbor-exec/src/exec_session.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05"
+   ],
+   "acceptance": [
+    "`1 + 2` via int4pl evaluates to Int4(3); `NULL + 2` is NULL without calling",
+    "`2 = ANY(ARRAY[1,NULL,2])` is TRUE; `3 = ANY(ARRAY[1,NULL,2])` is NULL; `3 = ANY('{}')` is FALSE; `3 <> ALL(ARRAY[1,2])` is TRUE",
+    "`(1,2) < (1,3)` TRUE; `(1,NULL) < (2,3)` TRUE; `(1,NULL) < (1,3)` NULL",
+    "a user function OID (>= 16384) fails with 0A000"
+   ]
+  },
+  {
+   "lease_id": "EXE-07",
+   "task_ids": [
+    "EXEC-05"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/eval_cast.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Casts, domain constraints, ARRAY/ROW constructors, field select, subscripts.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-07\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Use `pgarbor_types::cast::apply_cast` and `pgarbor_types::array::subscript::{fetch, construct}`. Domain constraints: follow the module docs exactly (cache in `ex.rt.domains`; bind via a synthetic `table_expr_scope` with one column named `value`). Unit tests: int4->int8 cast, text->int4 failure message, ARRAY[1,2,3][2], slice, ROW field select.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-types/src/cast/apply.rs",
+    "crates/pgarbor-types/src/array/subscript.rs",
+    "crates/pgarbor-sql/src/binder/stored.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05"
+   ],
+   "acceptance": [
+    "`'abc'::int4` fails with 22P02 `invalid input syntax for type integer: \"abc\"`",
+    "`(ARRAY[10,20,30])[2]` is 20, `[5]` is NULL, `[2:3]` is {20,30}",
+    "NULL into a NOT NULL domain fails with 23502 `domain d does not allow null values`",
+    "a domain CHECK violation fails with 23514 `value for domain d violates check constraint \"d_check\"`"
+   ]
+  },
+  {
+   "lease_id": "EXE-08",
+   "task_ids": [
+    "EXEC-05",
+    "EXEC-14"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/eval_srf.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Set-returning function start (lazy iterators), record expansion, SRF detection.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-08\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `open_srf`, `expand_record`, `contains_srf` per module docs. `FuncHandle::call_set` returns `SetIter`. For catalog set-returning External functions `sysfuncs::call_set(&CatalogCallCtx{env,session,io_config}, proc, &args)` returns `Vec<Datum>`: wrap `into_iter().map(Ok)`. `contains_srf` walks with `BoundExpr::walk` (see expr_walk.rs) and does not descend into `SubPlan`. Unit tests: generate_series(1,3), unnest of an array, strict NULL argument yields no rows.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/func/series.rs",
+    "crates/pgarbor-catalog/src/sysfuncs/mod.rs",
+    "crates/pgarbor-sql/src/ir/expr_walk.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-06"
+   ],
+   "acceptance": [
+    "`generate_series(1,3)` yields Int4 1,2,3 lazily (take 2 of generate_series(1,1000000000) completes instantly)",
+    "`generate_series(1, NULL)` yields no rows",
+    "`expand_record(Record[1,'a'], 2)` yields `[Int4(1), Text(a)]`; `Null` expands to two NULLs"
+   ]
+  },
+  {
+   "lease_id": "EXE-09",
+   "task_ids": [
+    "EXEC-14"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/subplan.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Sub-plan evaluation: EXISTS/scalar/ARRAY/ROW/ANY/ALL with correlation frames, init-plan caching and hashed ANY.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-09\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `eval_subplan` per module docs using the take/put-back pattern for `ex.rt.subplans[i].op` (read runtime.rs), `Executor::with_outer` for parameter frames, `keycodec::encode_key_vec` for hashed ANY, `eval_call::call_operator` for the per-column comparison operators and `pgarbor_types::logic::{and3,or3}` for three-valued combination. Operators are driven with `op.rescan(ex, &args)` then `op.next(ex)` inside `with_outer`. Unit tests construct a tiny operator implementing `RowSource` over a Vec of rows and install it in a hand-built `Runtime`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/eval_call.rs",
+    "crates/pgarbor-exec/src/error.rs",
+    "crates/pgarbor-sql/src/ir/expr.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-06"
+   ],
+   "acceptance": [
+    "EXISTS stops after the first row (the test operator counts pulled rows)",
+    "a scalar sub-plan returning two rows fails with 21000 `more than one row returned by a subquery used as an expression`",
+    "`1 IN (select ...)` with rows {2,NULL} is NULL, with rows {1,NULL} TRUE, with no rows FALSE",
+    "`x > ALL (select ...)` over an empty sub-plan is TRUE",
+    "an uncorrelated init-plan is executed once for many probes (counter)",
+    "a correlated sub-plan sees its args as `OuterRef{0,i}` and the frame is popped even on error"
+   ]
+  },
+  {
+   "lease_id": "EXE-10",
+   "task_ids": [
+    "EXEC-17"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/session_fns.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Executor-owned functions: nextval/currval/lastval/setval, set_config/current_setting, advisory locks, pg_sleep, txid_*, pg_notify, cancel.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-10\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `call` and `call_set` per the table in the module docs. Sequence params: `env.snapshot().sequence(oid)` -> `pgarbor_core::SequenceParams{name, increment, min_value: s.min, max_value: s.max, start, cache, cycle}`; relation names for messages from `snapshot.class_identity`. regclass arguments are `Datum::Oid`. Advisory keys: `AdvisoryKey::Single(i64)` / `AdvisoryKey::Pair(i32,i32)` (read core `locks/advisory.rs`). Match on `proc.name` and `proc.nargs`/`proc.arg_types` for overloads. Unit tests with `MemTxn` and a catalog containing a sequence.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-core/src/locks/advisory.rs",
+    "crates/pgarbor-core/src/sequence/state.rs",
+    "crates/pgarbor-catalog/src/model/sequence.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`nextval('s')` returns 1,2,3 on consecutive calls and `currval` returns 3; `lastval()` too",
+    "`setval('s', 10)` then `nextval` returns 11; `setval('s', 10, false)` then nextval returns 10",
+    "`currval` on an unused sequence fails with 55000 `currval of sequence \"s\" is not yet defined in this session`",
+    "`nextval` on a table fails with 42809 `\"t\" is not a sequence`",
+    "`pg_sleep(0.05)` returns and polls interrupts",
+    "`pg_advisory_unlock` of a lock never taken returns false plus a WARNING"
+   ]
+  },
+  {
+   "lease_id": "EXE-11",
+   "task_ids": [
+    "EXEC-01",
+    "EXEC-17"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/exec_session.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] SessionContext / SessionInfo implementations over shared borrows (external function routing to catalog sysfuncs, pg_settings / sequence-state rows).",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-11\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement the remaining bodies per module docs (`fill_random` is already done). `call_external`: `pgarbor_catalog::sysfuncs::handles(proc)` -> `sysfuncs::call(&CatalogCallCtx{env: &self.se.env, session: &ExecSessionInfo::new(self.se, self.txn), io_config: &self.se.io}, proc, args)`; `call_external_set` -> `handles_set` + `call_set` boxed as an iterator; else 0A000 `function {name} is not supported`. `SessionInfo::sequence_state`: catalog `snapshot.sequence(oid)` gives `start`; `txn.seq_state(oid)` the live state; map to `SequenceStateRow{last_value: if is_called {Some(last_value)} else {None}, start_value, log_cnt, is_called}`; missing state -> Ok(None). Unit tests with `MemTxn`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-catalog/src/session.rs",
+    "crates/pgarbor-catalog/src/sysfuncs/mod.rs",
+    "crates/pgarbor-types/src/context.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`call_external` of `current_database` (catalog function) returns the services database name via sysfuncs",
+    "an exec-owned function name reaching `call_external` returns 0A000",
+    "`ExecSessionInfo::settings` returns the `GucAccess::settings` rows",
+    "`sequence_state` of a never-used sequence has `last_value None`, `is_called false`"
+   ]
+  },
+  {
+   "lease_id": "EXE-12",
+   "task_ids": [
+    "EXEC-04"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_scan.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Leaf operators: Result, SeqScan, IndexScan (batched, backward via key collection), VirtualScan, ValuesScan.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-12\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement the five builders and their private `RowSource` structs per module docs. Use `b.table_desc(table.oid)?` once at build time, `rowstore::HeapCursor`, `index_key::{interval_for_bounds, rowid_of_entry_value}`, `eval::{eval, eval_opt_qual}`, `crate::txn::kv_scan_vec`. Do NOT keep KV iterators between calls. Relation lock: `ex.txn().lock_relation(oid, LockMode::AccessShare, WaitPolicy::Block)` on first next. Unit tests: seq scan with filter and rowid, index scan range/equality/backward over a MemTxn-populated table + index (use `index_maint`-independent manual entries per the layout), values scan.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/rowstore.rs",
+    "crates/pgarbor-exec/src/index_key.rs",
+    "crates/pgarbor-exec/src/eval.rs",
+    "crates/pgarbor-catalog/src/vrel/mod.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02",
+    "EXE-03",
+    "EXE-05",
+    "EXE-11"
+   ],
+   "acceptance": [
+    "SeqScan over 600 rows returns all rows in rowid order with a trailing Int8 rowid when `with_rowid`",
+    "an IndexScan with eq on a unique index returns exactly one row; range `a >= 5 and a < 9` returns 5..8; Backward returns descending order",
+    "`needed[i] == false` slots are Null",
+    "VirtualScan of pg_namespace returns the compiled-in schemas and applies `filter`",
+    "ValuesScan evaluates each cell once per row"
+   ]
+  },
+  {
+   "lease_id": "EXE-13",
+   "task_ids": [
+    "EXEC-05",
+    "EXEC-08"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_basic.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Filter, Project, Append, Materialize operators.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-13\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement the four builders per module docs. Materialize must follow the epoch rule (compare `ex.epoch()`); keep it simple and correct: buffer rows in a Vec as they are pulled, position index for replay. Unit tests with a small in-test `RowSource` over a Vec.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05"
+   ],
+   "acceptance": [
+    "Filter drops NULL and FALSE rows",
+    "Project evaluates each expression exactly once per row",
+    "Append drains children in order and rescans all of them",
+    "a Materialize rescanned with unchanged epoch does not pull its child again"
+   ]
+  },
+  {
+   "lease_id": "EXE-14",
+   "task_ids": [
+    "EXEC-14"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_func.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "FunctionScan (zip, ordinality) and ProjectSet (lock-step SRFs).",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-14\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs on top of `eval_srf::{open_srf, expand_record, contains_srf}`. Unit tests: `generate_series(1,3), generate_series(1,2)` lock step gives (1,1),(2,2),(3,NULL); WITH ORDINALITY numbering.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-08"
+   ],
+   "acceptance": [
+    "`ROWS FROM (generate_series(1,3), generate_series(1,2))` yields 3 rows padded with NULL",
+    "`WITH ORDINALITY` appends 1..n as Int8",
+    "ProjectSet of `unnest(NULL::int[])` produces no output rows for that input row"
+   ]
+  },
+  {
+   "lease_id": "EXE-15",
+   "task_ids": [
+    "EXEC-14"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_cte.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "CTE runtime: lazy evaluation, WITH RECURSIVE iteration with dedup, eager data-modifying CTEs, CteScan/WorkTableScan.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-15\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Remember the take/put-back pattern for `CteBodyRt` operators (read runtime.rs). Dedup keys: `sortutil::row_key_bytes`. Unit tests with hand-built `CteDef` bodies (Result/Values nodes from pgarbor_plan::plan) and `BuildCtx` over a minimal `Plan`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/build.rs",
+    "crates/pgarbor-exec/src/sortutil.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-12",
+    "EXE-13"
+   ],
+   "acceptance": [
+    "`WITH RECURSIVE t(n) AS (VALUES (1) UNION ALL SELECT n+1 FROM t WHERE n < 5) SELECT * FROM t` shape yields 1..5",
+    "UNION (not ALL) recursion terminates on cycles via dedup",
+    "a CTE referenced twice is executed once (counter)",
+    "an unreferenced data-modifying CTE still runs at `open_plan`"
+   ]
+  },
+  {
+   "lease_id": "EXE-16",
+   "task_ids": [
+    "EXEC-06"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_join.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Nested loop join (inner/left/semi/anti) with parameterized inner rescans.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-16\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Pull outer rows lazily; for each outer row evaluate `inner_params` with `eval::eval_exprs`, wrap `rescan` and every `next` of the inner side in `ex.with_outer(Rc::new(params), ...)` (read runtime.rs `with_outer`). Unit tests with in-test RowSource operators.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05"
+   ],
+   "acceptance": [
+    "inner join emits only qualifying pairs; left join pads unmatched outer rows with NULLs",
+    "semi join emits each outer row once; anti join only unmatched rows",
+    "`OuterRef{0,0}` inside the inner operator sees the current outer row's parameter"
+   ]
+  },
+  {
+   "lease_id": "EXE-17",
+   "task_ids": [
+    "EXEC-06"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_hashjoin.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Hash join on memcomparable key bytes, all join types, residual qual, lazy output.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-17\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Keys via `keycodec::encode_key_vec(env, &[KeyColumn::asc(ty)], &[value])` per key column concatenated (use `encode_key_vec` with all columns at once). NULL keys never match. Keep a pending output queue so `next` returns one row. Unit tests with in-test RowSources covering Inner/Left/Right/Full/Semi/Anti and duplicate keys.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-types/src/keycodec.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05"
+   ],
+   "acceptance": [
+    "duplicate inner keys produce a cross product per outer row",
+    "Right/Full emit never-matched inner rows after the outer side is exhausted, including NULL-key inner rows",
+    "NULL = NULL does not match",
+    "residual qual failing for all candidates makes the outer row unmatched (Left pads)"
+   ]
+  },
+  {
+   "lease_id": "EXE-18",
+   "task_ids": [
+    "EXEC-06"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_mergejoin.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Merge join over pre-sorted inputs for all join types with group buffering.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-18\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs with `compare::cmp_sort` per key. Unit tests with sorted in-test inputs including duplicates on both sides and NULL keys.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05"
+   ],
+   "acceptance": [
+    "many-to-many duplicate groups produce the full cross product",
+    "Full join outputs unmatched rows from both sides in key order",
+    "descending / nulls_first keys are honored"
+   ]
+  },
+  {
+   "lease_id": "EXE-19",
+   "task_ids": [
+    "EXEC-07"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_agg.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Aggregation: plain/hashed/sorted, GROUP BY, grouping sets with mask, DISTINCT, FILTER, ORDER BY inside aggregates, HAVING.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-19\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs on top of `pgarbor_types::agg::{make_aggregate, AggSpec, AggState}` (read `crates/pgarbor-types/src/agg/mod.rs`). Group keys as `keycodec` bytes (NULL equal). FuncCtx via `eval_call::with_func_ctx`. Unit tests: count/sum/avg over groups, empty input plain agg gives one row, grouping sets with mask values, string_agg ordered, count(DISTINCT x), FILTER.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-types/src/agg/mod.rs",
+    "crates/pgarbor-types/src/agg/basic.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-06"
+   ],
+   "acceptance": [
+    "`count(*)` over an empty input yields one row (0); `sum(x)` NULL",
+    "GROUP BY NULL keys form one group",
+    "`GROUPING SETS ((a),(b),())` outputs masks 2,1,3 for a 2-key aggregate and the empty set row for empty input",
+    "`array_agg(x ORDER BY y DESC)` order respected; `count(DISTINCT x)` skips duplicates and NULLs",
+    "HAVING filters finalized groups"
+   ]
+  },
+  {
+   "lease_id": "EXE-20",
+   "task_ids": [
+    "EXEC-07",
+    "EXEC-08"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_window.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "WindowAgg: partitions, peers, ROWS/RANGE/GROUPS frames with offsets and EXCLUDE, aggregates over frames (incremental / retract).",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-20\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Frame computation is the subtle part: read PostgreSQL `nodeWindowAgg.c` (`update_frameheadpos`, `update_frametailpos`, `row_is_in_frame`). Aggregates over frames: `agg::make_aggregate` per row, with the growing-frame optimization. Unit tests: running sum (default frame), sliding ROWS 1 PRECEDING..1 FOLLOWING, RANGE with peers, GROUPS, EXCLUDE CURRENT ROW.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/window_funcs.rs",
+    "crates/pgarbor-exec/src/sortutil.rs",
+    "~/develop/reference/postgres-18/src/backend/executor/nodeWindowAgg.c"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-19"
+   ],
+   "acceptance": [
+    "`sum(x) OVER (ORDER BY x)` with peers gives equal running sums for ties (RANGE default)",
+    "`sum(x) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)` matches the oracle",
+    "negative or NULL frame offsets fail with 22013",
+    "`count(*) OVER ()` equals the partition size for every row"
+   ]
+  },
+  {
+   "lease_id": "EXE-21",
+   "task_ids": [
+    "EXEC-07"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/window_funcs.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Pure window functions: row_number, rank, dense_rank, percent_rank, cume_dist, ntile, lag, lead, first_value, last_value, nth_value.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-21\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `eval_window_func` per module docs; arguments are evaluated with `eval::eval` over the row they refer to.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05"
+   ],
+   "acceptance": [
+    "rank/dense_rank over peers: values 1,1,3 and 1,1,2",
+    "`lag(x, 2, -1)` returns -1 for the first two rows",
+    "`ntile(3)` over 7 rows gives bucket sizes 3,2,2",
+    "`nth_value(x, 0)` fails with 22016"
+   ]
+  },
+  {
+   "lease_id": "EXE-22",
+   "task_ids": [
+    "EXEC-08"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/sortutil.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Sort helpers: key comparison with USING operators, stable row sorting, top-N, memcomparable row keys.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-22\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs (`cmp_sort`, `call_operator`, `keycodec`). `sort_rows` must evaluate keys once per row and propagate the first comparison error after sorting (use a RefCell<Option<PgError>> captured by the comparator closure with `sort_by`).",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-06"
+   ],
+   "acceptance": [
+    "ascending/descending with NULLS FIRST/LAST for ints and text",
+    "sort is stable",
+    "`TopN` with limit 3 over 10 rows returns the best 3 in order",
+    "`row_key_bytes` treats NULL=NULL and 1.0=1.00 as equal keys"
+   ]
+  },
+  {
+   "lease_id": "EXE-23",
+   "task_ids": [
+    "EXEC-08"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_sort.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Sort (full and top-N) and Limit/Offset/WITH TIES operators.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-23\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs on top of `sortutil`. Unit tests for LIMIT 0 pulling no input, negative limit error, offset, WITH TIES.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-22"
+   ],
+   "acceptance": [
+    "`LIMIT 0` pulls zero rows from the input",
+    "negative LIMIT fails with 2201W `LIMIT must not be negative`, negative OFFSET with 2201X",
+    "WITH TIES emits all rows tied with the last row",
+    "Sort with `limit: Some(2)` returns the 2 smallest in order"
+   ]
+  },
+  {
+   "lease_id": "EXE-24",
+   "task_ids": [
+    "EXEC-06",
+    "EXEC-08"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_setops.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Distinct (hashed and sorted, DISTINCT ON key slots) and SetOp (INTERSECT/EXCEPT [ALL]).",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-24\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs using `sortutil::row_key_bytes` and multiset counters.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-05",
+    "EXE-22"
+   ],
+   "acceptance": [
+    "DISTINCT keeps the FIRST row of each key, NULLs equal",
+    "INTERSECT ALL emits min(l,r) copies; EXCEPT ALL emits max(l-r,0)",
+    "sorted Distinct only compares adjacent rows"
+   ]
+  },
+  {
+   "lease_id": "EXE-25",
+   "task_ids": [
+    "EXEC-10"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/node_lock.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "LockRows: SELECT FOR UPDATE/SHARE with NOWAIT/SKIP LOCKED and concurrent-change handling.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-25\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs using `rowstore::lock_row` (read it) and the ColumnDesc/TableDesc of each target via `b.table_desc`. Map `LockStrength` to `pgarbor_core::locks::LockMode::{ForUpdate, ForNoKeyUpdate, ForShare, ForKeyShare}` and `LockWait` to `WaitPolicy`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/rowstore.rs",
+    "crates/pgarbor-sql/src/ir/query.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02"
+   ],
+   "acceptance": [
+    "NOWAIT on a locked row fails with 55P03 `could not obtain lock on row in relation \"t\"`",
+    "SKIP LOCKED drops the locked row and keeps others",
+    "a NULL rowid slot (outer-join miss) is skipped without locking"
+   ]
+  },
+  {
+   "lease_id": "EXE-26",
+   "task_ids": [
+    "EXEC-09",
+    "EXEC-10"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/modify.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] ModifyTable driver: drain input (Halloween), per-row INSERT/UPDATE/DELETE dispatch, end-of-statement FK checks, RETURNING, row counts, EPQ policy.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-26\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `build_modify_table` and `epq_policy` per module docs. The operator does all work in its first `next`; keep the RETURNING rows in a VecDeque. Row identity: `input[rowid_slot]` is `Datum::Int8` (cast `as u64`). RETURNING input row = kept image ++ `input[returning_extra_from..]`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/dml_insert.rs",
+    "crates/pgarbor-exec/src/dml_update.rs",
+    "crates/pgarbor-exec/src/dml_delete.rs",
+    "crates/pgarbor-exec/src/fk.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-05"
+   ],
+   "acceptance": [
+    "INSERT of 3 rows reports `affected_rows() == Some(3)`; RETURNING yields 3 rows",
+    "`UPDATE ... FROM` matching a target row twice updates it once",
+    "DML in a read-only transaction fails with 25006 `cannot execute INSERT in a read-only transaction`",
+    "a statement-level failure leaves no pending FK checks behind",
+    "`epq_policy` is `quals: Some(..)` for `Filter(SeqScan)` and `None` for a join"
+   ]
+  },
+  {
+   "lease_id": "EXE-27",
+   "task_ids": [
+    "EXEC-09",
+    "EXEC-11"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/dml_insert.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] INSERT row assembly (supplied columns, defaults, generated), constraint+heap+index+FK pipeline, ON CONFLICT hand-off.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-27\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Defaults and generated expressions are evaluated with `eval::eval` (defaults over `&[]`, generated over the full row). Pipeline order is fixed: constraints::enforce -> rowstore::insert_heap -> index_maint::insert_entries -> fk::after_insert.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02",
+    "EXE-04",
+    "EXE-05"
+   ],
+   "acceptance": [
+    "unsupplied columns take their default (including `nextval` identity values), supplied NULL into NOT NULL fails 23502",
+    "stored generated columns are computed from the final row",
+    "`insert_input_row` returns `None` when ON CONFLICT DO NOTHING skips"
+   ]
+  },
+  {
+   "lease_id": "EXE-28",
+   "task_ids": [
+    "EXEC-10"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/dml_update.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] UPDATE row processing with row lock, EvalPlanQual-lite re-check, new-row construction, generated recompute, in-place write + index/FK maintenance.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-28\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. `lock_row` is in rowstore. Assignments are `(attnum, expr)` over the INPUT row (`table row ++ rowid ++ extra`). `apply_update` is also called by fk.rs and dml_conflict.rs, keep it free of ModifyTable-specific assumptions.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/rowstore.rs",
+    "crates/pgarbor-exec/src/index_maint.rs",
+    "crates/pgarbor-exec/src/constraints.rs",
+    "crates/pgarbor-exec/src/fk.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02",
+    "EXE-04",
+    "EXE-05"
+   ],
+   "acceptance": [
+    "UPDATE t SET b = b + 1 writes the new image at the same rowid and updates affected index entries only",
+    "a concurrently deleted row is skipped (`None`)",
+    "EPQ with `quals: None` and a changed row fails with 40001",
+    "an update violating a unique index fails with 23505 and leaves the old entry intact in the transaction view"
+   ]
+  },
+  {
+   "lease_id": "EXE-29",
+   "task_ids": [
+    "EXEC-10"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/dml_delete.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "DELETE row processing (lock + EPQ-lite) and the low-level apply_delete used by FK cascades.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-29\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02",
+    "EXE-04",
+    "EXE-28"
+   ],
+   "acceptance": [
+    "delete removes the heap key and every index entry",
+    "a concurrently deleted row returns `None`",
+    "`apply_delete` calls `fk::after_delete`"
+   ]
+  },
+  {
+   "lease_id": "EXE-30",
+   "task_ids": [
+    "EXEC-13"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/dml_conflict.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "INSERT ... ON CONFLICT DO NOTHING / DO UPDATE with arbiters, EXCLUDED rows, WHERE, retry on lost races, affect-twice detection.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-30\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Evaluation row for DO UPDATE is `existing ++ excluded` (2*ncols slots).",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "~/develop/reference/postgres-18/src/backend/executor/nodeModifyTable.c"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-04",
+    "EXE-05",
+    "EXE-27",
+    "EXE-28"
+   ],
+   "acceptance": [
+    "DO NOTHING on a duplicate key skips the row without error",
+    "DO UPDATE SET n = t.n + excluded.n updates the existing row",
+    "a second proposal hitting a row already touched by the statement fails with 21000 `ON CONFLICT DO UPDATE command cannot affect row a second time`",
+    "DO UPDATE ... WHERE false skips without error"
+   ]
+  },
+  {
+   "lease_id": "EXE-31",
+   "task_ids": [
+    "EXEC-11"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/constraints.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] NOT NULL and CHECK enforcement with PG-exact errors and failing-row details.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-31\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs with `error::{not_null_violation, check_violation, row_description}`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-05"
+   ],
+   "acceptance": [
+    "`null value in column \"name\" of relation \"t\" violates not-null constraint` DETAIL `Failing row contains (2, null, 1.50, y, null).`",
+    "`new row for relation \"t\" violates check constraint \"t_v_check\"` DETAIL `Failing row contains (5, b, -1.00, q, null).`",
+    "a CHECK evaluating to NULL passes",
+    "checks run in constraint-name order, NOT NULL first"
+   ]
+  },
+  {
+   "lease_id": "EXE-32",
+   "task_ids": [
+    "EXEC-12"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/fk.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Foreign keys: child-side checks, parent-side NO ACTION/RESTRICT/CASCADE/SET NULL/SET DEFAULT actions, end-of-statement queue, validation.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-32\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. Parent lookup via `index_maint::lookup_unique`; referencing-row discovery via an FK-table index with the FK columns as leading keys else a `HeapCursor` scan. Cascades call `dml_delete::apply_delete` / `dml_update::apply_update` after `rowstore::lock_row`. Depth guard 1000.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/index_maint.rs",
+    "crates/pgarbor-exec/src/dml_update.rs",
+    "crates/pgarbor-exec/src/dml_delete.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/ri_triggers.c"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02",
+    "EXE-04",
+    "EXE-05",
+    "EXE-28",
+    "EXE-29"
+   ],
+   "acceptance": [
+    "insert of a child row with a missing parent fails at statement end with 23503 `insert or update on table \"c2\" violates foreign key constraint \"c2_a_b_fkey\"` DETAIL `Key (a, b)=(1, 2) is not present in table \"p\".`",
+    "delete of a referenced parent fails with 23503 `update or delete on table \"p\" violates foreign key constraint \"c2_a_b_fkey\" on table \"c2\"` DETAIL `Key (a, b)=(1, 1) is still referenced from table \"c2\".`",
+    "`UPDATE p SET id = id + 1` over all rows succeeds when every referenced key reappears (NO ACTION is checked at statement end)",
+    "ON DELETE CASCADE deletes children transitively; SET NULL nulls only the FK columns",
+    "NULL FK columns skip the check (MATCH SIMPLE)"
+   ]
+  },
+  {
+   "lease_id": "EXE-33",
+   "task_ids": [
+    "EXEC-16",
+    "CAT-05"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/ddl_table.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] CREATE TABLE and ALTER TABLE execution through the catalog writer with follow-ups and rewrites.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-33\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs using `ddl_driver::run_ddl` and the `CatalogTxn` methods listed there (signatures: `crates/pgarbor-catalog/src/ddl/*.rs`). Pass `&pgarbor_sql::rewrite::SqlExprRewriter` where an `ExprRewriter` is required. Unit tests: create a table through a MemTxn-backed ExecContext (the catalog works over MemKv through `ExecTxn`), then ALTER TABLE ADD COLUMN / RENAME / ADD CONSTRAINT.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/ddl_driver.rs",
+    "crates/pgarbor-exec/src/ddl_followup.rs",
+    "crates/pgarbor-catalog/src/ddl/table.rs",
+    "crates/pgarbor-catalog/src/ddl/alter_table.rs",
+    "crates/pgarbor-catalog/src/ddl/alter_column.rs",
+    "crates/pgarbor-catalog/src/ddl/constraint.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "CREATE TABLE returns tag `CREATE TABLE` and the table appears in `cx.se.env`",
+    "CREATE TABLE IF NOT EXISTS on an existing table returns the tag and queues the NOTICE `relation \"t\" already exists, skipping`",
+    "ALTER TABLE ... ADD COLUMN with a constant default does not rewrite rows (old rows read the default)",
+    "ALTER COLUMN TYPE with USING rewrites every row",
+    "DDL rollback is free: after a failed statement nothing of the catalog remains (verified by the txn overlay)"
+   ]
+  },
+  {
+   "lease_id": "EXE-34",
+   "task_ids": [
+    "EXEC-16",
+    "EXEC-03"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/ddl_followup.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "FollowUp execution (index builds, validations, rewrites, data drops, sequence state) and the table rewrite.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-34\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. For Validate* scans use `rowstore::HeapCursor` and `tabledesc::build_table_desc(&cx.se, oid)` (the new catalog is already in `cx.se.env`). Run each follow-up inside an `Executor` built over a throw-away `Runtime::default()`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/rowstore.rs",
+    "crates/pgarbor-exec/src/index_maint.rs",
+    "crates/pgarbor-exec/src/fk.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-01",
+    "EXE-02",
+    "EXE-04",
+    "EXE-05",
+    "EXE-31",
+    "EXE-32"
+   ],
+   "acceptance": [
+    "BuildIndex over existing rows populates entries (index scan finds them)",
+    "ValidateNotNull over a NULL fails with 23502 `column \"a\" of relation \"t\" contains null values`",
+    "ValidateCheck failure is 23514 `check constraint \"cc2\" of relation \"dd\" is violated by some row`",
+    "RewriteTable applies `Using` expressions and rebuilds all indexes",
+    "CreateSequenceState makes `nextval` work"
+   ]
+  },
+  {
+   "lease_id": "EXE-35",
+   "task_ids": [
+    "EXEC-16"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/ddl_objects.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] CREATE SCHEMA/INDEX/SEQUENCE/VIEW/TYPE/DOMAIN/FUNCTION/ROLE, COMMENT, GRANT/REVOKE, REFRESH MATERIALIZED VIEW execution.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-35\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs with `ddl_driver::run_ddl` + `ddl_followup::run_followups(cx, &outcome.follow_ups, None, &[])`. Tags equal `BoundStatement::tag()` of the corresponding variant.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/ddl_driver.rs",
+    "crates/pgarbor-exec/src/ddl_followup.rs",
+    "crates/pgarbor-catalog/src/ddl/index.rs",
+    "crates/pgarbor-catalog/src/ddl/sequence.rs",
+    "crates/pgarbor-catalog/src/ddl/view.rs",
+    "crates/pgarbor-catalog/src/ddl/typedef.rs",
+    "crates/pgarbor-catalog/src/ddl/function.rs",
+    "crates/pgarbor-catalog/src/ddl/role.rs",
+    "crates/pgarbor-catalog/src/ddl/grant.rs",
+    "crates/pgarbor-catalog/src/ddl/comment.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-34"
+   ],
+   "acceptance": [
+    "CREATE UNIQUE INDEX over duplicate rows fails with 23505 `could not create unique index \"dx\"`",
+    "CREATE SEQUENCE then nextval returns 1",
+    "CREATE TYPE ... AS ENUM then the type is visible in the env",
+    "COMMENT ON TABLE sets the description; tag `COMMENT`",
+    "CREATE DATABASE fails with 0A000"
+   ]
+  },
+  {
+   "lease_id": "EXE-36",
+   "task_ids": [
+    "EXEC-16"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/ddl_alter.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "ALTER RENAME/SCHEMA/OWNER/SEQUENCE/TYPE/DOMAIN/FUNCTION/ROLE/DATABASE execution.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-36\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `exec_alter` as a `match` over `AlterAction` calling the `CatalogTxn` method in each variant's doc (signatures in `crates/pgarbor-catalog/src/ddl/*.rs`); domain NOT NULL / constraint validation scans use `rowstore::HeapCursor` and `eval::eval_standalone`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-sql/src/ir/stmt.rs",
+    "crates/pgarbor-catalog/src/ddl/alter_column.rs",
+    "crates/pgarbor-catalog/src/ddl/typedef.rs",
+    "crates/pgarbor-catalog/src/ddl/sequence.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-34"
+   ],
+   "acceptance": [
+    "ALTER TABLE RENAME TO updates the env and rewrites dependent default text through SqlExprRewriter",
+    "ALTER SEQUENCE RESTART WITH 5 makes the next nextval return 5",
+    "ALTER DOMAIN SET NOT NULL over NULL rows fails with 23502 `column \"a\" of table \"t\" contains null values`"
+   ]
+  },
+  {
+   "lease_id": "EXE-37",
+   "task_ids": [
+    "EXEC-16"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/ddl_drop.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "DROP (all kinds), TRUNCATE (restart identity, cascade), DROP OWNED, REASSIGN OWNED.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-37\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs. TRUNCATE touches only data keys and sequence state; deletion goes through the transaction view so ROLLBACK restores everything.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-catalog/src/ddl/drop_stmt.rs",
+    "crates/pgarbor-exec/src/rowstore.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-02",
+    "EXE-34"
+   ],
+   "acceptance": [
+    "DROP TABLE removes data keys (no heap key with the table prefix remains)",
+    "DROP TABLE of a table with dependents fails with 2BP01 unless CASCADE",
+    "TRUNCATE ... RESTART IDENTITY restarts owned sequences",
+    "TRUNCATE of a table referenced by an FK fails with 0A000 `cannot truncate a table referenced in a foreign key constraint`",
+    "TRUNCATE inside a transaction then ROLLBACK restores rows"
+   ]
+  },
+  {
+   "lease_id": "EXE-38",
+   "task_ids": [
+    "EXEC-16",
+    "EXEC-09"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/ctas.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE TABLE AS / SELECT INTO and materialized view population / refresh.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-38\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs on top of `ddl_table::exec_create_table`, `execute::open_plan`/`PlanStream::fetch` and `dml_insert::insert_row`. For matviews parse the stored query text with `pgarbor_sql::parse_one` + `pgarbor_sql::bind` and plan with `pgarbor_plan::plan`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-exec/src/build.rs",
+    "crates/pgarbor-exec/src/dml_insert.rs",
+    "crates/pgarbor-exec/src/ddl_table.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-27",
+    "EXE-33"
+   ],
+   "acceptance": [
+    "CREATE TABLE AS SELECT creates the table with the query's column names/types and tag `SELECT n`",
+    "WITH NO DATA creates an empty table with tag `SELECT 0`",
+    "REFRESH MATERIALIZED VIEW replaces the rows"
+   ]
+  },
+  {
+   "lease_id": "EXE-39",
+   "task_ids": [
+    "EXEC-16"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/utility.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "LOCK TABLE, DO/CALL (unsupported), VACUUM/ANALYZE/CLUSTER/CHECKPOINT no-ops and REINDEX.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-39\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-04"
+   ],
+   "acceptance": [
+    "LOCK TABLE NOWAIT on a held lock fails with 55P03 `could not obtain lock on relation \"t\"`",
+    "VACUUM returns tag `VACUUM`; REINDEX rebuilds index entries"
+   ]
+  },
+  {
+   "lease_id": "EXE-40",
+   "task_ids": [
+    "EXEC-04"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/explain_exec.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "EXPLAIN and EXPLAIN ANALYZE execution (plan, run with stats, render).",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-40\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs with `pgarbor_plan::plan`, `pgarbor_plan::explain_plan` and `pgarbor_plan::explain_fmt::{render_analyze, ActualStats, NodeActual}`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-plan/src/explain_fmt.rs",
+    "crates/pgarbor-plan/src/context.rs"
+   ],
+   "depends_on_leases": [
+    "EXE-26"
+   ],
+   "acceptance": [
+    "EXPLAIN (COSTS OFF) SELECT 1 returns rows of the plan text under column `QUERY PLAN`, tag `EXPLAIN`",
+    "EXPLAIN ANALYZE of an INSERT really inserts",
+    "FORMAT JSON returns one row of type json"
+   ]
+  },
+  {
+   "lease_id": "EXE-41",
+   "task_ids": [
+    "EXEC-09"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/copy.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "COPY text/CSV/binary codecs and COPY FROM/TO execution over a CopyChannel.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-41\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement `execute_copy` and private codec helpers per module docs. Parsing must be chunk-boundary safe (a field/line may span read_chunk results): buffer until a full line. Use `rowstore::HeapCursor` for table sources and `dml_insert::insert_row` for inserts.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/copyfromparse.c",
+    "~/develop/reference/postgres-18/src/backend/commands/copyto.c"
+   ],
+   "depends_on_leases": [
+    "EXE-27",
+    "EXE-05"
+   ],
+   "acceptance": [
+    "`COPY t FROM STDIN` of text `1\\tfoo\\n2\\t\\\\N\\n` inserts (1,'foo'),(2,NULL) and returns `COPY 2`",
+    "CSV quoting round trip with embedded delimiter, quote and newline",
+    "missing column data fails with 22P04 `missing data for column \"b\"`",
+    "`COPY (select ...) TO STDOUT` writes text rows"
+   ]
+  },
+  {
+   "lease_id": "EXE-42",
+   "task_ids": [
+    "EXEC-11"
+   ],
+   "files": [
+    "crates/pgarbor-exec/src/perm.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Data-access privilege checks (SELECT/INSERT/UPDATE/DELETE/TRUNCATE on relations and columns, sequence USAGE) over catalog ACLs.",
+   "spec": "Implement per the module and function doc comments of the file EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values and fixtures). Replace every `Err(PgError::unimplemented(\"EXE-42\", ...))` body of the file with a real implementation; do not change any signature, pub item, `// CONTRACT` item, other file, Cargo.toml or dependency; no todo!/unimplemented!/panic!/unwrap/expect on user-derived data (use PgError constructors from `crate::error` for executor errors and the lower layers' constructors for theirs). You CANNOT compile or run anything: write simple, explicit Rust, re-read every function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ in the files under `reads` or in the dependency sources (~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference in ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` from functions you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file using `crate::memtxn::MemTxn` as the transaction and `pgarbor_catalog::testing` for catalogs; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement per module docs with `pgarbor_catalog::acl::{RoleGraph::build(snapshot, database), effective_acl, privilege_mask, AclObject}` and `model::acl_mode`. Superuser/owner semantics are inside `privilege_mask`. Errors via `pgarbor_catalog::errors::permission_denied_for`. Unit tests with a catalog containing two roles and GRANT/REVOKE applied through `CatalogTxn::grant_object_privileges`.",
+   "reads": [
+    "contracts/crates/pgarbor-exec.md",
+    "crates/pgarbor-exec/src/runtime.rs",
+    "crates/pgarbor-exec/src/context.rs",
+    "crates/pgarbor-exec/src/txn.rs",
+    "crates/pgarbor-plan/src/plan.rs",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "crates/pgarbor-catalog/src/model/common.rs",
+    "crates/pgarbor-catalog/src/errors.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "a role without privileges gets 42501 `permission denied for table t` on SELECT/INSERT; after GRANT SELECT the SELECT passes and INSERT still fails",
+    "column-level GRANT SELECT (a) lets `select a` pass and `select b` fail",
+    "the owner and superusers always pass",
+    "pg_catalog relations are readable by everyone"
+   ]
+  }
+ ]
+}
