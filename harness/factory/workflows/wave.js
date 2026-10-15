@@ -44,6 +44,22 @@ const REVIEW = {
   required: ['verdict', 'off_lease_files', 'fake_or_stub', 'contract_drift', 'likely_compile_errors', 'semantic_bugs'],
 }
 
+
+const COMPANION = '/home/allie/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs'
+// Thin haiku pass-through to Codex (project agents can't be registered mid-session, so the wrapper is inline).
+function viaCodex(model, write, task, commitFiles, epochLease) {
+  return `You are a thin forwarding wrapper around the Codex CLI companion. Do NOT inspect the repo, reason about code, review, or edit files yourself. Use only Bash.
+1. Write the task text below (between the TASK markers, verbatim) to a file: cat > .codex-task.txt <<'CODEX_EOF' ... CODEX_EOF
+2. Start: node ${COMPANION} task --background ${write ? '--write ' : ''}--model ${model} "$(cat .codex-task.txt)"   and capture the job id (task-...). Then rm .codex-task.txt
+3. Wait (repeat this Bash call until done, max 8 times): for i in $(seq 1 55); do s=$(node ${COMPANION} status <job-id> --json); echo "$s" | grep -qE '"status": *"(completed|failed|cancelled)"' && break; sleep 10; done; echo "$s" | head -c 800
+4. node ${COMPANION} result <job-id>
+${commitFiles ? `5. git add -- ${commitFiles.join(' ')} && git commit -qm "${epochLease}: codex ${model}"; git rev-parse --abbrev-ref HEAD; git rev-parse HEAD   (if nothing changed, skip the commit)` : ''}
+Then return the requested structured output, filled ONLY from Codex's result text${commitFiles ? ' and the git output (never invent a sha)' : ''}.
+TASK:
+${task}
+END TASK`
+}
+
 function workerPrompt(l, extra) {
   return `You are an implementation worker in the PGArbor RightShift swarm (${EPOCH}). You are inside an ISOLATED git worktree of the repo (your cwd). PGArbor is a Rust single-file branch-native database targeting exact PostgreSQL 18 behavior.
 
@@ -68,15 +84,20 @@ function reviewPrompt(l, sub) {
 
 const results = await pipeline(
   args.leases,
-  (l) => agent(workerPrompt(l), { label: `impl:${l.lease_id}`, phase: 'Implement', model: 'haiku', isolation: 'worktree', schema: SUBMISSION }),
-  (sub, l) => ({ lease: l, sub, review: null }),  // no LLM review: the central build + PG18 diff campaign are the reviewers
+  (l) => agent(args.impl_codex ? viaCodex(args.impl_codex, true, workerPrompt(l).replace(/FINISH:[\s\S]*$/, 'FINISH: do not run git; the wrapper commits. End with a summary of what is implemented, still unimplemented, assumptions, contract problems.'), l.files, `${EPOCH} ${l.lease_id}`) : workerPrompt(l), { label: `impl:${l.lease_id}`, phase: 'Implement', model: 'haiku', isolation: 'worktree', schema: SUBMISSION }),
+  async (sub, l) => {
+    // review only when a codex reviewer is configured (args.review_agent, e.g. 'codex-sol-review'); haiku never reviews
+    if (!args.review_codex || !sub || !sub.sha) return { lease: l, sub, review: null }
+    const review = await agent(viaCodex(args.review_codex, false, reviewPrompt(l, sub)), { label: `review:${l.lease_id}`, phase: 'Review', model: 'haiku', schema: REVIEW })
+    return { lease: l, sub, review }
+  },
   async (r, l) => {
     const needRetry = !r.sub || !r.sub.sha || (r.review && r.review.verdict === 'redo')
     if (!needRetry) return r
     const notes = r.review ? JSON.stringify(r.review).slice(0, 6000) : 'previous attempt produced no commit'
     const prior = r.sub && r.sub.sha ? `A previous attempt exists at commit ${r.sub.sha}: start from it with \`git checkout ${r.sub.sha} -- ${l.files.join(' ')}\` and fix it.` : ''
     const tier = 'haiku'  // max-savings: sonnet only identifies (review), haiku always fixes
-    const sub2 = await agent(workerPrompt(l, `RETRY: ${prior}\nReviewer findings to address: ${notes}`), { label: `retry:${l.lease_id}`, phase: 'Retry', model: MODEL[tier || 'sonnet'], isolation: 'worktree', schema: SUBMISSION })
+    const sub2 = await agent(args.impl_codex ? viaCodex(args.impl_codex, true, workerPrompt(l, `RETRY: ${prior}\nReviewer findings to address: ${notes}`).replace(/FINISH:[\s\S]*$/, 'FINISH: do not run git; the wrapper commits.'), l.files, `${EPOCH} ${l.lease_id} retry`) : workerPrompt(l, `RETRY: ${prior}\nReviewer findings to address: ${notes}`), { label: `retry:${l.lease_id}`, phase: 'Retry', model: MODEL[tier || 'sonnet'], isolation: 'worktree', schema: SUBMISSION })
     return { lease: l, sub: sub2 || r.sub, review: r.review, retried: true }
   },
 )
