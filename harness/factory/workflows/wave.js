@@ -69,11 +69,7 @@ function reviewPrompt(l, sub) {
 const results = await pipeline(
   args.leases,
   (l) => agent(workerPrompt(l), { label: `impl:${l.lease_id}`, phase: 'Implement', model: 'haiku', isolation: 'worktree', schema: SUBMISSION }),
-  async (sub, l) => {
-    if (!sub || !sub.sha) return { lease: l, sub, review: null }
-    const review = await agent(reviewPrompt(l, sub), { label: `review:${l.lease_id}`, phase: 'Review', model: (l.model_tier === 'haiku' ? 'haiku' : 'sonnet'), schema: REVIEW })
-    return { lease: l, sub, review }
-  },
+  (sub, l) => ({ lease: l, sub, review: null }),  // no LLM review: the central build + PG18 diff campaign are the reviewers
   async (r, l) => {
     const needRetry = !r.sub || !r.sub.sha || (r.review && r.review.verdict === 'redo')
     if (!needRetry) return r
