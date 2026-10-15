@@ -8,7 +8,7 @@
 //! `sector_size`-aligned absolute offsets).
 use crate::plan::CrashMode;
 use crate::rng::DetRng;
-use pgarbor_common::{PgError, Result};
+use pgarbor_common::Result;
 
 // CONTRACT
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,9 +88,16 @@ impl FileState {
     /// `pending` is CLEARED while `current` is left unchanged — the page cache still shows the
     /// data but it will never be retried, so a later successful sync does not make the dropped
     /// parts durable. (This is exactly why the storage layer poisons after an fsync error.)
-    #[allow(unused_variables)]
     pub fn fsync_fail(&mut self, sector_size: usize, rng: &mut DetRng) -> Result<()> {
-        Err(PgError::unimplemented("FLT-02", "fsyncgate simulation"))
+        let pending = std::mem::take(&mut self.pending);
+        for op in &pending {
+            match rng.below(4) {
+                0 | 1 => apply(&mut self.durable, op),
+                2 => tear_op(&mut self.durable, op, sector_size, rng),
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Durable image after a power loss, without mutating self. `DropUnsynced` → `durable`;
@@ -100,8 +107,172 @@ impl FileState {
     /// absolute offsets multiple of `sector_size`; the first/last chunk may be partial; a write
     /// inside one sector is kept or dropped whole), SetLen: apply; else drop.
     /// Example: durable "AAAA", pending [Write{0,"BB"}], KeepUnsynced → "BBAA".
-    #[allow(unused_variables)]
     pub fn crash_image(&self, mode: CrashMode, sector_size: usize, rng: &mut DetRng) -> Result<Vec<u8>> {
-        Err(PgError::unimplemented("FLT-02", "crash image construction"))
+        match mode {
+            CrashMode::DropUnsynced => Ok(self.durable.clone()),
+            CrashMode::KeepUnsynced => Ok(self.current.clone()),
+            CrashMode::Random { keep_permille, tear_permille } => {
+                let keep = keep_permille as u64;
+                let tear = keep + tear_permille as u64;
+                let mut img = self.durable.clone();
+                for op in &self.pending {
+                    let r = rng.below(1000);
+                    if r < keep {
+                        apply(&mut img, op);
+                    } else if r < tear {
+                        tear_op(&mut img, op, sector_size, rng);
+                    }
+                }
+                Ok(img)
+            }
+        }
+    }
+}
+
+/// Tear one op into `buf`: a Write applies a random non-empty proper subset of its sector chunks
+/// (a single chunk is kept or dropped whole with 50%); SetLen is applied.
+fn tear_op(buf: &mut Vec<u8>, op: &Pending, sector_size: usize, rng: &mut DetRng) {
+    match op {
+        Pending::SetLen(_) => apply(buf, op),
+        Pending::Write { offset, data } => {
+            if data.is_empty() {
+                return;
+            }
+            let sector = sector_size.max(1) as u64;
+            let start = *offset;
+            let end = start + data.len() as u64;
+            let mut bounds: Vec<u64> = vec![start];
+            let mut b = (start / sector + 1) * sector;
+            while b < end {
+                bounds.push(b);
+                b += sector;
+            }
+            bounds.push(end);
+            let n = bounds.len() - 1;
+            let mut keep: Vec<bool> = (0..n).map(|_| rng.below(2) == 1).collect();
+            if n >= 2 {
+                let kept = keep.iter().filter(|k| **k).count();
+                if kept == 0 {
+                    let i = rng.pick(n);
+                    keep[i] = true;
+                } else if kept == n {
+                    let i = rng.pick(n);
+                    keep[i] = false;
+                }
+            }
+            for (i, k) in keep.iter().enumerate() {
+                if *k {
+                    let lo = (bounds[i] - start) as usize;
+                    let hi = (bounds[i + 1] - start) as usize;
+                    let part = Pending::Write { offset: bounds[i], data: data[lo..hi].to_vec() };
+                    apply(buf, &part);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(rng: &mut DetRng) -> FileState {
+        let mut f = FileState::new(rng.bytes(2000));
+        for _ in 0..6 {
+            let off = rng.below(2500);
+            let len = 1 + rng.below(1500) as usize;
+            let d = vec![(rng.below(250) + 1) as u8; len];
+            f.write(off, &d);
+        }
+        f
+    }
+
+    #[test]
+    fn keep_drop_modes() {
+        let mut rng = DetRng::new(1);
+        let f = sample(&mut rng);
+        assert_eq!(f.crash_image(CrashMode::KeepUnsynced, 512, &mut rng).unwrap(), f.current);
+        assert_eq!(f.crash_image(CrashMode::DropUnsynced, 512, &mut rng).unwrap(), f.durable);
+        let m = CrashMode::Random { keep_permille: 1000, tear_permille: 0 };
+        assert_eq!(f.crash_image(m, 512, &mut rng).unwrap(), f.current);
+        let m = CrashMode::Random { keep_permille: 0, tear_permille: 0 };
+        assert_eq!(f.crash_image(m, 512, &mut rng).unwrap(), f.durable);
+    }
+
+    #[test]
+    fn example() {
+        let mut f = FileState::new(b"AAAA".to_vec());
+        f.write(0, b"BB");
+        let mut rng = DetRng::new(3);
+        assert_eq!(f.crash_image(CrashMode::KeepUnsynced, 512, &mut rng).unwrap(), b"BBAA");
+    }
+
+    #[test]
+    fn tear_bytes_are_old_or_new() {
+        for seed in 0..200 {
+            let mut rng = DetRng::new(seed);
+            let old = rng.bytes(3000);
+            let mut f = FileState::new(old.clone());
+            let off = rng.below(1500);
+            let new = vec![0xFFu8; 1 + rng.below(1400) as usize];
+            f.write(off, &new);
+            let m = CrashMode::Random { keep_permille: 0, tear_permille: 1000 };
+            let img = f.crash_image(m, 512, &mut rng).unwrap();
+            assert_eq!(img.len(), old.len());
+            for (i, b) in img.iter().enumerate() {
+                let covered = (i as u64) >= off && (i as u64) < off + new.len() as u64;
+                assert!(*b == old[i] || (covered && *b == 0xFF));
+            }
+        }
+    }
+
+    #[test]
+    fn tear_is_proper_subset_of_chunks() {
+        for seed in 0..100 {
+            let mut rng = DetRng::new(seed);
+            let mut f = FileState::new(vec![0u8; 2048]);
+            f.write(0, &vec![1u8; 2048]);
+            let m = CrashMode::Random { keep_permille: 0, tear_permille: 1000 };
+            let img = f.crash_image(m, 512, &mut rng).unwrap();
+            let ones = img.iter().filter(|b| **b == 1).count();
+            assert!(ones > 0 && ones < 2048);
+            assert_eq!(ones % 512, 0);
+        }
+    }
+
+    #[test]
+    fn fsync_fail_clears_pending_keeps_current() {
+        let mut rng = DetRng::new(9);
+        let mut f = FileState::new(vec![0u8; 4096]);
+        f.write(0, &vec![7u8; 4096]);
+        let cur = f.current.clone();
+        f.fsync_fail(512, &mut rng).unwrap();
+        assert!(f.pending.is_empty());
+        assert_eq!(f.current, cur);
+        for (d, c) in f.durable.iter().zip(cur.iter()) {
+            assert!(*d == 0 || *d == *c);
+        }
+        f.write(0, &[9u8; 4]);
+        assert_eq!(f.pending.len(), 1);
+        f.sync();
+        assert_eq!(f.durable, f.current);
+    }
+
+    #[test]
+    fn fsync_fail_dropped_parts_stay_lost_until_rewritten() {
+        for seed in 0..64 {
+            let mut rng = DetRng::new(seed);
+            let mut f = FileState::new(vec![0u8; 8]);
+            f.write(0, &[5u8; 4]);
+            f.fsync_fail(512, &mut rng).unwrap();
+            if f.durable == vec![0u8; 8] {
+                let mut crash_rng = DetRng::new(0);
+                let img = f.crash_image(CrashMode::DropUnsynced, 512, &mut crash_rng).unwrap();
+                assert_eq!(img, vec![0u8; 8]);
+                assert_eq!(&f.current[..4], &[5u8; 4]);
+                return;
+            }
+        }
+        panic!("no dropping seed found");
     }
 }

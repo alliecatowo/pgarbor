@@ -12,7 +12,7 @@ export const meta = {
 const ROOT = '/home/allie/develop/pgarbor'
 const REG = '~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f'
 const EPOCH = args.epoch
-const MODEL = { haiku: 'haiku', sonnet: 'sonnet', opus: undefined }
+const MODEL = { haiku: 'haiku', sonnet: 'sonnet', opus: 'sonnet' }
 
 const SUBMISSION = {
   type: 'object',
@@ -47,12 +47,10 @@ const REVIEW = {
 function workerPrompt(l, extra) {
   return `You are an implementation worker in the PGArbor RightShift swarm (${EPOCH}). You are inside an ISOLATED git worktree of the repo (your cwd). PGArbor is a Rust single-file branch-native database targeting exact PostgreSQL 18 behavior.
 
-YOUR LEASE: ${l.lease_id} (crate ${l.crate}; seed tasks ${(l.task_ids || []).join(', ')})
+YOUR LEASE: ${l.lease_id} (crate ${l.crate})
 FILES YOU OWN (edit ONLY these): ${l.files.join(', ')}
-SUMMARY: ${l.summary}
-SPEC: ${l.spec}
-ACCEPTANCE (verified centrally later): ${(l.acceptance || []).join(' | ')}
-READ FOR CONTEXT: contracts/ARCHITECTURE.md, contracts/crates/${l.crate}.md, ${(l.reads || []).join(', ')}, and the doc comments in your files (they are the frozen spec). Read the upstream crate source you call into so your calls match real signatures exactly. Dependency sources (exact versions): ${REG}/ . PostgreSQL 18.6 source for reference behavior: ~/develop/reference/postgres-18 (read to understand; write original Rust, never paste C). Reference catalog data: contracts/reference/pg18/*.csv.
+FULL LEASE SPEC: read your entry (lease_id ${l.lease_id}) in contracts/leases/${l.crate}.json — its summary, spec, reads, depends_on_leases and acceptance are binding.
+READ FOR CONTEXT: contracts/ARCHITECTURE.md, contracts/crates/${l.crate}.md, the lease's 'reads' files, and the doc comments in your files (they are the frozen spec). Read the upstream crate source you call into so your calls match real signatures exactly. Dependency sources (exact versions): ${REG}/ . PostgreSQL 18.6 source for reference behavior: ~/develop/reference/postgres-18 (read to understand; write original Rust, never paste C). Reference catalog data: contracts/reference/pg18/*.csv.
 
 RULES (RightShift):
 - Do NOT run cargo, rustc, tests, docker/podman, or postgres. Nobody compiles per worker; a central build happens later. So write code carefully: exact types, imports, lifetimes, error conversions, match exhaustiveness, borrowck-friendly. Re-read your code once for compile errors before committing.

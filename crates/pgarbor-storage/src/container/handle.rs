@@ -19,7 +19,8 @@ use crate::container::options::{
 use crate::container::pins::PinTable;
 use crate::container::snapshot::Snapshot;
 use crate::container::write::WriteTxn;
-use crate::doctor::report::{DoctorReport, SpaceReport};
+use crate::doctor::report::{DoctorReport, Issue, IssueSeverity, SpaceReport};
+use crate::gc::trace::ReachSet;
 use crate::error;
 use crate::format::superblock::Superblock;
 use crate::io::{OsVfs, Vfs};
@@ -129,9 +130,26 @@ impl Container {
     /// state = {pager, sb, slot 0}, empty PinTable, recovery report with `created = true`).
     /// Errors: existing path → 58P02 via `error::open_failed`; invalid page size → 22023
     /// `invalid page size <n>` (detail "Page size must be a power of two between 4096 and 65536.").
-    #[allow(unused_variables)]
     pub fn create_with(vfs: Arc<dyn Vfs>, path: &Path, opts: &CreateOptions) -> Result<Container> {
-        Err(PgError::unimplemented("STO-13", "container create"))
+        let rec = crate::container::recovery::initialize(vfs.as_ref(), path, opts)?;
+        let sb = rec.choice.superblock;
+        let slot = rec.choice.slot;
+        let pager = Arc::new(Pager::new(rec.file, path.to_path_buf(), sb.page_size, opts.cache_pages));
+        Ok(Container {
+            inner: Arc::new(ContainerInner {
+                vfs,
+                path: path.to_path_buf(),
+                read_only: false,
+                sync: opts.sync,
+                cache_pages: opts.cache_pages,
+                spill_threshold: opts.spill_threshold_bytes,
+                state: RwLock::new(ContainerState { pager, sb, slot }),
+                writer: Mutex::new(WriterState::default()),
+                poison: Mutex::new(None),
+                pins: PinTable::new(),
+                recovery: rec.report,
+            }),
+        })
     }
 
     /// Open through any `Vfs`. Steps: `recovery::recover(vfs, path, opts)`; Pager over the file;
@@ -141,9 +159,49 @@ impl Container {
     /// the first Error-severity issue as XX001 `database file "<path>" failed verification: <msg>`.
     /// Errors: missing file → 58P01; locked → 55006 (`error::locked`); format errors per
     /// `format::superblock::choose_slot`.
-    #[allow(unused_variables)]
     pub fn open_with(vfs: Arc<dyn Vfs>, path: &Path, opts: &OpenOptions) -> Result<Container> {
-        Err(PgError::unimplemented("STO-13", "container open"))
+        let rec = crate::container::recovery::recover(vfs.as_ref(), path, opts)?;
+        let sb = rec.choice.superblock;
+        let slot = rec.choice.slot;
+        let pager = Arc::new(Pager::new(rec.file, path.to_path_buf(), sb.page_size, opts.cache_pages));
+        match opts.verify {
+            VerifyLevel::None => {}
+            VerifyLevel::Roots => {
+                if !sb.directory_root.is_none() {
+                    let snap = Snapshot::new(pager.clone(), sb, None);
+                    let page = snap.pager().read_page(sb.directory_root)?;
+                    crate::btree::node::decode_node(&page)?;
+                }
+            }
+            VerifyLevel::Full => {
+                let snap = Snapshot::new(pager.clone(), sb, None);
+                let mut issues: Vec<Issue> = Vec::new();
+                let mut seen = ReachSet::new(sb.page_count);
+                crate::doctor::verify::verify_tree(&snap, sb.directory_root, "directory", &mut seen, &mut issues)?;
+                if let Some(first) = issues.iter().find(|i| i.severity == IssueSeverity::Error) {
+                    return Err(PgError::corruption(format!(
+                        "database file \"{}\" failed verification: {}",
+                        path.display(),
+                        first.message
+                    )));
+                }
+            }
+        }
+        Ok(Container {
+            inner: Arc::new(ContainerInner {
+                vfs,
+                path: path.to_path_buf(),
+                read_only: opts.read_only,
+                sync: opts.sync,
+                cache_pages: opts.cache_pages,
+                spill_threshold: opts.spill_threshold_bytes,
+                state: RwLock::new(ContainerState { pager, sb, slot }),
+                writer: Mutex::new(WriterState::default()),
+                poison: Mutex::new(None),
+                pins: PinTable::new(),
+                recovery: rec.report,
+            }),
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -218,5 +276,84 @@ impl Container {
     pub fn close(self) -> Result<()> {
         drop(self);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::MemVfs;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn container_is_send_sync() {
+        assert_send_sync::<Container>();
+    }
+
+    #[test]
+    fn create_then_open_round_trip() {
+        let vfs = Arc::new(MemVfs::new());
+        let path = Path::new("/rt.pga");
+        let copts = CreateOptions { sync: SyncMode::Off, ..CreateOptions::default() };
+        let c = Container::create_with(vfs.clone(), path, &copts).unwrap();
+        let uuid = c.db_uuid();
+        assert!(c.recovery_report().created);
+        assert_eq!(c.page_size(), copts.page_size);
+        c.close().unwrap();
+        let o = Container::open_with(vfs, path, &OpenOptions::from_create(&copts)).unwrap();
+        assert_eq!(o.db_uuid(), uuid);
+        assert!(!o.recovery_report().created);
+        assert!(!o.is_poisoned());
+    }
+
+    #[test]
+    fn create_existing_fails_58p02() {
+        let vfs = Arc::new(MemVfs::new());
+        let path = Path::new("/dup.pga");
+        let copts = CreateOptions { sync: SyncMode::Off, ..CreateOptions::default() };
+        let _c = Container::create_with(vfs.clone(), path, &copts).unwrap();
+        let before = vfs.read_bytes(path).unwrap();
+        let e = Container::create_with(vfs.clone(), path, &copts).unwrap_err();
+        assert_eq!(e.sqlstate.code(), "58P02");
+        assert_eq!(vfs.read_bytes(path).unwrap(), before);
+    }
+
+    #[test]
+    fn invalid_page_size_rejected() {
+        let vfs = Arc::new(MemVfs::new());
+        let copts = CreateOptions { page_size: 5000, sync: SyncMode::Off, ..CreateOptions::default() };
+        let e = Container::create_with(vfs, Path::new("/bad.pga"), &copts).unwrap_err();
+        assert_eq!(e.sqlstate.code(), "22023");
+    }
+
+    #[test]
+    fn missing_file_open_fails() {
+        let vfs = Arc::new(MemVfs::new());
+        let e = Container::open_with(vfs, Path::new("/none.pga"), &OpenOptions::default()).unwrap_err();
+        assert_eq!(e.sqlstate.code(), "58P01");
+    }
+
+    #[test]
+    fn read_only_refuses_writes() {
+        let vfs = Arc::new(MemVfs::new());
+        let path = Path::new("/ro.pga");
+        let copts = CreateOptions { sync: SyncMode::Off, ..CreateOptions::default() };
+        Container::create_with(vfs.clone(), path, &copts).unwrap().close().unwrap();
+        let o = Container::open_with(vfs, path, &OpenOptions { read_only: true, sync: SyncMode::Off, ..OpenOptions::default() })
+            .unwrap();
+        assert!(o.is_read_only());
+        let e = o.begin_write().err().expect("write must be refused");
+        assert_eq!(e.sqlstate.code(), "25006");
+    }
+
+    #[test]
+    fn verify_full_on_empty_directory() {
+        let vfs = Arc::new(MemVfs::new());
+        let path = Path::new("/full.pga");
+        let copts = CreateOptions { sync: SyncMode::Off, ..CreateOptions::default() };
+        Container::create_with(vfs.clone(), path, &copts).unwrap().close().unwrap();
+        let o = OpenOptions { verify: VerifyLevel::Full, sync: SyncMode::Off, ..OpenOptions::default() };
+        Container::open_with(vfs, path, &o).unwrap();
     }
 }

@@ -44,7 +44,7 @@ def main(argv):
             ledger["rejected"].append({"lease_id": s["lease_id"], "reason": "no submission"})
             continue
         try:
-            changed = [p for p in git("diff", "--name-only", base, sha).split("\n") if p]
+            changed = [p for p in git("diff", "--name-only", f"{sha}^", sha).split("\n") if p]
         except RuntimeError as e:
             ledger["rejected"].append({"lease_id": s["lease_id"], "sha": sha, "reason": str(e)})
             continue

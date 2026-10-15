@@ -23,6 +23,7 @@ New (leased) functions:
 
 CLI (kept): ``python3 -m pgarbor_factory.dag validate <graph> [--leases files...]``.
 """
+import copy
 import fnmatch
 import json
 import sys
@@ -129,35 +130,147 @@ def validate_leases(lease_docs, task_ids):
     return errors, {"leases": sum(len(d.get("leases", [])) for d in lease_docs), "files": len(owner)}
 
 
+SPECULATIVE_STATES = frozenset({"PLANNED", "SPEC_READY"})
+
+
+def _task_list(graph: Any) -> list[dict[str, Any]]:
+    """The ``tasks`` list of a graph; every entry must be a JSON object."""
+    tasks = graph.get("tasks") if isinstance(graph, dict) else None
+    if not isinstance(tasks, list):
+        raise DagError("graph has no 'tasks' list")
+    for t in tasks:
+        if not isinstance(t, dict):
+            raise DagError(f"task entry is not an object: {t!r}")
+    return tasks
+
+
+def _index(graph: dict[str, Any]) -> tuple[list[str], dict[str, list[str]]]:
+    """(ids in file order, id -> integration dependencies); rejects duplicate and unknown ids."""
+    ids: list[str] = []
+    deps: dict[str, list[str]] = {}
+    for t in _task_list(graph):
+        tid = t.get("id")
+        if tid in deps:
+            raise DagError(f"duplicate task id {tid!r}")
+        ids.append(tid)
+        deps[tid] = list(t.get("integration_dependencies", []))
+    for tid, ds in deps.items():
+        for d in ds:
+            if d not in deps:
+                raise DagError(f"unknown integration dependency {d!r} of {tid!r}")
+    return ids, deps
+
+
 def load_graph(path: Path) -> dict[str, Any]:
     """Load + validate; raise DagError("<n> errors: <first 5 as JSON>") when invalid."""
-    raise NotImplementedError("FAC-01: load and validate graph")
+    p = Path(path)
+    try:
+        g = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise DagError(f"cannot load task graph {p}: {e}") from e
+    _task_list(g)
+    errors, _ = validate_graph(g)
+    if errors:
+        raise DagError(f"{len(errors)} errors: {json.dumps(errors[:5])}")
+    return g
 
 
 def integration_waves(graph: dict[str, Any]) -> list[list[str]]:
     """Kahn layering (see module docstring); raise DagError on a cycle."""
-    raise NotImplementedError("FAC-01: integration waves")
+    ids, deps = _index(graph)
+    remaining = {i: len(set(deps[i])) for i in ids}
+    dependents: dict[str, list[str]] = {i: [] for i in ids}
+    for i in ids:
+        for d in set(deps[i]):
+            dependents[d].append(i)
+    waves: list[list[str]] = []
+    wave = sorted(i for i in ids if remaining[i] == 0)
+    placed = 0
+    while wave:
+        waves.append(wave)
+        placed += len(wave)
+        nxt: list[str] = []
+        for i in wave:
+            for j in dependents[i]:
+                remaining[j] -= 1
+                if remaining[j] == 0:
+                    nxt.append(j)
+        wave = sorted(nxt)
+    if placed != len(ids):
+        stuck = sorted(i for i in ids if remaining[i] > 0)
+        raise DagError(f"integration dependency cycle among {len(stuck)} tasks: {stuck[:5]}")
+    return waves
 
 
 def speculative_ready(graph: dict[str, Any], frozen_contracts: Iterable[str]) -> list[str]:
     """Sorted ids eligible for speculative dispatch (module docstring)."""
-    raise NotImplementedError("FAC-01: speculative readiness")
+    frozen = set(frozen_contracts)
+    return sorted(
+        t["id"] for t in _task_list(graph)
+        if t.get("state") in SPECULATIVE_STATES
+        and all(d in frozen for d in t.get("contract_dependencies", []))
+    )
 
 
 def integration_ready(graph: dict[str, Any], verified: Iterable[str]) -> list[str]:
     """Sorted ids whose integration dependencies are all verified."""
-    raise NotImplementedError("FAC-01: integration readiness")
+    done = set(verified)
+    return sorted(
+        t["id"] for t in _task_list(graph)
+        if all(d in done for d in t.get("integration_dependencies", []))
+    )
 
 
 def fanout(graph: dict[str, Any]) -> dict[str, int]:
     """Transitive dependent counts over integration edges."""
-    raise NotImplementedError("FAC-01: dependency fanout")
+    ids, deps = _index(graph)
+    dependents: dict[str, list[str]] = {i: [] for i in ids}
+    for i in ids:
+        for d in set(deps[i]):
+            if d != i:
+                dependents[d].append(i)
+    result: dict[str, int] = {}
+    for start in ids:
+        seen = {start}
+        stack = [start]
+        count = 0
+        while stack:
+            cur = stack.pop()
+            for nxt in dependents[cur]:
+                if nxt not in seen:
+                    seen.add(nxt)
+                    count += 1
+                    stack.append(nxt)
+        result[start] = count
+    return result
 
 
 def merge_repair_nodes(graph: dict[str, Any], tickets: list[dict[str, Any]]) -> \
         tuple[dict[str, Any], list[dict[str, Any]]]:
-    """New graph with tickets appended + validation errors (module docstring)."""
-    raise NotImplementedError("FAC-01: merge repair tickets")
+    """New graph with tickets appended + validation errors (module docstring).
+
+    A ticket whose id already exists in the graph (or repeats an earlier ticket in this call)
+    is rejected: it is not appended and a ``duplicate_ticket_id`` error is returned. The input
+    graph is never mutated.
+    """
+    new = copy.deepcopy(graph)
+    tasks = _task_list(new)
+    existing = {t.get("id") for t in tasks}
+    errors: list[dict[str, Any]] = []
+    for tk in tickets:
+        node = tk.to_json() if hasattr(tk, "to_json") else tk
+        if not isinstance(node, dict):
+            errors.append({"kind": "bad_ticket", "ticket": repr(tk)})
+            continue
+        node = copy.deepcopy(node)
+        tid = node.get("id")
+        if tid in existing:
+            errors.append({"kind": "duplicate_ticket_id", "id": tid})
+            continue
+        existing.add(tid)
+        tasks.append(node)
+    verr, _ = validate_graph(new)
+    return new, errors + verr
 
 
 def main(argv):

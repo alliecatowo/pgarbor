@@ -1,0 +1,2226 @@
+{
+ "submissions": [
+  {
+   "lease_id": "TYP-22",
+   "branch": "worktree-wf_fed745da-684-13",
+   "sha": "1ef8adee70068888fb850812c01cf66c0ca661f4",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/lexer.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_datetime: full port of PG ParseDateTime state machine (digit/time/date/number, leading '.', alpha with date/tz-name detection via datetktbl core token check, sign -> Tz/Special, punctuation skipped, other chars BadFormat)",
+    "MAXDATEFIELDS=25 limit and emulated 153-byte workbuf overflow -> BadFormat",
+    "ASCII-only lower-casing and C-locale isspace/ispunct/isalpha semantics; embedded NUL ends input",
+    "unit tests covering acceptance cases and edge cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "C/ASCII locale ctype behavior: non-ASCII bytes are not alpha/punct, so produce BadFormat",
+    "Core token list copied from datetktbl in PG18 (incl. ad, bc, epoch, infinity, now, today, tomorrow, yesterday)"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types datetime::lexer"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/datetime.c ParseDateTime and datetktbl",
+    "src/include/utils/datetime.h",
+    "crates/pgarbor-types/src/datetime/mod.rs (DtErr)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/lexer.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-06",
+   "branch": "worktree-wf_fed745da-684-6",
+   "sha": "ceb5c535e94c8c281fd4aef0ec8b36b0dac07100",
+   "files_changed": [
+    "crates/pgarbor-types/src/scalar/float.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_float8/parse_float4: whitespace trim, NaN/inf/infinity with optional sign, strict decimal syntax, 22P02 and 22003 (overflow, underflow) with PG messages; subnormals ok; float4 parsed directly as f32",
+    "format_float8/format_float4: shortest round-trip layout (fixed for -4<=exp<15 / <6, else e+XX), NaN/Infinity/-0, and %.{P}g emulation for extra_float_digits<=0",
+    "input/output/recv/send by type oid (700/701); recv length errors 08P01 / 22P03"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Signed nan/inf accepted as glibc strtod does",
+    "recv with wrong length: short is 08P01 'insufficient data left in message', long is 22P03 'incorrect binary data format'",
+    "float4 parsed directly with str::parse::<f32> (strtof behaviour) rather than via f64"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "unit tests in float.rs: fmt8, fmt4, fmt_g, parse, io_roundtrip (not run; no cargo allowed)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json TYP-06",
+    "doc comments in float.rs",
+    "pgarbor-common/src/error.rs",
+    "pgarbor-types datum.rs/context.rs/oids.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/float.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-13",
+   "branch": "worktree-wf_fed745da-684-3",
+   "sha": "29ff29f8460932930e30c13d62a5bd0725dcdf2a",
+   "files_changed": [
+    "crates/pgarbor-types/src/text/io.rs"
+   ],
+   "implemented_behaviors": [
+    "apply_char_typmod: varchar(n)/bpchar(n) length in characters; non-explicit excess must be all spaces else 22001 'value too long for type character varying(n)' / 'character(n)'; explicit truncates; bpchar right-pads to n chars; typmod < 4 is a no-op",
+    "truncate_name: NUL check (22021), then clip to <=63 bytes on a char boundary",
+    "input: char family (charin with \\ooo 4-char octal form, empty string -> 0, else first byte), name (truncate), varchar/bpchar (apply typmod), text/unknown/cstring/pg_node_tree/refcursor and others verbatim; NUL -> 22021",
+    "output: \"char\" (0 -> empty, >=0x80 -> \\ooo, else ASCII); all others return the stored string verbatim (bpchar keeps padding)",
+    "recv: \"char\" exactly 1 byte else 22P03; others validate UTF-8 and NUL (22021 with PG-style offending bytes, first offending byte wins), name >=64 bytes -> 42622 'identifier too long', varchar/bpchar apply typmod",
+    "send: \"char\" single byte; others raw UTF-8 bytes",
+    "Unit tests in #[cfg(test)] mod tests covering varchar/bpchar rules, name truncation, char I/O, NUL/invalid UTF-8 errors, binary round trip"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "recv for name follows PG namerecv: rejects >= 64 bytes with 42622 rather than truncating (checked against name.c).",
+    "charin 4-char octal form truncates the computed value to 8 bits, matching the C cast in char.c.",
+    "Types sharing the textin family but not listed (e.g. refcursor, oid 1790) are treated as verbatim text.",
+    "Typmod values 0..=3 are treated as no constraint (valid PG typmods are always >= 4)."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "varchar(3) input 'abcd' -> 22001 'value too long for type character varying(3)'",
+    "varchar(3) input 'abc   ' -> 'abc'",
+    "bpchar(4) input 'ab' -> 'ab  '",
+    "apply_char_typmod('abcd', 7, false, true) == 'abc'",
+    "name 80-byte multibyte input truncates to 62 bytes",
+    "\"char\" output 200 == '\\310'; input '\\101' == 65",
+    "text input with NUL -> 22021; recv invalid UTF-8 0xff -> 22021 'invalid byte sequence for encoding \"UTF8\": 0xff'",
+    "recv of 0 bytes for \"char\" -> 22P03"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-13)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/typmod.rs",
+    "contracts/reference/pg18/pg_type.csv",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/char.c (charin/charout)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/name.c (namein/namerecv)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/io.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-03",
+   "branch": "worktree-wf_fed745da-684-4",
+   "sha": "086824a73844fe631c1fcd4bb6c65c6557139cbe",
+   "files_changed": [
+    "crates/pgarbor-types/src/scalar/bool.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_bool: C-isspace trim, case-insensitive prefix matching of true/false/yes/no, on/off (min 2 chars, so 'of' is false and 'o' is invalid), 1/0; NUL bytes rejected",
+    "input (boolin): 22P02 'invalid input syntax for type boolean: \"<input as given>\"'",
+    "output: 't'/'f' (type_mismatch on non-Bool)",
+    "recv: exactly one byte, nonzero is true, otherwise 22P03 via io::invalid_binary",
+    "send: [1]/[0]",
+    "lookup: all 14 Bool-module procs matched by prosrc (booleq, boolne, boollt, boolgt, boolle, boolge, btboolcmp, booland_statefunc, boolor_statefunc, booltext, int4_bool, bool_int4, hashbool, hashboolextended); all are lang 12",
+    "hashbool/hashboolextended call compare::pg_hash_uint32 / pg_hash_uint32_extended (TYP-49)",
+    "unit tests in #[cfg(test)] mod; the hash fixture test is #[ignore = \"needs TYP-49\"]"
+   ],
+   "still_unimplemented": [
+    "none in TYP-03 scope; hashbool and hashboolextended return TYP-49's 0A000 until compare::pg_hash_uint32 lands"
+   ],
+   "assumptions": [
+    "parse_bool trims C whitespace, as the module doc specifies for boolin. PG's bare parse_bool(value) (used by some GUC paths) does not trim, so GUC callers that need that behavior must be checked against the PG source.",
+    "Only the input text is trimmed. The 22P02 message quotes the untrimmed input, matching PG's in_str.",
+    "The arms match PG's parse_bool_with_len exactly: strncasecmp with n=len for true/false/yes/no and n=max(len,2) for on/off. This yields 'of' false and 'o' invalid, as the acceptance list requires.",
+    "Nothing was compiled or run, per the RightShift rules. Code was re-read once for borrowck and type inference issues."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "scalar::bool::tests::parse_accepts_unambiguous_prefixes",
+    "scalar::bool::tests::parse_trims_c_whitespace",
+    "scalar::bool::tests::parse_rejects_invalid",
+    "scalar::bool::tests::input_error_matches_pg",
+    "scalar::bool::tests::output_and_send",
+    "scalar::bool::tests::recv_rules",
+    "scalar::bool::tests::booltext_uses_long_words",
+    "scalar::bool::tests::comparison_and_logic_functions",
+    "scalar::bool::tests::int_bool_casts",
+    "scalar::bool::tests::every_bool_proc_has_an_implementation",
+    "scalar::bool::tests::strict_null_handled_by_dispatcher",
+    "scalar::bool::tests::hash_fixtures (ignored until TYP-49)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-03 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/{datum.rs,context.rs,func/mod.rs,io.rs,compare.rs,catalog_data/procs.rs,catalog_data/mod.rs}",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/bool.c (parse_bool_with_len, boolin, booltext, hashbool, hashboolextended, booland_statefunc)",
+    "~/develop/reference/postgres-18/src/test/regress/expected/boolean.out"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/bool.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-04",
+   "branch": "worktree-wf_fed745da-684-2",
+   "sha": "ce7c88f67c1d2077d20ef533116fc9276672cdac",
+   "files_changed": [
+    "crates/pgarbor-types/src/scalar/int.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_int2/parse_int4/parse_int8: port of PG18 pg_strtoint16/32/64_safe (sign, whitespace, 0x/0o/0b prefixes, underscores, eager out-of-range check, trailing whitespace only, C-string NUL truncation)",
+    "input/output by ty.oid (int2/int4/int8) with 22P02 and 22003 messages using the original input string and smallint/integer/bigint names",
+    "send: big-endian 2/4/8 bytes; recv: exact-length check, else 22P03 'incorrect binary data format'",
+    "Datum variant mismatch returns internal error via datum::type_mismatch (no panic)",
+    "#[cfg(test)] mod tests covering all acceptance examples plus limits, underscores, binary length checks"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Underscore rule follows the PG18 source, not the module doc: in prefixed literals (0x/0o/0b) a leading underscore is allowed if followed by a digit, so '0x_1'::int4 = 1. Only decimal literals reject a leading underscore.",
+    "Input is treated as a C string: bytes from the first NUL onward are ignored, matching PG's behavior for cstrings.",
+    "Out-of-range is detected eagerly during the digit scan (same ordering as PG), so '99999999999x' reports 22003 rather than 22P02.",
+    "Unit tests use IoCtx::new(registry::builtin_env(), &IoConfig::default()) and do not construct context::TestSession, since int I/O never reads session state."
+   ],
+   "contract_breaks": [
+    "Module doc (int.rs header) says underscores may not directly follow the prefix; PG18 numutils.c allows '0x_1'. Implemented per source; the doc comment should be corrected by whoever owns the contract."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types scalar::int::tests (not run per rules)",
+    "'0x_1'::int4 = 1 should be verified against PG18.6 oracle since it departs from the module doc"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-04)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/numutils.c (pg_strtoint16/32/64_safe, lines 128-880)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/int.c and int8.c (int2recv/send, int4recv/send, int8recv/send)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/int.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-51",
+   "branch": "worktree-wf_fed745da-684-8",
+   "sha": "a7693ba223dc8b1a1aa4617d0f979e9c986ce6d4",
+   "files_changed": [
+    "crates/pgarbor-types/src/tuple.rs"
+   ],
+   "implemented_behaviors": [
+    "encode_row/encode_value for every Datum variant per v1 layout (minimal LEB128, NaN bits preserved, numeric/jsonb payloads)",
+    "decode_row with strict validation: version check, truncation, unknown tags, UTF-8, non-minimal/overflowing varints, trailing bytes, numeric scale range and canonical digit bytes, jsonb key order/uniqueness, array dims/count consistency, depth limit 512",
+    "decode_columns with cheap structural skipping of unwanted columns; result length ncols_hint.max(stored)",
+    "Allocations bounded by remaining input length",
+    "Unit tests plus proptest canonical roundtrip and arbitrary-bytes no-panic tests"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Numeric with negative bigdecimal scale is re-expressed at scale 0 when encoding; scale > 0x3FFF is an internal error",
+    "Nesting deeper than 512 is rejected (54000 on encode, XX001 on decode)",
+    "Jsonb numbers must be finite; arrays must satisfy dims/items invariants on encode",
+    "Decoder rejects non-minimal varints and non-canonical numeric digit bytes to guarantee encode(decode(b)) == b",
+    "Array element oid stored as varint of u32"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types tuple::"
+   ],
+   "provenance": [
+    "crates/pgarbor-types/src/tuple.rs module docs",
+    "datum.rs, numeric/mod.rs, json/mod.rs, array/mod.rs",
+    "pgarbor-common error.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/tuple.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-50",
+   "branch": "worktree-wf_fed745da-684-7",
+   "sha": "cb2886340b9960dd59d6e3670b823cf3a42b21f1",
+   "files_changed": [
+    "crates/pgarbor-types/src/keycodec.rs"
+   ],
+   "implemented_behaviors": [
+    "encode_key / encode_value / encode_key_vec implemented per module doc (tags 0x00/0xFF/0x80, desc inverts body only)",
+    "bool, int2/4/8, xid8/pg_lsn (u64), oid-like, char, float4/8 (canonical NaN, -0 folded), numeric (class byte, normalized digit pairs, neg inversion), text/varchar/name/unknown/cstring/bpchar (trailing spaces stripped), bytea, uuid, date, time, timetz, timestamp(tz), interval (cmp_span i128)",
+    "jsonb with rank bytes, counts, recursive elements, empty top-level array rank 0x00",
+    "arrays (elements, end marker, ndims, dims then lower bounds), enums via label_sort_order as float4, composites via env.composite_fields (dropped fields skipped), domains followed to base type",
+    "json/xml/geometric types give 42883 'could not identify an ordering operator for type X'",
+    "values longer than cols returns XX000; prefix keys supported; failed encode truncates output back",
+    "unit tests plus proptests for ints, floats, numeric, text, timestamps, intervals, int arrays against compare::cmp_sort"
+   ],
+   "still_unimplemented": [
+    "anonymous record (oid 2249) keys: field types are not derivable from the type alone, returns 0A000 TYP-50",
+    "other builtin types with no ordering handled (e.g. inet, bit, tsvector, ranges): 0A000 TYP-50"
+   ],
+   "assumptions": [
+    "Array dims are emitted as all lengths first then all lower bounds, matching PG array_cmp (module doc says per dim; differs only for multi-dim arrays with differing lower bounds)",
+    "Record datum may include or omit dropped-column slots; handled by field count",
+    "Nested empty jsonb arrays use rank 0x50 (only top-level uses 0x00)",
+    "Array element type taken from Array.elem, falling back to the type's typelem",
+    "jsonb encoding is independent of compare_jsonb (TYP-34 not yet implemented)",
+    "Enum equality relies on TYP-41 label_sort_order"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types keycodec (requires TYP-49 compare::cmp_sort for the proptests)",
+    "Add jsonb order proptest once TYP-34 compare_jsonb lands",
+    "Add enum and composite tests once a TypeEnv with enum_labels/composite_fields exists"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-50)",
+    "crates/pgarbor-types/src/{datum,context,compare,registry,enum_type,array/mod,numeric/mod,json/mod,json/ops}.rs",
+    "postgres-18 src/backend/utils/adt/arrayfuncs.c array_cmp"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/keycodec.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-24",
+   "branch": "worktree-wf_fed745da-684-11",
+   "sha": "3720a24e5caeb346d31b1d7474d08f2ebf44a784",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/encode.rs"
+   ],
+   "implemented_behaviors": [
+    "encode_date_only: ISO, SQL (DMY/MDY/YMD), German, Postgres (DMY/MDY) date styles; years zero-padded to 4 digits, astronomical year <= 0 printed as BC-era with ' BC' suffix; invalid month returns internal error instead of panicking",
+    "encode_time_only: hh:mm:ss with fraction trimmed of trailing zeros (precision 6), optional zone suffix via EncodeTimezone rules (ISO sign, +hh / +hh:mm / +hh:mm:ss)",
+    "encode_date_time: ISO (space separator, numeric zone), SQL and German (zone abbreviation truncated to 10 chars when present, else numeric zone), Postgres (Dow Mon dd yyyy with zone abbrev or numeric zone after a space, day-of-week via date2j/j2day), BC suffix for all styles",
+    "encode_interval: postgres (with '+' on fields following a negative field, 'mon'/'year'/'day' units with plural rule, zero as 00:00:00), postgres_verbose ('@ ... ago' with first-nonzero-field sign rule, unitless ' 0' for zero), sql_standard (single leading sign, mixed-sign explicit signs, '0'), iso_8601 (P..T..S, PT0S)",
+    "encode_timezone: east-positive ISO offset from seconds west, shortest exact form",
+    "private helpers: AppendSeconds port (abs value, trailing-zero-trimmed fraction, fillzeros flag), Fields negation, check_month, display_year, push_bc, push_num, push_day_month, push_hms, push_tz, push_tzname, push_postgres_part, push_verbose_part, push_iso_part",
+    "unit tests in #[cfg(test)] mod tests covering all acceptance fixtures (ISO 0044-03-15 BC, timestamptz 2024-02-29 07:31:02.5+00, timetz 00:00:00+05:30:15, Postgres 'Thu Feb 29 13:01:02.5 2024 UTC', SQL DMY, German, interval postgres '-1 days -02:00:00' and '-1 mons +2 days', sql_standard '+1-2 +3 +4:05:06.7', iso_8601 P1Y2M3DT4H5M6.7S and PT0S, verbose '@ 1 day 2 hours ago')"
+   ],
+   "still_unimplemented": [
+    "Infinite values ('infinity' / '-infinity') for date, timestamp and interval are NOT produced by these encoders: Tm/Itm cannot represent them. The caller (io/date/timestamp/interval layer) must print the EARLY/LATE spellings. No public EncodeSpecial* function exists in the frozen contract, so none was added."
+   ],
+   "assumptions": [
+    "Itm.year and Itm.mon are already split (year = months/12, mon = months%12), matching PG pg_itm; the encoder does not re-split.",
+    "Tm.year is astronomical (1 BC = 0), as the datetime module docs state; display_year maps it to the BC-era number.",
+    "style parameter of encode_time_only is unused (PG only uses it for the XSD zone variant, which DateStyle cannot express); kept as `let _ = style;`.",
+    "Zone abbreviation truncation to MAXTZLEN=10 uses characters, identical to PG bytes for the ASCII abbreviations the module documents.",
+    "Test helpers from registry::builtin_env()/IoConfig/TestSession were not needed: all encoders are pure over Tm/Itm and take their style/order arguments directly.",
+    "Tests were not compiled or run (per RightShift rules); code was re-read for borrowck, index bounds (day/month names are index-safe) and i64/i32 conversions."
+   ],
+   "contract_breaks": [
+    "Module doc lists EncodeSpecialDate/Timestamp/Interval (infinity text), but the frozen contract exposes no public function for them and encode_* signatures take only Tm/Itm, which cannot carry infinity. Suggest a contract amendment adding e.g. `encode_special(kind: DateTimeKind-like, ...)` or having the io layer own the EARLY/LATE strings."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types datetime::encode (the tests mod at the bottom of encode.rs; covers all lease acceptance fixtures)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-24 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/datetime/mod.rs (Tm, Itm, precision consts)",
+    "crates/pgarbor-types/src/datetime/calendar.rs (date2j, j2day: 0 = Sunday)",
+    "crates/pgarbor-types/src/context.rs (DateStyle, DateOrder, IntervalStyle)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/datetime.c: AppendSeconds, EncodeTimezone, EncodeDateOnly, EncodeTimeOnly, EncodeDateTime, EncodeInterval and AddPostgresIntPart/AddVerboseIntPart/AddISO8601IntPart helpers (lines ~458-4860)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (EncodeSpecialTimestamp, EncodeSpecialInterval) and date.c (EncodeSpecialDate), read for the infinity spelling only",
+    "~/develop/reference/postgres-18/src/include/datatype/timestamp.h (struct pg_itm field layout), miscadmin.h (MAXTZLEN=10), utils/date.h (MAX_TIME_PRECISION=6)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/encode.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-21",
+   "branch": "worktree-wf_fed745da-684-10",
+   "sha": "b0463656c1c9e7dd00a38c8be89910824395da5f",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/calendar.rs"
+   ],
+   "implemented_behaviors": [
+    "tm2timestamp: PG tm2timestamp port; IS_VALID_JULIAN (year/month) plus mon/mday check; optional tz shift utc = local + west; final MIN_TIMESTAMP..END_TIMESTAMP check; all errors 22008 'timestamp out of range'",
+    "timestamp2tm: PG timestamp2tm port; infinities rejected with 22008; local = ts - west when tz given; date0 range check; fills year/mon/mday/hour/min/sec/fsec, wday, yday, tz (tz_abbrev None)",
+    "time2tm: 0..=USECS_PER_DAY decomposition (24:00:00 allowed), else 22008 'time out of range'",
+    "tm2time: PG time_overflows field checks (hour<=24, sec<=60, fsec<=1e6) and total <= USECS_PER_DAY, else 22008",
+    "interval2itm: PG interval2itm port with i64 hour; infinite intervals rejected with 22008 'interval out of range'",
+    "itm2interval: checked arithmetic; months must fit i32; micros checked; infinite result is overflow; 22008 'interval out of range'",
+    "date2isoweek / date2isoyear / date2isoyearday: PG control flow ported over i64 julian arithmetic (no wrapping); invalid y/m/d gives 22008 'date out of range'",
+    "isoweek2j: Monday of ISO week; result must lie in [DATETIME_MIN_JULIAN, DATE_END_JULIAN) else 22008",
+    "Unit tests appended in the existing #[cfg(test)] mod: epoch and range edges, tz shift roundtrip, time, interval acceptance vector, ISO week acceptance vectors (2024-12-30 -> week 1, iso year 2025), isoweek2j"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "timestamp2tm with tz_secs_west Some(w) treats w as the fixed offset (no tz database), setting tm.tz = Some(w) and tm.tz_abbrev = None; the caller supplies the abbreviation.",
+    "timestamp2tm returns 22008 for infinite inputs (i64::MIN/MAX) instead of decomposing them; callers must special-case infinities first.",
+    "tm2timestamp additionally rejects invalid month or day-of-month (PG 18 IS_VALID_JULIAN only checks year and month), returning 22008 timestamp out of range; hour/min/sec are not range-checked, matching PG (24:00:00 is allowed).",
+    "interval2itm returns 22008 'interval out of range' for infinite intervals (PG has no finite decomposition for them).",
+    "date2isoweek and related functions treat any invalid year/month/day as 22008 'date out of range'.",
+    "tm2time enforces PG time_overflows field limits and rejects totals above 24:00:00 with 22008 'time out of range'.",
+    "isoweek2j rejects results outside the valid Julian range with 22008 'date out of range'."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "calendar::tests::tm2timestamp_epoch_and_range",
+    "calendar::tests::timestamp2tm_epoch_fields",
+    "calendar::tests::timestamp_tz_roundtrip",
+    "calendar::tests::time_conversions",
+    "calendar::tests::interval_decomposition",
+    "calendar::tests::iso_week_helpers",
+    "calendar::tests::isoweek_julian_matches_epoch",
+    "calendar::tests::julian_roundtrip (existing)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-21 spec and acceptance)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/datetime/mod.rs (Tm, Itm, constants, out_of_range)",
+    "crates/pgarbor-types/src/datum.rs (Interval)",
+    "crates/pgarbor-common/src/error.rs (SqlState, PgError)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (timestamp2tm, tm2timestamp, dt2time, time2t, dt2local, interval2itm, itm2interval, isoweek2j, date2isoweek, date2isoyear, date2isoyearday)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c (tm2time, time_overflows, time2tm)",
+    "~/develop/reference/postgres-18/src/include/datatype/timestamp.h (IS_VALID_JULIAN, JULIAN_* constants, IS_VALID_TIMESTAMP)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/calendar.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-09",
+   "branch": "worktree-wf_fed745da-684-5",
+   "sha": "b11c19f6ae4102f590163a7d14529f75660bebcd",
+   "files_changed": [
+    "crates/pgarbor-types/src/numeric/io.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_numeric: whitespace trim, sign, NaN/Infinity/inf (case-insens, -NaN invalid), decimals with _ separators, exponent, 0x/0o/0b literals, dscale = max(0, frac - exp), overflow checks (22003), 22P02 syntax errors with original input text",
+    "format_numeric: exact dscale digits, no -0, specials",
+    "format_numeric_sci: numeric_out_sci semantics (half-up rounding of significand, e+NN exponent)",
+    "apply_typmod: half-up rounding to scale (negative scale supported), 22003 overflow with PG detail text (10^N / 1), NaN passthrough, infinity rejection with detail",
+    "to_binary/from_binary: NBASE groups, weight, sign codes, dscale; recv validation (sign, scale, digit -> 22P03; short buffer -> 08P01); truncation to dscale as in PG numeric_recv",
+    "input/output/recv/send datum wrappers with typmod"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "num_bigint is a direct dependency of pgarbor-types and unifies with the BigInt version bigdecimal 0.4.11 uses",
+    "from_binary truncates (does not round) hidden digits, following PG numeric_recv rather than the module doc wording",
+    "Input whose dscale would exceed 0x3FFF returns 22003 value overflows numeric format to preserve the Numeric invariant",
+    "from_binary rejects trailing bytes with 22P03 incorrect binary data format"
+   ],
+   "contract_breaks": [
+    "Module doc says recv 'rounds to dscale'; PG truncates. Implemented truncation."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types numeric::io (unit tests in the file: text_input, text_errors, typmod, sci, binary, datum_io)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-09)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/numeric.c (numeric_in, set_var_from_str, set_var_from_non_decimal_integer_str, apply_typmod, apply_typmod_special, numeric_recv, get_str_from_var_sci)",
+    "bigdecimal-0.4.11 src/lib.rs (with_scale, with_scale_round)",
+    "crates/pgarbor-types/src/typmod.rs, numeric/mod.rs, context.rs, datum.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/io.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-15",
+   "branch": "worktree-wf_fed745da-684-9",
+   "sha": "ac4d6ab8d0e9c80d17d12f6913c209421b749ad6",
+   "files_changed": [
+    "crates/pgarbor-types/src/text/format.rs"
+   ],
+   "implemented_behaviors": [
+    "quote_identifier: ruleutils.c logic, safe = [a-z_][a-z0-9_]* and not a non-unreserved keyword (QUOTED_KEYWORDS, 164 entries generated from pg_keywords.csv, binary-searched); embedded quotes doubled",
+    "quote_literal: single quotes doubled; backslashes doubled and E prefix when the input contains a backslash",
+    "lookup(): procs 1282, 1283, 1285 (by oid), 1289, 1290 (by oid), 2089/2090, 6330-6333 (to_hex/to_bin/to_oct 32/64), 3058 concat, 3059 concat_ws, 3539 and 3540 format; all other procs return None",
+    "quote_ident / quote_literal / quote_nullable (text and anyelement variants; quote_nullable NULL -> NULL)",
+    "concat: NULL args skipped, never NULL; concat_ws: NULL separator -> NULL, NULL values skipped without emitting a separator",
+    "to_hex/to_oct/to_bin 32 and 64: unsigned reinterpretation, lowercase, no leading zeros",
+    "format(): faithful port of varlena.c text_format: %[argpos$][-][width|*|*n$]{s,I,L}, %%, indirect width (int4/int2 direct, other types via text), PG error texts and SQLSTATEs (22023 too few arguments / unrecognized type specifier with HINT / unterminated / argument 0; 22004 null for %I; 22P02 and 22003 for bad width text), padding by character count, negative width left-justifies",
+    "#[cfg(test)] mod tests with quote, format, concat, concat_ws, radix and lookup coverage tests (not executed)"
+   ],
+   "still_unimplemented": [
+    "none in the TextFormat module: every proc with module ImplModule::TextFormat in catalog_data/procs.rs has an implementation; unsupported() remains as the fallback for unknown procs"
+   ],
+   "assumptions": [
+    "concat/concat_ws/format receive all actual args in `args` (args[0] is the format or separator for format/concat_ws), with ctx.arg_types parallel to args, as the func/mod.rs module doc states.",
+    "format(VARIADIC array) with an array passed as a single VARIADIC argument is not expanded; the module doc says VARIADIC any procs receive individual values, so this is treated as out of contract.",
+    "Non-text values are rendered via crate::io::output, which depends on other leases' family modules (scalar::int, etc.); the unit tests only exercise text and int4/int8 paths that route through those modules for output of non-text only in quote_literal(anyelement), which the tests do not call.",
+    "Width text parsing for non-int args mirrors pg_strtoint32 error texts (22P02 syntax, 22003 range), taken from memory of PG source rather than a verified copy."
+   ],
+   "contract_breaks": [
+    "The module doc (line 27) says quote_ident leaves unquoted identifiers matching [a-z_][a-z0-9_$]*, but PG 18 ruleutils.c quote_identifier does NOT treat '$' as safe (only a-z, 0-9, _). The implementation follows PG source (a$b is quoted as \"a$b\"). The doc should be corrected; the header was left untouched because it is the frozen spec.",
+    "The lease asks for 'quote_identifier(ident)' returning Result<String>; it never fails, so Ok is always returned. No contract change needed, noted for completeness."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types text::format::tests (quote_ident_rules, quote_literal_rules, format_positional_and_sequential, format_errors, format_width_flags_and_percent, format_null_handling, concat_skips_nulls, concat_ws_skips_nulls, radix_conversions, quote_nullable_null_is_unquoted, lookup_covers_owned_procs)",
+    "Acceptance from lease: quote_ident('select')=\"select\", quote_ident('abc')=abc, quote_ident('Abc')=\"Abc\", quote_literal(E'a''b\\\\c') form, format('%2$s %1$s %s','a','b')='b a b', format('%z',1) 22023 with HINT, format('%s %s','a') 22023 too few arguments, concat('a',NULL,1)='a1', concat_ws(',','a',NULL,'b')='a,b', to_hex(-1)='ffffffff'"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-15)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::TextFormat rows)",
+    "crates/pgarbor-common/src/error.rs",
+    "contracts/reference/pg18/pg_keywords.csv",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/varlena.c (text_format, text_format_parse_format, text_format_string_conversion, text_format_append_string; lines 5882-6410)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/ruleutils.c (quote_identifier, line 13062)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/quote.c (quote_literal_internal)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/format.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-53",
+   "branch": "worktree-wf_fed745da-684-19",
+   "sha": "6df34223d29224151670c6be9cd55f977e18c711",
+   "files_changed": [
+    "crates/pgarbor-types/src/cast/apply.rs"
+   ],
+   "implemented_behaviors": [
+    "apply_cast: NULL input returns NULL and skips all steps; a NULL produced mid-plan also stops the plan",
+    "Relabel and DomainCheck are identity",
+    "Func step: func::implementation(proc) called with [value], [value, Int4(typmod)] or [value, Int4(typmod), Bool(explicit)]; FuncCtx::with_types gets the declared cast-function arg types (INT4/BOOL filled for typmod/explicit positions) and plan.to as the result type",
+    "ViaIo step: io::output(from) then io::input(to), so input errors (22P02 etc.) propagate unchanged",
+    "ArrayCoerce step: element-wise apply_cast with elem_plan, dims kept, elem set to elem_plan.to.oid; non-array input gives an internal type_mismatch",
+    "RecordCoerce step: column-count check first (42846 cannot cast type X to Y, DETAIL 'Input has too few columns.' / 'Input has too many columns.'), then per-field plan_cast with plan.context and apply_cast; dropped target attributes become NULL; values indexed by attribute position including dropped attributes",
+    "Typmod step: typmod::enforce_typmod(ctx, to, value, explicit)",
+    "cast_datum kept as before (plan_cast + apply_cast)",
+    "Unit tests in #[cfg(test)] mod tests: int4->int8, NULL passthrough, text->int4 22P02 message, int4[]->text[] elementwise, explicit text->varchar(3) truncation, assignment 22001, noop plan"
+   ],
+   "still_unimplemented": [
+    "RecordCoerce from an anonymous record value (plan.from = record): returns PgError::unimplemented(\"TYP-53\", ...) because neither the value nor the plan carries the source field types; needs the binder to supply them (a plan or FuncCtx field), or a contract amendment"
+   ],
+   "assumptions": [
+    "Datum::Record values are indexed by attribute position including dropped attributes, matching TypeEnv::composite_fields order (CompositeField.dropped)",
+    "Func step result type is plan.to (the target type including typmod), as the spec's 'target result type'",
+    "Per-field plan_cast in RecordCoerce uses the outer plan's CastContext, mirroring PG coerce_record_to_complex",
+    "A NULL that appears mid-plan (e.g. from a Void input) short-circuits the remaining steps and stays NULL",
+    "Module imports used: names::display_name, func::implementation, io::{input,output}, typmod::enforce_typmod, oids::{INT4,BOOL,RECORD,INT4_ARRAY,TEXT_ARRAY,VARCHAR,TEXT}, all verified to exist in the crate"
+   ],
+   "contract_breaks": [
+    "The CastStep::RecordCoerce { to } step has no source-type field, so an anonymous record source cannot be field-coerced at runtime. The contract needs either a `from`/source field types on the step or a FuncCtx arg-type hint to support anonymous record casts."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types cast::apply::tests (not run: no compile per RightShift rules)",
+    "int4->int8 on 5 == Int8(5) (depends on TYP-04 int48 and TYP-52 plan_cast)",
+    "text->int4 'abc' => 22P02 invalid input syntax for type integer: \"abc\" (depends on TYP-13 and TYP-52)",
+    "int4[]->text[] with NULL element keeps dims [(3,1)] and elem TEXT (depends on TYP-37 array io and TYP-52)",
+    "explicit text->varchar(3) truncates 'abcdef' to 'abc'; assignment errors 22001 (depends on TYP-02 enforce_typmod)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-53 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/cast/lookup.rs (CastPlan, CastStep, CastPathway)",
+    "crates/pgarbor-types/src/context.rs (FuncCtx, IoCtx, TypeEnv, CompositeField, TestSession)",
+    "crates/pgarbor-types/src/func/mod.rs (FuncHandle, implementation, call)",
+    "crates/pgarbor-types/src/io.rs (input, output)",
+    "crates/pgarbor-types/src/array/mod.rs (Array, from_vec)",
+    "crates/pgarbor-types/src/datum.rs (Datum, TypeId, type_mismatch)",
+    "crates/pgarbor-common/src/error.rs (PgError, SqlState)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/cast/apply.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-49",
+   "branch": "worktree-wf_fed745da-684-1",
+   "sha": "051ce972549f164873b8ebbdf7f6f173add88c4d",
+   "files_changed": [
+    "crates/pgarbor-types/src/compare.rs"
+   ],
+   "implemented_behaviors": [
+    "cmp_datums/cmp_sort/sql_eq/not_distinct for all Datum variants, following domains to base types; NULLS LAST, NULL=NULL; cmp_sort honours desc and nulls_first independently",
+    "float total order (NaN greatest and equal to itself, -0 = 0), numeric via pg_cmp, bpchar ignores trailing spaces, oid/reg*/xid/cid unsigned, xid8/pg_lsn unsigned u64, timetz by (time + zone*1e6) then zone, interval by cmp_span, jsonb via compare_jsonb, enum via enum_type::cmp_labels",
+    "arrays follow PG array_cmp: elements (NULL last), then item count, ndims, dims, lbounds; composites compare field-wise with composite_fields and skip dropped columns; anonymous record infers field types from the values",
+    "json (and arrays or records of json) gives 42883 'could not identify an ordering/equality operator for type json'",
+    "hash_datum is consistent with not_distinct: numeric normalized, float -0 and NaN canonical, bpchar trimmed, interval hashed by span, jsonb hashed recursively, arrays and records hashed element-wise",
+    "is_orderable: false for json and unsupported types, recursive through arrays and composites",
+    "pg_hash_uint32, pg_hash_bytes and both *_extended variants ported from hashfn.c (lookup3 mix/final, little-endian word path, seed perturbation)",
+    "unit tests for every acceptance item; jsonb and enum tests are #[ignore]d"
+   ],
+   "still_unimplemented": [
+    "Types without a Datum representation (inet, bit, geometric, range, tsvector, xml, aclitem, cstring and similar) return 0A000 via PgError::unimplemented(\"TYP-49\", \"comparison of type X\")"
+   ],
+   "assumptions": [
+    "Record datums may be aligned either with all composite_fields (including dropped ones) or with only the live ones; both layouts are accepted",
+    "money is stored as Int8 and compared as a signed integer",
+    "Array element type comes from the type's pg_type elem, not Array.elem",
+    "Records with different column counts raise 42804 'cannot compare record types with different numbers of columns'",
+    "xid and cid are compared as unsigned oid-like values, as the module spec says, even though PG has no btree opclass for them",
+    "oidvector uses plain array_cmp rather than PG's btoidvectorcmp length-first rule"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "compare::tests::* in crates/pgarbor-types/src/compare.rs (float_order, numeric_eq_and_hash, bpchar_and_interval, oid_unsigned_and_nulls, json_has_no_ordering, arrays, anonymous_records, timetz_and_u64, pg_hash_fixtures)",
+    "jsonb_order, ignored until TYP-34 lands",
+    "enum_order_needs_labels, ignored until TYP-41 lands; it needs an env that provides user enums and does not yet test enum ordering"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/common/hashfn.c",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c (timetz_cmp_internal)",
+    "contracts/leases/pgarbor-types.json (TYP-49)",
+    "crates/pgarbor-types/src/{datum,context,registry,oids,numeric/mod,json/mod,json/ops,enum_type,array/funcs}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/compare.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-56",
+   "branch": "worktree-wf_fed745da-684-23",
+   "sha": "8d0f52346e6f09c21593a20558167dc9380ae4e5",
+   "files_changed": [
+    "crates/pgarbor-types/src/resolve/oper.rs"
+   ],
+   "implemented_behaviors": [
+    "builtin_operator_candidates from catalog_data::operators_named",
+    "resolve_operator: arity filter, same-signature dedup by path_pos, binary_oper_exact (unknown takes the other side's type, domain base retry), prefix exact match",
+    "implicit-coercion filter via can_coerce_type then func::select_candidate",
+    "42883 operator does not exist and 42725 operator is not unique with PG hints, prefix and infix message forms",
+    "shell operator (proc 0) 42883 error",
+    "polymorphic arg/result resolution via enforce_generic_type_consistency",
+    "unit tests covering the acceptance cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "func::select_candidate returns the surviving indexes, with len != 1 or an Err 42725 meaning ambiguous",
+    "names::display_name gives the integer/text style type names",
+    "enforce_generic_type_consistency returns declared args in the same order as input"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "unit tests in oper.rs mod tests (int4+int4 oid 551, unknown+int4, timestamptz-unknown, unknown+unknown ambiguous, int4+text missing, prefix - unknown ambiguous, numeric+int4)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json TYP-56",
+    "parse_oper.c semantics (oper, binary_oper_exact, op_error) as described in module docs",
+    "crates/pgarbor-types/src/resolve/func.rs, coerce.rs, polymorphic.rs signatures"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/oper.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-54",
+   "branch": "worktree-wf_fed745da-684-21",
+   "sha": "99cfbf5404ecc88453c3e6232e227340a75496de",
+   "files_changed": [
+    "crates/pgarbor-types/src/resolve/coerce.rs"
+   ],
+   "implemented_behaviors": [
+    "can_coerce_type: any target, identical types, polymorphic targets deferred to check_generic_type_consistency, unknown input OK, find_cast lookup, record/composite/record[] field-wise acceptance",
+    "select_common_type: PG algorithm with all-identical fast path (domains preserved), base-type reduction, category mismatch 42804 '<ctx> types X and Y cannot be matched', preferred-type promotion, all-unknown -> text",
+    "select_common_typmod: shared typmod if all inputs are common type with equal typmod else -1",
+    "verify_common_type: 42846 '<ctx> could not convert type X to Y'; unknown inputs always accepted",
+    "unit tests for acceptance cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Followed PG source exactly: no extra 'prefer T if preferred' rule beyond the pispreferred check",
+    "Empty type list in select_common_type returns an internal error",
+    "Length mismatch of inputs/targets in can_coerce_type returns false",
+    "Type names use names::display_name which falls back to pg_type name if format_type (TYP-01) is unavailable"
+   ],
+   "contract_breaks": [
+    "SqlState has no Debug impl so assert_eq on SqlState cannot compile; tests compare .code() strings instead"
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types resolve::coerce"
+   ],
+   "provenance": [
+    "postgres-18 src/backend/parser/parse_coerce.c (can_coerce_type, select_common_type)",
+    "contracts/leases/pgarbor-types.json TYP-54",
+    "crates/pgarbor-types/src/registry.rs, cast/lookup.rs, names.rs, resolve/polymorphic.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/coerce.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-52",
+   "branch": "worktree-wf_fed745da-684-18",
+   "sha": "d270d4d22cba2940ea899076d624303dc4924bf8",
+   "files_changed": [
+    "crates/pgarbor-types/src/cast/lookup.rs"
+   ],
+   "implemented_behaviors": [
+    "find_cast: same-type relabel, domain base-type lookthrough (source and target), pg_cast row (user then builtin) with context gating (too-strong row => None, no IO fallthrough), element-wise ArrayCoerce (int2vector/oidvector targets excluded), automatic IO for string category (assignment target / explicit source), RecordCoerce for record<->composite",
+    "plan_cast: pathway steps (Relabel/Func with proc nargs/ViaIo/RecordCoerce/ArrayCoerce with nested elem_plan; array-of-relabel collapses to Relabel), Typmod step when target typmod>=0, a typmod length-coercion pg_cast row (T->T) exists and typmods differ (array targets get an ArrayCoerce wrapping Typmod), DomainCheck for domain targets (domain typmod used when target typmod unspecified), 42846 'cannot cast type X to Y' via names::display_name",
+    "is_binary_coercible: PG18 IsBinaryCoercibleWithCast logic (ANY/ANYELEMENT/ANYCOMPATIBLE, array/nonarray/enum/range/multirange/record/record[] pseudo-targets, binary+implicit pg_cast row)",
+    "unit tests for acceptance cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "ViaIo step carries typmod-less target types and a separate Typmod step follows (PG semantics: explicit casts truncate); this deviates from the CastStep::ViaIo doc comment saying the input function applies the typmod, so apply.rs should not rely on typmod in ViaIo.to",
+    "Func nargs is taken from builtin_proc(proc).nargs clamped to 3 (1 if proc unknown, e.g. user cast)",
+    "Typmod step is skipped when source and target oid and typmod are identical",
+    "ANYCOMPATIBLEARRAY/NONARRAY/RANGE/MULTIRANGE OIDs (5078/5079/5080/4538) hard-coded locally since oids.rs lacks them",
+    "Code not compiled; assumes oids::{ANY,ANYELEMENT,ANYCOMPATIBLE,ANYARRAY,ANYNONARRAY,ANYENUM,ANYRANGE,ANYMULTIRANGE,RECORD,RECORD_ARRAY,OIDVECTOR,INT2VECTOR,INT4_ARRAY} exist (verified by grep)"
+   ],
+   "contract_breaks": [
+    "CastStep::ViaIo doc says typmod applied by input function; plan_cast instead emits ViaIo with typmod -1 plus a Typmod step so explicit casts to varchar(n) truncate rather than error"
+   ],
+   "proposed_tests_unexecuted": [
+    "lookup.rs #[cfg(test)]: widening_and_narrowing, relabel_and_io, array_elementwise, plan_errors_and_typmod, binary_coercible"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json TYP-52",
+    "~/develop/reference/postgres-18/src/backend/parser/parse_coerce.c (IsBinaryCoercibleWithCast, find_coercion_pathway)",
+    "contracts/reference/pg18/pg_cast.csv",
+    "crates/pgarbor-types/src/{context,registry,catalog_data/mod,cast/apply,names,oids}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/cast/lookup.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-57",
+   "branch": "worktree-wf_fed745da-684-20",
+   "sha": "c0d93712a74970cb08c2998f98d37603426b8921",
+   "files_changed": [
+    "crates/pgarbor-types/src/resolve/polymorphic.rs"
+   ],
+   "implemented_behaviors": [
+    "check_generic_type_consistency: family 1 (anyelement/anyarray/anynonarray/anyenum) and family 2 (anycompatible*) via shared analyze(strict=false); inconsistent candidate returns Ok(false)",
+    "enforce_generic_type_consistency: same analysis in strict mode raising 42804 'arguments declared \"anyelement\" are not all alike' with DETAIL 'X versus Y', 'argument declared anyarray is not an array but type X', anynonarray/anyenum violations, anyarray/anyelement inconsistency",
+    "unknown inputs do not determine T; all-unknown resolves to text (text[] for anyarray); anyenum with only unknowns errors in enforce",
+    "domain over array counts as its base array for anyarray/anycompatiblearray",
+    "anycompatible family uses coerce::select_common_type (context 'anycompatible'); check treats 42804 mismatch as false",
+    "polymorphic declared args and return type substituted; result polymorphic with no matching-family input raises 42P13 'cannot determine result data type'; missing array type raises 42704",
+    "unit tests (8 live, 2 #[ignore = needs TYP-54])"
+   ],
+   "still_unimplemented": [
+    "anyrange, anymultirange, anycompatiblerange, anycompatiblemultirange: TypeEnv exposes no range subtype/multirange info and ranges are unsupported in v1; check returns false, enforce returns PgError::unimplemented(TYP-57)"
+   ],
+   "assumptions": [
+    "select_common_type context string is 'anycompatible' since the frozen signature carries no function name",
+    "all-unknown anycompatible inputs resolve to text",
+    "SqlState 42P13 obtained via SqlState::from_code with fallback to 42P18",
+    "anyarray actual that is itself pseudo (anyarray) is not special-cased",
+    "Compatible-family mismatch in enforce passes through select_common_type's own 42804 message rather than PG's 'not all alike' wording"
+   ],
+   "contract_breaks": [
+    "TypeEnv/TypeInfo have no range subtype or multirange-to-range mapping, so range-family polymorphism cannot be resolved",
+    "check/enforce signatures lack the function name, so the anycompatible common-type context cannot be the function name as the module doc suggests"
+   ],
+   "proposed_tests_unexecuted": [
+    "crates/pgarbor-types/src/resolve/polymorphic.rs #[cfg(test)] mod tests (not compiled or run by me)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-57)",
+    "crates/pgarbor-types/src/resolve/polymorphic.rs module docs",
+    "crates/pgarbor-types/src/registry.rs, oids.rs, names.rs, context.rs, resolve/coerce.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "PG parse_coerce.c semantics from memory (PG source tree not opened)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/polymorphic.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-25",
+   "branch": "worktree-wf_fed745da-684-12",
+   "sha": "9d7542e99cba7b0cc06db65f2df3e2acdb290b13",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/tz.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_timezone_setting: UTC family (UTC/GMT/Z/Zulu/Etc/UTC and zero links) -> Utc; numeric GUC string as ISO-sign hours (strtod form, e.g. '-8' -> -28800, fractional hours allowed); 'interval '...'' form with ISO sign (letters/units -> 0A000); POSIX TZ strings ('+05:30' -> -19800, 'UTC+3' -> -10800, 'UTC-3' -> +10800) keeping the given text as name; IANA names canonicalised case-insensitively -> Named (or Fixed for Etc/GMT+-n); anything else -> 22023 'invalid value for parameter \"TimeZone\": \"x\"'.",
+    "fixed_offset_setting: ISO seconds-east -> PG POSIX-bracket name ('<-08>+08'); range check against TZDISP_LIMIT.",
+    "lookup_zone: full PG 18.6 Default abbreviation table (195 entries, sorted, case-insensitive binary search, generated from src/timezone/tznames/Default); zone-referencing abbreviations and IANA names other than Etc/GMT+-n -> DtErr::UnsupportedTimezone (0A000); zero-offset words -> Fixed{0,'UTC'}; unknown -> DtErr::BadTimezone(name).",
+    "parse_numeric_offset: +h, +hh, +hhmm, +hhmmss, +hh:mm[:ss], -h (ISO sign) -> seconds east; malformed -> BadFormat; minutes/seconds >= 60 or |offset| >= 16h -> TzDispOverflow.",
+    "offset_at_utc / offset_at_local: Utc -> 0, Fixed -> secs_east, Named -> 0A000 via PgError::unimplemented(\"TYP-25\", ...).",
+    "abbrev_at_utc: Utc -> 'UTC', Fixed -> PG tm_zone text (e.g. '-08', '+05:30'), Named -> 0A000.",
+    "IANA zone name table generated from /usr/share/zoneinfo/tzdata.zi (version 2026c, Zone and Link names incl. backward links, 598 names), sorted case-insensitively."
+   ],
+   "still_unimplemented": [
+    "Named (IANA region) zones: conversions via offset_at_utc/offset_at_local/abbrev_at_utc return 0A000 by design (no tz rules shipped; amendment 04).",
+    "INTERVAL-form TimeZone GUC values containing units or months/days (e.g. \"interval '1 day'\") return PgError::unimplemented(\"TYP-25\"), not PG's exact GUC detail errors.",
+    "ZoneSpec::Region is declared by the contract but never constructed; lookup_zone returns DtErr::UnsupportedTimezone for IANA regions as the acceptance requires."
+   ],
+   "assumptions": [
+    "Numeric GUC strings ('-8', '8', '5.5') follow PG 18.6 variable.c check_timezone: strtod hours with ISO sign, passed to pg_tzset_offset. This is the opposite of the module doc's 'number-only POSIX sign' line; the source was followed.",
+    "The POSIX-bracket name uses colons for minutes/seconds, as pgtz.c pg_tzset_offset does ('<+05:30>-05:30'). The contract doc comment says '<+0530>-0530'; the acceptance tests only check -28800, so both are consistent with it.",
+    "The GUC range limit for numeric and POSIX offsets is TZDISP_LIMIT (16h). PG's exact limit comes from tzcode and was not verified.",
+    "Tests use only the tz functions and do not construct registry::builtin_env()/IoConfig/TestSession, since no test needs them.",
+    "The IANA zone list comes from the host's tzdata.zi (2026c, matching amendment 04). The host has no 'backward' file, so names come from the Z/L lines of tzdata.zi.",
+    "Abbreviations in the Default table with a zone reference (50 entries such as ART, CLT, SGT) return UnsupportedTimezone rather than a historical offset, since PG resolves those through zone history."
+   ],
+   "contract_breaks": [
+    "fixed_offset_setting doc comment example '19800 -> <+0530>-0530' conflicts with PG 18.6 pgtz.c pg_tzset_offset, which prints '<+05:30>-05:30'. Implemented per source; the contract doc should be corrected.",
+    "datetime::tz module doc: 'Number-only -8/8: hours, POSIX sign' conflicts with PG 18.6 variable.c check_timezone, where a numeric GUC string is ISO-signed hours ('-8' = 8h west, the same as 'SET TIME ZONE -8'). Implemented per source."
+   ],
+   "proposed_tests_unexecuted": [
+    "Unit tests in tz.rs mod tests: utc_family_settings, posix_numeric_and_interval_settings, fixed_offset_names, iana_names_and_errors, zone_lookup, numeric_offsets, tables_are_sorted_and_unique. Not compiled or run, per the RightShift rules."
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-25)",
+    "contracts/crates/pgarbor-types.md",
+    "contracts/amendments/pgarbor-types-04-timezone-data.md",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/context.rs (TimeZoneSetting, IoConfig)",
+    "crates/pgarbor-common/src/error.rs (PgError, SqlState)",
+    "~/develop/reference/postgres-18/src/timezone/tznames/Default",
+    "~/develop/reference/postgres-18/src/timezone/pgtz.c (pg_tzset, pg_tzset_offset)",
+    "~/develop/reference/postgres-18/src/backend/commands/variable.c (check_timezone)",
+    "/usr/share/zoneinfo/tzdata.zi (version 2026c)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/tz.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-01",
+   "branch": "worktree-wf_fed745da-684-17",
+   "sha": "3fc820e78392ca134b7c671b84d8d4eb6dfa765e",
+   "files_changed": [
+    "crates/pgarbor-types/src/names.rs"
+   ],
+   "implemented_behaviors": [
+    "resolve_type_name: SQL keyword aliases, float(p) rules with 22023 errors, char/character default typmod 5, bit default 1, quoted \"char\" -> 18, interval range/precision typmod, numeric/varchar/time/etc via typmod_in, 42601 modifier-not-allowed, 42704 unknown type, array types via array_type_of",
+    "parse_type_string: tokenizer and parser for multi-word names, typmod parens, [] / ARRAY suffixes, quoted identifiers, schema.name, time/timestamp with/without time zone after parens, interval fields",
+    "format_type: port of format_type_extended (special names, typmod printing, arrays, '-' for oid 0, '???' for unknown, schema qualification when not visible)",
+    "display_name uses format_type_be semantics (no typmod-given flag, so bpchar prints as character)",
+    "unit tests for the acceptance criteria"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "typmod_in warnings are dropped in resolve_type_name (the signature has no channel for them); interval precision above 6 is clamped to 6",
+    "typmod_out for time/timestamp may or may not include the ' with[out] time zone' tail; print_typmod appends it only when absent",
+    "quote_identifier is owned by TYP-15 and may be unimplemented; quote_ident falls back to a simple [a-z_][a-z0-9_$]* rule without a keyword check",
+    "interval typmod is computed locally rather than through typmod_in because the mods encoding for interval ranges is not defined in the contract",
+    "Typmod-capable types are hardcoded (bpchar, varchar, numeric, time, timetz, timestamp, timestamptz, interval, bit, varbit) because TypeInfo has no typmodin field",
+    "Schema names for non-visible user types come from env.reg_name(RegKind::Namespace, ..)",
+    "Not compiled or run, per RightShift rules"
+   ],
+   "contract_breaks": [
+    "TypeInfo has no typmodin/typmodout field, so the typmod-capable type set is hardcoded",
+    "The module doc says format_type uses TYPEMOD_GIVEN when typmod >= 0, but the acceptance 'bpchar' for (1042,-1) matches PG only when the flag is set for any given typmod; format_type therefore always sets it and display_name does not",
+    "TypeEnv has no namespace-name lookup other than reg_name"
+   ],
+   "proposed_tests_unexecuted": [
+    "names::tests::format_acceptance",
+    "names::tests::resolve_acceptance",
+    "names::tests::parse_strings"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-01)",
+    "crates/pgarbor-types/src/{context,registry,typmod,datum,oids,datetime/mod,text/format}.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "PG18 format_type.c and gram.y behavior from the module docs and memory (no source files opened)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/names.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-02",
+   "branch": "worktree-wf_fed745da-684-16",
+   "sha": "588465313b20816c98702f5731e0b79f72f9b9d5",
+   "files_changed": [
+    "crates/pgarbor-types/src/typmod.rs"
+   ],
+   "implemented_behaviors": [
+    "typmod_in for varchar/bpchar (VARHDRSZ encoding, 22023 length errors with typename 'varchar'/'char'), bit/varbit (n, no VARHDRSZ), numeric (1..=1000 precision, -1000..=1000 scale, 1 or 2 mods, 'invalid NUMERIC type modifier'), time/timetz/timestamp/timestamptz (precision with 22023 negative error and WARNING clamp to 6, Severity::Warning, SqlState::WARNING), interval (range mask validation, [range] and [range, precision], clamp warning), and 42601 'type modifier is not allowed for type' for other oids",
+    "typmod_out for varchar/bpchar '(n)', bit/varbit '(n)', numeric '(p,s)', time/timetz/timestamp/timestamptz with zone phrase, interval field phrases incl. '(precision)' suffix; internal error for an invalid interval range",
+    "enforce_typmod: NULL and typmod<0 pass-through; varchar/bpchar via text::io::apply_char_typmod; numeric via numeric::io::apply_typmod; time/timetz via adjust_time_precision (zone kept); timestamp/timestamptz via adjust_timestamp_precision; interval via apply_interval_typmod; other types unchanged; mismatched variant gives XX000 via type_mismatch",
+    "lookup() maps all 8 ImplModule::Typmod procs by prosrc (varchar, bpchar, numeric, time_scale, timetz_scale, timestamp_scale, timestamptz_scale, interval_scale) to private scalar fns that read args[0] value and args[1] typmod (varchar/bpchar also args[2] explicit); unsupported() kept as the only unimplemented path",
+    "Unit tests in #[cfg(test)] mod: typmod_in/out errors and encodings, numeric errors, timestamp/time warnings, 42601 case, interval in/out, every Typmod proc has an implementation, varchar length coercion, numeric rounding via io::input/output; time (TYP-27) and interval (TYP-29) enforcement tests marked #[ignore = \"needs TYP-27\"] / #[ignore = \"needs TYP-29\"]"
+   ],
+   "still_unimplemented": [
+    "Nothing in TYP-02 scope is left as unimplemented. The only unimplemented path is unsupported(proc) for Typmod-module procs that lookup() does not map, and all 8 owned procs are mapped."
+   ],
+   "assumptions": [
+    "typmod_out for time/timetz/timestamp/timestamptz follows PG source (date.c anytime_typmodout, timestamp.c anytimestamp_typmodout): a negative typmod returns the zone phrase (' without time zone' / ' with time zone'), not an empty string. This contradicts the contract line 'empty string when typmod < 0'. names::format_type must not append the zone phrase again.",
+    "Precision WARNINGs use SqlState::WARNING (01000) and Severity::Warning as the lease and module doc require. PG source (date.c, timestamp.c, interval) raises these with errcode ERRCODE_INVALID_PARAMETER_VALUE (22023), so the NoticeResponse SQLSTATE in real PG would likely be 22023. The doc's 'oracle-verified' 01000 claim is unverified against the source; flagging for confirmation against the oracle.",
+    "typmod_in for bit/varbit (BIT, VARBIT) was added even though the lease lists only varchar/bpchar/numeric/time/timestamp/interval. The module doc lists bit(n) -> n, so this is included. enforce_typmod leaves bit values unchanged because there is no Datum variant for bit.",
+    "typmod_out returns an empty string (not an error) for oids that have no typmodout, for example text.",
+    "Tests that call apply_interval_typmod or adjust_time_precision are gated (#[ignore]). Tests that call crate::io::input/output on numeric and text::io::apply_char_typmod (TYP-09, TYP-13) are not gated, because those leases are listed as depends_on."
+   ],
+   "contract_breaks": [
+    "Contract: 'typmod_out ... (empty string when typmod < 0)' conflicts with PG for time/timetz/timestamp/timestamptz, where PG returns the zone phrase even for typmod -1. Implemented per PG source; the contract text should be amended or names::format_type must own the zone phrase.",
+    "Module doc says warnings are SQLSTATE 01000 and 'oracle-verified', but PG source uses ERRCODE_INVALID_PARAMETER_VALUE for these warnings. Implemented per the lease (01000). Needs an oracle check."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types typmod (not run per worker rules)",
+    "typmod_in(VARCHAR,[0]) -> 22023 'length for type varchar must be at least 1'",
+    "typmod_in(NUMERIC,[1001]) -> 22023 'NUMERIC precision 1001 must be between 1 and 1000'",
+    "typmod_in(TIMESTAMPTZ,[7]) -> (6, [WARNING 'TIMESTAMP(7) WITH TIME ZONE precision reduced to maximum allowed, 6'])",
+    "typmod_in(NUMERIC,[1,2,3]) -> 22023 'invalid NUMERIC type modifier'",
+    "typmod_out(NUMERIC, numeric_typmod(10,2)) == '(10,2)'",
+    "enforce_typmod varchar(3) 'abcd' explicit -> 'abc'; assignment -> 22001 'value too long for type character varying(3)'"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-02)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/typmod.rs (module doc)",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datetime/mod.rs",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::Typmod rows)",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/varchar.c (anychar_typmodin, anychar_typmodout)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/varbit.c (anybit_typmodin, anybit_typmodout)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c (anytime_typmodin, anytime_typmod_check, anytime_typmodout, time_scale, timetz_scale)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (anytimestamp_typmod_check, anytimestamp_typmodout, intervaltypmodin, intervaltypmodout, interval_scale, timestamp_scale)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/numeric.c (numerictypmodin, numerictypmodout, make_numeric_typmod_safe)",
+    "~/develop/reference/postgres-18/src/include/utils/timestamp.h, utils/datetime.h, utils/numeric.h, access/htup_details.h (macros and limits)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/typmod.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-10",
+   "branch": "worktree-wf_fed745da-684-26",
+   "sha": "5986b978b6f020bf8bd5be1beeb82be75e2e53fd",
+   "files_changed": [
+    "crates/pgarbor-types/src/numeric/arith.rs"
+   ],
+   "implemented_behaviors": [
+    "add/sub/mul with PG scale rules and special-value tables",
+    "div via select_div_scale (base-10000 weight/first) with exact BigInt half-away rounding",
+    "div_scale, div_trunc, modulo (sign of dividend, dscale max)",
+    "neg/abs/sign/ceil/floor/round/trunc (negative scales, scale clamp +-2000)",
+    "check_range (22003 value overflows numeric format; scale clamped to 0x3FFF)",
+    "division by zero 22012",
+    "unit tests covering all acceptance cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Only bigdecimal and num_bigint used (num-traits not a direct dependency); BigInt::pow inherent method used",
+    "Scales above 0x3FFF are rounded to 0x3FFF rather than erroring",
+    "Finite / Inf yields zero with dscale 0; Finite % Inf returns the dividend unchanged",
+    "Integer digit limit is 131072 as stated in the contract"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types numeric::arith"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-10)",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "numeric.c semantics as described in the module docs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/arith.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-55",
+   "branch": "worktree-wf_fed745da-684-22",
+   "sha": "dfbaab93cdea99aa5b3056598bd745608f51d251",
+   "files_changed": [
+    "crates/pgarbor-types/src/resolve/func.rs"
+   ],
+   "implemented_behaviors": [
+    "builtin_candidates: maps catalog_data::procs_named to FuncCandidate (IN-arg names filtered by arg_modes, padded; path_pos 0)",
+    "resolve_function: candidate layout per FuncnameGetCandidates (VARIADIC expansion without keyword, trailing defaults, named/mixed notation with default holes), path_pos hiding of identical signatures, exact match, can_coerce_type filtering, select_candidate, polymorphic resolution via enforce_generic_type_consistency, VARIADIC any array check (42804)",
+    "select_candidate: faithful port of func_select_candidate (exact matches, preferred types, unknown-category heuristic with STRING bias, last-gasp known-type assumption, domain->base)",
+    "Errors: 42883 'function foo(integer) does not exist' + HINT (named args print 'name => type'), 42725 'is not unique' + HINT, 54023 too many args",
+    "signature_string; #[cfg(test)] tests for all acceptance cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "coerce_to is in CALL argument order (PG true_typeids order); unknown literals at 'any' positions are coerced to text",
+    "arg_order has one entry per declared parameter for named calls, usize::MAX = default-filled; identity over supplied args for positional calls",
+    "Zero-length variadic expansion is not supported (matches PG, e.g. concat() fails)",
+    "select_candidate on failure returns the remaining >1 candidate set rather than an error",
+    "Depends on TYP-54 can_coerce_type, TYP-57 polymorphic, TYP-01 names::display_name/format_type being implemented"
+   ],
+   "contract_breaks": [
+    "ResolvedFunc.coerce_to/arg_order semantics are ambiguous in the contract; documented on the struct. Named calls with defaulted holes cannot be expressed by ndefaults_used alone, so arg_order uses usize::MAX for default slots.",
+    "Procedure vs function kind filtering is left to the binder (kind is returned)."
+   ],
+   "proposed_tests_unexecuted": [
+    "unit tests in func.rs: abs/round/upper unknown, length(int4) 42883, foo(int4), array_cat(int4[],text[]), concat(int4,unknown), make_interval(days=>3), unknown named arg, signature_string"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/parser/parse_func.c (func_select_candidate, ParseFuncOrColumn, funcname_signature_string)",
+    "contracts/leases/pgarbor-types.json TYP-55",
+    "crates/pgarbor-types/src/{registry,names,catalog_data/mod,resolve/coerce,resolve/polymorphic}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/resolve/func.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-37",
+   "branch": "worktree-wf_fed745da-684-29",
+   "sha": "7fe6462e573ac4d0c267c57baa314a3c94911849",
+   "files_changed": [
+    "crates/pgarbor-types/src/array/io.rs"
+   ],
+   "implemented_behaviors": [
+    "array_in: ReadArrayDimensions, ReadArrayStr and ReadArrayToken ported, with PG18 detail messages and SQLSTATEs",
+    "array_in: '{{}}' and '{}' give the empty array; typmod is passed to element input",
+    "array_out: quoting rules, [lb:ub]= decoration when a lower bound is not 1, per-type delimiter",
+    "array_recv: header validation, element OID mismatch 42804, size and bounds overflow 54000, NULL elements, trailing bytes 22P03",
+    "array_send: header, per-dim len/lbound, -1 for NULL elements",
+    "unit tests for the acceptance cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Element type comes from registry::element_type_of(ty.oid) on input/recv; output/send use Array.elem",
+    "Truncated binary header returns 08P01 'insufficient data left in message'; truncated element data returns 22P03 with the same text",
+    "Delimiter 0 in TypeInfo falls back to ','",
+    "Nothing was compiled or run, per the RightShift rules"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types array::io",
+    "box[] with ';' delimiter roundtrip",
+    "varchar(3)[] typmod propagation on input",
+    "domain-element arrays"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/arrayfuncs.c (array_in, ReadArrayDimensions, ReadDimensionInt, ReadArrayStr, ReadArrayToken, array_out, array_recv, ReadArrayBinary, array_send)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/arrayutils.c (ArrayGetNItems, ArrayCheckBounds)",
+    "crates/pgarbor-types/src/{array/mod.rs,io.rs,context.rs,registry.rs,names.rs}",
+    "crates/pgarbor-common/src/error.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/array/io.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-23",
+   "branch": "worktree-wf_fed745da-684-14",
+   "sha": "7e51bd905261de3ebd3ea00a0f9e47228542b768",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/decode.rs"
+   ],
+   "implemented_behaviors": [
+    "decode_date_time: port of DecodeDateTime (DATE/TIME/TZ/NUMBER/STRING/SPECIAL fields, ptype prefix handling for J/T, fmask/tmask conflict checks, AM/PM, AD/BC, month names, DOW, dst modifier, epoch/infinity/-infinity, allballs)",
+    "decode_time_only: port of DecodeTimeOnly (optional date part, time zones, concatenated hhmm/hhmmss, AM/PM, final time_overflows check -> 25:00 gives FieldOverflow)",
+    "Private ports of DecodeDate, DecodeNumber, DecodeNumberField, DecodeTime/DecodeTimeCommon, DecodeTimezone, DecodeSpecial (datetktbl keyword table), ValidateDate (BC, 2-digit years 1970-2069, DOY, MdFieldOverflow vs FieldOverflow), ParseFraction/ParseFractionalSecond (round half even)",
+    "DateOrder-driven disambiguation: 01/02/2024 gives Jan 2 under MDY and Feb 1 under DMY; YMD supported",
+    "now returns kind Now with tm and tz filled in the session zone from ctx.now; today/tomorrow/yesterday return Date with date fields; ctx.now None gives PgError::unimplemented(TYP-23)",
+    "Decoded.tz is Some (seconds WEST) only for explicit zones (Z, +hh, +hh:mm, +hhmm, abbreviations, zulu/allballs); numeric zone beyond 15:59:59 gives TzDispOverflow",
+    "IANA-region/unsupported zones reported as DtErr::UnsupportedTimezone at the point PG computes the offset; unknown zone in a DATE-class field gives BadTimezone(lowercased name); unknown alpha word gives BadFormat",
+    "parse_date_time / parse_time_only: lex + decode, mapping DtErr via dt_parse_error with type_name",
+    "Unit tests covering all lease acceptance items plus text months, concatenated forms, DOY, Julian, 2-digit years, fractions, now/today"
+   ],
+   "still_unimplemented": [
+    "DYNTZ (dynamic abbreviations whose offset depends on the date) and DST-flag distinctions (pdt vs pst, 'pdt dst' conflict) because tz::ZoneSpec exposes only fixed offsets and no is_dst; abbreviations are treated as plain fixed TZ",
+    "Session-zone offset resolution for inputs without an explicit zone (Decoded.tz stays None; caller uses tz::offset_at_local)"
+   ],
+   "assumptions": [
+    "Keyword table is consulted before tz::lookup_zone; verified against PG's tznames/Default that no keyword collides with a Default abbreviation",
+    "Words that lookup_zone rejects with BadTimezone are BadFormat in STRING fields (as PG), but BadTimezone in DATE-class fields after the date is complete (e.g. Mars/Base)",
+    "Lexer (TYP-22) classifies 'mars/base' as FieldKind::Date and 'j'/'t' prefixes as separate STRING fields followed by Number fields, as in PG ParseDateTime",
+    "Numeric zones are decoded by a private DecodeTimezone port instead of tz::parse_numeric_offset, to get PG's seconds-west sign and run-together hhmm / hhmmss-zz handling exactly",
+    "tz::offset_at_utc and calendar::timestamp2tm (TYP-25/TYP-21) are used for now/today/tomorrow/yesterday in the session zone",
+    "Incomplete input where PG returns positive dterr 1 (time without date) maps to DtErr::BadFormat, matching DateTimeParseError's default case",
+    "Time-only 'now' returns kind Date with only the time fields and tz None"
+   ],
+   "contract_breaks": [
+    "tz::ZoneSpec::Fixed has no is_dst flag, so TZ vs DTZ vs DTZMOD interplay (e.g. 'pdt dst' should be a BadFormat conflict) cannot be reproduced exactly.",
+    "DateTimeKind has no Time variant: time-only decoding always returns kind Date."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types datetime::decode (unit tests in decode.rs, never compiled or run)",
+    "Differential oracle cases for date/time/timestamp/timestamptz/timetz input against PG18.6, especially text month orderings, 2-digit years, DOY, Julian with fraction, and hhmmss-zz forms",
+    "'2020-01-01 00:00 America/New_York' gives DtErr::UnsupportedTimezone (0A000) once TYP-25 is in"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/datetime.c (DecodeDateTime, DecodeTimeOnly, DecodeDate, ValidateDate, DecodeTimeCommon, DecodeNumber, DecodeNumberField, DecodeTimezone, DecodeSpecial, datetktbl, ParseFraction)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c (time_overflows)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (dt2time)",
+    "~/develop/reference/postgres-18/src/include/utils/datetime.h (DTK_* masks and type numbers, DTERR codes)",
+    "~/develop/reference/postgres-18/src/timezone/tznames/Default (keyword/abbreviation collision check)",
+    "contracts/leases/pgarbor-types.json (TYP-23)",
+    "crates/pgarbor-types/src/datetime/{mod,lexer,tz,calendar}.rs and src/context.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/decode.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-05",
+   "branch": "worktree-wf_fed745da-684-24",
+   "sha": "9a8435666a86939636930ec6bea090e3e6786cb1",
+   "files_changed": [
+    "crates/pgarbor-types/src/scalar/int_ops.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup(): maps all 161 distinct IntOps prosrc names (167 procs; prosrc shared by overloads such as mod/abs/int8) to implementations; verified by script that no IntOps prosrc is missing and no extra arms exist. All procs are lang 12, so no oid-based SQL-language matches were needed.",
+    "Comparisons int{2,4,8} x all width pairs for eq/ne/lt/le/gt/ge, widened to i64; btint*cmp returns Int4 -1/0/1.",
+    "Arithmetic pl/mi/mul/div/mod for every width pair with result = wider type; overflow -> 22003 with result-type message (smallint/integer/bigint out of range); division by zero -> 22012; INT_MIN / -1 -> overflow; x % -1 = 0; % takes dividend sign.",
+    "Unary um (negate), up, abs (checked), int4inc, int{2,4,8}larger/smaller.",
+    "Bitwise and/or/xor/not; shifts mask count (&31 for int2/int4, &63 for int8; int2 computed in int32 then truncated); >> arithmetic.",
+    "Casts i2toi4, i4toi2, int48, int84, int28, int82 via range-checked narrowing.",
+    "gcd/lcm for int4 and int8 using u128 magnitudes; gcd results that do not fit the width -> 22003; lcm(x,0)=0.",
+    "int4random/int8random: 22023 when min > max; uniform inclusive via ctx.session.random_f64().",
+    "in_range for all seven width combinations (single shared fn): 22013 on negative offset; overflow of base +/- offset treated as infinite sum (less for +, !less for -).",
+    "hashint2/hashint4/hashint8 and extended variants: hashint8 fold (lo ^ (hi or ~hi)), delegating to compare::pg_hash_uint32 and compare::pg_hash_uint32_extended; these inherit TYP-49 unimplemented status until TYP-49 lands.",
+    "unsupported() kept as the only unimplemented call site (PgError::unimplemented(\"TYP-05\", ...)); reached only for procs not in lookup(), of which there are none.",
+    "Unit tests in #[cfg(test)] mod tests cover overflow messages, division/mod semantics, casts, shifts, gcd/lcm, comparisons, in_range, random bounds, and hash fixtures (hash fixtures need TYP-49)."
+   ],
+   "still_unimplemented": [
+    "Hash functions (hashint2/4/8 and extended) return the TYP-49 unimplemented error until compare::pg_hash_* is implemented; no TYP-05 code path is left as unimplemented."
+   ],
+   "assumptions": [
+    "Operands are widened to i64 and results narrowed to the result width. For narrower operand types the i64 math cannot overflow, so the narrowing error matches PG's per-width check (verified against int.c/int8.c semantics for in_range and gcd).",
+    "int4random/int8random use session.random_f64() as the header specifies; for int8 ranges wider than 2^53 the distribution is approximate (53-bit unit draw). Not oracle-exact, since PG's output is random anyway.",
+    "int2 shifts follow the header spec (int32 computation, count & 31, truncate to i16); not re-verified against the PG oracle in this session.",
+    "Operator-style procs with shared prosrc (e.g. 'int2mod' for both oid 155 and oid 940 'mod') resolve by prosrc alone; all IntOps procs are lang 12 so no oid-keyed arms were needed."
+   ],
+   "contract_breaks": [
+    "The lease text says lookup must use prosrc for C-language procs and oid for SQL-language ones; the IntOps set has no SQL-language procs, so the oid path is unused. No contract change needed."
+   ],
+   "proposed_tests_unexecuted": [
+    "Unit tests in crates/pgarbor-types/src/scalar/int_ops.rs #[cfg(test)] mod tests (not run per RightShift rules): overflow messages for int2/int4/int8, division/mod edge cases, casts, shifts, gcd/lcm, comparisons and btcmp, in_range semantics incl. 22013, random 22023 bounds, hashint4(1) = -1905060026 and hashint4extended(1,0) = -3670598878359251130 (depends on TYP-49)."
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-05 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/compare.rs",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (IntOps rows)",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/int.c (in_range_int*_int*, gcd/lcm)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/int8.c (in_range_int8_int8)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/pseudorandomfuncs.c (int4random/int8random)",
+    "~/develop/reference/postgres-18/src/backend/access/hash/hashfunc.c (hashint2/4/8 and extended)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/int_ops.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-28",
+   "branch": "worktree-wf_fed745da-684-15",
+   "sha": "6fd8c50face5c8406f2c5c3304a0374b676e7c37",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/timestamp.rs"
+   ],
+   "implemented_behaviors": [
+    "adjust_timestamp_precision: half-away-from-zero rounding per AdjustTimestampForTypmod, no-op for infinities, precision <0 or >=6; rounded result outside the valid range gives 22008",
+    "timestamp_add_interval: PG timestamp_pl_interval semantics incl. infinite interval/timestamp rules, months with day-of-month clamping, then days, then micros, each range-checked",
+    "input: via decode::parse_date_time, explicit zone or session zone for timestamptz, epoch/infinity/-infinity/now specials, typmod rounding, 22008 with input string",
+    "output: timestamp and timestamptz via timestamp2tm and encode::encode_date_time with date_style/date_order, zone offset and abbreviation for timestamptz, infinity specials",
+    "recv/send: 8-byte big-endian i64, exact-length check (22P03), range check (22008), typmod applied on recv",
+    "lookup: every one of the 75 ImplModule::Timestamp procs has an arm (verified by script against procs.rs prosrc values); SQL-language procs (1176, 1296, 1298, 2546, 2548, 2549) matched by OID",
+    "comparisons eq/ne/lt/le/gt/ge/cmp for ts-ts, ts-date, tz-date, ts-tz, tz-ts with PG overflow-sign semantics for out-of-range cross-type conversions",
+    "timestamp_mi / timestamptz_mi with PG infinity rules and justify_hours (days, not months); larger/smaller; hash and hash_extended via compare::pg_hash_uint32(_extended) with PG hashint8 low/high folding",
+    "casts timestamp<->timestamptz, date, time, timetz with NULL for infinite time casts; interval_pl_date/timestamp/timestamptz; timedate_pl, timetzdate_pl, timestamptz(date,time); in_range_timestamp(tz)_interval with 22013 negative-offset check",
+    "unit tests in a cfg(test) mod: precision rounding, month clamping (leap and non-leap), day+micro add, infinite add, timestamp subtraction (365 days), infinite subtraction 22008, binary roundtrip, specials output, out-of-range input message, typmod rounding, nanosecond rounding, timestamptz acceptance example"
+   ],
+   "still_unimplemented": [
+    "No parts of the Timestamp module are left as unimplemented(...) at this layer. Behaviour depends on frozen APIs of other leases that still return unimplemented: calendar::timestamp2tm/tm2timestamp (TYP-21), datetime::decode::parse_date_time (TYP-23), encode::encode_date_time/abbrev via tz (TYP-24/TYP-25), tz::offset_at_utc/offset_at_local/abbrev_at_utc (TYP-25), compare::pg_hash_uint32(_extended) (TYP-49). Those paths will 0A000 until they land.",
+    "unsupported() kept as the only 0A000 call site for Timestamp procs; it is not reachable for the 75 listed procs."
+   ],
+   "assumptions": [
+    "Timestamp arithmetic uses calendar::date2j, j2date, days_in_month (implemented in TYP-21 skeleton), and private helpers, rather than tm2timestamp/timestamp2tm, so month/day/micro math does not depend on TYP-21 for correctness.",
+    "interval justify_hours needed by timestamp_mi is implemented privately in this file (whole 24h periods into days, PG sign-adjust), so no TYP-29 API is called and no test is #[ignore]d for TYP-29.",
+    "tm2timestamp(tm, Some(west)) is taken to return the UTC instant (local + west), per the calendar.rs contract wording; timestamp2tm(ts, Some(west)) shifts to local with -west, per the contract.",
+    "The 'now' input kind with timestamp (no zone) converts the transaction timestamp to session-local wall clock, and returns FEATURE_NOT_SUPPORTED (0A000) when ctx.now is None.",
+    "Rounding that pushes a timestamp past END_TIMESTAMP (or below MIN) in adjust_timestamp_precision returns 22008 rather than storing an invalid value (PG does not check here); this only matters at the extreme upper boundary.",
+    "Interval infinity values (Interval::INFINITY / NEG_INFINITY) follow PG 18 semantics from timestamp.c: timestamp + infinite interval gives infinity, except opposite-infinity combinations which raise 22008."
+   ],
+   "contract_breaks": [
+    "None in the frozen signatures. The contract doc does not state whether tm2timestamp(tm, Some(west)) returns UTC or local; I assumed UTC (matching the calendar.rs doc comment) and documented this in assumptions."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types datetime::timestamp (all tests in the cfg(test) mod; none gated, but input/output/timestamptz tests depend on TYP-21/23/24/25 landing)",
+    "Oracle checks at integration: '2024-02-29 13:01:02.5+05:30'::timestamptz -> '2024-02-29 07:31:02.5+00'; timestamp(2) of .125 -> .13; '2020-01-01 00:00:00.123456789' -> .123457; timestamp_mi('2024-01-01','2023-01-01') = '365 days'; '2024-01-31' + '1 month' = '2024-02-29 00:00:00'; timestamp_mi with infinity -> 22008 cannot subtract infinite timestamps; send/recv roundtrip"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-28 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/datetime/{mod,calendar,decode,encode,tz,interval}.rs",
+    "crates/pgarbor-types/src/{datum,context,func/mod,io,compare}.rs",
+    "crates/pgarbor-types/src/catalog_data/{mod,procs}.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (AdjustTimestampForTypmod, timestamp_in, timestamp_mi, timestamp_pl_interval, timestamp_mi_interval, timestamptz_pl_interval_internal, in_range_timestamp(tz)_interval, timestamp2timestamptz_opt_overflow, timestamp_cmp_timestamptz_internal, timestamptz_timestamp)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c (date2timestamp_opt_overflow, date2timestamptz_opt_overflow, date_cmp_timestamp(tz)_internal, timestamp_date, timestamptz_date, timestamp_time, timestamptz_time, timestamptz_timetz, datetime_timestamp, datetimetz_timestamptz, date_pl_interval)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/timestamp.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-16",
+   "branch": "worktree-wf_fed745da-684-32",
+   "sha": "1220864504b7d06277be1e3a1dafcd732f1a6748",
+   "files_changed": [
+    "crates/pgarbor-types/src/text/like.rs"
+   ],
+   "implemented_behaviors": [
+    "like/ilike/like_bytes: port of MatchText (like_match.c) over char and u8 units, deterministic paths; '%' backtracking via recursion with a 4096-depth guard (54001); trailing-escape 22025 raised only when reached, as in PG",
+    "ilike uses simple single-char lowercase mapping (multi-char mappings keep the char), matching lower() convention in text/mod.rs",
+    "like_escape (text) and like_escape_bytea: port of do_like_escape incl. empty escape (doubles backslashes), escape '\\' passthrough, and 22025 'invalid escape string' + HINT for multi-char escape",
+    "similar_to_escape_1/2 and legacy non-strict similar_escape: port of similar_escape_internal incl. bracket-expression tracking, escape-double-quote separators, and 2200C error for >2 separators; similar_escape returns NULL for NULL pattern and default escape for NULL escape",
+    "like_fixed_prefix: port of Like_fixed_prefix (case-sensitive) returning (prefix, exact) where exact = reached end of pattern",
+    "lookup(): maps all 25 ImplModule::Like procs by prosrc (all are lang 12); no unsupported() call sites remain for Like procs",
+    "NOT LIKE / NOT ILIKE / bytea NOT LIKE implemented as negations of the matchers",
+    "unit tests in #[cfg(test)] mod tests: LIKE/ILIKE/bytea matching, escape errors, like_escape rewriting, SIMILAR conversions (oracle strings from the lease), prefix extraction, registry wrappers and lookup"
+   ],
+   "still_unimplemented": [
+    "none for the Like module: all 25 owned procs have implementations; unsupported() remains only as the registry's fallback for non-matching prosrc"
+   ],
+   "assumptions": [
+    "Only lookup-by-prosrc is needed: every Like-module proc in procs.rs is lang 12 with a non-empty prosrc (verified by grep), so no oid-based matching was added",
+    "Text values are matched by Unicode scalar (char) units, matching the v1 code-point collation; bpchar arguments arrive as Datum::Text with their padding, consistent with PG's use of textlike for bpcharlike",
+    "Recursion depth for % backtracking is capped at 4096 and reported as 54001 'stack depth limit exceeded' (PG reports the same SQLSTATE from check_stack_depth, but at a platform-dependent depth)",
+    "like_fixed_prefix returns exact=true for a pattern ending in a lone backslash, mirroring PG's Like_fixed_prefix (pos >= pattlen after the escape skip)"
+   ],
+   "contract_breaks": [
+    "none: all public signatures were kept as declared; private helpers and tests were added only inside like.rs"
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types text::like::tests (includes like/ilike/bytea/like_escape/similar/prefix/registry cases; not executed per RightShift rules)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-16 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::Like rows)",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/like_match.c (MatchText, do_like_escape)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/like.c (Generic_Text_IC_like, like_escape, like_escape_bytea)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/like_support.c (Like_fixed_prefix)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/regexp.c (similar_escape_internal, similar_escape)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/like.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-19",
+   "branch": "worktree-wf_fed745da-684-35",
+   "sha": "35f43f55b9fe9f75c268b326c03ad99d3d2b2160",
+   "files_changed": [
+    "crates/pgarbor-types/src/crypto.rs"
+   ],
+   "implemented_behaviors": [
+    "md5(data) per RFC 1321 with one-shot padding; only the last one or two blocks are copied, the message is never copied",
+    "sha224/sha256/sha384/sha512 per FIPS 180-4; K and H constants generated from prime roots with integer math and checked against the published FIPS values",
+    "CRC-32 (IEEE reflected, 0xEDB88320) and CRC-32C (reflected, 0x82F63B78) via const-generated tables, returned as unsigned values in int8",
+    "lookup() matches prosrc for all 8 ImplModule::Crypto procs: md5_text, md5_bytea, sha224_bytea, sha256_bytea, sha384_bytea, sha512_bytea, crc32_bytea, crc32c_bytea; all are Scalar; all arguments are non-NULL (dispatcher strictness)",
+    "SQL return types: md5_text and md5_bytea return Datum::Text lowercase hex; sha*_bytea return Datum::Bytea; crc32*_bytea return Datum::Int8",
+    "Wrong argument variant returns PgError::internal, not a panic",
+    "unsupported() kept unchanged; no unimplemented call sites remain in this file",
+    "#[cfg(test)] mod tests: RFC 1321 and FIPS vectors, padding-boundary table at lengths 0,3,55,56,63,64,111,112,127,128,200 (reference digests from Python hashlib/zlib), CRC vectors, lookup coverage, SQL-level calls through builtin_env/IoConfig::default/TestSession::default"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Datum::Text is the representation for text arguments and md5_text output, and Datum::Bytea for bytea (per the datum.rs mapping table).",
+    "The md5 of text hashes the UTF-8 bytes of the Rust String, which matches the database encoding for PG18 UTF8 databases.",
+    "Dispatcher routes only ImplModule::Crypto procs to this lookup; matching on prosrc alone is therefore sufficient because no crypto prosrc collides with another module.",
+    "The 'unsupported' helper stays pub(crate) and may now be unused, so the dispatcher may flag it as dead code; it was kept because the contract says to keep it."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types crypto::tests (not run per RightShift rules)",
+    "md5/sha/crc padding_boundary_vectors table covers 11 lengths x 7 digests",
+    "lookup_covers_every_crypto_proc expects oids 2311,2321,3419-3422,6364,6365 to resolve to FuncImpl::Scalar"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-19 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/crypto.rs (original frozen stub and doc comments)",
+    "crates/pgarbor-types/src/func/mod.rs (FuncImpl, ScalarFn, SetFn, FuncHandle::call strictness)",
+    "crates/pgarbor-types/src/context.rs (FuncCtx, IoConfig Default, TestSession Default)",
+    "crates/pgarbor-types/src/datum.rs (Datum variants, variant_name)",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (8 ImplModule::Crypto rows)",
+    "crates/pgarbor-types/src/bytea.rs (sibling lookup pattern)",
+    "crates/pgarbor-common/src/error.rs (PgError::internal, unimplemented)",
+    "FIPS 180-4 and RFC 1321 constants generated in python and cross-checked against published values; test digests from python hashlib and zlib"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/crypto.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-11",
+   "branch": "worktree-wf_fed745da-684-31",
+   "sha": "c8193dd36706a0fbe2622af7de20f91b78f5c186",
+   "files_changed": [
+    "crates/pgarbor-types/src/numeric/transcendental.rs"
+   ],
+   "implemented_behaviors": [
+    "sqrt: PG rscale selection (2*weight+1), exact integer sqrt with one guard digit then half-up rounding, specials/errors",
+    "exp: PG rscale from f64 estimate, argument halving + Taylor + squaring in BigInt fixed point, overflow >=6000 -> 22003, underflow -> zero at rscale, specials",
+    "ln: estimate_ln_dweight port, 2^k reduction + atanh series + ln2 constant, 2201E errors, specials",
+    "log(b,x)/log10: log_var rscale/guard-digit port, ln/ln rounded division, division by zero for base 1, special-value table",
+    "power: full numeric_power special table, power_var (non-integer via exp(ln)), power_var_int with PG's rounded repeated squaring and local rscales, overflow/underflow thresholds, negative base sign handling, error texts and SQLSTATEs",
+    "unit tests for all acceptance cases"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Results are computed with large guard digits and correctly rounded, so may differ from PG only in rare last-digit boundary cases where PG's own intermediate rounding is inexact",
+    "Did not call arith.rs (TYP-10) functions; used BigDecimal/BigInt directly so there is no runtime dependency",
+    "num-bigint 0.4.8 inherent pow/sqrt and Shl<usize> are available; bigdecimal 0.4.11 is_integer/with_scale_round/abs used"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types numeric::transcendental",
+    "Oracle fixture comparison for sqrt/exp/ln/log/power cases, especially ln(1e400) -> 921.03403719761827 and exp near +/-6000 boundaries"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/numeric.c (numeric_sqrt, numeric_exp, numeric_ln, numeric_log, numeric_power, sqrt_var, exp_var, ln_var, log_var, power_var, power_var_int, estimate_ln_dweight, numeric_is_integral)",
+    "contracts/leases/pgarbor-types.json (TYP-11)",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-common/src/error.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/transcendental.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-20",
+   "branch": "worktree-wf_fed745da-684-36",
+   "sha": "4f462a28111b222993adb8ef7e3d76d4e827395b",
+   "files_changed": [
+    "crates/pgarbor-types/src/uuid.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_uuid: PG string_to_uuid port (optional braces, any-group hyphens after every 4 hex digits, either case, 22P02 with exact message)",
+    "input/output/recv/send: text and 16-byte binary (recv of any length other than 16 gives 22P03 incorrect binary data format)",
+    "lookup() covers all 14 ImplModule::Uuid procs by prosrc: uuid_eq/ne/lt/le/gt/ge/cmp (memcmp order; uuid_cmp returns the first-differing byte difference, as glibc memcmp), uuid_hash, uuid_hash_extended, gen_random_uuid + uuidv4 (v4 bits), uuidv7 (0-arg), uuidv7_interval, uuid_extract_version (NULL unless RFC variant), uuid_extract_timestamp (v1 and v7, else NULL)",
+    "uuidv7: 48-bit BE unix ms, 12-bit sub-ms in rand_a from session clock, version 7, RFC variant, random tail; process-wide monotonic ns step of 245 ns as in PG get_real_time_ns_ascending",
+    "uuidv7_interval: 22008 for infinite interval and for out-of-range result, with PG detail texts; shift applied in session zone via timestamp_add_interval (UTC and Fixed zones use offset directly)",
+    "Unit tests in #[cfg(test)] mod tests: parse forms and rejects, text/binary round trip, v4 bits, v7 version and ordering, v7 timestamp from session clock, infinite interval rejection, v1 extraction, null cases, comparisons, registry resolution"
+   ],
+   "still_unimplemented": [
+    "uuid_hash and uuid_hash_extended call compare::pg_hash_bytes(_extended) (TYP-49). They return TYP-49's 0A000 until TYP-49 lands; the test hash_procs_run is #[ignore = \"needs TYP-49\"].",
+    "uuidv7_interval calls datetime::timestamp::timestamp_add_interval (TYP-28, still a stub). Its test uuidv7_interval_shifts_by_a_day is #[ignore = \"needs TYP-28\"]. Named IANA time zones go through tz::offset_at_utc / offset_at_local (TYP-25) and return 0A000 until it lands.",
+    "uuid_in/out/recv/send, uuid_sortsupport, uuid_skipsupport and brin_minmax_multi_distance_uuid are ImplModule::Unsupported, so they belong to extra_types and are not in this lease's lookup. unsupported() is kept unchanged."
+   ],
+   "assumptions": [
+    "PG_UNIX_EPOCH_OFFSET_US and the other epoch constants are computed from the JDATE values in datum/timestamp.h (2451545, 2440588, 2299161).",
+    "SessionContext::clock_timestamp() returns TimestampTz (\u00b5s since 2000-01-01), like statement_timestamp. Unix ns = (clock + offset) * 1000, so the sub-\u00b5s part comes only from the monotonic step.",
+    "The monotonic guard uses a process-wide AtomicI64 (UUIDV7_PREV_NS), as PG's static previous_ns does. It is a static, but it reads the clock only through SessionContext.",
+    "SUBMS_MINIMAL_STEP_NS = 245 (Linux, SUBMS_MINIMAL_STEP_BITS = 12). The Darwin 10-bit variant and its byte-7 XOR are not ported.",
+    "uuid_cmp returns the first differing byte difference (glibc memcmp behaviour). If the oracle reports -1/0/1 instead, change memcmp_result to signum.",
+    "The UUIDv7 timestamp path for a non-UTC TimeZone adds months and days in local time and converts back using offset_at_utc / offset_at_local. This follows PG's timestamptz_pl_interval_internal, and is exact for fixed-offset zones.",
+    "The commit omits the Claude-Session trailer because the workspace CLAUDE.md forbids session links in commits. It keeps the Co-Authored-By line.",
+    "Nothing was compiled or run, per the RightShift rules. The code was re-read once for compile errors (lifetimes, fn-pointer coercions, imports, edition 2024)."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "parse_accepted_forms and parse_rejected_forms (22P02 message text check)",
+    "text_roundtrip and binary_io (recv of 15 bytes -> 22P03)",
+    "gen_random_uuid_v4_bits (version nibble 4, variant 10xx)",
+    "uuidv7_version_and_order and uuidv7_timestamp_from_session_clock",
+    "uuidv7_interval_infinite_rejected (22008)",
+    "extract_version_and_timestamp_null_cases and extract_timestamp_v1 (v1 maps 2000-01-01 to PG timestamp 0)",
+    "comparisons_are_memcmp_order",
+    "registry_resolves_uuid_procs (implementation() for oids 2956, 2960, 3432, 6428, 6429, 6430, 6342, 6343)",
+    "ignored until deps land: hash_procs_run (TYP-49), uuidv7_interval_shifts_by_a_day (TYP-28)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-20 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/uuid.rs (original stubs and module doc)",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::Uuid rows, oids 2954-2963, 3412, 3432, 6342, 6343, 6428-6430)",
+    "crates/pgarbor-types/src/func/mod.rs (ScalarFn, FuncImpl, dispatch)",
+    "crates/pgarbor-types/src/context.rs (SessionContext, FuncCtx, IoConfig, TimeZoneSetting, TestSession)",
+    "crates/pgarbor-types/src/datum.rs (Datum::Uuid, Interval, type_mismatch)",
+    "crates/pgarbor-types/src/io.rs (invalid_binary, routing)",
+    "crates/pgarbor-types/src/compare.rs (pg_hash_bytes signatures, TYP-49 stubs)",
+    "crates/pgarbor-types/src/datetime/timestamp.rs (timestamp_add_interval, TYP-28 stub)",
+    "crates/pgarbor-types/src/datetime/tz.rs (offset_at_utc / offset_at_local, TYP-25 stub)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/uuid.c (string_to_uuid, uuid_extract_timestamp, generate_uuidv7, uuidv7_interval, get_real_time_ns_ascending)",
+    "~/develop/reference/postgres-18/src/include/datatype/timestamp.h (JDATE constants, INTERVAL_NOT_FINITE)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/uuid.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-18",
+   "branch": "worktree-wf_fed745da-684-34",
+   "sha": "95750f720b6b40a07f93164aa898ec44d1ccbef8",
+   "files_changed": [
+    "crates/pgarbor-types/src/bytea.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_bytea: hex input when the text starts with lowercase \\x (whitespace allowed between digit pairs; 22023 odd-digits and invalid-digit errors with the offending character), otherwise escape input (\\\\, \\ooo octal; anything else 22P02 without the value in the message)",
+    "format_bytea: hex (\\x + lowercase hex) and escape output (printable 0x20..0x7e as-is, backslash doubled, others as \\ooo)",
+    "input/output/recv/send for bytea (recv/send are raw bytes)",
+    "lookup() maps every ImplModule::Bytea proc in the generated table: byteaoctetlen (octet_length, length), SQL bit_length (oid 1810, matched by oid), byteaGetByte/SetByte/GetBit/SetBit with 2202E index errors and 22023 'new bit must be 0 or 1', byteaoverlay(+no_len), bytea_substr(+no_len) for substring/substr with 22011 negative-length error, binary_encode (hex/base64 with 76-column wrapping/escape), binary_decode (22023 unrecognized encoding), byteaeq/ne/lt/le/gt/ge, byteacmp, bytea_larger/smaller, byteacat, byteapos, byteatrim/bytealtrim/byteartrim, bytea_bit_count, bytea_reverse, hashbytea and hashbyteaextended (private port of hash_bytes / hash_bytes_extended from hashfn.c), int2/int4/int8_bytea and bytea_int2/int4/int8 with 22003 range errors",
+    "unsupported() kept as the only 0A000 call site for Bytea procs; no proc in the Bytea module is left unimplemented",
+    "unit tests in a #[cfg(test)] mod at the bottom of bytea.rs covering the acceptance fixtures, base64 wrapping, substring/overlay/trim, bit ops, int casts and a lookup coverage check"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "PG 18.6 byteain accepts only a lowercase 'x' after the backslash for hex input (checked in varlena.c byteain), so '\\X..' is treated as escape input and gives 22P02. The module doc in this file says '\\X' is also accepted; I followed the PG source.",
+    "byteacmp returns the raw byte difference of the first mismatching bytes (glibc memcmp behaviour), or -1/0/1 for length-only differences. Only the sign is contract-relevant.",
+    "bytea_substring follows the PG source including the overflow case (S+L overflowing i32 means 'to end of string').",
+    "The hash ports are private to bytea.rs (compare.rs TYP-49 has no public hash_bytes), derived from common/hashfn.c with the little-endian tail layout (bytes 8..11 shifted left by 8 in c).",
+    "Unit tests were not compiled or run (no cargo per the swarm rules), and the expected hash values were not checked against an oracle."
+   ],
+   "contract_breaks": [
+    "The module doc says hex input also accepts '\\X'; PG 18.6 source accepts only lowercase '\\x'. Implemented per source; the doc line should be corrected by the architect."
+   ],
+   "proposed_tests_unexecuted": [
+    "bytea::tests::hex_input, hex_input_errors, escape_input, output_formats, encode_decode_formats, base64_wraps_at_76, get_byte_out_of_range, substring_and_overlay, trims_and_position, int_casts, bit_ops, io_roundtrip_through_module_api, lookup_covers_module_procs (all #[cfg(test)] in bytea.rs; not compiled)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-18 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/bytea.rs (frozen signatures and module doc)",
+    "crates/pgarbor-types/src/datum.rs, context.rs, func/mod.rs, io.rs, catalog_data/mod.rs and procs.rs (ImplModule::Bytea rows)",
+    "crates/pgarbor-common/src/error.rs (PgError constructors, with_hint)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/varlena.c (byteain, byteaout, bytea_substring, bytea_overlay, byteapos, byteaGet/SetByte/Bit, bytea_reverse, byteacmp, bytea_larger/smaller, bytea_int2/int4/int8)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/encode.c (hex_decode_safe, base64 encode/decode with line wrapping, esc_encode/decode, pg_find_encoding)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/oracle_compat.c (dobyteatrim)",
+    "~/develop/reference/postgres-18/src/common/hashfn.c (hash_bytes, hash_bytes_extended, mix, final)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/bytea.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-14",
+   "branch": "worktree-wf_fed745da-684-25",
+   "sha": "32b24a1fbaba1b1963e4f1ab056400ac59b00bc4",
+   "files_changed": [
+    "crates/pgarbor-types/src/text/funcs.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup() maps all 122 ImplModule::Text procs (by prosrc for compiled procs, by OID for SQL-language procs 879/880/1811/2003/2004); verified by script against procs.rs: only the 7 intentionally unsupported procs return None.",
+    "Text comparison families (text, name, name-vs-text cross types, bpchar with trailing spaces removed, \"char\" unsigned) with eq/ne/lt/le/gt/ge, btree cmp (varstr_cmp-style), larger/smaller, and pattern variants.",
+    "Hashes: hashtext/hashname, hashbpchar (trimmed), hashchar (signed char via hash_uint32), and the extended variants, via crate::compare::pg_hash_*.",
+    "Casts and conversions: text_name, name_text, bpchar_name, name_bpchar, text_char, char_text, char_bpchar, chartoi4 (signed), i4tochar (22003 outside -128..127), nameconcatoid.",
+    "String functions: textcat, textlen, bpcharlen, textoctetlen, bpcharoctetlen, bit_length, text_substr(_no_len) with PG text_substring semantics (22011 on negative count), textoverlay(_no_len) (22011 for sp<=0), textpos, text_starts_with, lower/upper/initcap (simple case mapping), ltrim/rtrim/btrim and the 1-arg space variants, lpad/rpad (2 and 3 arg), repeat, replace_text, split_part (22023 on field 0, negative indexes), translate (first match wins), text_reverse, text_left/right, ascii, chr (22023 negative, 54000 zero, 54000 too large and surrogates), unistr (PG escapes and surrogate pairs, 42601/22023 errors), textanycat/anytextcat via crate::io::output.",
+    "Unit tests in #[cfg(test)] mod tests cover substr, split_part, left/right, pads, case mapping, chr/ascii, bpchar semantics, char conversions, unistr, translate/replace/position, overlay/concat and the hashtext fixture. They are not executed here."
+   ],
+   "still_unimplemented": [
+    "casefold (oid 6412): needs PG simple case-folding tables, which std does not provide; returns 0A000 via unsupported(). Reason: no table in the workspace.",
+    "normalize (4350) and is_normalized (4351): need Unicode normalization data; 0A000 via unsupported().",
+    "unicode_assigned (6105): needs Unicode assigned-code-point tables; 0A000 via unsupported().",
+    "to_ascii (1845, 1846, 1847): locale transliteration tables; 0A000 via unsupported(). This is per the spec, which says to keep these as None."
+   ],
+   "assumptions": [
+    "lower/upper/initcap use PG's simple case mapping because the pinned C.UTF-8 locale is not PG_UNICODE_FAST (checked in common/unicode_case.c). Rust's char::to_uppercase is used, and a multi-char full mapping keeps the original character. Known imperfection: Greek characters with iota subscript (U+1F80..U+1FAF etc.) have simple uppercase mappings that differ from the full mapping, and this code keeps them unchanged. Titlecase is only special-cased for the Latin digraphs.",
+    "Text/name/bpchar ordering returns glibc-style memcmp differences (the first differing byte difference, else -1/0/1 from length), as PG's varstr_cmp does under C collation. The exact values of bttextcmp/btnamecmp are not verified against the oracle, only the sign.",
+    "btcharcmp returns (uint8)a - (uint8)b. I recalled this from char.c, but the grep for it found no match, so the value is unverified. Only the sign is certain.",
+    "hashchar and hashcharextended use (int32) of a signed char, as in access/hash/hashfunc.c (read in the reference source).",
+    "split_part, lpad/rpad, text_substring, text_overlay, chr, initcap and unistr follow the reference source in utils/adt/varlena.c and oracle_compat.c. Error SQLSTATEs and messages are copied from there.",
+    "Choice: char_text/char_bpchar and text values with a single byte >= 0x80 return 22021 'invalid byte sequence for encoding \"UTF8\": 0xNN', because Datum::Text is valid UTF-8. PG would emit the raw byte.",
+    "Choice: unistr('\\0000') (code point 0) returns 22021, consistent with the TYP-13 rule that text cannot contain U+0000. PG would produce a text with a NUL byte."
+   ],
+   "contract_breaks": [
+    "Hard dependency on TYP-13 (text/io.rs): text_name, bpchar_name and nameconcatoid call truncate_name, which is still a stub returning 0A000 TYP-13 in this tree. These functions will error until TYP-13 lands. Calling it is listed in the lease reads, so I did not duplicate the logic.",
+    "Hard dependency on TYP-49 (compare.rs): hashtext, hashchar and their extended forms call pg_hash_bytes, pg_hash_bytes_extended, pg_hash_uint32 and pg_hash_uint32_extended, which are still stubs returning 0A000 TYP-49. The tests in this file that check hash values (hashtext('abc') = -785388649) need TYP-49.",
+    "The contract has no way to represent a single byte >= 0x80 as text (Datum::Text is UTF-8 only). char_text/char_bpchar therefore return 22021 for those bytes instead of PG's raw-byte output. This is a deviation the contract could resolve."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types text::funcs: unit tests in text/funcs.rs (substr, split_part, left/right, pads, case mapping, chr/ascii, bpchar, char conversions, unistr, translate/replace/position, overlay/concat, hashtext fixture)",
+    "Acceptance rows from the lease (all in tests): substr('abc',0,2)='a'; substr('abc',1,-1) -> 22011; split_part('a,b,c',',',-1)='c'; split_part(..,0) -> 22023; left('abcd',-1)='abc'; lpad('hi',5,'xy')='xyxhi'; lpad('hello',2)='he'; initcap('hELLO wORLD-foo bar_baz')='Hello World-Foo Bar_Baz'; upper('stra\u00dfe')='STRA\u00dfE'; chr(0) -> 54000; bpchareq('ab  ','ab')=true; bpcharlen('ab  ')=2; i4tochar(200) -> 22003"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-14 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::Text rows, 129 total)",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/compare.rs",
+    "crates/pgarbor-types/src/text/io.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/varlena.c (text_substring, text_overlay, textpos, split_part, text_left/right/reverse, unistr, replace_text, bttextcmp, varstr_cmp)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/oracle_compat.c (lpad/rpad, chr, ascii, repeat, translate, initcap, btrim1)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/char.c (charout, chartoi4, i4tochar, char comparisons)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/name.c (namecmp, nameconcatoid)",
+    "~/develop/reference/postgres-18/src/backend/access/hash/hashfunc.c (hashchar, hashtextextended, hashbpchar)",
+    "~/develop/reference/postgres-18/src/common/unicode_case.c (simple vs full case mapping; casemap_full only for PG_UNICODE_FAST)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/funcs.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-07",
+   "branch": "worktree-wf_fed745da-684-28",
+   "sha": "126602447a1660fe13f43d52f41ec2f13056e2f4",
+   "files_changed": [
+    "crates/pgarbor-types/src/scalar/float_ops.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup(proc) maps all 118 distinct prosrc names of the 131 ImplModule::FloatOps catalog rows to scalar implementations; a unit test checks every owned row resolves (no SQL-language rows exist for this module)",
+    "float4/float8 arithmetic pl/mi/mul/div with PG float_overflow/underflow/zero-divide rules (22003 value out of range: overflow|underflow, 22012 division by zero, NaN/0 = NaN)",
+    "float4/float8 um/abs/up/larger/smaller, NaN-aware eq/ne/lt/le/gt/ge and btfloat4/8cmp, btfloat48cmp, btfloat84cmp, and mixed float48*/float84* arithmetic and comparisons",
+    "casts ftod dtof i2tod i4tod i8tod i2tof i4tof i8tof; float->int dtoi2/4/8 and ftoi2/4/8 with rint (round half even) and 22003 smallint/integer/bigint out of range",
+    "math dround dtrunc dceil dfloor dsign dsqrt (2201F) dcbrt dpow (POSIX NaN/inf special cases, 2201F errors) dexp dlog1 dlog10 (2201E) degrees radians dpi",
+    "radian trig dsin dcos dtan dcot dasin dacos datan datan2 and degree trig dsind dcosd dtand dcotd dasind dacosd datand datan2d with PG exact-value scaling constants and 22003 input is out of range",
+    "hyperbolic dsinh dcosh dtanh dasinh dacosh datanh; derf derfc dgamma dlgamma via libm erf/erfc/tgamma/lgamma",
+    "drandom via ctx.session.random_f64(); drandom_normal(mean, stddev) Box-Muller; setseed with 22023 'setseed parameter %g is out of allowed range [-1,1]' (C %g formatting) and session.set_seed, returns Datum::Null",
+    "width_bucket_float8 (2201G errors, 22003 integer out of range) and in_range_float8_float8 / in_range_float4_float8 (22013 for negative or NaN offset)",
+    "hashfloat4/8 and hashfloat4/8extended following hashfunc.c (zero and -0 hash to 0 or seed, NaN canonicalized) via compare::pg_hash_bytes(_extended) over native-endian bytes",
+    "unit tests (#[cfg(test)]) for overflow/underflow, division, rint casts, sqrt/power errors, NaN comparisons, -0 round, degree exact points, setseed message, %g formatting, hash zero, in_range and width_bucket"
+   ],
+   "still_unimplemented": [
+    "none: every ImplModule::FloatOps proc has a lookup arm; unsupported() remains as the module's 0A000 hook (called only for procs without an arm, which do not exist today)"
+   ],
+   "assumptions": [
+    "erf, erfc, tgamma and lgamma are declared as `unsafe extern \"C\"` `safe fn` items resolved from the platform libm (glibc on the oracle host), because Rust std has no special functions and the crate cannot add a dependency. This is the only unsafe in the file; the crate has no forbid(unsafe_code) lint. If the workspace later forbids unsafe, these four need a pure-Rust port (libm-0.2.16 is in the registry as a source reference).",
+    "PG errno checks (ERANGE/EDOM) are not observable from Rust. Overflow/underflow are detected from the result instead (inf or NaN for overflow; 0 for nonzero input for underflow). A subnormal result that glibc flags with ERANGE would differ from PG; this is not modelled.",
+    "f64::cbrt returns exactly 3 for 27 where glibc prints 3.0000000000000004 in the oracle, as the module doc already records.",
+    "drandom_normal uses plain Box-Muller on two ctx.session.random_f64() draws (u1 mapped into (0,1]), per the module doc. PG 18 uses pg_prng_double_normal (polar method), so the sequence differs even with an identical seed.",
+    "hashfloat4/8 (and extended) depend on compare::pg_hash_bytes and pg_hash_bytes_extended from TYP-49, which are still unimplemented stubs in this worktree. The zero and -0 paths return before calling them, so they pass now; non-zero hash values will fail until TYP-49 lands.",
+    "SqlState 2201G (INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION) and 22013 (INVALID_PRECEDING_OR_FOLLOWING_SIZE) have no constants in pgarbor-common, so they are built as SqlState(*b\"2201G\") and SqlState(*b\"22013\") locally. Those constants could be added to pgarbor-common later; I did not edit that file.",
+    "setseed's void return is Datum::Null, per the module doc.",
+    "Degree trig constants are computed once with std::sync::OnceLock using the same expressions as PG's init_degree_constants, without volatile temporaries; Rust's f64 is IEEE double on the target, so the exact-point ratios (dsind(30)=0.5, dcosd(60)=0.5) follow from the shared expressions."
+   ],
+   "contract_breaks": [
+    "No contract break in the frozen signatures. The lease asked for PG-faithful special functions without new dependencies, and Rust std lacks erf/gamma; declaring them from libm (see assumptions) was the workaround, kept inside this file."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types scalar::float_ops: overflow_and_underflow (float8mul 1e308*10 -> 22003 overflow; 1e-300*1e-300 -> underflow; 1e-308*1e-10 subnormal ok)",
+    "division_rules: float8div(0,0) -> 22012; float8div(NaN,0) is NaN",
+    "float_to_int_rounds_half_even: dtoi4(2.5)=2, dtoi4(-2.5)=-2, dtoi4(1.5)=2, dtoi4(NaN) -> 22003 integer out of range",
+    "sqrt_and_power_errors: dsqrt(-1) -> 2201F; dpow(0,-1) -> 2201F zero raised to a negative power is undefined",
+    "comparison_nan_rules: float8gt(NaN, inf) = true",
+    "round_keeps_negative_zero: dround(-0.5) is -0.0",
+    "degree_trig_exact_points: dsind(30)=0.5, dcosd(60)=0.5, dsind(180)=0",
+    "setseed_range_message: setseed(2) -> 22023 'setseed parameter 2 is out of allowed range [-1,1]'",
+    "printf_g_format: fmt_g(2)=2, 1e-5 -> 1e-05, 123456789 -> 1.23457e+08, -2.5 -> -2.5",
+    "hash_zero_and_negative_zero_agree: hashfloat8(0)=hashfloat8(-0)=0 (returns before compare::pg_hash_*)",
+    "in_range_nan_and_offset_rules and width_bucket_basics",
+    "lookup_covers_every_module_proc: all 131 FloatOps catalog rows resolve via lookup()"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/float.c (float8/float4 arithmetic, casts, dround/dtrunc/dsqrt/dpow/dexp/dlog1, trig and degree functions, hyperbolic, derf/dgamma/dlgamma, width_bucket_float8, in_range_float{4,8}_float8)",
+    "~/develop/reference/postgres-18/src/include/utils/float.h (float{4,8}_{pl,mi,mul,div,eq,ne,lt,le,gt,ge} NaN rules and overflow/underflow helpers)",
+    "~/develop/reference/postgres-18/src/include/c.h (FLOAT{4,8}_FITS_IN_INT{16,32,64} macros)",
+    "~/develop/reference/postgres-18/src/backend/access/hash/hashfunc.c (hashfloat4/8 and extended: zero and NaN normalization)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/pseudorandomfuncs.c (setseed message, drandom, drandom_normal)",
+    "~/develop/reference/postgres-18/src/backend/utils/errcodes.txt (2201E, 2201F, 2201G, 22013 names)",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libm-0.2.16 (checked for the special-function sources; not copied, FFI used instead)",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (the 131 FloatOps rows, prosrc names and signatures)",
+    "crates/pgarbor-types/src/func/mod.rs, datum.rs, context.rs, compare.rs (dispatcher, Datum mapping, FuncCtx/SessionContext, pg_hash_* signatures)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/float_ops.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-33",
+   "branch": "worktree-wf_fed745da-684-43",
+   "sha": "2e736d20f1b0c687d9699a6d1cb24a2cecb5241d",
+   "files_changed": [
+    "crates/pgarbor-types/src/json/io.rs"
+   ],
+   "implemented_behaviors": [
+    "format_jsonb: canonical jsonb text (\", \" / \": \" separators, keys already sorted by normalization, numbers via numeric::io::format_numeric, strings via parse::escape_json), mirroring PG18 JsonbToCStringWorker non-indent path",
+    "format_jsonb_pretty: PG18 JsonbToCStringWorker indent path (4-space levels, \",\" + newline per item, closing bracket on own line, no leading newline at top level, containers as object values open on the key line)",
+    "input: json -> parse::validate_json then Datum::Json verbatim; jsonb -> parse::parse_jsonb; other oid -> XX000 internal",
+    "output: json verbatim; jsonb via format_jsonb; mismatched datum -> XX000 internal",
+    "recv: json = raw UTF-8 (22021 on invalid UTF-8 or NUL, PG pq_getmsgtext wording) then validate_json; jsonb = version byte (08P01 if empty buffer, XX000 'unsupported jsonb version number N' if not 1), then UTF-8 text then parse_jsonb",
+    "send: json = raw bytes; jsonb = 0x01 version byte followed by canonical text (PG jsonb_send)",
+    "Unit tests in #[cfg(test)] mod tests covering canonical text, scalars/empties, pretty layout, json verbatim, jsonb send/recv roundtrip, recv version/empty/UTF-8/NUL errors"
+   ],
+   "still_unimplemented": [
+    "none in io.rs; all PgError::unimplemented(\"TYP-33\") bodies replaced. Behavior depends on TYP-32 (parse::validate_json, parse::parse_jsonb) and TYP-09 (numeric::io::format_numeric), which are still stubs in this worktree and will be filled by those leases."
+   ],
+   "assumptions": [
+    "jsonb_pretty follows the PG18 source (jsonb.c JsonbToCStringWorker) literally: an empty container prints as open bracket, newline+indent, close bracket (e.g. '{}' -> \"{\\n}\", '[]' -> \"[\\n]\", and '{\"a\":{}}' -> \"{\\n    \\\"a\\\": {\\n    }\\n}\"). I did not verify against a live PG18 run (no execution allowed).",
+    "jsonb_recv message for an empty buffer uses PG's pq_getmsgint wording 'insufficient data left in message' with SQLSTATE 08P01.",
+    "Binary input UTF-8 error uses SQLSTATE 22021 with message 'invalid byte sequence for encoding \"UTF8\": 0xNN', matching text/io.rs convention; NUL bytes in binary json/jsonb input are reported the same way as 0x00."
+   ],
+   "contract_breaks": [
+    "Doc comment in io.rs (pre-existing, now corrected in the module doc) said empty containers print '{}' / '[]' in jsonb_pretty; PG18 source prints them with an interior newline. I followed the PG source and documented the deviation in the module doc. Oracle/PG check recommended for the empty-container pretty case."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types json::io::tests (canonical_object_text, scalar_and_empty_text, pretty_layout_matches_pg, json_is_verbatim, jsonb_send_recv_roundtrip, jsonb_recv_rejects_bad_version_and_empty, recv_rejects_invalid_utf8_and_nul)",
+    "Oracle check: jsonb_pretty('{}') and jsonb_pretty('{\"a\":[]}') against PG18.6 to confirm the empty-container layout",
+    "Acceptance SQL from lease: jsonb '{\"b\":1,\"aa\":[1,2.50,{\"c\":null}],\"a\":true, \"b\":2}' -> '{\"a\": true, \"b\": 2, \"aa\": [1, 2.50, {\"c\": null}]}'; jsonb '1e3' -> '1000'; json '[1,  2]' verbatim; jsonb send first byte 0x01; jsonb_pretty('{\"a\":[1,{\"b\":2}]}') layout"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-33 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/json/{mod,io,parse}.rs",
+    "crates/pgarbor-types/src/{io,datum,context,oids}.rs",
+    "crates/pgarbor-types/src/numeric/io.rs",
+    "crates/pgarbor-types/src/text/io.rs (UTF-8 error convention)",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonb.c (JsonbToCStringWorker, add_indent, jsonb_send, jsonb_recv)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/io.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-12",
+   "branch": "worktree-wf_fed745da-684-27",
+   "sha": "bf36423c44d20b0907d5db0ffb133e93e6a5b04c",
+   "files_changed": [
+    "crates/pgarbor-types/src/numeric/funcs.rs"
+   ],
+   "implemented_behaviors": [
+    "to_i16/to_i32/to_i64: round half away from zero via BigDecimal HalfUp; NaN/Inf -> 0A000 'cannot convert NaN|infinity to <type>'; out of range -> 22003 '<type> out of range'",
+    "to_f64/to_f32: correctly rounded parse of format_numeric text; Inf/NaN map to IEEE; infinite result or zero-from-nonzero -> 22003 '\"<text>\" is out of range for type double precision|real'",
+    "from_f64/from_f32: C %.15g / %.6g emulation (format_g) parsed via BigDecimal, giving from_f64(0.1)='0.1', from_f64(1/3)='0.333333333333333', from_f32(1.1)='1.1', 1e20 -> 100000000000000000000",
+    "lookup() covers all 63 Numeric-module procs (prosrc match, plus SQL-language oids 1708, 1710, 1741, 1481 matched by oid); unsupported() kept as the only fallback",
+    "arithmetic/rounding/transcendental wrappers delegate to arith:: and transcendental:: (add, sub, mul, div, div_trunc, modulo, neg, abs, sign, ceil, floor, round, trunc, sqrt, exp, ln, log, log10, power)",
+    "comparisons numeric_eq/ne/gt/ge/lt/le via Numeric::pg_cmp (NaN = NaN, NaN largest); numeric_cmp returns -1/0/1; numeric_larger/smaller pick per numeric.c",
+    "int2/int4/int8/float4/float8 <-> numeric conversions for all ten conversion procs",
+    "scale (NULL for specials), min_scale, trim_scale (specials pass through), per get_min_scale",
+    "factorial(int8): n<0 -> 22003 'factorial of a negative number is undefined', n>32177 -> 22003 'value overflows numeric format', exact BigInt product",
+    "gcd/lcm: exact Euclid on aligned BigInts, result dscale = max of input dscales; specials -> NaN; lcm zero short-circuit",
+    "width_bucket_numeric: exact bucket index via aligned BigInt truncating division; 2201G messages for count<=0, NaN, infinite bounds, equal bounds; 22003 'integer out of range' on overflow",
+    "in_range_numeric_numeric: full special-value tree per numeric.c; negative/NaN offset -> 22013 'invalid preceding or following size in window function'",
+    "random(numeric,numeric): 22023 bound messages per numeric.c; uniform over multiples of 10^-dscale using session.fill_random with 8 spare bytes; lower>upper -> 22023",
+    "hash_numeric and hash_numeric_extended: NBASE group representation (leading/trailing zero groups stripped, weight tracked, sign-independent), specials 0 / seed, zero -1 / seed-1, result = hash XOR weight exactly as hash_numeric does; uses to_ne_bytes (little-endian on x86 like PG)",
+    "unit tests in #[cfg(test)] mod tests: conversions, error SQLSTATEs, float text, scale functions, factorial, gcd/lcm, width_bucket, in_range, random bounds, nbase grouping, hash special values; hash equality test #[ignore = \"needs TYP-49\"], ln test #[ignore = \"needs TYP-11\"]"
+   ],
+   "still_unimplemented": [
+    "hash_numeric / hash_numeric_extended (only the hashing step): they call compare::pg_hash_bytes / pg_hash_bytes_extended, which are TYP-49 stubs that return 0A000 today, so the procs report that error until TYP-49 lands. The digit-group and weight logic is complete and does not need anything else."
+   ],
+   "assumptions": [
+    "numeric -> float8/float4 uses the decimal text from numeric::io::format_numeric (TYP-09, a declared dependency) and Rust's correctly rounded str::parse, which matches PG's float8in on that text.",
+    "numeric -> float conversions raise the numeric.c error text '\"<text>\" is out of range for type double precision' (or 'real') with SQLSTATE 22003, because numeric_float8/numeric_float4 call float8in/float4in and float8in_internal emits that message. This does NOT match the module-doc line 'overflow -> 22003 value out of range: overflow'. I followed the PG18 source. The lease text is the one to reconcile, and no oracle case in the repo covers this path.",
+    "numeric_random draws bytes from SessionContext::fill_random (the PG RNG is not reproduced) and adds 8 spare bytes before the modulo to keep bias negligible. Output values are not bit-identical to PG, which is expected for a volatile function.",
+    "width_bucket, gcd/lcm, in_range, random and trim/min_scale use exact BigDecimal/BigInt arithmetic inside this file rather than calling arith::, because the results need exact integer or decimal semantics. arith:: is still used for add/sub/mul/div/mod/round/trunc/sign/abs/ceil/floor/neg/div_trunc.",
+    "BigDecimal::is_zero comes from the num_traits Zero trait (imported); BigDecimal::sign/abs are inherent methods. Edition 2024 is respected (no explicit & patterns under default binding modes).",
+    "The code has NOT been compiled (per worker rules). The main compile risks are the BigDecimal/BigInt operator impls on references (&BigDecimal - &BigDecimal, &BigInt + BigInt), ToPrimitive on BigInt, and the test-module glob import of private items."
+   ],
+   "contract_breaks": [
+    "none. All CONTRACT signatures (to_i64, to_i32, to_i16, to_f64, from_f64, from_f32, lookup, unsupported) are kept verbatim. A private helper to_f32 and private fns were added, which the contract allows."
+   ],
+   "proposed_tests_unexecuted": [
+    "to_i32(2.5)=3, to_i32(-2.5)=-3, to_i16(-7.5)=-8, to_i64(1.4999)=1",
+    "to_i32(NaN) -> 0A000 'cannot convert NaN to integer'; to_i64(+Inf) -> 0A000 'cannot convert infinity to bigint'; to_i16(40000) -> 22003 'smallint out of range'",
+    "from_f64(0.1)='0.1'; from_f64(1/3)='0.333333333333333'; from_f64(1e20)='100000000000000000000'; from_f64(1.23456789e-7)='0.000000123456789'; from_f32(1.1)='1.1' (uses format_numeric from TYP-09)",
+    "to_f64('1e400') -> 22003",
+    "scale(1.50)=2; scale(NaN)=NULL; min_scale(1.500)=1; trim_scale(1.500)='1.5'; trim_scale(100.00)='100'",
+    "factorial(20)=2432902008176640000; factorial(0)=1; factorial(-1) -> 22003 'factorial of a negative number is undefined'; factorial(32178) -> 22003",
+    "gcd(12.5,7.5)='2.5'; lcm(1.5,2.5)='7.5'; lcm(4,-6)='12'",
+    "width_bucket(5.35,0.024,10.06,5)=3; below range -> 0; above range -> count+1; count=0 -> 2201G",
+    "in_range(5,3,2,false,true)=true; in_range with negative offset -> 22013",
+    "random(1.5,2.5) stays in [1.5,2.5]; random(3,1) -> 22023",
+    "hash_numeric(0)=-1; hash_numeric(NaN)=0; hash_numeric_extended(0, 7)=6 (no TYP-49 needed for these)",
+    "#[ignore = \"needs TYP-49\"] hash_numeric(1.5)==hash_numeric(1.50)",
+    "#[ignore = \"needs TYP-11\"] ln(10) = '2.3025850929940457'",
+    "Compile check: cargo build -p pgarbor-types, then cargo test -p pgarbor-types numeric::funcs"
+   ],
+   "provenance": [
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::Numeric rows, prosrc/oid/arg types)",
+    "crates/pgarbor-types/src/func/mod.rs (FuncImpl, ScalarFn, FuncHandle strictness contract)",
+    "crates/pgarbor-types/src/datum.rs, context.rs (FuncCtx, SessionContext::fill_random, TestSession, IoConfig)",
+    "crates/pgarbor-types/src/numeric/mod.rs, arith.rs, transcendental.rs, io.rs (frozen signatures)",
+    "crates/pgarbor-common/src/error.rs (SqlState, PgError::new/internal/unimplemented)",
+    "contracts/leases/pgarbor-types.json (TYP-12 spec and acceptance)",
+    "~/develop/reference/postgres-18 src/backend/utils/adt/numeric.c: hash_numeric, hash_numeric_extended, width_bucket_numeric/compute_bucket, in_range_numeric_numeric, numeric_smaller/larger, numeric_gcd/lcm, gcd_var, numeric_fac, numeric_scale, numeric_min_scale, numeric_trim_scale, numeric_int4/int8/int2 (+ _opt_error), float8_numeric, numeric_float8, numeric_float4, random_numeric",
+    "~/develop/reference/postgres-18 src/backend/utils/adt/float.c: float8in_internal and float4in_internal ERANGE handling, float_overflow_error text",
+    "~/develop/reference/postgres-18 src/backend/utils/adt/pseudorandomfuncs.c and numeric.c random bound messages",
+    "~/.cargo/registry bigdecimal-0.4.11 (with_scale, with_scale_round, RoundingMode, as_bigint_and_exponent, into_bigint_and_exponent, Zero, FromStr, operator impls) and num-bigint-0.4.8 (bits, from_bytes_le, magnitude, sign)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/numeric/funcs.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-27",
+   "branch": "worktree-wf_fed745da-684-38",
+   "sha": "81d6c9ae130bb2dcae0e861d39c8c3eb78f3bcba",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/time.rs"
+   ],
+   "implemented_behaviors": [
+    "adjust_time_precision: PG AdjustTimeForTypmod symmetric rounding; no-op for precision <0 or >=6",
+    "input/output for time and timetz (decode::parse_time_only, encode::encode_time_only; timetz zone from input or session zone, stored west-positive)",
+    "recv/send for time (i64 BE us, range 0..=86400e6 -> 22008 'time out of range') and timetz (i64 BE us + i32 BE zone; |zone| >= 16h -> 22009); short buffer -> 08P01, trailing bytes -> 22P03",
+    "lookup(): SQL-language 1848 interval_pl_time and 2547 interval_pl_timetz by oid; all other Time-module prosrc names mapped to scalar fns",
+    "time comparisons eq/ne/lt/le/gt/ge/cmp, larger/smaller, hash and hash_extended (via compare::pg_hash_uint32[_extended] and PG hashint8 fold; timetz XOR of time and zone hashes)",
+    "time_pl_interval/time_mi_interval/timetz_pl_interval/timetz_mi_interval wrap at 24h, infinite interval -> 22008",
+    "time_mi_time -> interval (micros, months/days 0); time_interval cast",
+    "time_timetz and timetz_time casts; timetz compare per PG timetz_cmp_internal (UTC-adjusted, then zone)",
+    "make_time with PG float_time_overflows check and 22008 'time field value out of range: H:MM:SS' message (C %g emulation)",
+    "in_range_time_interval and in_range_timetz_interval: 22013 on negative offset, non-wrapping arithmetic as PG",
+    "unit tests in #[cfg(test)] mod tests (precision rounding, 24:00:00, 25:00 error, output fraction, timetz roundtrip, binary roundtrip and zone check, mi_time/pl_interval wrap, make_time message, timetz compare)"
+   ],
+   "still_unimplemented": [
+    "none of the owned proc prosrc names are left unimplemented; unsupported() is kept as the only unimplemented call site for procs without a match arm"
+   ],
+   "assumptions": [
+    "Dependency stubs (decode::parse_time_only, encode::encode_time_only, tz::offset_at_utc/offset_at_local, compare::pg_hash_uint32[_extended]) are called exactly as their contracts declare; they currently return unimplemented errors and will work once TYP-23/24/25/49 land.",
+    "For Utc and Fixed time zones the session offset is computed directly without tz calls (exact); only Named zones go through tz::offset_at_utc/offset_at_local.",
+    "When ctx.now is None and the zone is Named, the date anchor is 2000-01-01 (0); Named zones are unsupported in v1 anyway.",
+    "C %g emulation in make_time is approximate for unusual rounding edge cases; common values (integers, one-decimal seconds) match PG.",
+    "PG-faithful hash values depend on compare::pg_hash_uint32 and pg_hash_uint32_extended matching PG hash_uint32 and hash_uint32_extended."
+   ],
+   "contract_breaks": [
+    "interval_time (pg_proc oid 1419, cast interval->time) is generated with ImplModule::Interval, not Time as the lease spec lists, so it is not routed to this module. The body is provided as pub(crate) fn interval_time_value(&Interval) -> Result<i64> (marked allow(dead_code)) for the interval module to call; the Interval lease or the generator should own the lookup arm.",
+    "timetz_pl_interval / timetz_mi_interval / in_range_timetz_interval and the time counterparts use wrapping arithmetic on the i64 micros where PG relies on C wraparound; no contract change, noted for review."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types datetime::time::tests (not run per RightShift rules)",
+    "'12:00:00.123456'::time(2) -> '12:00:00.12' (unit test precision_rounds_half_away_from_zero and time_input_accepts_24h_and_applies_typmod)",
+    "'25:00' -> 22008 date/time field value out of range: \"25:00\" (time_input_out_of_range_is_22008)",
+    "timetz '12:34:56.789+05:30' stored zone -19800 and printed back (timetz_roundtrip_keeps_zone)",
+    "timetz send = i64 us + i32 zone (timetz_binary_roundtrip_and_zone_check)",
+    "time_mi_time('12:00','11:30') = 00:30:00 (time_mi_time_and_pl_interval_wrap)",
+    "time_pl_interval wraps at 24h (time_mi_time_and_pl_interval_wrap)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-27 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/datetime/{mod,decode,encode,tz,calendar,time}.rs",
+    "crates/pgarbor-types/src/{datum,context,io,func/mod,compare,catalog_data/procs}.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c (time_in, time_recv, make_time, float_time_overflows, time_interval, interval_time, time_mi_time, time_pl_interval, time_mi_interval, in_range_time_interval, timetz_in/out/recv/send, timetz_cmp_internal, timetz_pl_interval, timetz_mi_interval, in_range_timetz_interval, timetz_time, time_timetz, timetz_hash, timetz_hash_extended, time_hash, time_hash_extended, AdjustTimeForTypmod)",
+    "~/develop/reference/postgres-18/src/include/datatype/timestamp.h (INTERVAL_NOT_FINITE)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/time.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-26",
+   "branch": "worktree-wf_fed745da-684-37",
+   "sha": "b04e750d80afa623072a28f0530a649707e9fd33",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/date.rs"
+   ],
+   "implemented_behaviors": [
+    "date_to_timestamp: infinities map to timestamp infinities; out-of-range midnight -> 22008 'date out of range for timestamp'",
+    "input: decode::parse_date_time(s, ctx, \"date\"); epoch, infinity/-infinity, now (via ctx.now and session zone; 0A000 if ctx.now is None), date kind validated with IS_VALID_JULIAN/IS_VALID_DATE; out of range -> 22008 'date out of range: \"<input>\"'",
+    "output: infinity/-infinity specials; finite values via calendar::j2date and encode::encode_date_only under ctx.config",
+    "recv: exactly 4 bytes (else 22P03), big-endian i32, range check -> 22008 'date out of range'; send: 4-byte big-endian days",
+    "lookup: all 38 distinct prosrc names plus SQL-language oid 2550 (integer_pl_date) for the 40 ImplModule::Date procs; every one implemented, no unsupported() call sites left for this module",
+    "date_eq/ne/lt/le/gt/ge/cmp/larger/smaller, date_finite, hashdate, hashdateextended (compare::pg_hash_uint32 and _extended)",
+    "date_pli/date_mii with infinity passthrough and 22008 'date out of range'; date_mi with infinite operand -> 22008 'cannot subtract infinite dates'",
+    "cross-type date vs timestamp and date vs timestamptz comparisons with PG overflow ordering (finite date past timestamp range sorts above all finite timestamps and below +infinity); timestamptz uses midnight in the session zone via tz::offset_at_local",
+    "date_pl_interval / date_mi_interval via timestamp_add_interval (infinite timestamps passed through; interval negation with infinity handling)",
+    "date_timestamp, date_timestamptz, datetime_timestamp (date+time, 22008 'timestamp out of range'), datetimetz_timestamptz (zone seconds west, 22008 'date out of range for timestamp')",
+    "make_date: PG ValidateDate semantics (negative year = BC, year 0 and bad month/day -> 22008 'date field value out of range: Y-MM-DD'; IS_VALID_JULIAN/IS_VALID_DATE -> 22008 'date out of range: ...')",
+    "in_range_date_interval: negative offset -> 22013 'invalid preceding or following size in window function', both-infinite shortcut, otherwise base +/- offset compared with the midnight timestamps",
+    "unit tests in #[cfg(test)] mod tests (leap day round trip, out-of-range input, infinity specials, date arithmetic, make_date errors and BC, send bytes, recv length, cross-type infinity, dispatch coverage of every ImplModule::Date proc)"
+   ],
+   "still_unimplemented": [
+    "None in TYP-26. All ImplModule::Date procs are implemented. Remaining dependence: output and input rely on TYP-23 (decode::parse_date_time), TYP-24 (encode::encode_date_only), TYP-25 (tz::offset_at_local, offset_at_utc) and TYP-28 (timestamp_add_interval), which still return unimplemented in this tree; the date unsupported() hook is kept and is unreachable for ImplModule::Date procs."
+   ],
+   "assumptions": [
+    "Session timezone offsets: tz::offset_at_local and tz::offset_at_utc return seconds EAST of UTC (as their doc says); date-to-timestamptz uses utc = local - east.",
+    "timestamp_add_interval(ts, iv) returns the timestamp unchanged for an infinite iv or an infinite ts, as the PG timestamp_pl_interval does. I short-circuit infinite timestamps in this file, but infinite spans are delegated to TYP-28.",
+    "The PG 'date out of range for timestamp' error text for date_to_timestamp / date2timestamptz upper-bound overflow follows PG date.c, which the contract also states.",
+    "The 'now' input path returns 0A000 (TYP-26 lease ID) when IoCtx.now is None, since decode only yields DateTimeKind::Now when a transaction timestamp is expected.",
+    "date_mi computes in i64 and maps i32 overflow to 22008 date out of range. For valid dates the difference cannot overflow i32, so this branch is unreachable in practice."
+   ],
+   "contract_breaks": [
+    "None of the frozen signatures needed changes. The ScalarFn type alias from crate::func was used for the lookup match, and in_range_date_interval needed TYP-28 timestamp_mi_interval behaviour that is not in the frozen timestamp.rs API; I rebuilt it from timestamp_add_interval plus private negate_interval, so the contract did not need amending."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types datetime::date::tests (all tests in the module; they need TYP-23/24/25/28 to be implemented for the render/parse helpers)",
+    "make_date(-44,3,15) renders 0044-03-15 BC (depends on TYP-24)",
+    "date_pli('2024-02-29',1) equals input('2024-03-01') (depends on TYP-23)",
+    "every ImplModule::Date proc has a lookup() hit (test every_date_module_proc_is_dispatched)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-26 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/datetime/mod.rs, decode.rs, encode.rs, calendar.rs, timestamp.rs, tz.rs, funcs.rs, time.rs, interval.rs",
+    "crates/pgarbor-types/src/datum.rs, context.rs, func/mod.rs, io.rs, compare.rs (pg_hash_uint32 and _extended), catalog_data/mod.rs and procs.rs (module Date rows)",
+    "crates/pgarbor-common/src/error.rs (SqlState, PgError fields and constructors)",
+    "/home/allie/develop/reference/postgres-18/src/backend/utils/adt/date.c (make_date, date_mi, date_pli, date_mii, date2timestamp_opt_overflow, date2timestamptz_opt_overflow, date_cmp_timestamp_internal, date_cmp_timestamptz_internal, datetime_timestamp, datetimetz_timestamptz, in_range_date_interval, date_pl_interval, date_mi_interval)",
+    "/home/allie/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (in_range_timestamp_interval)",
+    "/home/allie/develop/reference/postgres-18/src/backend/utils/adt/datetime.c (ValidateDate)",
+    "/home/allie/develop/reference/postgres-18/src/include/datatype/timestamp.h (IS_VALID_JULIAN, JULIAN_* limits)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/date.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-29",
+   "branch": "worktree-wf_fed745da-684-39",
+   "sha": "f792f6591e1b2890928c7fed8759a30d12e5741d",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/interval.rs"
+   ],
+   "implemented_behaviors": [
+    "interval_in: lexer + DecodeInterval port (postgres syntax, units table with 10-byte token matching, fractional cascade, ago, @, SQL-standard Y-M and D H:M:S, signed time fields, IntervalStyle=sql_standard force_negative, infinity/-infinity, duplicate-unit rejection) with ISO 8601 fallback (designator, basic and extended alternative formats) via DecodeISO8601Interval port",
+    "Errors: 22007 invalid input syntax, 22015 interval field value out of range (FieldOverflow mapped), 22008 interval out of range",
+    "AdjustIntervalForTypmod port (range truncation, precision rounding, precision range check, XX000 for unknown range); applied in input and recv",
+    "interval_out via interval2itm + encode::encode_interval, infinity/-infinity special",
+    "interval_recv/send (micros, days, months big-endian)",
+    "add/sub/neg with PG17+ infinity rules and overflow checks; mul/div with fractional cascade, TSROUND, rint (round_ties_even), NaN/inf handling, division by zero 22012",
+    "justify_days/hours/interval",
+    "registry lookup for all 23 ImplModule::Interval procs: pl, mi, um, mul, mul_d_interval, div, eq/ne/lt/le/gt/ge/cmp (cmp_span), larger/smaller, hash/hash_extended (hashint8 on low 64 bits of span), finite, justify_*, interval_time (22008 for infinite), in_range_interval_interval (22013 on negative offset)",
+    "unit tests covering all lease acceptance items"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "lexer::parse_datetime (TYP-22) yields Time/Tz/Date/Number/String/Special kinds as documented, with lowercased text and '-infinity' as Special",
+    "encode::encode_interval (TYP-24) handles finite Itm only; infinity strings are produced here",
+    "compare::pg_hash_uint32 and pg_hash_uint32_extended (TYP-49) will be implemented; interval_hash depends on them",
+    "strtod hex floats and exotic forms in ISO 8601 numbers are not supported (only decimal and exponent forms)",
+    "recv rejects buffers other than exactly 16 bytes with 08P01"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types datetime::interval (unit tests in the file's tests module)",
+    "oracle: select '1.5 years'::interval, '1 day ago'::interval, 'P1Y2M3DT4H5M6.7S'::interval, interval '2' hour, '1 day 02:03:04.5678'::interval second(2)",
+    "oracle: interval hash equality for '1 mon' vs '30 days'"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (interval_in, AdjustIntervalForTypmod, interval_mul/div/pl/mi/um, justify_*, hash, in_range_interval_interval)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/datetime.c (DecodeInterval, DecodeISO8601Interval, DecodeTimeCommon, Adjust* helpers, deltatktbl)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c (interval_time)",
+    "contracts/leases/pgarbor-types.json (TYP-29)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/interval.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-32",
+   "branch": "worktree-wf_fed745da-684-42",
+   "sha": "ccd8cd990d7ab026be867f455697583be4d4e28b",
+   "files_changed": [
+    "crates/pgarbor-types/src/json/parse.rs"
+   ],
+   "implemented_behaviors": [
+    "validate_json: full PG json_in syntax check (need_escapes=false): punctuation, literals, numbers per json_lex_number, strings with escape and control-char checks, \\u hex validation, trailing-token and end-of-input errors",
+    "parse_jsonb: PG jsonb_in semantics: strings decoded with surrogate-pair rules (22P02 'invalid input syntax for type json' with the surrogate DETAILs), \\u0000 rejected with 22P05 'unsupported Unicode escape sequence' and DETAIL '\\u0000 cannot be converted to text.', numbers via numeric::io::parse_numeric, object keys sorted by jsonb_key_cmp with last duplicate winning",
+    "parse_json_value: order- and duplicate-preserving tree with number spelling kept verbatim, decoding with the same surrogate and \\u0000 rules as jsonb (PG need_escapes=true used by json functions)",
+    "All token, structure, escape and surrogate DETAIL texts ported from jsonapi.c json_errdetail; token text is the maximal token per json_lex/json_lex_number, so '{a' -> Token \"a\", '01' -> Token \"01\", '1.' -> Token \"1.\", '\"abc' -> Token \"\"abc\"",
+    "Nesting limit: more than 6400 open containers gives 54001 'stack depth limit exceeded' with the max_stack_depth hint; parser is iterative with an explicit frame stack so the limit cannot overflow the Rust stack",
+    "Unit tests in #[cfg(test)] mod tests covering the acceptance cases, duplicate keys, key ordering, order-preserving values, the nesting boundary and the 22P05 path (not executed)"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "PG json_in uses need_escapes=false (jsonapi.c via json.c json_in), so for json input '\"\\\\ud83d\"' and '\"\\\\u0000\"' are ACCEPTED by validate_json. This matches the PG docs (json checks Unicode escapes for syntax only; jsonb insists on correct surrogates and rejects \\u0000). The acceptance line for the lone surrogate therefore is treated as applying to jsonb (parse_jsonb), not json. If the binding acceptance means validate_json must reject it, that conflicts with PG 18 source (json.c:162 passes need_escapes=false).",
+    "Nesting: the PG 18 recursive default parser uses check_stack_depth (54001 with the max_stack_depth hint), and the JSON_NESTING_TOO_DEEP text 'JSON nested too deep, maximum permitted depth is 6400.' belongs to the incremental parser only. The 6400-level limit with 54001 follows the contract module doc, not the exact PG trigger point, which depends on stack size.",
+    "The jsonb and json-value surrogate error is reported with message 'invalid input syntax for type json' (22P02) for jsonb too, because PG's json_errsave_error hardcodes the type name \"json\".",
+    "Contract signatures and JsonValue are unchanged, and escape_json is kept as-is. The parser module imports numeric::io::parse_numeric and json::jsonb_key_cmp, which both exist with the expected signatures."
+   ],
+   "contract_breaks": [
+    "PgError has no context field, so PG's CONTEXT 'JSON data, line 1: ...' is omitted, as the module doc already says. No change needed beyond amendment 02."
+   ],
+   "proposed_tests_unexecuted": [
+    "json::parse::tests::bad_token_details",
+    "json::parse::tests::structure_details",
+    "json::parse::tests::string_details",
+    "json::parse::tests::json_accepts_lone_surrogates_and_nul_escape",
+    "json::parse::tests::jsonb_nul_escape_is_22p05",
+    "json::parse::tests::jsonb_duplicate_keys_last_wins_and_sorted",
+    "json::parse::tests::json_value_preserves_order_and_spelling",
+    "json::parse::tests::nesting_limit"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-32)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/json/mod.rs",
+    "crates/pgarbor-types/src/json/io.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-types/src/numeric/io.rs (parse_numeric signature)",
+    "~/develop/reference/postgres-18/src/common/jsonapi.c (json_lex, json_lex_string, json_lex_number, parse_scalar/object/array, report_parse_error, json_errdetail)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonfuncs.c (json_errsave_error)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/json.c (json_in uses need_escapes=false)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonb.c (jsonb_in uses need_escapes=true)",
+    "~/develop/reference/postgres-18/src/include/mb/pg_wchar.h (surrogate range macros)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/parse.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-39",
+   "branch": "worktree-wf_fed745da-684-47",
+   "sha": "f2a93fc64b257daa6dafeaed3c8be76c33475114",
+   "files_changed": [
+    "crates/pgarbor-types/src/array/subscript.rs"
+   ],
+   "implemented_behaviors": [
+    "fetch: NULL subscript -> NULL; more than MAXDIM subscripts -> 54000; element fetch returns NULL for out-of-bounds, wrong subscript count, or empty array; slice fetch (any Slice present, scalar i means 1:i) clamps bounds, resets result lbounds to 1, returns {} on empty intersection",
+    "assign: NULL subscript -> 22004 'array subscript in assignment must not be null'; NULL target treated as empty array; element assign on empty array creates dims with the given lbounds; 1-D arrays extend both directions with NULL gap fill; multi-dim out of range -> 2202E 'array subscript out of range'; wrong subscript count -> 2202E 'wrong number of array subscripts'",
+    "assign slice: NULL replacement leaves array unchanged; empty target requires both bounds (2202E with PG DETAIL); 'source array too small' and 'upper bound cannot be less than lower bound' (2202E); 1-D extension with NULL fill; multi-dim block replacement in row-major order",
+    "construct: scalar elements -> 1-D lbound 1, empty -> empty array; nested -> (N+1)-D; NULL and empty sub-arrays skipped, all-empty -> empty array, mixed -> 2202E; mismatched dims/lbounds -> 2202E 'multidimensional arrays must have array expressions with matching dimensions'; element type mismatch -> 42804 'cannot merge incompatible arrays' with PG DETAIL; size limit 54000 MaxArraySize 134217727",
+    "Unit tests in #[cfg(test)] mod tests (about 27 tests) covering the acceptance cases: fetch([1,2,3],[5]) NULL, 2-D [2][1]=3, slice [2:3]={2,3}, 2-D [1:1][1:2]={{1,2}}, assign beyond end fills NULLs, construct([[1,2],[3]]) 2202E"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Assign into a non-empty array uses the array's own element type (arr.elem) and ignores the elem argument; the elem argument is only used when arr is None.",
+    "For cannot-merge detail text, names::display_name is called with the builtin env; until TYP-01 (format_type) lands it falls back to the catalog typname (e.g. int4 rather than integer), so that DETAIL line may differ from PG until TYP-01 is in.",
+    "Multi-dimensional slice assignment ignores the source array's dimensions and uses only its item count and row-major order, as PG's array_insert_slice does.",
+    "1-D slice assignment beyond the upper bound is implemented as the intended gap-filled extension (source placed at its lower bound, gap NULL). I did not verify PG's exact output for that case from the C source; I read array_set_slice and its data copy looked inconsistent for that case, so this may differ from PG. Worth an oracle check.",
+    "Element/slice subscript count above MAXDIM is rejected with 54000 in fetch and assign, matching the parser-level check in array_subscript_transform."
+   ],
+   "contract_breaks": [
+    "Subscript::Slice bounds use None for omitted bounds only; a SQL NULL bound (a[NULL:2]) cannot be expressed inside a slice. Callers must pass the whole subscript as None, which fetch turns into NULL and assign turns into 22004, so the NULL-bound semantics are preserved only if the caller maps it that way."
+   ],
+   "proposed_tests_unexecuted": [
+    "array::subscript::tests::* (about 27 unit tests in crates/pgarbor-types/src/array/subscript.rs), not compiled or run per RightShift rules; they cover fetch/assign/construct acceptance cases and the 22004, 2202E and 42804 error paths"
+   ],
+   "provenance": [
+    "crates/pgarbor-types/src/array/subscript.rs (module doc, frozen contract)",
+    "contracts/leases/pgarbor-types.json TYP-39 entry",
+    "contracts/crates/pgarbor-types.md",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/arraysubs.c (array_subscript_check_subscripts, array_subscript_fetch, array_subscript_fetch_slice, array_subscript_assign, array_subscript_assign_slice, array_subscript_transform)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/arrayfuncs.c (array_get_element, array_get_slice, array_set_element, array_set_slice)",
+    "~/develop/reference/postgres-18/src/backend/executor/execExprInterp.c (ExecEvalArrayExpr)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/arrayutils.c (ArrayGetNItemsSafe, ArrayCheckBoundsSafe)",
+    "~/develop/reference/postgres-18/src/include/utils/array.h (MAXDIM, MaxArraySize)",
+    "crates/pgarbor-types/src/array/mod.rs, datum.rs, context.rs, registry.rs, names.rs, crates/pgarbor-common/src/error.rs (signatures used)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/array/subscript.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-41",
+   "branch": "worktree-wf_fed745da-684-50",
+   "sha": "ad2f8e8210fffca06f0e2747ccbfb0631ef2676c",
+   "files_changed": [
+    "crates/pgarbor-types/src/enum_type.rs"
+   ],
+   "implemented_behaviors": [
+    "cmp_labels: compares by enumsortorder; unknown label gives 22P02 'invalid input value for enum <type>: \"<label>\"'; non-enum type gives XX000",
+    "label_sort_order: returns sort_order of a label, same unknown-label error",
+    "input (enum_in): exact case-sensitive label match, else 22P02; returns Datum::Text(label)",
+    "output (enum_out): validates the label belongs to the enum (22P03 'invalid internal value for enum') and returns it",
+    "recv (enum_recv): UTF-8 bytes then input semantics; invalid UTF-8 gives 22P03",
+    "send (enum_send): output label bytes",
+    "lookup() maps all 15 ImplModule::Enum procs by prosrc: enum_eq, enum_ne, enum_lt, enum_le, enum_gt, enum_ge, enum_cmp, enum_smaller, enum_larger, enum_first, enum_last, enum_range_bounds, enum_range_all, hashenum, hashenumextended",
+    "enum_first/enum_last ignore the argument and use arg_types[0]; empty enum gives 55000 'enum <type> contains no values'; missing enum type gives 0A000 'could not determine actual enum type'",
+    "enum_range_all and enum_range_bounds return an array with element type = the enum OID; bounds follow enum_range_internal (NULL = open, unknown lower gives empty, unreached upper leaves range open)",
+    "enum_smaller/enum_larger return the chosen label following PG tie-break (ties return the second argument)",
+    "hashenum/hashenumextended hash the label's pg_enum OID via compare::pg_hash_uint32 and pg_hash_uint32_extended (PG hashoid/hashoidextended)",
+    "unit tests in #[cfg(test)] mod tests with a MoodEnv TypeEnv (mood: sad<ok<happy by sort_order), covering input error text, binary round-trip, ordering, range/first/last, comparisons and lookup coverage"
+   ],
+   "still_unimplemented": [
+    "unsupported() is retained as the fallback call site required by func/mod.rs but is unreachable for the 15 owned procs (all now have implementations)"
+   ],
+   "assumptions": [
+    "Enum datums are Datum::Text labels, so enum_eq/enum_ne compare label text instead of pg_enum OIDs; labels are unique per enum so the result matches PG.",
+    "The 55P04 unsafe-use check for uncommitted enum values is not modelled; labels are assumed committed.",
+    "Equality/ordering helpers that need labels call env.enum_labels; a TypeEnv that returns None for an enum type yields XX000 rather than a silent answer.",
+    "Error messages use names::format_type(env, oid, -1) as the spec requires, so they depend on TYP-01 being implemented; the unit test expects the 'mood' name to print unqualified (test env answers type_by_name(None,'mood') with the OID).",
+    "Hash results depend on compare::pg_hash_uint32 and pg_hash_uint32_extended (TYP-49, still unimplemented in this tree); hashenum errors propagate until TYP-49 lands.",
+    "The enum input length check (strlen >= NAMEDATALEN) is not special-cased: such strings never match a label and produce the same 22P02 error PG gives."
+   ],
+   "contract_breaks": [
+    "Unit tests cannot use registry::builtin_env() alone for enum behaviour because BuiltinTypeEnv returns no enum labels; the test module defines its own TypeEnv wrapper that delegates to builtin_env for other types. This is inside the test module only, not a contract change."
+   ],
+   "proposed_tests_unexecuted": [
+    "input(ctx, mood, \"meh\") -> 22P02 with message 'invalid input value for enum mood: \"meh\"' (enum_type::tests::input_accepts_only_exact_labels)",
+    "cmp_labels(env, mood, \"happy\", \"sad\") == Greater (ordering by sort_order not text)",
+    "enum_range_all(null::mood) == {sad,ok,happy}; enum_range_bounds('ok', null) == {ok,happy}; enum_range_bounds(null, 'ok') == {sad,ok}; enum_first(null) == 'sad'; enum_last(null) == 'happy'",
+    "send/recv round trip for label bytes; recv of non-UTF-8 gives 22P03",
+    "lookup() returns Some for every ImplModule::Enum row in catalog_data::PROCS"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-41 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/enum_type.rs (original skeleton and doc comments)",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/io.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "crates/pgarbor-types/src/array/mod.rs",
+    "crates/pgarbor-types/src/compare.rs (pg_hash_uint32 signatures)",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (15 ImplModule::Enum rows)",
+    "crates/pgarbor-types/src/catalog_data/mod.rs (BuiltinProc, ImplModule)",
+    "crates/pgarbor-common/src/error.rs (PgError, SqlState)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/enum.c (enum_in, enum_out, enum_recv, enum_send, enum_cmp_internal, enum_smaller/larger, enum_endpoint, enum_first/last, enum_range_internal)",
+    "~/develop/reference/postgres-18/src/backend/utils/cache/typcache.c (compare_values_of_enum)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/enum_type.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-08",
+   "branch": "worktree-wf_fed745da-684-30",
+   "sha": "ead35646c1a2de75b6cbdd9d5a6a5dd07245e16d",
+   "files_changed": [
+    "crates/pgarbor-types/src/scalar/oid_types.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_oid: strtoul base-0 emulation (0x hex, leading-0 octal, +/- sign with wrap, C isspace), LP64 uint32in_subr range rule (accepts -1..-2147483648), 22P02/22003 messages and ordering",
+    "uint64 parse for xid8 (no 32-bit check)",
+    "pg_lsn text I/O (HEX/HEX, 1-8 digits per half, uppercase output)",
+    "int2vector text input (strtol base 10, space-only separator, smallint messages) and output; oidvector text input (uint32 token parse, remainder-quoted messages) and output",
+    "reg* text input: all-digit -> oid, '-' -> 0 (not for regoper/regoperator), regtype via parse_type_string with reg_lookup fallback only when TYP-01 is unimplemented; not-found errors with PG codes and messages (parsed-name vs raw-name quoting per regproc.c)",
+    "reg* text output: 0 -> '-' (regoper/regoperator -> '0'), reg_name, regtype format_type fallback when type_info exists, else bare number",
+    "binary recv/send: 4-byte BE for oid/xid/cid/reg*, 8-byte BE for xid8/pg_lsn, exact-length check (22P03); int2vector/oidvector binary written directly (ndim=1, dim, lbound 0, length-prefixed elements, empty vector sends ndim=1 dim=0), recv validates ndim/hasnull/elem/lbound/element length and whole-buffer consumption",
+    "lookup() routes all 43 ImplModule::OidTypes procs by prosrc (xideqint4/xidneqint4 share xideq/xidneq and accept an Int4 second argument): eq/ne/lt/le/gt/ge for oid, xid, cid, xid8 (u64); btoidcmp; btoidvectorcmp and oidvector ops (length difference first, then element-wise); i8tooid (22003 'OID out of range'); oidtoi8; xid8toxid; oidlarger/oidsmaller; xid8cmp/xid8_larger/xid8_smaller; hashoid/hashxid/hashcid (+extended), hashoidvector (+extended), hashxid8 (+extended) with a private port of PG hash_bytes / hash_bytes_extended / hash_uint32(_extended) / hashint8 fold",
+    "unit tests in #[cfg(test)] mod tests: oid parse, xid8, int2vector/oidvector text, pg_lsn roundtrip, regclass dash/not-found, every OidTypes proc has an implementation, extended-vs-plain hash agreement under zero seed, oidvector length-first compare"
+   ],
+   "still_unimplemented": [
+    "No lease-owned gaps: all 43 OidTypes procs have implementations. unsupported() remains as the only TYP-08 unimplemented call site and is only reached for procs not in lookup(), which is none of the 43 today."
+   ],
+   "assumptions": [
+    "Collation not-found message hardcodes encoding \"UTF8\" (PG uses GetDatabaseEncodingName(); TypeEnv/IoConfig do not expose the encoding).",
+    "hashoidvector hashes the oid values as little-endian bytes (x86_64 oracle), using a private port of PG hash_bytes; TYP-49 compare.rs has no pub hash_bytes port to reuse.",
+    "regtype input: if names::parse_type_string returns an unimplemented error, fall back to env.reg_lookup(Type, s); any other parse error propagates unchanged (PG parseTypeString errors propagate).",
+    "regoper/regoperator input rejects '-' and accepts only all-digit OIDs (parseNumericOid); output prints '0' for OID 0 (regoperout/regoperatorout), overriding the module-doc '-' wording.",
+    "Not-found names follow regproc.c: regclass/regconfig/regdictionary/regcollation quote the parsed identifier list joined by '.', regrole/regnamespace quote the first identifier, regproc/regprocedure/regoper/regoperator quote the raw string, regtype uses the parsed form when TYP-01 does not produce the error itself.",
+    "Vector binary recv/send are written directly rather than delegating to array::io (TYP-37 still unimplemented) so that the empty vector sends PG's ndim=1, dim=0 header; the array model stores an empty vector as dims == [].",
+    "Binary recv of int2vector/oidvector reports 22P03 'invalid <type> data' for a wrong element OID, where PG array_recv would raise 42804 first."
+   ],
+   "contract_breaks": [
+    "Binary int2vector/oidvector I/O does not delegate to array::io::recv/send as the module doc says; it writes the 1-D wire format itself (see assumptions). The module doc line was restored verbatim.",
+    "The collation not-found message needs the database encoding name, which TypeEnv/SessionContext/IoConfig do not expose; hardcoded to UTF8 for now.",
+    "No shared hash_bytes port is available from compare.rs (TYP-49) to this lease; a private port lives in oid_types.rs."
+   ],
+   "proposed_tests_unexecuted": [
+    "scalar::oid_types::tests::oid_parse_base0_and_sign_wrap ('-1' -> 4294967295, '-2147483648', '010' -> 8, '0x1F' -> 31, '08' and '-2147483649' error)",
+    "scalar::oid_types::tests::oid_parse_errors_match_pg ('4294967296' -> 22003 message; 'x' -> 22P02 message)",
+    "scalar::oid_types::tests::xid8_is_unsigned_64_bit ('-1' -> Int8(-1) -> '18446744073709551615')",
+    "scalar::oid_types::tests::int2vector_and_oidvector_text ('1 2' roundtrip; '1\\t2' -> 22P02; '99999' -> 22003 smallint message; empty oidvector -> '')",
+    "scalar::oid_types::tests::pg_lsn_roundtrip ('0/16B6C50' roundtrip; 'x' -> 22P02 pg_lsn message)",
+    "scalar::oid_types::tests::reg_input_and_output_without_catalog ('-' output for regclass 0; 'nosuch' regclass -> 42P01 relation message; regnamespace -> 3F000)",
+    "scalar::oid_types::tests::regtype_output_uses_format_type (#[ignore = \"needs TYP-01\"]; regtype 23 -> 'integer')",
+    "scalar::oid_types::tests::extended_hashes_agree_with_plain_hashes_under_zero_seed (low 32 bits of extended(k,0) == plain hash; hash_bytes(le bytes of k) == hash_uint32(k))",
+    "scalar::oid_types::tests::oidvector_compare_is_length_first (length difference first, then element order)",
+    "scalar::oid_types::tests::every_oidtypes_proc_has_an_implementation (lookup() is Some for all ImplModule::OidTypes procs)"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/oid.c (oidin/oidout/oidvectorin/out/recv/send, oideq..oidsmaller, oidvector comparisons)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/xid.c (xidin/out/recv/send, xid8in/out, xid8 comparisons/larger/smaller, xid8toxid, hashxid/hashcid)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/regproc.c (regprocin, regoperin/out, regoperatorout, regclassin/out, regtypein/out, regcollationin/out, regconfigin, regdictionaryin, regrolein, regnamespacein, parseNumericOid, parseDashOrOid)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/pg_lsn.c (pg_lsn_in_internal, pg_lsn_in/out/recv/send)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/int.c (int2vectorin/out/recv)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/int8.c (i8tooid, oidtoi8)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/numutils.c (uint32in_subr, uint64in_subr)",
+    "~/develop/reference/postgres-18/src/common/hashfn.c and src/include/common/hashfn.h (mix, final, hash_bytes, hash_bytes_extended, hash_bytes_uint32(_extended), hash_any wrappers)",
+    "~/develop/reference/postgres-18/src/backend/access/hash/hashfunc.c (hashint8/extended, hashoid/extended, hashoidvector/extended)",
+    "~/develop/reference/postgres-18/src/backend/access/nbtree/nbtcompare.c (btoidcmp, btoidvectorcmp)",
+    "contracts/crates/pgarbor-types.md; contracts/leases/pgarbor-types.json (TYP-08); crates/pgarbor-types/src/{datum,context,io,names,func/mod,catalog_data/mod,array/mod,registry}.rs; crates/pgarbor-common/src/error.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/scalar/oid_types.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-17",
+   "branch": "worktree-wf_fed745da-684-33",
+   "sha": "1ec4c6c57e55f9176a442c0b4e7a6e252852f033",
+   "files_changed": [
+    "crates/pgarbor-types/src/text/regex.rs"
+   ],
+   "implemented_behaviors": [
+    "parse_flags: g b c e i m n p q s t w x with sequential PG semantics; unknown flag gives 22023 'invalid regular expression option: \"z\"'",
+    "compile (thread-local 32-entry cache): ARE, ERE, BRE and literal (q) flavors; ***= and ***: directors; leading embedded options (?imnpqstwxbce); (?:), (?#), lookahead (?= (?!, lookbehind (?<= (?<!; greedy and lazy quantifiers incl. {m,n}; bracket expressions with [:class:], [.x.], [=x=], ranges and escapes; \\d \\s \\w \\D \\S \\W \\m \\M \\y \\Y \\A \\Z, hex/octal/unicode escapes; backreferences; expanded (x) mode; [[:<:]] and [[:>:]]",
+    "PG compile errors as 2201B 'invalid regular expression: <reason>' using regerrs.h texts (parentheses, brackets, braces, repetition counts, quantifier operand, escape, backreference number, range, class, collating element, embedded option, too complex)",
+    "Matching: explicit-stack backtracking VM over chars; leftmost-longest exploration when the RE is greedy and has choices (short-circuits at end of subject); first path wins when the first quantifier is lazy; is_match stops at the first path; {1,1}? forces lazy preference inside (SIMILAR substring form); step and stack budget raises 2201B 'regular expression failed: regular expression is too complex'",
+    "find_at and is_match public API with byte offsets and capture groups; ^ does not match at the search offset",
+    "Operators textregexeq/ne, texticregexeq/ne, nameregexeq/ne, nameicregexeq/ne (bpchar variants share prosrc)",
+    "textregexsubstr and SQL-language substring(text,text,text) (oid 2074) via similar_to_escape (oid 1986) then regex substring",
+    "regexp_replace in all arities (3, 4 flags, 4 start, 5, 6) with \\1..\\9, \\&, \\\\ escapes, g flag, start and N arguments, digit-flag HINT",
+    "regexp_match, regexp_matches (SRF, g flag), regexp_split_to_array, regexp_split_to_table (SRF), regexp_like, regexp_count, regexp_instr, regexp_substr incl. all _no_* prosrc variants, parameter validation and 'does not support the \"global\" option' errors (with HINT for regexp_match)",
+    "Unit tests for compile errors, flags, matching, lookaround, backrefs, longest semantics, captures, newline modes, expanded/literal/BRE, SQL function layer"
+   ],
+   "still_unimplemented": [
+    "Spencer-specific fine points are approximated: per-subexpression MIXED greediness preferences (only the first quantifier decides whole-RE preference, plus {1,1}? lazy regions) and POSIX subexpression capture tie-breaking differ from a true NFA/DFA hybrid in rare cases",
+    "ERE flavor ('e' flag) is approximated by ARE-minus-advanced-features parsing; unsupported ERE-only edge rules not audited",
+    "Character classes use Rust Unicode predicates rather than the database locale's ctype tables"
+   ],
+   "assumptions": [
+    "Datum::Text carries name, bpchar (padded) and text values for all regex operator argument types",
+    "similar_to_escape(text,text) is catalog oid 1986 and is implemented by TYP-16; substring(text,text,text) calls it through crate::func::call",
+    "Exceeding the step budget uses SQLSTATE 2201B 'regular expression failed: regular expression is too complex' (REG_ETOOBIG text) since no oracle was available; the amendment's 54001 was not used per the lease spec",
+    "regexp_split_to_array('', x) yields a one-element array containing the empty string, following the C loop",
+    "Digit classes (\\d, [:digit:]) are ASCII only, matching glibc iswdigit; other classes are Unicode-aware"
+   ],
+   "contract_breaks": [
+    "RegexFlags has no field for the 'e' (plain ERE) option or 't'; 'e' is encoded privately as basic=true && literal=true (otherwise meaningless); 't' just clears expanded",
+    "Regex struct gained a private field (prog: Arc<Program>) which is allowed since it is opaque; no pub signature changed"
+   ],
+   "proposed_tests_unexecuted": [
+    "All #[cfg(test)] tests in crates/pgarbor-types/src/text/regex.rs (compile_errors, flags, basic_matching, lookaround_and_backrefs, longest_semantics, captures, find_at_offset, newline_modes, expanded_literal_and_embedded, similar_form, budget_does_not_hang, sql_functions) were never compiled or run",
+    "Differential oracle checks against PG18.6 for: regexp_instr/regexp_substr with subexpr on patterns without groups, regexp_split on empty string, '(a*)*b' complexity error text, case-insensitive ranges and classes, \\x/\\u escapes",
+    "Acceptance cases from the lease: 'abc' ~ '(' error, regexp_replace flag z error, regexp_match/matches/split/count, backreference (\\w)\\1, lookahead ^(?=x)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-17)",
+    "contracts/amendments/pgarbor-types-01-regex-engine.md",
+    "postgres-18 src/backend/utils/adt/regexp.c (parse_re_flags, setup_regexp_matches, regexp_* functions, error texts)",
+    "postgres-18 src/backend/utils/adt/varlena.c (replace_text_regexp, replacement escape handling)",
+    "postgres-18 src/backend/regex/regc_lex.c, regcomp.c (lexing, prefixes, quantifier/bracket parsing, error codes), src/include/regex/regerrs.h",
+    "postgres-18 doc func.sgml (SIMILAR substring greediness)",
+    "crates/pgarbor-types/src/func/mod.rs, datum.rs, context.rs, array/mod.rs, catalog_data (procs.rs rows for ImplModule::Regex)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/text/regex.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-42",
+   "branch": "worktree-wf_fed745da-684-51",
+   "sha": "ae5a9e7937fec3e43ca7e0898f8dc3a8c31e47f0",
+   "files_changed": [
+    "crates/pgarbor-types/src/extra_types.rs"
+   ],
+   "implemented_behaviors": [
+    "money input (cash_in port, lc_monetary=C): accepts '$1,234.56', '1234.56', '-$1', '(1.00)', '$-1.00'; rounding of a 3rd fractional digit; 22P02 and 22003 with PG texts",
+    "money output (cash_out port): '$1,234.56', '0.00' -> '$0.00', negative '-$1.00', i64::MIN handled",
+    "money binary recv/send (8-byte BE; 08P01 on short buffer, 22P03 on trailing bytes)",
+    "aclitem input (aclparse/getid syntax port): optional group/user keyword, quoted names with doubled quotes, PUBLIC grantee when empty, privilege letters in bit order with '*' grant options, duplicates collapse, canonical text stored as Datum::Text; errors 22P02 (mode char, missing '=', extra garbage, empty grantor name, unrecognized keyword, missing name) and 22P02 name-too-long as 42622",
+    "aclitem output returns the canonical Datum::Text; aclitem recv/send raise 42883 'no binary input/output function available for type aclitem' (PG has no typreceive/typsend)",
+    "anyarray_out/anycompatiblearray_out and anyarray_send/anycompatiblearray_send delegate to array::io (Datum::Array required, else XX000)",
+    "all other pseudo types (anyelement, any, trigger, internal, anyrange, ...) reject input/output/recv/send with PG 0A000 texts 'cannot accept|display a value of type X'; pseudo types with no typreceive/typsend give 42883 first, as PG does",
+    "all other types still return PgError::unimplemented(\"TYP-42\", ...) (point gives 'type point is not supported by PGArbor yet')",
+    "unit tests in #[cfg(test)] mod tests cover money, aclitem, pseudo and unsupported-type paths using registry::builtin_env() and IoConfig::default()"
+   ],
+   "still_unimplemented": [
+    "aclitem: role existence is not checked (aclparse's get_role_oid 42704 path). TypeEnv has no role catalog, and reg_lookup(RegKind::Role) returns Ok(None) on builtin_env, so checking it would reject every role in the unit tests",
+    "aclitem: input with a missing '/grantor' returns 0A000 via unimplemented. PG accepts it with a WARNING and defaults the grantor to the bootstrap superuser (OID 10), whose name this crate does not know",
+    "anyarray output uses array_type_of(element) to pick the array type, so int2vector/oidvector print as '{...}' rather than their vector form. Only matters if an int2vector Datum reaches anyarray_out",
+    "array output and send depend on array::io (TYP-37), still unimplemented in this tree, so anyarray output returns TYP-37's 0A000 until that lease lands",
+    "refcursor: no code added. Its typinput is textin, so crate::io routes it to text::io before extra_types is reached"
+   ],
+   "assumptions": [
+    "money uses the lc_monetary=C values from PG's glibc C locale: currency '', decimal '.', thousands ',' (fallback), signs '' and '-', frac_digits 2, group 3, and CHAR_MAX sep/cs flags. This gives '$1,234.56' and '-$1.00'",
+    "money typmod is ignored, since money has none",
+    "aclitem names are kept as written (after getid unquoting and putid requoting). Role names are not normalized against the catalog",
+    "NUL bytes in input end the string, as in C"
+   ],
+   "contract_breaks": [
+    "Pseudo-type dummy I/O is implemented by typtype == 'p' plus the array-name exceptions, not by a per-name table. This is equivalent for the PG18 catalog but depends on pg_type.typtype being accurate in catalog_data",
+    "No role lookup exists on TypeEnv for aclitem validation (see still_unimplemented)"
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types extra_types: money_input_accepts_symbol_grouping_and_plain_forms, money_negative_forms, money_rounding_and_fraction_padding, money_output_grouping (i64::MIN -> -$92,233,720,368,547,758.08), money_roundtrip, money_input_errors (22P02, 22003), money_binary_roundtrip_and_errors (08P01, 22P03), aclitem_* (canonicalization, quoting, errors, no binary I/O 42883), unsupported_types_keep_the_lease_error (point), pseudo_types_reject_io_with_pg_texts, anyarray_output_rejects_non_array_datum",
+    "Oracle check: money '$1,234.56' roundtrip and aclitem 'alice=r*w/bob' pass-through, matching the acceptance criteria",
+    "Consider a PG18 oracle fixture for money input/output edge cases (e.g. '(1.00)', '1.005', '92233720368547758.08') in the central run"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-42 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "contracts/amendments/pgarbor-types-03-datum-variants.md",
+    "crates/pgarbor-types/src/{datum,io,context,registry,catalog_data/types,catalog_data/procs}.rs and crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/cash.c (cash_in, cash_out, cash_recv, cash_send)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/acl.c (getid, putid, aclparse, aclitemin, aclitemout)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/pseudotypes.c (PSEUDOTYPE_DUMMY_* macros, anyarray_out, anyarray_send, anycompatiblearray_out/send)",
+    "~/develop/reference/postgres-18/src/backend/utils/cache/lsyscache.c (no binary input/output function messages)",
+    "~/develop/reference/postgres-18/src/include/utils/acl.h (ACL_ALL_RIGHTS_STR)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/extra_types.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-36",
+   "branch": "worktree-wf_fed745da-684-46",
+   "sha": "3288446d17a7f71589b12d35785a94553b0bc48c",
+   "files_changed": [
+    "crates/pgarbor-types/src/json/srf.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup() matches all 19 ImplModule::JsonSrf procs by prosrc (json_each, jsonb_each, *_each_text, json/jsonb_array_elements and _text, json/jsonb_object_keys, json/jsonb_populate_record, *_populate_recordset, json/jsonb_to_record, *_to_recordset, jsonb_populate_record_valid); unsupported() unchanged and still the only 0A000 site.",
+    "json_each/jsonb_each/json_each_text/jsonb_each_text: rows Record[key Text, value Json|Jsonb|Text]; json keeps verbatim token text (spacing, number spelling, duplicate keys in input order); jsonb values rebuilt via parse_jsonb; _text maps JSON null to SQL NULL and unescapes strings.",
+    "Wrong-container errors 22023 with the spec texts: jsonb_each non-object; json_each 'cannot deconstruct an array as an object' / 'cannot deconstruct a scalar'; jsonb_array_elements 'cannot extract elements from an object/a scalar'; json_array_elements 'on a non-array' / 'on a scalar'; object_keys 'on an array' / 'on a scalar' per json/jsonb.",
+    "json(b)_array_elements(_text): one value per element, eager Vec-backed SetIter.",
+    "json_object_keys keeps duplicates in input order; jsonb_object_keys yields storage order.",
+    "Private span-recording scanner (Node) over validated text, with string decoding (escapes, surrogate pairs), 6400-level depth guard (54001), \\u0000 rejected with 22P05 'unsupported Unicode escape sequence' and DETAIL.",
+    "json(b)_populate_record / jsonb_populate_record_valid / json(b)_to_record: NULL json returns base (or NULL); empty object with base returns base; missing key keeps base field (or NULL); JSON null gives NULL; duplicate keys last wins; nested composite objects recurse; arrays become PG array literals fed to the column type's input function (elements quoted, nested arrays kept); JSON string into array/composite column goes through input; non-object top level gives 22023 'cannot call populate_composite on a scalar/an array'. jsonb_populate_record_valid returns false on SQLSTATE class 22 and true otherwise, using arg_type(0) as the row type.",
+    "json(b)_populate_recordset / json(b)_to_recordset: NULL json gives empty set; root object/scalar/non-array messages per json vs jsonb; non-object element gives 'argument of <fn> must be an array of objects'; base record reused for every row.",
+    "Row type from ctx.result_type (populate_record(s) uses result_type too, which the binder resolves from anyelement); missing composite fields give 42601 'a column definition list is required...' for *_to_record/*_to_recordset and 0A000 'could not determine row type for result of <fn>' (with PG hint) otherwise.",
+    "Unit tests in #[cfg(test)] mod tests: jsonb_each acceptance, json_each raw spans and duplicates, json_each_text null/unescape, scalar 22023, jsonb_each array message, array_elements_text acceptance, jsonb canonical text, wrong-kind messages, object_keys duplicates and kind messages, \\u0000 rejection, surrogate decoding."
+   ],
+   "still_unimplemented": [
+    "No procs left unimplemented in srf.rs; all 19 owned procs have implementations.",
+    "Dependency gaps, not stubs in this file: jsonb sources call format_jsonb (TYP-33) and parse_jsonb (TYP-32), and populate leaves call io::input/io::output (scalar, array and record families). These currently return 0A000 in the tree, so the jsonb paths and populate paths are unexercised until those leases land. The json_each/json_array_elements/json_object_keys paths need only the scanner and escape helpers, plus escape_json which already exists in parse.rs."
+   ],
+   "assumptions": [
+    "Populate duplicate keys: the last occurrence wins (matches the hash-table overwrite behaviour as I read jsonfuncs.c; I did not verify hash_object_field_end line by line).",
+    "populate_record uses ctx.result_type as the row type (the binder resolves anyelement to the base argument type, as the module doc states). jsonb_populate_record_valid is the exception and uses ctx.arg_type(0), because its result type is bool.",
+    "use_json_as_text (json_populate_record arg 3) is ignored, as PG 18 ignores it in populate_record_worker.",
+    "Domain constraints (NOT NULL / CHECK on domain-typed record fields) are not checked during populate. io::input applies only the base-type input routine and typmod. PG runs domain_check_safe in populate_composite.",
+    "Anonymous record types for to_record / to_recordset are resolved through ctx.env.composite_fields(result_type.oid). The binder must register the column definition list there.",
+    "Set-returning functions compute all rows eagerly and return any error from the call itself, instead of raising it mid-iteration. This is the allowed collect-then-into_iter approach. PG streams, so an error in a later element can appear after earlier rows in PG but not here. Result is the same for the caller since PG materializes these SRFs too.",
+    "Error CONTEXT lines (e.g. JSON data, line 1: ...) are omitted because PgError has no context field in contract v1."
+   ],
+   "contract_breaks": [
+    "None. Frozen signatures in srf.rs (lookup, unsupported) are unchanged. No public API added. Nothing outside srf.rs was edited."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types json::srf::tests (all 11 unit tests in srf.rs; not run per worker rules). Expected to fail until TYP-32 (parse_jsonb) and TYP-33 (format_jsonb) land, because the jsonb-source tests use them.",
+    "Acceptance (central run): jsonb_each('{\"a\":1,\"b\":[2]}') -> (a,1),(b,[2]); jsonb_each('[1]') -> 22023 'cannot call jsonb_each on a non-object'; json_each('1') -> 22023 'cannot deconstruct a scalar'; jsonb_array_elements_text('[\"a\",null]') -> 'a', NULL; json_object_keys('{\"a\":1,\"a\":2}') -> a, a.",
+    "Suggested follow-up test (needs a TypeEnv fixture with composite_fields, not written): json_populate_record over a composite with a missing key and a base record, plus json_populate_recordset over a nested array column."
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-36 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/{datum.rs,context.rs,io.rs,registry.rs,func/mod.rs,json/mod.rs,json/parse.rs,json/io.rs,record.rs}",
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::JsonSrf rows)",
+    "crates/pgarbor-common/src/error.rs (PgError, SqlState)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonfuncs.c (each_worker_jsonb, elements_worker_jsonb, populate_record_worker, populate_composite, populate_record_field, populate_scalar, populate_recordset_worker, jsonb_object_keys messages)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/srf.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-44",
+   "branch": "worktree-wf_fed745da-684-53",
+   "sha": "8ad8150aa0b86e3c00894503e0558e6ef2018444",
+   "files_changed": [
+    "crates/pgarbor-types/src/func/series.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup() maps all 9 Series procs by prosrc to FuncImpl::Set: generate_series_int4/step_int4, int8/step_int8, numeric/step_numeric, timestamp, timestamptz, timestamptz_at_zone",
+    "int4/int8 lazy iterators: inclusive bounds, default step 1, step 0 -> 22023 'step size cannot equal zero', negative step, overflow ends series without error (i64 cursor, checked_add)",
+    "numeric: NaN/infinity checks for start, stop, step with PG messages and order; zero step check; increments via arith::add so dscale follows max(dscale) like PG add_var; increment computed before emit so overflow errors replace the row",
+    "timestamp: interval step zero -> 22023 'step size cannot equal zero', infinite step -> 22023 'step size cannot be infinite'; increments via timestamp_add_interval (TYP-28)",
+    "timestamptz (session zone from IoConfig.time_zone) and timestamptz_at_zone (zone resolved via tz::lookup_zone with PG lowercasing; unknown -> 22023 via dt_parse_error, IANA region -> 0A000): months/days applied in local wall-clock, then micros added to the instant; infinite values pass through unchanged",
+    "Unit tests in #[cfg(test)] mod; dependency-gated tests marked #[ignore = \"needs TYP-10\"], \"needs TYP-28\", \"needs TYP-25\""
+   ],
+   "still_unimplemented": [
+    "none in series.rs; unsupported() is kept as the 0A000 fallback for Series procs without a lookup entry (none remain, so it is only reached if lookup is extended)"
+   ],
+   "assumptions": [
+    "arith::add (TYP-10) returns max-dscale results and a 22003 error on overflow, as its doc comment states; numeric series relies on it",
+    "timestamp_add_interval (TYP-28) implements PG timestamp_pl_interval semantics including month clamping and infinite pass-through",
+    "tz::offset_at_utc / offset_at_local take and return microseconds since 2000-01-01 and seconds east, as their doc comments say; tz::lookup_zone returns BadTimezone for unknown names and Region for IANA names",
+    "timestamptz with months/days converts to local time once and back once; PG converts twice, which differs only across DST transitions inside the interval (no DST zones shipped yet)",
+    "Infinite timestamp start with infinite finish loops lazily forever, matching PG's behavior of timestamp_pl_interval returning infinity unchanged"
+   ],
+   "contract_breaks": [
+    "none: all public signatures in the crate contract were used as declared; SetFn/SetIter/FuncImpl used unchanged"
+   ],
+   "proposed_tests_unexecuted": [
+    "int4 ascending/empty/negative step/zero step 22023 message",
+    "int4 and int8 overflow boundary yields rows without error (2147483646..2147483647; i64::MAX-1..i64::MAX)",
+    "numeric NaN start -> 22023 'start value cannot be NaN'; PosInf stop -> 'stop value cannot be infinity'",
+    "numeric 1.5..3 -> 1.5, 2.5 (ignored until TYP-10)",
+    "timestamp 0..2 days by 1 day inclusive (ignored until TYP-28)",
+    "timestamptz session UTC by 1 day (ignored until TYP-28)",
+    "timestamp zero interval -> 22023; timestamptz infinite interval -> 'step size cannot be infinite'",
+    "timestamptz at-zone with unknown zone -> 22023 (ignored until TYP-25)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-44 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/numeric/mod.rs and arith.rs",
+    "crates/pgarbor-types/src/datetime/timestamp.rs, tz.rs, mod.rs (DtErr, dt_parse_error, out_of_range)",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/int.c (generate_series_step_int4)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/int8.c (generate_series_step_int8)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/numeric.c (generate_series_step_numeric)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (generate_series_timestamp, generate_series_timestamptz_internal)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/func/series.rs"
+   ]
+  }
+ ]
+}

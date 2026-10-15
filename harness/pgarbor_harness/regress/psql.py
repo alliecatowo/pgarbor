@@ -42,11 +42,20 @@ timed_out=True.
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from .. import config
+from ..oracle.container import OracleError, regress_mounts
+
+#: Result file names derive from the test name; container names must match this charset.
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 @dataclass
@@ -62,7 +71,53 @@ class PsqlRun:
 def psql_argv(test: str, host: str, port: int, db: str, regress_dir: Path, out_dir: Path,
               image: str = config.PG_IMAGE) -> list[str]:
     """Build the exact podman argv from the module docstring."""
-    raise NotImplementedError("HAR-16: psql podman argv")
+    src = str(regress_dir.resolve())
+    out = str(out_dir.resolve())
+    result_file = f"{out}/results/{test}.out"
+    safe = _UNSAFE_NAME_CHARS.sub("_", test)
+    name = f"pgarbor-psql-{safe}-{os.getpid()}"
+    env = dict(config.REGRESS_ENV)
+    env.update({
+        "PGAPPNAME": f"pg_regress/{test}",
+        "PGARBOR_OUT": result_file,
+        "PG_ABS_SRCDIR": src,
+        "PG_ABS_BUILDDIR": out,
+        "PG_LIBDIR": src,
+        "PG_DLSUFFIX": ".so",
+        "PGHOST": host,
+        "PGPORT": str(port),
+        "PGUSER": config.PG_SUPERUSER,
+    })
+    argv: list[str] = ["podman", "run", "--rm", "-i", "--name", name, "--network", "host"]
+    for key in sorted(env):
+        argv += ["-e", f"{key}={env[key]}"]
+    for host_path, cont_path, opts in regress_mounts(regress_dir, out_dir):
+        argv += ["-v", f"{host_path}:{cont_path}:{opts}"]
+    argv += ["-w", out, "--entrypoint", "sh", image,
+             "-c", 'exec psql "$@" > "$PGARBOR_OUT" 2>&1', "sh"]
+    argv += list(config.REGRESS_PSQL_FLAGS[:3])  # -X -a -q
+    argv += ["-d", db]
+    argv += list(config.REGRESS_PSQL_FLAGS[3:])  # -v HIDE_TABLEAM=on -v HIDE_TOAST_COMPRESSION=on
+    return argv
+
+
+def _podman_run(argv: Sequence[str], stdin: bytes, timeout: float) -> "subprocess.CompletedProcess[bytes]":
+    """Run podman with captured output. On timeout, ``podman kill`` the named container and
+    re-raise ``subprocess.TimeoutExpired``. A missing podman binary is a harness error."""
+    try:
+        return subprocess.run(list(argv), input=stdin, capture_output=True,
+                              timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        name = argv[argv.index("--name") + 1]
+        subprocess.run(["podman", "kill", name], capture_output=True, check=False)
+        raise
+    except OSError as e:
+        raise OracleError(f"cannot run podman: {e}") from e
+
+
+def _default_runner(argv: Sequence[str], stdin: bytes, timeout: float) -> tuple[int, str]:
+    proc = _podman_run(argv, stdin, timeout)
+    return proc.returncode, proc.stderr.decode("utf-8", errors="replace")
 
 
 def run_psql(test: str, sql_file: Path, host: str, port: int, db: str, regress_dir: Path,
@@ -72,10 +127,43 @@ def run_psql(test: str, sql_file: Path, host: str, port: int, db: str, regress_d
     """Run one test file. ``runner(argv, stdin_bytes, timeout) -> (exit_code, stderr)`` is
     injectable for tests; default uses subprocess.run(input=..., timeout=...). Creates
     ``out_dir/results`` first."""
-    raise NotImplementedError("HAR-16: run psql in oracle image")
+    results_dir = out_dir.resolve() / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    out_file = results_dir / f"{test}.out"
+    argv = psql_argv(test, host, port, db, regress_dir, out_dir)
+    stdin = sql_file.read_bytes()
+    run = runner if runner is not None else _default_runner
+    start = time.monotonic()
+    code: Optional[int]
+    err = ""
+    timed_out = False
+    try:
+        code, err = run(argv, stdin, timeout_s)
+    except subprocess.TimeoutExpired:
+        code, timed_out = None, True
+        err = f"timed out after {timeout_s:g}s; podman kill issued"
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    return PsqlRun(test=test, out_file=out_file, exit_code=code, timed_out=timed_out,
+                   elapsed_ms=elapsed_ms, stderr=err)
 
 
 def run_admin_sql(sql: str, host: str, port: int, db: str = "postgres") -> tuple[int, str]:
     """Run admin SQL (e.g. CREATE DATABASE "regression") through the same image's psql with
     ``-X -q -v ON_ERROR_STOP=1 -c <sql>``; return (exit_code, combined output)."""
-    raise NotImplementedError("HAR-16: admin sql via image psql")
+    name = f"pgarbor-psql-admin-{uuid.uuid4().hex[:12]}"
+    argv = ["podman", "run", "--rm", "-i", "--name", name, "--network", "host",
+            "-e", f"PGHOST={host}", "-e", f"PGPORT={port}",
+            "-e", f"PGUSER={config.PG_SUPERUSER}",
+            "--entrypoint", "sh", config.PG_IMAGE,
+            "-c", 'exec psql "$@" 2>&1', "sh",
+            "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql]
+    try:
+        proc = _podman_run(argv, b"", config.REGRESS_TEST_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        # 124 follows coreutils ``timeout``: the statement never completed.
+        return 124, f"admin sql timed out after {config.REGRESS_TEST_TIMEOUT_S:g}s"
+    out = proc.stdout.decode("utf-8", errors="replace")
+    err = proc.stderr.decode("utf-8", errors="replace")
+    if err.strip():
+        out += err
+    return proc.returncode, out

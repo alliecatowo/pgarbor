@@ -191,16 +191,97 @@ impl<'c> WriteTxn<'c> {
     /// Write every dirty page to the file (ids are private, past the committed end), move their
     /// ids to `spilled`, clear `dirty`, reset `dirty_bytes`. Pages are encoded with
     /// `self.commit_seq`. No sync. Write failure → error (txn should be dropped), no poison.
-    #[allow(unused_variables)]
     pub(crate) fn spill(&mut self) -> Result<()> {
-        Err(PgError::unimplemented("STO-12", "write txn spill"))
+        if self.dirty.is_empty() {
+            return Ok(());
+        }
+        let ps = self.pager.page_size();
+        let mut images: Vec<(PageId, Vec<u8>)> = Vec::with_capacity(self.dirty.len());
+        for (id, page) in self.dirty.iter() {
+            images.push((PageId(*id), encode_page(ps, page)?));
+        }
+        self.pager.write_pages(&mut images)?;
+        // Only after the write succeeded do the pages change state.
+        for (id, _) in images.iter() {
+            self.spilled.insert(id.0);
+        }
+        self.dirty.clear();
+        self.dirty_bytes = 0;
+        Ok(())
     }
 
     /// Run the commit protocol described in the module docs. Consumes the txn (the writer mutex is
     /// released on return, success or failure).
-    #[allow(unused_mut)]
     pub fn commit(mut self) -> Result<CommitSeq> {
-        Err(PgError::unimplemented("STO-12", "container commit"))
+        // Step 0: nothing to do.
+        if self.dirty.is_empty() && self.spilled.is_empty() && self.directory_root == self.base.directory_root {
+            return Ok(self.base.commit_seq);
+        }
+        // Step 1: final page count.
+        let highest = self
+            .dirty
+            .keys()
+            .copied()
+            .chain(self.spilled.iter().copied())
+            .max()
+            .unwrap_or(0);
+        let page_count = self.base.page_count.max(highest);
+        let ps = self.pager.page_size();
+
+        // Step 2: encode and write the still-dirty pages. Failure does not poison.
+        let mut images: Vec<(PageId, Vec<u8>)> = Vec::with_capacity(self.dirty.len());
+        for (id, page) in self.dirty.iter() {
+            images.push((PageId(*id), encode_page(ps, page)?));
+        }
+        self.pager.write_pages(&mut images)?;
+        drop(images);
+
+        // Step 3: make the pages durable before the superblock can reference them.
+        if self.inner.syncing() {
+            if let Err(e) = self.pager.sync_data() {
+                self.inner.poison(format!("fsync after page writes failed: {}", e.message));
+                return Err(e);
+            }
+        }
+
+        // Step 4: write the new superblock into the inactive slot.
+        let new_slot = 1 - self.base_slot;
+        let new_sb = Superblock {
+            commit_seq: self.commit_seq,
+            directory_root: self.directory_root,
+            page_count,
+            ..self.base
+        };
+        let image = new_sb.encode()?;
+        if let Err(e) = self.pager.write_slot(new_slot, &image) {
+            self.inner.poison(format!("superblock write to slot {new_slot} failed: {}", e.message));
+            return Err(e);
+        }
+
+        // Step 5: make the superblock durable.
+        if self.inner.syncing() {
+            if let Err(e) = self.pager.sync_data() {
+                self.inner.poison(format!("fsync after superblock write failed: {}", e.message));
+                return Err(e);
+            }
+        }
+
+        // Step 6: publish.
+        self.inner.publish(crate::container::handle::ContainerState {
+            pager: self.pager.clone(),
+            sb: new_sb,
+            slot: new_slot,
+        });
+        self.guard.commits += 1;
+
+        // Step 7: warm the cache; errors are irrelevant now.
+        let dirty = std::mem::take(&mut self.dirty);
+        for (_, page) in dirty {
+            let _ = self.pager.cache().insert(page);
+        }
+
+        // Step 8.
+        Ok(new_sb.commit_seq)
     }
 
     /// Abort explicitly (same as drop).
@@ -216,32 +297,298 @@ impl PageSource for WriteTxn<'_> {
     /// ids `pager.read_page_uncached(id)` (must have commit_seq == `self.commit_seq`, wrapped in
     /// `Arc`). NONE, released, or never-allocated ids → `error::page_out_of_range(id,
     /// next_page - 1)`.
-    #[allow(unused_variables)]
     fn read_page(&self, id: PageId) -> Result<PageRef> {
-        Err(PgError::unimplemented("STO-12", "write txn page read"))
+        if id.0 >= 1 && id.0 <= self.base.page_count {
+            let page = self.pager.read_page(id)?;
+            if page.commit_seq > self.base.commit_seq {
+                return Err(error::invalid_page(
+                    id,
+                    format!(
+                        "page written by commit {}, newer than snapshot commit {}",
+                        page.commit_seq.0, self.base.commit_seq.0
+                    ),
+                ));
+            }
+            return Ok(page);
+        }
+        if self.is_private(id) {
+            if let Some(p) = self.dirty.get(&id.0) {
+                return Ok(p.clone());
+            }
+            if self.spilled.contains(&id.0) {
+                let page = self.pager.read_page_uncached(id)?;
+                if page.commit_seq != self.commit_seq {
+                    return Err(error::invalid_page(
+                        id,
+                        format!(
+                            "spilled page written by commit {}, expected commit {}",
+                            page.commit_seq.0, self.commit_seq.0
+                        ),
+                    ));
+                }
+                return Ok(Arc::new(page));
+            }
+        }
+        Err(error::page_out_of_range(id, self.next_page - 1))
     }
 }
 
 impl PageSink for WriteTxn<'_> {
     /// Pop `free_private` if non-empty, else `next_page++`.
     fn alloc_page(&mut self) -> Result<PageId> {
-        Err(PgError::unimplemented("STO-12", "write txn page allocation"))
+        if let Some(id) = self.free_private.pop() {
+            return Ok(id);
+        }
+        let id = PageId(self.next_page);
+        self.next_page += 1;
+        Ok(id)
     }
     /// Private ids only (else `PgError::internal("write to non-private page <id>")`); payload
     /// within `payload_capacity` (else internal). Insert `Arc<Page{id, kind, commit_seq:
     /// self.commit_seq, payload}>` into `dirty` (replacing; adjust `dirty_bytes`), remove from
     /// `spilled` if present (the dirty version supersedes the spilled bytes).
-    #[allow(unused_variables)]
     fn write_page(&mut self, id: PageId, kind: PageKind, payload: Vec<u8>) -> Result<()> {
-        Err(PgError::unimplemented("STO-12", "write txn page write"))
+        if !self.is_private(id) {
+            return Err(PgError::internal(format!("write to non-private page {}", id.0)));
+        }
+        let cap = crate::format::consts::payload_capacity(self.pager.page_size());
+        if payload.len() > cap {
+            return Err(PgError::internal(format!(
+                "payload of {} bytes exceeds page capacity {} (page {})",
+                payload.len(),
+                cap,
+                id.0
+            )));
+        }
+        self.dirty_bytes += payload.len();
+        let page = Arc::new(Page { id, kind, commit_seq: self.commit_seq, payload });
+        if let Some(old) = self.dirty.insert(id.0, page) {
+            self.dirty_bytes = self.dirty_bytes.saturating_sub(old.payload.len());
+        }
+        self.spilled.remove(&id.0);
+        Ok(())
     }
     fn is_private(&self, id: PageId) -> bool {
         id.0 > self.base.page_count && id.0 < self.next_page
     }
     /// Private → remove from `dirty`/`spilled`, push onto `free_private`
     /// (`PgError::internal` on double release). Shared → `released_shared += 1`.
-    #[allow(unused_variables)]
     fn release_page(&mut self, id: PageId) -> Result<()> {
-        Err(PgError::unimplemented("STO-12", "write txn page release"))
+        if self.is_private(id) {
+            let mut was_live = false;
+            if let Some(old) = self.dirty.remove(&id.0) {
+                self.dirty_bytes = self.dirty_bytes.saturating_sub(old.payload.len());
+                was_live = true;
+            }
+            if self.spilled.remove(&id.0) {
+                was_live = true;
+            }
+            // A live (written) page cannot be on the free list; only scan otherwise.
+            if !was_live && self.free_private.contains(&id) {
+                return Err(PgError::internal(format!("double release of private page {}", id.0)));
+            }
+            self.free_private.push(id);
+            Ok(())
+        } else if id.is_none() || id.0 >= self.next_page {
+            Err(PgError::internal(format!("release of invalid page {}", id.0)))
+        } else {
+            self.released_shared += 1;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::container::handle::Container;
+    use crate::container::options::{CreateOptions, SyncMode};
+    use crate::io::{FileIo, LockMode, MemVfs, OpenMode, Vfs};
+    use pgarbor_common::KvRead;
+    use std::io;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    #[derive(Debug, Default)]
+    struct Ctl {
+        writes: AtomicU64,
+        syncs: AtomicU64,
+        fail_write: AtomicBool,
+        fail_sync: AtomicBool,
+    }
+
+    #[derive(Debug)]
+    struct CountFile {
+        inner: Box<dyn FileIo>,
+        ctl: Arc<Ctl>,
+    }
+    impl FileIo for CountFile {
+        fn read_at(&self, o: u64, b: &mut [u8]) -> io::Result<usize> {
+            self.inner.read_at(o, b)
+        }
+        fn write_at(&self, o: u64, b: &[u8]) -> io::Result<usize> {
+            if self.ctl.fail_write.load(Ordering::SeqCst) {
+                return Err(io::Error::from_raw_os_error(28));
+            }
+            self.ctl.writes.fetch_add(1, Ordering::SeqCst);
+            self.inner.write_at(o, b)
+        }
+        fn sync_data(&self) -> io::Result<()> {
+            if self.ctl.fail_sync.load(Ordering::SeqCst) {
+                return Err(io::Error::from_raw_os_error(5));
+            }
+            self.ctl.syncs.fetch_add(1, Ordering::SeqCst);
+            self.inner.sync_data()
+        }
+        fn sync_all(&self) -> io::Result<()> {
+            self.sync_data()
+        }
+        fn len(&self) -> io::Result<u64> {
+            self.inner.len()
+        }
+        fn set_len(&self, l: u64) -> io::Result<()> {
+            self.inner.set_len(l)
+        }
+        fn try_lock(&self, m: LockMode) -> io::Result<()> {
+            self.inner.try_lock(m)
+        }
+        fn unlock(&self) -> io::Result<()> {
+            self.inner.unlock()
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountVfs {
+        inner: MemVfs,
+        ctl: Arc<Ctl>,
+    }
+    impl Vfs for CountVfs {
+        fn open(&self, p: &Path, m: OpenMode) -> io::Result<Box<dyn FileIo>> {
+            let f = self.inner.open(p, m)?;
+            Ok(Box::new(CountFile { inner: f, ctl: self.ctl.clone() }))
+        }
+        fn exists(&self, p: &Path) -> io::Result<bool> {
+            self.inner.exists(p)
+        }
+        fn rename(&self, a: &Path, b: &Path) -> io::Result<()> {
+            self.inner.rename(a, b)
+        }
+        fn remove_file(&self, p: &Path) -> io::Result<()> {
+            self.inner.remove_file(p)
+        }
+        fn sync_dir(&self, d: &Path) -> io::Result<()> {
+            self.inner.sync_dir(d)
+        }
+    }
+
+    fn make(spill: usize) -> (Container, Arc<Ctl>) {
+        let ctl = Arc::new(Ctl::default());
+        let vfs: Arc<dyn Vfs> = Arc::new(CountVfs { inner: MemVfs::new(), ctl: ctl.clone() });
+        let opts = CreateOptions { spill_threshold_bytes: spill, sync: SyncMode::Full, ..CreateOptions::default() };
+        let c = Container::create_with(vfs, Path::new("t.pga"), &opts).unwrap();
+        (c, ctl)
+    }
+
+    fn put_commit(c: &Container, k: &[u8], v: &[u8]) -> Result<CommitSeq> {
+        let mut w = c.begin_write()?;
+        let root = w.put(PageId::NONE, k, v)?.root;
+        w.set_directory_root(root);
+        w.commit()
+    }
+
+    #[test]
+    fn commit_then_snapshot_sees_data() {
+        let (c, _) = make(64 << 20);
+        let seq = put_commit(&c, b"k", b"v").unwrap();
+        assert_eq!(seq, c.commit_seq());
+        assert_eq!(seq.0, 1);
+        let snap = c.snapshot();
+        assert_eq!(snap.directory().get(b"k").unwrap(), Some(b"v".to_vec()));
+    }
+
+    #[test]
+    fn drop_without_commit_publishes_nothing() {
+        let (c, _) = make(64 << 20);
+        let before = c.commit_seq();
+        {
+            let mut w = c.begin_write().unwrap();
+            let r = w.put(PageId::NONE, b"k", b"v").unwrap().root;
+            w.set_directory_root(r);
+        }
+        assert_eq!(c.commit_seq(), before);
+        assert_eq!(c.snapshot().directory_root(), PageId::NONE);
+        assert!(!c.is_poisoned());
+    }
+
+    #[test]
+    fn empty_commit_does_no_io() {
+        let (c, ctl) = make(64 << 20);
+        let w0 = ctl.writes.load(Ordering::SeqCst);
+        let s0 = ctl.syncs.load(Ordering::SeqCst);
+        let w = c.begin_write().unwrap();
+        let seq = w.commit().unwrap();
+        assert_eq!(seq, c.commit_seq());
+        assert_eq!(ctl.writes.load(Ordering::SeqCst), w0);
+        assert_eq!(ctl.syncs.load(Ordering::SeqCst), s0);
+    }
+
+    #[test]
+    fn tiny_spill_threshold_still_correct() {
+        let (c, _) = make(1);
+        let mut w = c.begin_write().unwrap();
+        let mut root = PageId::NONE;
+        for i in 0..300u32 {
+            let k = i.to_be_bytes();
+            root = w.put(root, &k, &[i as u8; 200]).unwrap().root;
+        }
+        for i in 0..300u32 {
+            assert_eq!(w.get(root, &i.to_be_bytes()).unwrap(), Some(vec![i as u8; 200]));
+        }
+        w.set_directory_root(root);
+        w.commit().unwrap();
+        let snap = c.snapshot();
+        for i in 0..300u32 {
+            assert_eq!(snap.directory().get(&i.to_be_bytes()).unwrap(), Some(vec![i as u8; 200]));
+        }
+    }
+
+    #[test]
+    fn page_write_failure_does_not_poison() {
+        let (c, ctl) = make(64 << 20);
+        put_commit(&c, b"a", b"1").unwrap();
+        ctl.fail_write.store(true, Ordering::SeqCst);
+        let err = put_commit(&c, b"b", b"2").unwrap_err();
+        assert_eq!(err.sqlstate.code(), "53100");
+        assert!(!c.is_poisoned());
+        assert_eq!(c.commit_seq().0, 1);
+        ctl.fail_write.store(false, Ordering::SeqCst);
+        put_commit(&c, b"b", b"2").unwrap();
+        assert_eq!(c.commit_seq().0, 2);
+    }
+
+    #[test]
+    fn sync_failure_poisons() {
+        let (c, ctl) = make(64 << 20);
+        ctl.fail_sync.store(true, Ordering::SeqCst);
+        assert!(put_commit(&c, b"a", b"1").is_err());
+        assert!(c.is_poisoned());
+        ctl.fail_sync.store(false, Ordering::SeqCst);
+        let e = c.begin_write().unwrap_err();
+        assert_eq!(e.sqlstate.code(), "58030");
+        assert_eq!(c.commit_seq().0, 0);
+    }
+
+    #[test]
+    fn release_and_reuse_private_pages() {
+        let (c, _) = make(64 << 20);
+        let mut w = c.begin_write().unwrap();
+        let a = w.alloc_page().unwrap();
+        assert!(w.is_private(a));
+        w.write_page(a, PageKind::Leaf, vec![1, 2, 3]).unwrap();
+        w.release_page(a).unwrap();
+        assert!(w.release_page(a).is_err());
+        assert!(w.read_page(a).is_err());
+        assert_eq!(w.alloc_page().unwrap(), a);
+        assert!(w.write_page(PageId(0), PageKind::Leaf, vec![]).is_err());
     }
 }

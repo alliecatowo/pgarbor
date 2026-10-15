@@ -15,6 +15,45 @@ use crate::roots::{NamedRoot, RootResolver};
 use pgarbor_common::{PageId, PgError, Result};
 use serde::Serialize;
 
+use crate::error;
+use std::ops::Bound;
+
+/// Maximum b-tree depth a walk descends to (root = depth 0), matching `get` / `RangeIter`.
+const MAX_TREE_DEPTH: u32 = 64;
+
+/// Bytes of `u32::MAX` used as the "unowned" marker in the owner array.
+const OWNER_NONE: u32 = u32::MAX;
+/// Owner-array marker for a page reachable from more than one root.
+const OWNER_SHARED: u32 = u32::MAX - 1;
+
+/// `error::page_out_of_range` unless `id` is in `1..=page_count`.
+fn check_id(id: PageId, page_count: u64) -> Result<()> {
+    if id.0 == 0 || id.0 > page_count {
+        Err(error::page_out_of_range(id, page_count))
+    } else {
+        Ok(())
+    }
+}
+
+/// Visit every page of one overflow chain (chain order). A `false` on the chain's first page
+/// skips the remaining pages of that chain; later `false` results are ignored (chain pages have
+/// no children).
+fn visit_chain(
+    src: &dyn PageSource,
+    first: PageId,
+    len: u32,
+    visit: &mut dyn FnMut(PageId, PageKind) -> Result<bool>,
+) -> Result<()> {
+    let pages = chain_pages(src, first, len)?;
+    for (i, pid) in pages.iter().enumerate() {
+        let cont = visit(*pid, PageKind::Overflow)?;
+        if i == 0 && !cont {
+            break;
+        }
+    }
+    Ok(())
+}
+
 // CONTRACT
 /// Dense bitmap over page ids `1..=page_count`. Fully implemented.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -122,7 +161,15 @@ pub fn collect_roots(
     directory_root: PageId,
     resolver: &dyn RootResolver,
 ) -> Result<Vec<NamedRoot>> {
-    Err(PgError::unimplemented("STO-14", "live root collection"))
+    let mut out = Vec::new();
+    if !directory_root.is_none() {
+        out.push(NamedRoot { label: "directory".to_string(), root: directory_root });
+    }
+    for item in RangeIter::new(src, directory_root, Bound::Unbounded, Bound::Unbounded)? {
+        let (key, value) = item?;
+        resolver.roots(&key, &value, &mut out)?;
+    }
+    Ok(out)
 }
 
 // CONTRACT
@@ -138,7 +185,42 @@ pub fn visit_tree(
     root: PageId,
     visit: &mut dyn FnMut(PageId, PageKind) -> Result<bool>,
 ) -> Result<()> {
-    Err(PgError::unimplemented("STO-14", "tree page walk"))
+    if root.is_none() {
+        return Ok(());
+    }
+    // Explicit stack of (page, depth); children are pushed in reverse so the first child pops first.
+    let mut stack: Vec<(PageId, u32)> = vec![(root, 0)];
+    while let Some((id, depth)) = stack.pop() {
+        if depth > MAX_TREE_DEPTH {
+            return Err(error::corrupt("b-tree too deep, possible cycle"));
+        }
+        let page = src.read_page(id)?;
+        let kind = page.kind;
+        if !visit(id, kind)? {
+            continue;
+        }
+        match kind {
+            PageKind::Leaf => {
+                let spans = leaf_spans(id, &page.payload)?;
+                for span in &spans {
+                    if let LeafValueRef::Overflow { first, len } = span_value(&page.payload, span) {
+                        visit_chain(src, first, len, &mut *visit)?;
+                    }
+                }
+            }
+            PageKind::Internal => {
+                let (_level, first_child, spans) = internal_spans(id, &page.payload)?;
+                for span in spans.iter().rev() {
+                    stack.push((span.child, depth + 1));
+                }
+                stack.push((first_child, depth + 1));
+            }
+            other => {
+                return Err(error::invalid_page(id, format!("expected a b-tree node, found {} page", other.name())));
+            }
+        }
+    }
+    Ok(())
 }
 
 // CONTRACT
@@ -149,5 +231,246 @@ pub fn visit_tree(
 /// root index / SHARED) to derive `exclusive_pages` (O(sum of per-root reachable pages)).
 #[allow(unused_variables)]
 pub fn trace(src: &dyn PageSource, page_count: u64, roots: &[NamedRoot], per_root: bool) -> Result<TraceResult> {
-    Err(PgError::unimplemented("STO-14", "reachability trace"))
+    // Global pass: one walk over all roots, skipping anything already marked.
+    let mut reachable = ReachSet::new(page_count);
+    let mut kinds = KindCounts::default();
+    for r in roots {
+        if r.root.is_none() {
+            continue;
+        }
+        check_id(r.root, page_count)?;
+        visit_tree(src, r.root, &mut |id: PageId, kind: PageKind| -> Result<bool> {
+            check_id(id, page_count)?;
+            if reachable.insert(id) {
+                kinds.add(kind);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })?;
+    }
+
+    if !per_root {
+        return Ok(TraceResult { reachable, kinds, roots: Vec::new() });
+    }
+
+    // Per-root pass. `stamp[id]` = index+1 of the last root whose walk visited `id`, which gives
+    // each root its own visited set without reallocating a bitmap per root.
+    if roots.len() >= OWNER_SHARED as usize {
+        return Err(PgError::internal("too many roots to trace"));
+    }
+    let n = page_count as usize;
+    let mut owner = vec![OWNER_NONE; n + 1];
+    let mut stamp = vec![0u32; n + 1];
+    let mut pages_per_root: Vec<u64> = Vec::with_capacity(roots.len());
+    for (i, r) in roots.iter().enumerate() {
+        let idx = i as u32;
+        let tag = idx + 1;
+        let mut pages: u64 = 0;
+        if !r.root.is_none() {
+            check_id(r.root, page_count)?;
+            visit_tree(src, r.root, &mut |id: PageId, _kind: PageKind| -> Result<bool> {
+                check_id(id, page_count)?;
+                let ix = id.0 as usize;
+                if stamp[ix] == tag {
+                    return Ok(false);
+                }
+                stamp[ix] = tag;
+                pages += 1;
+                owner[ix] = match owner[ix] {
+                    OWNER_NONE => idx,
+                    o if o == idx => o,
+                    _ => OWNER_SHARED,
+                };
+                Ok(true)
+            })?;
+        }
+        pages_per_root.push(pages);
+    }
+
+    let mut exclusive = vec![0u64; roots.len()];
+    for &o in &owner[1..] {
+        if o != OWNER_NONE && o != OWNER_SHARED {
+            exclusive[o as usize] += 1;
+        }
+    }
+    let usage: Vec<RootUsage> = roots
+        .iter()
+        .enumerate()
+        .map(|(i, r)| RootUsage {
+            label: r.label.clone(),
+            root: r.root,
+            pages: pages_per_root[i],
+            exclusive_pages: exclusive[i],
+        })
+        .collect();
+    Ok(TraceResult { reachable, kinds, roots: usage })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::btree::node::{InternalEntry, InternalNode, LeafEntry, LeafNode, LeafValue};
+    use crate::format::page::{Page, PageRef};
+    use crate::roots::PrefixU64Roots;
+    use pgarbor_common::CommitSeq;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    const PS: u32 = 4096;
+
+    struct MemSrc {
+        pages: BTreeMap<u64, PageRef>,
+    }
+
+    impl PageSource for MemSrc {
+        fn page_size(&self) -> u32 {
+            PS
+        }
+        fn read_page(&self, id: PageId) -> Result<PageRef> {
+            self.pages.get(&id.0).cloned().ok_or_else(|| error::page_out_of_range(id, self.pages.len() as u64))
+        }
+    }
+
+    fn put(src: &mut MemSrc, id: u64, kind: PageKind, payload: Vec<u8>) {
+        src.pages.insert(id, Arc::new(Page { id: PageId(id), kind, commit_seq: CommitSeq(1), payload }));
+    }
+
+    fn leaf_payload(kvs: Vec<(&str, LeafValue)>) -> Vec<u8> {
+        let entries = kvs
+            .into_iter()
+            .map(|(k, v)| LeafEntry { key: k.as_bytes().to_vec(), value: v })
+            .collect();
+        LeafNode { entries }.encode(PS).unwrap()
+    }
+
+    fn internal_payload(first: u64, seps: Vec<(&str, u64)>) -> Vec<u8> {
+        let entries = seps
+            .into_iter()
+            .map(|(k, c)| InternalEntry { key: k.as_bytes().to_vec(), child: PageId(c) })
+            .collect();
+        InternalNode { level: 1, first_child: PageId(first), entries }.encode(PS).unwrap()
+    }
+
+    fn inline(s: &str) -> LeafValue {
+        LeafValue::Inline(s.as_bytes().to_vec())
+    }
+
+    /// Pages 1..=9:
+    /// 1 leaf "a"; 2 leaf "b"; 3 internal -> {1, 2} (shared subtree S);
+    /// 4 leaf "c"; 5 internal -> {3, 4} (root A); 6 internal -> {3, 7} (root B);
+    /// 7 leaf "d"; 8 overflow chain page (3 bytes "xyz"); 9 leaf "o" with overflow value (root C).
+    fn sample() -> MemSrc {
+        let mut src = MemSrc { pages: BTreeMap::new() };
+        put(&mut src, 1, PageKind::Leaf, leaf_payload(vec![("a", inline("1"))]));
+        put(&mut src, 2, PageKind::Leaf, leaf_payload(vec![("b", inline("2"))]));
+        put(&mut src, 3, PageKind::Internal, internal_payload(1, vec![("b", 2)]));
+        put(&mut src, 4, PageKind::Leaf, leaf_payload(vec![("c", inline("3"))]));
+        put(&mut src, 5, PageKind::Internal, internal_payload(3, vec![("c", 4)]));
+        put(&mut src, 6, PageKind::Internal, internal_payload(3, vec![("d", 7)]));
+        put(&mut src, 7, PageKind::Leaf, leaf_payload(vec![("d", inline("4"))]));
+        let mut chain = vec![0u8; 8];
+        chain.extend_from_slice(b"xyz");
+        put(&mut src, 8, PageKind::Overflow, chain);
+        put(
+            &mut src,
+            9,
+            PageKind::Leaf,
+            leaf_payload(vec![("o", LeafValue::Overflow { first: PageId(8), len: 3 })]),
+        );
+        src
+    }
+
+    fn named(label: &str, root: u64) -> NamedRoot {
+        NamedRoot { label: label.to_string(), root: PageId(root) }
+    }
+
+    #[test]
+    fn shared_subtree_is_not_exclusive() {
+        let src = sample();
+        let roots = vec![named("A", 5), named("B", 6)];
+        let t = trace(&src, 9, &roots, true).unwrap();
+        // Distinct pages: 1,2,3,4,5,6,7 = 7.
+        assert_eq!(t.reachable.len(), 7);
+        assert_eq!(t.reachable.unmarked(), 2);
+        assert_eq!(t.kinds.total(), 7);
+        assert_eq!(t.kinds.leaf, 4);
+        assert_eq!(t.kinds.internal, 3);
+        assert_eq!(t.kinds.overflow, 0);
+        assert_eq!(t.roots.len(), 2);
+        // Each root reaches 5 pages: {5,3,1,2,4} and {6,3,1,2,7}.
+        for u in &t.roots {
+            assert_eq!(u.pages, 5);
+            assert_eq!(u.exclusive_pages, 2);
+            assert!(u.exclusive_pages <= u.pages);
+        }
+        assert_eq!(t.roots[0].label, "A");
+        assert_eq!(t.roots[1].root, PageId(6));
+        // Shared pages {1,2,3} are in neither exclusive count: 2 + 2 + 3 = 7 total.
+        assert_eq!(t.roots[0].exclusive_pages + t.roots[1].exclusive_pages + 3, t.reachable.len());
+    }
+
+    #[test]
+    fn overflow_pages_counted_as_overflow() {
+        let src = sample();
+        let roots = vec![named("A", 5), named("B", 6), named("C", 9)];
+        let t = trace(&src, 9, &roots, true).unwrap();
+        assert_eq!(t.reachable.len(), 9);
+        assert_eq!(t.reachable.unmarked(), 0);
+        assert_eq!(t.kinds.total(), 9);
+        assert_eq!(t.kinds.overflow, 1);
+        assert_eq!(t.kinds.leaf, 5);
+        assert_eq!(t.kinds.internal, 3);
+        // Root C owns the leaf 9 and its overflow page 8 exclusively.
+        assert_eq!(t.roots[2].pages, 2);
+        assert_eq!(t.roots[2].exclusive_pages, 2);
+    }
+
+    #[test]
+    fn global_trace_matches_per_root_totals() {
+        let src = sample();
+        let roots = vec![named("A", 5), named("B", 6), named("C", 9)];
+        let global = trace(&src, 9, &roots, false).unwrap();
+        let detailed = trace(&src, 9, &roots, true).unwrap();
+        assert!(global.roots.is_empty());
+        assert_eq!(global.reachable, detailed.reachable);
+        assert_eq!(global.kinds, detailed.kinds);
+    }
+
+    #[test]
+    fn none_roots_are_skipped() {
+        let src = sample();
+        let roots = vec![named("empty", 0)];
+        let t = trace(&src, 9, &roots, true).unwrap();
+        assert!(t.reachable.is_empty());
+        assert_eq!(t.roots[0].pages, 0);
+        assert_eq!(t.roots[0].exclusive_pages, 0);
+    }
+
+    #[test]
+    fn root_beyond_page_count_is_xx001() {
+        let src = sample();
+        let err = trace(&src, 9, &[named("bad", 20)], false).unwrap_err();
+        assert_eq!(err.sqlstate.code(), "XX001");
+        assert!(err.message.contains("beyond the end of committed data"));
+    }
+
+    #[test]
+    fn collect_roots_reads_directory() {
+        let mut src = sample();
+        // Directory leaf 10: "Rmain" -> root 9, "Rsnap" -> root 5, "Xother" -> not a root.
+        let dir = leaf_payload(vec![
+            ("Rmain", LeafValue::Inline(9u64.to_le_bytes().to_vec())),
+            ("Rsnap", LeafValue::Inline(5u64.to_le_bytes().to_vec())),
+            ("Xother", LeafValue::Inline(b"junk".to_vec())),
+        ]);
+        put(&mut src, 10, PageKind::Leaf, dir);
+        let resolver = PrefixU64Roots::new(b"R");
+        let roots = collect_roots(&src, PageId(10), &resolver).unwrap();
+        assert_eq!(roots.len(), 3);
+        assert_eq!(roots[0], NamedRoot { label: "directory".into(), root: PageId(10) });
+        assert_eq!(roots[1], NamedRoot { label: "main".into(), root: PageId(9) });
+        assert_eq!(roots[2], NamedRoot { label: "snap".into(), root: PageId(5) });
+        assert!(collect_roots(&src, PageId::NONE, &resolver).unwrap().is_empty());
+    }
 }
