@@ -1,0 +1,1498 @@
+{
+ "crate": "pgarbor-catalog",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "CAT-01",
+   "task_ids": [
+    "CAT-01",
+    "CAT-05",
+    "CAT-12"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/persist/meta.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Catalog OID counter fallback and branch bootstrap.",
+   "spec": "Implement `allocate_oid` (KV counter `cat:next_oid`, wrap at u32::MAX to 16384, skip `in_use`, never 0, 54000 `out of OIDs` after exhausting) and `bootstrap(kv)` exactly as the module docs list (public schema with ACL, postgres role, postgres database from `builtin::DATABASES`, the two descriptions, counters, bootstrap marker; idempotent via `cat:bootstrap`). Use `persist::put_object/put_description`, `keys::*`. The bootstrap superuser row must have all attributes true, `conn_limit -1`, no password. `Database` fields come from the generated `BuiltinDatabase` row of OID 5. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/persist/keys.rs",
+    "crates/pgarbor-catalog/src/persist/codec.rs",
+    "crates/pgarbor-catalog/src/builtin/objects.rs",
+    "crates/pgarbor-catalog/src/model/namespace.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "bootstrap on an empty MemKv returns true, a second call false and writes nothing",
+    "after bootstrap CatalogSnapshot::load finds namespace 2200 `public` with acl text `{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}`, role 10 `postgres` (superuser), database 5 `postgres`",
+    "allocate_oid on an empty KV returns 16384 then 16385; skips OIDs reported in_use; wraps from u32::MAX to 16384",
+    "read_version after bootstrap == (1, 0)"
+   ]
+  },
+  {
+   "lease_id": "CAT-02",
+   "task_ids": [
+    "CAT-01",
+    "CAT-12"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/snapshot/build.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Build the immutable indexed CatalogSnapshot from builtin + persisted data; aclitem[] text parser.",
+   "spec": "Implement `CatalogSnapshot::build` (steps 1-9 of the module docs, including validation errors XX001 with the exact texts) and `parse_acl_text` (PG aclitem[] grammar: `{a=r*w/g,\"quoted name\"=U/g,=U/g}`, `*` grant options, privilege letters `arwdDxtXUCTcsAm`). Builtin objects come from `crate::builtin` (NAMESPACES, ROLES, DATABASES, SYSTEM_RELS); convert builtin acl text through `parse_acl_text` with a role lookup over the builtin ROLES plus the bootstrap `postgres` role (10). Skip the bootstrap-mutable rows (public 2200, postgres role 10, database 5) when taking them from the generated tables: they come from `data`. `SnapshotIndexes` must be fully populated; array type names use `Relation::array_type_name`/`TypeObj::array_type_name` or `naming::array_type_name`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/snapshot/core.rs",
+    "crates/pgarbor-catalog/src/data.rs",
+    "crates/pgarbor-catalog/src/builtin/mod.rs",
+    "crates/pgarbor-catalog/src/builtin/objects.rs",
+    "crates/pgarbor-catalog/src/naming.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-06"
+   ],
+   "acceptance": [
+    "builtin_only() snapshot resolves pg_catalog 11, information_schema 13293, pg_toast 99 but not public until bootstrap data is supplied",
+    "class_in_namespace(11, \"pg_class\") is ClassRef::Relation(1259); (11, \"pg_class_oid_index\") is SystemIndex",
+    "two persisted relations with the same (namespace, name) -> XX001 `duplicate catalog entry for relation \"<ns oid>.<name>\"`",
+    "an index whose table is missing -> XX001 `catalog is corrupt: ...`",
+    "parse_acl_text(Some(\"{postgres=UC/postgres,=U/postgres}\")) yields two AclItems with PUBLIC grantee 0",
+    "indexes_by_table, constraints_by_table, fks_referencing, sequences_by_owner, enum_label_owner, attrdef_owner are populated and sorted by OID"
+   ]
+  },
+  {
+   "lease_id": "CAT-03",
+   "task_ids": [
+    "CAT-02"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/search_path.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] search_path GUC parsing and resolution against a snapshot.",
+   "spec": "Implement `SearchPath::parse` (PG SplitIdentifierString rules, ASCII down-casing, 63-byte truncation, `$user`, quoted items, 22023 invalid value + DETAIL `List syntax is invalid.` via `errors::invalid_search_path`) and `resolve_search_path` (explicit/effective/effective_for_relations/creation_namespace/temp rules of the module docs). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/snapshot/core.rs",
+    "crates/pgarbor-catalog/src/env.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-02"
+   ],
+   "acceptance": [
+    "parse(\"\\\"$user\\\", public\") == default()",
+    "parse(\"A, \\\"B\\\"\") -> [Name(a), Name(B)]",
+    "parse(\"a,,b\") -> 22023 invalid value for parameter \"search_path\": \"a,,b\"",
+    "parse(\"\") is an empty list and resolving it gives creation_namespace None",
+    "resolve with default path on a bootstrapped snapshot: effective = [pg_catalog 11, public 2200]; explicit = [public]; current_schemas(true) names {pg_catalog,public}",
+    "nonexistent schemas in the path are skipped silently; duplicates deduplicated"
+   ]
+  },
+  {
+   "lease_id": "CAT-04",
+   "task_ids": [
+    "CAT-02",
+    "CAT-03"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/resolve.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] Name resolution: relations, types, functions, roles, collations, visibility, creation namespaces.",
+   "spec": "Implement every `CatalogEnv` method in the file per the module docs. Builtin system relations are found through `snapshot.class_in_namespace` / `builtin::system_rel_by_name`; builtin types through `pgarbor_types::registry` and `catalog_data`; builtin functions through `pgarbor_types::catalog_data::procs_named` building `FuncCandidate` (read `pgarbor_types::resolve::func::FuncCandidate`). Visibility follows PG `RelationIsVisible`/`TypeIsVisible`/`FunctionIsVisible` (earlier same-name object in the path hides later ones). `qualified_class_name` uses `pgarbor_types::text::format::quote_identifier`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/search_path.rs",
+    "crates/pgarbor-catalog/src/env.rs",
+    "crates/pgarbor-types/src/resolve/func.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-types/src/registry.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-02",
+    "CAT-03"
+   ],
+   "acceptance": [
+    "lookup_class(None, \"pg_class\") finds the system table via the implicit pg_catalog entry; lookup_class(Some(\"nos\"), \"x\") is Ok(None) for a missing schema",
+    "resolve_class of a missing relation -> 42P01 `relation \"x\" does not exist`",
+    "creation_namespace_for(Some(\"pg_catalog\"), \"t\") -> 42501 `permission denied to create \"pg_catalog.t\"`; Some(\"nos\") -> 3F000 `schema \"nos\" does not exist`",
+    "resolve_relation of an index -> 42809 `cannot open relation \"t_pkey\"` with DETAIL `This operation is not supported for indexes.`",
+    "lookup_type(None, \"int4\") finds the builtin; user enum `mood` in public found via the path; `_mood` resolves to its array type",
+    "function_candidates(None, \"abs\") returns all builtin abs overloads with path_pos of pg_catalog",
+    "relation_is_visible is false for a table shadowed by an earlier same-named table in the path"
+   ]
+  },
+  {
+   "lease_id": "CAT-05",
+   "task_ids": [
+    "CAT-03",
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/typeenv.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] pgarbor_types::TypeEnv over the catalog: user type metadata, enum labels, composite fields, reg* lookup/output.",
+   "spec": "Implement the five inherent methods of `impl CatalogEnv` exactly as the module docs specify (TypeInfo shapes for enums/domains/rowtypes/arrays, label order, composite field lists including builtin catalog rowtypes via `builtin::builtin_relation`, reg* parsing with stringToQualifiedNameList rules, reg* output with visibility-based qualification). Read `pgarbor_types::registry::TypeInfo`, `pgarbor_types::names`, `pgarbor_types::context`. Keep the `TypeEnv` trait impl unchanged. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-types/src/registry.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/names.rs",
+    "crates/pgarbor-catalog/src/resolve.rs",
+    "crates/pgarbor-catalog/src/model/types.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-04"
+   ],
+   "acceptance": [
+    "user_type_info of an enum has typtype 'e', category 'E', len 4, byval, align 'i', input name `enum_in`",
+    "user_type_info of a domain over varchar copies len/align/storage/output from the base type and reports basetype",
+    "composite_fields_of(83) (pg_class rowtype) returns 34 fields named oid, relname, ...",
+    "reg_lookup_impl(Class, \"public.t\") and \"\\\"Mixed\\\"\" resolve; a missing name is Ok(None); more than two dotted parts -> 42601 improper qualified name (too many dotted names)",
+    "reg_name_impl(Class, oid) returns `t` when visible, `s.t` otherwise, quoted when needed",
+    "enum_labels_of returns labels sorted by sort_order"
+   ]
+  },
+  {
+   "lease_id": "CAT-06",
+   "task_ids": [
+    "CAT-03",
+    "CAT-04"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/naming.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] PG-exact automatic names for sequences, indexes, constraints and array types.",
+   "spec": "Implement makeObjectName, ChooseRelationName, ChooseConstraintName, ChooseIndexName, ChooseIndexColumnNames, the column-list addition and choose_array_type_name exactly as the doc comments (including the corrected `_name_1` retry scheme). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/snapshot/core.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "make_object_name(\"t\", Some(\"id\"), Some(\"seq\")) == t_id_seq; a 70-byte name1 is truncated so the whole stays <= 63 bytes and the label survives",
+    "choose_relation_name with an existing t_a_idx returns t_a_idx1, then t_a_idx2",
+    "choose_index_column_names([Column(a), FunctionCall(lower), Expression, Expression]) == [a, lower, expr, expr1]",
+    "choose_index_name(primary) == t_pkey; unique constraint over (a,b) == t_a_b_key; plain == t_a_idx",
+    "choose_array_type_name for `mood` == _mood; when _mood is taken == _mood_1",
+    "choose_constraint_name checks the whole namespace, not one table"
+   ]
+  },
+  {
+   "lease_id": "CAT-07",
+   "task_ids": [
+    "CAT-06"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/describe.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Object descriptions (getObjectDescription) used by DROP messages, COMMENT and pg_describe_object.",
+   "spec": "Implement `describe` and `type_description` per the table in the module docs (schema qualification only when not visible in the search path; columns, defaults, constraints on tables vs domains, functions via `ddl::function::format_signature`, builtin objects too). Unknown OID -> Ok(None). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/resolve.rs",
+    "crates/pgarbor-catalog/src/ddl/function.rs",
+    "crates/pgarbor-catalog/src/model/common.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-04",
+    "CAT-19"
+   ],
+   "acceptance": [
+    "describe(table t visible) == `table t`; in an invisible schema == `table zz_scratch.t`",
+    "describe(column b of t) == `column b of table t`; default == `default value for column id of table t`",
+    "describe(PK constraint) == `constraint t_pkey on table t`; domain constraint == `constraint pos_check`",
+    "describe(index) == `index t_pkey`; array rowtype type prints `t[]`; function prints `function f(integer)`",
+    "type_description words match the module docs",
+    "unknown OID -> Ok(None)"
+   ]
+  },
+  {
+   "lease_id": "CAT-08",
+   "task_ids": [
+    "CAT-05",
+    "CAT-03"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/common.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] Shared DDL helpers: ownership and privilege checks, name-clash checks, column list validation.",
+   "spec": "Implement `validate_column_specs` and the `CatalogTxn` helpers (`is_superuser`, `require_owner`, `require_schema_create`, `check_new_relation_name`, `resolve_type_name_clash` including the moveArrayTypeName behavior, `check_creatable_namespace`, `owner_of`). Ownership is `has_privs_of_role(current_user, owner)` or superuser; use `crate::acl::RoleGraph` (CAT-22) for membership. Error texts per docs. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/txn.rs",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/naming.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-22",
+    "CAT-06"
+   ],
+   "acceptance": [
+    "validate_column_specs rejects duplicate names (42701 `column \"a\" specified more than once`), `xmin` (42701 `column name \"xmin\" conflicts with a system column name`), pseudo-types (42P16 `column \"a\" has pseudo-type record`), and conflicting serial/identity/default/generated combinations with the 42601 messages",
+    "check_new_relation_name on an existing table -> 42P07 `relation \"t\" already exists`; with if_not_exists -> NOTICE ... skipping and Ok(false)",
+    "a rowtype clash with an enum -> 42710 `type \"x\" already exists`; clash with an auto array type `_foo` moves that array out of the way (array_type_name = _foo_1 style) instead of failing",
+    "require_owner by a non-owner -> 42501 `must be owner of table t`; superuser passes",
+    "check_creatable_namespace(pg_catalog) -> 42501 permission denied to create \"pg_catalog.x\" + DETAIL System catalog modifications are currently disallowed."
+   ]
+  },
+  {
+   "lease_id": "CAT-09",
+   "task_ids": [
+    "CAT-02",
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/schema.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] CREATE SCHEMA, ALTER SCHEMA RENAME/OWNER, ALTER DATABASE.",
+   "spec": "Implement all methods per the module docs, with the exact order of checks of schemacmds.c (existence, duplicate, ownership, CREATE on database, reserved prefix). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/common.rs",
+    "crates/pgarbor-catalog/src/model/namespace.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-22"
+   ],
+   "acceptance": [
+    "create_schema(\"s\") allocates an OID >= 16384, owner and acl None",
+    "create_schema(\"pg_x\") -> 42939 unacceptable schema name \"pg_x\" with DETAIL The prefix \"pg_\" is reserved for system schemas.",
+    "duplicate -> 42P06 `schema \"s\" already exists`; if_not_exists -> NOTICE skipping and Ok(None)",
+    "rename_schema to an existing name -> 42P06; unknown old name -> 3F000",
+    "rename_database of the current database -> 55006 `current database cannot be renamed`",
+    "set_database_config adds/replaces/removes name=value entries"
+   ]
+  },
+  {
+   "lease_id": "CAT-10",
+   "task_ids": [
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/role.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Roles and memberships: CREATE/ALTER/DROP ROLE, GRANT/REVOKE role.",
+   "spec": "Implement per the module docs. Membership cycle detection uses the existing memberships in the working data (transitive closure over `RoleMembership`). DROP ROLE must collect owned objects and ACL mentions through `crate::depend::role_dependencies` (CAT-23) and describe them with `describe::describe` for the DETAIL lines. Password strings are stored as given (already hashed by the caller). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/model/namespace.rs",
+    "crates/pgarbor-catalog/src/depend.rs",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "crates/pgarbor-catalog/src/ddl/common.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-22",
+    "CAT-23"
+   ],
+   "acceptance": [
+    "create_role stores attributes and rejects names starting with pg_ (42939 role name \"pg_x\" is reserved)",
+    "duplicate role -> 42710 `role \"x\" already exists`",
+    "drop_role of a role owning a table -> 2BP01 `role \"r\" cannot be dropped because some objects depend on it` with DETAIL `owner of table t`",
+    "drop_role(current user) -> 55006 current user cannot be dropped",
+    "grant_role a->b then b->a -> 0LP01 `role \"a\" is a member of role \"b\"`",
+    "plaintext password -> 22023 password is not hashed"
+   ]
+  },
+  {
+   "lease_id": "CAT-11",
+   "task_ids": [
+    "CAT-03",
+    "CAT-10"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/table.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "[north-star] CREATE TABLE: columns, defaults, serial/identity/generated, rowtype OIDs, constraints and indexes.",
+   "spec": "Implement `create_table` following the 7-step algorithm in the module docs. Allocate OIDs with `new_oid`, name sequences/constraints through `crate::naming` against `snapshot()` (the statement's own earlier names must be passed as `others`), create sequences with `create_column_sequence` AFTER the table row is written, then call `add_constraints_to_new_table`. Column collations from `env.type_info(oid).collation`. Fold `ColumnSpec::not_null`, serial and identity columns into `ConstraintSpecKind::NotNull` specs before calling the constraint creator; PRIMARY KEY columns lacking a NOT NULL constraint also get one (`t_id_not_null`). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/ddl/common.rs",
+    "crates/pgarbor-catalog/src/ddl/constraint.rs",
+    "crates/pgarbor-catalog/src/ddl/sequence.rs",
+    "crates/pgarbor-catalog/src/naming.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-12",
+    "CAT-16",
+    "CAT-06"
+   ],
+   "acceptance": [
+    "create table t(id serial primary key, a int not null, b text unique, c int check (c>0), d int generated always as identity, e int generated always as (a*2) stored, f int references t(id) on delete cascade) creates relations t_id_seq, t_d_seq, t, t_pkey, t_b_key and constraints t_c_check, t_id_not_null, t_a_not_null, t_d_not_null, t_pkey, t_b_key, t_f_fkey with the oracle attributes",
+    "default of id is `nextval('t_id_seq'::regclass)` with a dependency on the sequence; sequence is owned_by (t,1)",
+    "second PRIMARY KEY -> 42P16 multiple primary keys for table \"t\" are not allowed",
+    "duplicate column -> 42701; unknown key column -> 42703 column \"x\" named in key does not exist",
+    "existing relation -> 42P07; with if_not_exists NOTICE and Ok(None)",
+    "temporary tables / inheritance / partitioning -> 0A000 via PgError::unimplemented(\"CAT-11\", ...)",
+    "FollowUp::CreateSequenceState queued per sequence; no BuildIndex follow-ups"
+   ]
+  },
+  {
+   "lease_id": "CAT-12",
+   "task_ids": [
+    "CAT-04",
+    "CAT-09"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/constraint.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Table constraints: ADD/DROP/RENAME/VALIDATE/ALTER CONSTRAINT, NOT NULL, FK key lookup.",
+   "spec": "Implement all methods per the module docs. Index creation goes through `create_index_internal` (CAT-13); FK type compatibility uses `pgarbor_types::ops::resolve_operator` / `cast::find_cast`; drops go through `drop_objects` (CAT-24). Keep the constraint creation ORDER documented for CREATE TABLE. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/index.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "crates/pgarbor-catalog/src/naming.rs",
+    "crates/pgarbor-types/src/resolve/oper.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-13",
+    "CAT-24",
+    "CAT-06",
+    "CAT-08"
+   ],
+   "acceptance": [
+    "add_constraint(PrimaryKey) on a table with a nullable column creates `t_id_not_null` then `t_pkey` with index and queues BuildIndex + ValidateNotNull",
+    "FK referencing a non-unique column set -> 42830 there is no unique constraint matching given keys for referenced table \"t\"",
+    "REFERENCES t without columns when t has no PK -> 42704 there is no primary key for referenced table \"t\"",
+    "FK text -> integer -> 42804 foreign key constraint \"f_x_fkey\" cannot be implemented with the DETAIL of the docs",
+    "drop_constraint of a PK with an inbound FK under RESTRICT -> 2BP01 `cannot drop constraint t_pkey on table t because other objects depend on it` DETAIL `constraint t2_x_fkey on table t2 depends on index t_pkey`",
+    "dropping a PK leaves the NOT NULL constraint and Column::not_null",
+    "rename_constraint of a PK renames its index too",
+    "validate_constraint on a UNIQUE -> 42809 constraint ... is not a foreign key or check constraint"
+   ]
+  },
+  {
+   "lease_id": "CAT-13",
+   "task_ids": [
+    "CAT-04",
+    "CAT-12"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/index.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE INDEX / ALTER INDEX, operator class defaults, index key resolution.",
+   "spec": "Implement per the module docs. `default_btree_opclass` reads `builtin::OPCLASSES` (TextRows: columns opcmethod, opcname, opcnamespace, opcowner, opcfamily, opcintype, opcdefault, opckeytype in catalog order - see gen/ref/pg_opclass.csv): btree method OID 403 with opcdefault = 't'. Option validation tables for btree (fillfactor 10..100, deduplicate_items, vacuum_cleanup_index_scale_factor). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/model/index.rs",
+    "crates/pgarbor-catalog/src/builtin/objects.rs",
+    "crates/pgarbor-catalog/src/naming.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-06"
+   ],
+   "acceptance": [
+    "create index on t(a) names it t_a_idx; second -> t_a_idx1; ON t(lower(b)) -> t_lower_idx; ((a+1),(a+2)) -> t_expr_expr1_idx; include (a) -> t_a_a1_idx",
+    "key on text gets opclass 3126, int4 1978, collation 100 for text; desc nulls last -> indoption 1",
+    "CREATE INDEX on a view -> 42809 cannot create index on relation \"v\" DETAIL This operation is not supported for views.",
+    "unknown column -> 42703 column \"nosuch\" does not exist; explicit collation on integer -> 42804 collations are not supported by type integer",
+    "type xid -> 42704 data type xid has no default operator class for access method \"btree\"",
+    "fillfactor=5 -> 22023 value 5 out of bounds for option \"fillfactor\" DETAIL Valid values are between \"10\" and \"100\".",
+    "hash/gist/gin -> 0A000 via unimplemented(\"CAT-13\")",
+    "BuildIndex follow-up queued"
+   ]
+  },
+  {
+   "lease_id": "CAT-14",
+   "task_ids": [
+    "CAT-03",
+    "CAT-06"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/alter_table.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "ALTER TABLE ADD/DROP/RENAME COLUMN and ALTER COLUMN TYPE.",
+   "spec": "Implement per the module docs. Column drop delegates to `drop_objects` for the column address (CAT-24 rewrites the slot). Rename collects dependent expressions through `depends_on` and calls the `ExprRewriter`. ALTER TYPE must update index keys, re-validate FKs, apply `new_default`, handle identity sequences and queue RewriteTable. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/drop.rs",
+    "crates/pgarbor-catalog/src/ddl/constraint.rs",
+    "crates/pgarbor-catalog/src/ddl/index.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-11",
+    "CAT-24",
+    "CAT-12",
+    "CAT-13",
+    "CAT-16"
+   ],
+   "acceptance": [
+    "add_column on a view -> 42809 ALTER action ADD COLUMN cannot be performed on relation \"v\" DETAIL This operation is not supported for views.",
+    "add_column existing name -> 42701 `column \"a\" of relation \"t\" already exists`; if_not_exists -> NOTICE skipping",
+    "add_column with fast_default stores missing_value and queues no RewriteTable; volatile default / identity / stored generated queue RewriteTable",
+    "drop_column cascades per the docs: view dependent blocks with 2BP01 `cannot drop column a of table t because other objects depend on it` DETAIL `view v depends on column a of table t`; multi-column PK and CHECK vanish silently",
+    "dropped slot is named `........pg.dropped.N........` with type oid 0",
+    "rename_column rewrites a CHECK text via the rewriter and keeps IndexKey::name",
+    "rename of a system column -> 0A000 cannot rename system column \"ctid\"",
+    "alter_column_type on a column used by a view -> 0A000 cannot alter type of a column used by a view or rule; by a generated column -> 0A000 ... generated column DETAIL Column \"a\" is used by generated column \"d\"."
+   ]
+  },
+  {
+   "lease_id": "CAT-15",
+   "task_ids": [
+    "CAT-03",
+    "CAT-10"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/alter_column.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Column attributes and whole-relation ALTERs: defaults, NOT NULL, identity, generation, storage, rename/schema/owner/options.",
+   "spec": "Implement every method per the module docs. Relation renames/moves rewrite dependent expression text through the `ExprRewriter` (only for expressions whose `depends_on` contains the relation). Ownership change rewrites ACLs with `acl::aclnewowner`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/ddl/constraint.rs",
+    "crates/pgarbor-catalog/src/ddl/sequence.rs",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "crates/pgarbor-catalog/src/model/sequence.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-11",
+    "CAT-14",
+    "CAT-16",
+    "CAT-22",
+    "CAT-24",
+    "CAT-12"
+   ],
+   "acceptance": [
+    "add_identity on a nullable column -> 42P16 column \"a\" of relation \"t\" must be declared NOT NULL before identity can be added",
+    "set_column_default on an identity column -> 42P16 `column \"id\" of relation \"t\" is an identity column`; on a generated column -> `... is a generated column` HINT Use ALTER TABLE ... ALTER COLUMN ... SET EXPRESSION instead.",
+    "drop_not_null on a PK column -> 42P16 column \"id\" is in a primary key",
+    "drop_expression on a non-generated column -> 42P16 not a generated column (NOTICE with missing_ok)",
+    "set_column_attribute Storage(external) on integer -> 42804 column data type integer can only have storage PLAIN",
+    "rename_relation onto an existing relation -> 42P07; constraint and index names are unchanged",
+    "set_relation_schema moves the relation, its indexes, owned sequences, and constraints",
+    "set_relation_options fillfactor=5 -> 22023 value 5 out of bounds ...",
+    "alter_relation_owner on an index -> 42809 cannot change owner of index \"i\" with the documented HINT"
+   ]
+  },
+  {
+   "lease_id": "CAT-16",
+   "task_ids": [
+    "CAT-10",
+    "CAT-03"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/sequence.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE/ALTER SEQUENCE definitions and sequence option resolution (init_params).",
+   "spec": "Implement `resolve_sequence_options` exactly per PG init_params (read src/backend/commands/sequence.c), `create_sequence`, `alter_sequence`, `create_column_sequence`. Pure option resolution must be unit-tested thoroughly. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/model/sequence.rs",
+    "crates/pgarbor-catalog/src/errors.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08"
+   ],
+   "acceptance": [
+    "defaults: bigint ascending -> start 1, min 1, max 9223372036854775807, increment 1, cache 1, no cycle; descending -> max -1, min i64::MIN, start -1",
+    "AS smallint -> max 32767; MAXVALUE 100000 AS smallint -> 22023 MAXVALUE (100000) is out of range for sequence data type smallint",
+    "INCREMENT 0 -> 22023 INCREMENT must not be zero; MINVALUE 10 MAXVALUE 5 -> 22023 MINVALUE (10) must be less than MAXVALUE (5)",
+    "START 0 with default MINVALUE 1 -> 22023 START value (0) cannot be less than MINVALUE (1)",
+    "ALTER ... AS integer moves default bounds to the integer defaults",
+    "OWNED BY with a different owner -> 55000 sequence must have same owner as table it is linked to; different schema -> 55000 ... same schema ...",
+    "create_sequence queues CreateSequenceState; alter with RESTART queues RestartSequence{value}"
+   ]
+  },
+  {
+   "lease_id": "CAT-17",
+   "task_ids": [
+    "CAT-03",
+    "CAT-06"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/view.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE [OR REPLACE] [MATERIALIZED] VIEW and REFRESH MATERIALIZED VIEW (catalog side).",
+   "spec": "Implement per the module docs, including checkViewColumns for OR REPLACE and the matview populate/refresh follow-ups. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs",
+    "crates/pgarbor-catalog/src/ddl/table.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-24"
+   ],
+   "acceptance": [
+    "create view v as select 1 as a; create or replace view with column b -> 42P16 cannot change name of view column \"a\" to \"b\" with the HINT of the docs",
+    "or replace adding a column at the end works and keeps the OID",
+    "or replace with fewer columns -> 42P16 cannot drop columns from view",
+    "type change -> 42P16 cannot change data type of view column \"a\" from integer to bigint",
+    "CREATE MATERIALIZED VIEW queues PopulateMatView when populated; refresh_matview(false) queues DropRelationData for matview and indexes",
+    "or_replace over a table -> 42809 \"t\" is not a view"
+   ]
+  },
+  {
+   "lease_id": "CAT-18",
+   "task_ids": [
+    "CAT-03",
+    "CAT-06"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/typedef.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Enums, domains, composite types and ALTER TYPE/DOMAIN catalog operations.",
+   "spec": "Implement per the module docs including the f32 midpoint/renumber algorithm for enum ADD VALUE (read src/backend/catalog/pg_enum.c AddEnumLabel/RenumberEnumType), domain constraint naming (d_check, d_check1, d_not_null) and the type name clash/array move logic via `resolve_type_name_clash`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/model/types.rs",
+    "crates/pgarbor-catalog/src/ddl/common.rs",
+    "crates/pgarbor-catalog/src/naming.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-06",
+    "CAT-24",
+    "CAT-14"
+   ],
+   "acceptance": [
+    "create_enum(['a','b','c']) gives sort orders 1,2,3; duplicate labels -> 23505 duplicate key value violates unique constraint \"pg_enum_typid_label_index\"; 64-byte label -> 42602 invalid enum label ...",
+    "add_enum_value('z') before 'a' with 1,2 -> sort order 1.5; after the last -> last+1; unknown neighbour -> 22023 \"zz\" is not an existing enum label",
+    "rename_enum_value to an existing label -> 42710 enum label \"b\" already exists",
+    "create_domain with two CHECKs and NOT NULL names d_check, d_check1, d_not_null",
+    "add_domain_constraint duplicate name -> 42710 constraint \"c3\" for domain \"d\" already exists; drop missing -> 42704 constraint \"nosuch\" of domain \"d\" does not exist",
+    "alter_domain on an enum -> 42809 `e is not a domain`",
+    "creating type _e when e's array is _e moves e's array out of the way",
+    "create_composite makes a CompositeType relation without system columns"
+   ]
+  },
+  {
+   "lease_id": "CAT-19",
+   "task_ids": [
+    "CAT-03",
+    "CAT-10"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/function.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "CREATE [OR REPLACE] FUNCTION/PROCEDURE, ALTER FUNCTION, signature formatting.",
+   "spec": "Implement per the module docs (parameter checks, return type derivation, OR REPLACE compatibility rules, ALTER attributes, rename/schema/owner) and `format_signature` using `pgarbor_types::names::format_type` and `CatalogEnv::function_is_visible`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/model/function.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs",
+    "crates/pgarbor-catalog/src/errors.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-22"
+   ],
+   "acceptance": [
+    "duplicate identity -> 42723 `function \"f\" already exists with same argument types`",
+    "or replace changing the return type -> 42P13 cannot change return type of existing function HINT Use DROP FUNCTION f(integer) first.",
+    "or replace renaming an input parameter -> 42P13 cannot change name of input parameter \"a\"",
+    "format_signature gives `g(integer,integer[])` without spaces",
+    "two OUT params make ret record (2249); TABLE(...) sets retset; procedure ret is void 2278",
+    "VARIADIC not last / not array -> 42P13 with the documented texts"
+   ]
+  },
+  {
+   "lease_id": "CAT-20",
+   "task_ids": [
+    "CAT-02",
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/comment.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "COMMENT ON, ALTER OWNER dispatch, REASSIGN OWNED, DROP OWNED.",
+   "spec": "Implement per the module docs. REASSIGN/DROP OWNED use `depend::role_dependencies` (CAT-23) and the typed owner operations. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/ddl/alter_column.rs",
+    "crates/pgarbor-catalog/src/ddl/typedef.rs",
+    "crates/pgarbor-catalog/src/ddl/function.rs",
+    "crates/pgarbor-catalog/src/depend.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-08",
+    "CAT-15",
+    "CAT-18",
+    "CAT-19",
+    "CAT-22",
+    "CAT-23",
+    "CAT-24",
+    "CAT-09"
+   ],
+   "acceptance": [
+    "comment_on(table, Some(\"x\")) then None removes it; empty string removes",
+    "column comment key has objsubid = attnum; comment on a non-owner's table -> 42501 must be owner of table t",
+    "alter_owner(index) -> 42809 cannot change owner of index \"i\"",
+    "reassign_owned moves tables and their owned sequences; drop_owned drops owned objects and revokes privileges"
+   ]
+  },
+  {
+   "lease_id": "CAT-21",
+   "task_ids": [
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/grant.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "GRANT/REVOKE privileges on objects.",
+   "spec": "Implement `grant_object_privileges` per the module docs using `acl::grant_privileges/revoke_privileges` and expanding schema-wide targets. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-22",
+    "CAT-08"
+   ],
+   "acceptance": [
+    "GRANT SELECT ON t TO PUBLIC sets relacl to the default plus `=r/owner`; REVOKE returning to default stores None",
+    "GRANT USAGE ON a table -> 0LP01 invalid privilege type USAGE for table",
+    "GRANT by a non-owner without grant option -> 42501 permission denied for table t",
+    "ALL TABLES IN SCHEMA expands to tables, views and matviews"
+   ]
+  },
+  {
+   "lease_id": "CAT-22",
+   "task_ids": [
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/acl.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "ACL algebra, default ACLs, role membership graph and privilege masks.",
+   "spec": "Implement acldefault (oracle values in the docs), grant/revoke with grant options and recursive revoke, aclnewowner, RoleGraph::{build,has_privs_of_role,is_member_of_role,can_set_role}, privilege_mask. Port from utils/adt/acl.c (aclupdate, recursive_revoke, aclmask, roles_is_member_of) and catalog/aclchk.c (restrict_and_check_grant). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/model/common.rs",
+    "crates/pgarbor-catalog/src/model/namespace.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-02"
+   ],
+   "acceptance": [
+    "acldefault(Table, 10) prints `{postgres=arwdDxtm/postgres}`; Database `{=Tc/postgres,postgres=CTc/postgres}`; Function `{=X/postgres,postgres=X/postgres}`",
+    "grant SELECT to alice then revoke returns None when equal to default",
+    "REVOKE RESTRICT with dependent grants -> 2BP01 dependent privileges exist HINT Use CASCADE to revoke them too.",
+    "has_privs_of_role follows inherit_option edges only; is_member_of_role ignores inherit; superuser has everything",
+    "privilege_mask with PUBLIC grant gives SELECT to any role",
+    "aclnewowner rewrites grantee/grantor from the old owner"
+   ]
+  },
+  {
+   "lease_id": "CAT-23",
+   "task_ids": [
+    "CAT-04",
+    "CAT-06"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/depend.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Derive the pg_depend-equivalent dependency graph and role (shared) dependencies from the catalog model.",
+   "spec": "Implement `DepGraph::build` per the edge table (every row verified against a real PG 18.6 pg_depend dump of the documented objects) and `role_dependencies`. Edges to pinned referenced objects are skipped. Result must be deterministic (from_entries sorts). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/model/common.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "crates/pgarbor-catalog/src/model/index.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-02"
+   ],
+   "acceptance": [
+    "for `create table t(id serial primary key, ...)` the graph contains: t->namespace n; rowtype->t i; col id->nothing (builtin type); attrdef->col id a; attrdef->sequence n; sequence->col id a (serial); index t_pkey->constraint t_pkey i; constraint t_pkey->col id a; FK constraint->ref col n, ->ref index n, ->col a",
+    "identity sequence has an Internal edge to its column",
+    "CHECK constraint has both Auto and Normal edges to a referenced column",
+    "view depends Normal on each depends_on address",
+    "a user enum used by a column gives column->type n; array type->elem i",
+    "role_dependencies lists Owner deps for owned relations and Acl deps for ACL mentions"
+   ]
+  },
+  {
+   "lease_id": "CAT-24",
+   "task_ids": [
+    "CAT-06",
+    "CAT-05"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/drop.rs"
+   ],
+   "model_tier": "opus",
+   "summary": "DROP planning (PG findDependentObjects/reportDependentObjects flag algebra) and application.",
+   "spec": "Implement `plan_drop` and `CatalogTxn::drop_objects` per the module docs. This is the subtlest piece: study src/backend/catalog/dependency.c (findDependentObjects, reportDependentObjects, object_address_present_add_flags, deleteOneObject) and reproduce its flags (NORMAL/AUTO/INTERNAL), the INTERNAL-owner refusal, reporting order and message formats, using `describe::describe` BEFORE deletion. Table-driven unit tests over small hand-built `CatalogData` graphs are required; each oracle message in the docs must be a test. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/depend.rs",
+    "crates/pgarbor-catalog/src/describe.rs",
+    "crates/pgarbor-catalog/src/errors.rs",
+    "crates/pgarbor-catalog/src/txn.rs",
+    "crates/pgarbor-catalog/src/ddl/spec.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-23",
+    "CAT-07"
+   ],
+   "acceptance": [
+    "drop table t (with FK from t2 and views v->v2) RESTRICT -> 2BP01 `cannot drop table t because other objects depend on it` DETAIL lines `constraint t2_x_fkey on table t2 depends on table t`, `view v depends on table t`, `view v2 depends on view v` + HINT; CASCADE -> NOTICE `drop cascades to 3 other objects` DETAIL in oracle order",
+    "drop column a (used by view v->v2) -> `cannot drop column a of table t because other objects depend on it` DETAIL `view v depends on column a of table t`, `view v2 depends on view v`",
+    "drop schema with tables -> DETAIL `table t2 depends on schema zz_cat`; cascade notice qualifies tables of a schema not on the search path",
+    "drop type mood used by column w.m cascades to `column m of table w`",
+    "drop sequence of a serial -> `default value for column id of table t depends on sequence t_id_seq`; drop index t_a_key (constraint-owned) -> 2BP01 `cannot drop index t_a_key because constraint t_a_key on table t requires it` HINT `You can drop constraint t_a_key on table t instead.`",
+    "drop type t (table rowtype) -> `cannot drop type t because table t requires it` HINT `You can drop table t instead.`; array -> `cannot drop type t[] because type t requires it`",
+    "dropping a serial table silently drops its owned sequence and queues DropSequenceState + DropRelationData",
+    "pinned object -> `cannot drop schema pg_catalog because it is required by the database system`"
+   ]
+  },
+  {
+   "lease_id": "CAT-25",
+   "task_ids": [
+    "CAT-06",
+    "CAT-02"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/ddl/drop_stmt.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Statement-level DROP: name lookup, kind checks, IF EXISTS notices, routine resolution.",
+   "spec": "Implement `drop_by_names` per the module docs; resolution through `CatalogEnv::{lookup_class, lookup_type, function_candidates}`; collapse duplicate targets; one `drop_objects` call for all. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/drop.rs",
+    "crates/pgarbor-catalog/src/resolve.rs",
+    "crates/pgarbor-catalog/src/errors.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-24",
+    "CAT-04",
+    "CAT-08",
+    "CAT-10"
+   ],
+   "acceptance": [
+    "drop table s (a sequence) -> 42809 `\"s\" is not a table` HINT `Use DROP SEQUENCE to remove a sequence.`",
+    "drop table if exists zz_nos.a -> NOTICE schema \"zz_nos\" does not exist, skipping",
+    "drop table nosuch -> 42P01 table \"nosuch\" does not exist; drop index nosuch -> 42704; drop type/domain nosuch -> 42704 type \"nosuch\" does not exist",
+    "drop function f with two overloads -> 42725 function name \"f\" is not unique + HINT; none -> 42883 could not find a function named \"f\"; if exists nosuch(int) -> NOTICE `function nosuch(pg_catalog.int4) does not exist, skipping`",
+    "drop table t, t succeeds",
+    "drop pg_catalog relation -> 42501 permission denied: \"pg_class\" is a system catalog"
+   ]
+  },
+  {
+   "lease_id": "CAT-26",
+   "task_ids": [
+    "CAT-04",
+    "CAT-09"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/deparse.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "pg_get_indexdef / constraintdef / viewdef / function definition and argument text.",
+   "spec": "Implement per the module docs; port ruleutils.c pieces (pg_get_indexdef_worker, pg_get_constraintdef_worker, print_function_arguments, pg_get_functiondef). Identifier quoting via `pgarbor_types::text::format::quote_identifier`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/model/index.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "crates/pgarbor-catalog/src/model/function.rs",
+    "crates/pgarbor-catalog/src/resolve.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-04",
+    "CAT-19"
+   ],
+   "acceptance": [
+    "indexdef of a unique PK with fillfactor 50 == `CREATE UNIQUE INDEX t_pk2 ON zz_cat.t USING btree (a) WITH (fillfactor='50')`",
+    "expression key `(a+1)` prints `(((a + 1)))`; lower(b) prints `(lower(b))`; `(a DESC NULLS LAST, b)`; INCLUDE and WHERE parts; COLLATE \"C\" only when non-default",
+    "constraintdef: `PRIMARY KEY (id)`, `UNIQUE NULLS NOT DISTINCT (b)`, `UNIQUE (x) INCLUDE (id)`, `NOT NULL id`, `CHECK ((c > 0))`, FK with MATCH/ON UPDATE/ON DELETE/DEFERRABLE INITIALLY DEFERRED/NOT VALID/NOT ENFORCED in order",
+    "function_result for TABLE params == `TABLE(x integer, y text)`; procedure -> None; functiondef for a plpgsql STABLE function == the oracle text; procedure uses `IN x integer` and $procedure$",
+    "serial_sequence returns schema-qualified quoted name"
+   ]
+  },
+  {
+   "lease_id": "CAT-27",
+   "task_ids": [
+    "CAT-02"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/diff.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Schema diff between two catalog snapshots (branch compare).",
+   "spec": "Implement `diff_schemas` per the module docs: match by names, deterministic ordering, readable details. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/snapshot/core.rs",
+    "crates/pgarbor-catalog/src/deparse.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-26"
+   ],
+   "acceptance": [
+    "identical snapshots -> empty vec",
+    "a column added in b -> Modified table with detail `column x added`, plus Added column entry (object_type column, name public.t.x)",
+    "a table only in a -> Removed table; type change shows `type integer -> bigint`",
+    "output order follows the documented kind rank then qualified name"
+   ]
+  },
+  {
+   "lease_id": "CAT-28",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_class.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] pg_namespace, pg_class, pg_inherits, pg_sequence, pg_rewrite rows.",
+   "spec": "Replace each `unimplemented` scan body with a real producer per the module docs (RowBuilder by column name). Builtin system relations come from `builtin::SYSTEM_RELS`; user objects from the snapshot. Respect the `ScanRequest` fast paths for pg_class (oid / relname) since drivers query by oid. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/vrel/rowbuild.rs",
+    "crates/pgarbor-catalog/src/builtin/system_rels.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-02",
+    "CAT-04"
+   ],
+   "acceptance": [
+    "pg_class contains 1259 pg_class (relkind r, relnatts 34, relam 2, relpersistence p) and 1259's index pg_class_oid_index (relkind i, relam 403)",
+    "a user table: relkind r, relnatts = columns.len(), reltuples -1, relpages 0, relhasindex true when indexed, relchecks counts CHECK constraints, relreplident d; view: relhasrules true, relam 0, relfilenode 0, relreplident n; sequence: relpages 1, reltuples 1, relnatts 3, relam 0; unlogged table relpersistence u",
+    "every row has exactly the schema's column count",
+    "pg_namespace lists 11, 99, 2200, 13293 in OID order with nspacl text from the acl",
+    "pg_sequence row has seqtypid, seqstart..seqcycle from Sequence",
+    "pg_rewrite has one _RETURN row per view"
+   ]
+  },
+  {
+   "lease_id": "CAT-29",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_attribute.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "[north-star] pg_attribute (incl. system columns) and pg_attrdef rows.",
+   "spec": "Implement per the module docs; attlen/attbyval/attalign/attstorage from `CatalogEnv::user_type_info`/`registry::lookup_type`; fast path on attrelid is required. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/vrel/rowbuild.rs",
+    "crates/pgarbor-catalog/src/model/relation.rs",
+    "crates/pgarbor-catalog/src/typeenv.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-05",
+    "CAT-28"
+   ],
+   "acceptance": [
+    "table t(id serial primary key, a int, b text) yields attnum -6..-1 system rows then id,a,b with oracle attlen/attbyval/attalign/attstorage/attcollation (b: -1, f, i, x, 100)",
+    "views and composite types have no system columns; indexes have one row per key with attnotnull false",
+    "dropped column row has attisdropped true, atttypid 0 and the dropped name",
+    "atthasdef true for default and generated columns; attidentity 'a'/'d'; attgenerated 's'/'v'; attstattarget NULL by default",
+    "pg_attrdef adbin is the default text, adnum the attnum",
+    "sequence rows: last_value, log_cnt, is_called with attnotnull true"
+   ]
+  },
+  {
+   "lease_id": "CAT-30",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_type.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_type (builtin + user), pg_enum, pg_range rows.",
+   "spec": "Implement per the module docs. For builtin rows use `pgarbor_types::catalog_data::TYPES` and the provided `regproc_oid`; user rows via `user_type_info`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/typeenv.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-catalog/src/builtin/objects.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-05",
+    "CAT-28"
+   ],
+   "acceptance": [
+    "622 builtin rows: oid 23 int4 has typlen 4, typbyval true, typinput = oid of int4in",
+    "array types report typsubscript = array_subscript_handler (6179), typanalyze array_typanalyze (3817)",
+    "a user enum yields type row typtype e, typcategory E and an array row `_mood` with typelem; a table rowtype typtype c, typrelid the table",
+    "pg_enum rows ordered by sort order with float4 enumsortorder",
+    "pg_range rows convert TextRows via io::input"
+   ]
+  },
+  {
+   "lease_id": "CAT-31",
+   "task_ids": [
+    "CAT-09"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_constraint.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_index and pg_constraint rows.",
+   "spec": "Implement per the module docs, including `connoinherit` for PK/UNIQUE/FK and the space char for non-FK action columns. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/model/index.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "crates/pgarbor-catalog/src/vrel/rowbuild.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-28"
+   ],
+   "acceptance": [
+    "PK index row: indisunique, indisprimary, indkey `1`, indclass `1978`, indcollation `0`, indoption `0`, indexprs/indpred NULL",
+    "expression index: indkey `0 0`, indexprs text of the expressions joined by `, `, indpred set; text key indclass 3126 indcollation 100",
+    "FK constraint row: contype f, conkey {7}, confkey {1}, confupdtype/confdeltype a, confmatchtype s, conindid = referenced index, connoinherit t",
+    "NOT NULL constraint row: contype n, conkey {2}, confupdtype/confmatchtype ' ' (space char), connoinherit f",
+    "domain CHECK row: contypid set, conrelid 0, conkey NULL, conbin text"
+   ]
+  },
+  {
+   "lease_id": "CAT-32",
+   "task_ids": [
+    "CAT-09"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_depend.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_depend, pg_description, pg_shdescription, pg_shdepend rows.",
+   "spec": "Implement per the module docs on top of `DepGraph::build` and `role_dependencies`; descriptions merge persisted and builtin (`builtin::BUILTIN_DESCRIPTIONS`). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/depend.rs",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/builtin/descriptions.rs",
+    "crates/pgarbor-catalog/src/snapshot/core.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-23",
+    "CAT-28"
+   ],
+   "acceptance": [
+    "pg_depend rows for a serial table match the oracle shape (classid 1259 etc., deptype chars n a i)",
+    "pg_description contains builtin rows (e.g. for pg_class) and persisted comments; roles/databases comments only in pg_shdescription",
+    "pg_shdepend: owner row 'o' per owned object for non-builtin owners"
+   ]
+  },
+  {
+   "lease_id": "CAT-33",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_proc.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_proc, pg_aggregate, pg_operator, pg_cast, pg_language rows (builtin + user functions).",
+   "spec": "Implement per the module docs using `pgarbor_types::catalog_data`; honour fast paths (oid/proname/pronamespace) to avoid materializing 3413 rows per lookup. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-catalog/src/model/function.rs",
+    "crates/pgarbor-catalog/src/vrel/pg_type.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-28",
+    "CAT-30"
+   ],
+   "acceptance": [
+    "pg_proc has 3413 builtin rows; abs(int4) has proargtypes `23`, prorettype 23, provolatile i, proisstrict true",
+    "a function with OUT params has proallargtypes/proargmodes/proargnames filled; all-IN functions have NULL proallargtypes/proargmodes",
+    "user function f(a int, b text default 'x') has pronargs 2, pronargdefaults 1, proargdefaults `'x'::text`",
+    "pg_operator has 800 rows with oprcode = proc oid; pg_cast 236 rows with castcontext i/a/e; pg_language 4 rows"
+   ]
+  },
+  {
+   "lease_id": "CAT-34",
+   "task_ids": [
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_roles.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_authid, pg_roles, pg_shadow, pg_user, pg_group, pg_auth_members, pg_database, pg_db_role_setting, pg_tablespace rows.",
+   "spec": "Implement per the module docs (note the different column ORDER of pg_roles vs pg_authid). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/model/namespace.rs",
+    "crates/pgarbor-catalog/src/builtin/objects.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-28"
+   ],
+   "acceptance": [
+    "pg_roles.rolpassword is the text ******** for every row; pg_authid.rolpassword is the stored verifier or NULL",
+    "pg_user lists only login roles; pg_group only non-login roles with grolist of members",
+    "pg_database lists template1 (1), template0 (4), postgres (5) with datlocprovider b and datcollate C.UTF-8",
+    "pg_auth_members includes builtin predefined-role grants and persisted memberships",
+    "pg_db_role_setting rows from Role/Database config"
+   ]
+  },
+  {
+   "lease_id": "CAT-35",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_builtin.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_collation, pg_am, pg_opclass, pg_opfamily, pg_extension and available-extension views over compiled-in data.",
+   "spec": "Implement per the module docs; convert `TextRows` cells with io::input using the column types of the catalog. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/builtin/objects.rs",
+    "crates/pgarbor-catalog/src/builtin/mod.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-28",
+    "CAT-30"
+   ],
+   "acceptance": [
+    "pg_collation has the same row count as builtin::COLLATIONS with NULL for absent text columns",
+    "pg_am: btree 403 with amhandler bthandler's proc OID and amtype i; heap 2 amtype t",
+    "pg_extension has one row plpgsql 1.0",
+    "pg_available_extensions has exactly the plpgsql row"
+   ]
+  },
+  {
+   "lease_id": "CAT-36",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/pg_views.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_tables, pg_views, pg_matviews, pg_indexes, pg_sequences.",
+   "spec": "Implement per the module docs; definitions via `deparse` (CAT-26); sequence last_value via `ctx.session.sequence_state`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/deparse.rs",
+    "crates/pgarbor-catalog/src/session.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-26",
+    "CAT-28"
+   ],
+   "acceptance": [
+    "pg_tables lists user tables and pg_catalog tables with tableowner as the role name",
+    "pg_views.definition equals pg_get_viewdef text; system views use SYSTEM_VIEW_DEFS",
+    "pg_indexes.indexdef equals deparse::indexdef",
+    "pg_sequences.last_value NULL until the sequence is called; data_type regtype OID"
+   ]
+  },
+  {
+   "lease_id": "CAT-37",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/unsupported.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Honest 0A000 for system relations that cannot be served yet.",
+   "spec": "Implement `scan` for `UnsupportedRelation`: find the reason in `UNSUPPORTED_REASONS` (generated include) and return `Err(PgError::unimplemented(\"CAT-37\", format!(\"system relation {name}: {reason}\")))`. Keep exactly one unimplemented call site. Also add a unit test that every entry of UNSUPPORTED_REASONS is registered in `vrel::lookup`. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/vrel/unsupported_list.inc"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "scanning pg_stat_bgwriter returns 0A000 mentioning the relation name and reason",
+    "every UNSUPPORTED_REASONS OID is found by vrel::lookup"
+   ]
+  },
+  {
+   "lease_id": "CAT-38",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/runtime.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_settings, pg_stat_activity, pg_locks, pg_prepared_statements, pg_cursors, pg_stat_ssl, pg_stat_gssapi from SessionInfo.",
+   "spec": "Implement per the module docs; convert SessionInfo rows to Datum rows with RowBuilder; timestamps are TimestampTz microseconds. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/session.rs",
+    "crates/pgarbor-catalog/src/vrel/rowbuild.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-28"
+   ],
+   "acceptance": [
+    "pg_settings has one row per SettingRow in order, enumvals as text[] or NULL",
+    "pg_stat_activity.client_addr is NULL; xid columns truncated to u32",
+    "empty SessionInfo defaults give zero rows for locks/prepared/cursors",
+    "pg_prepared_statements.parameter_types is an array of regtype (elem 2206)"
+   ]
+  },
+  {
+   "lease_id": "CAT-39",
+   "task_ids": [
+    "CAT-07"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/stats.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Per-relation pg_stat*/pg_statio* views with zero counters.",
+   "spec": "Implement per the module docs; share one row-building helper across the 18 relations (they differ in which relations they list and which columns exist; use `builtin::system_rel` column names and set unlisted counters to 0 / NULL as documented). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/builtin/system_rels.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-28"
+   ],
+   "acceptance": [
+    "pg_stat_user_tables has one row per user table with seq_scan 0 and NULL last_* timestamps; sys variants list only pg_catalog/information_schema relations",
+    "pg_statio_user_sequences lists sequences with blks_read 0",
+    "all rows match the schema column count"
+   ]
+  },
+  {
+   "lease_id": "CAT-40",
+   "task_ids": [
+    "CAT-08"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/is_core.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "information_schema: schemata, tables, views, sequences, catalog_name, character_sets, collations, roles views, user_defined_types, attributes.",
+   "spec": "Port the CREATE VIEW definitions of PG 18.6 information_schema.sql for each relation to model-driven producers, with the visibility rules in the module docs (privilege test via acl::RoleGraph / privilege_mask). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "crates/pgarbor-catalog/src/vrel/is_columns.rs",
+    "~/develop/reference/postgres-18/src/backend/catalog/information_schema.sql"
+   ],
+   "depends_on_leases": [
+    "CAT-22",
+    "CAT-28",
+    "CAT-41"
+   ],
+   "acceptance": [
+    "schemata lists information_schema, pg_catalog, pg_toast, public with schema_owner role names (public owned by pg_database_owner)",
+    "tables lists user tables as BASE TABLE and views as VIEW, excludes matviews and sequences, is_insertable_into YES for tables",
+    "views.check_option NONE; sequences.start_value etc. as decimal text",
+    "character_sets one row UTF8/UCS/UTF8 with default_collate_catalog = database",
+    "enabled_roles for a superuser lists all roles"
+   ]
+  },
+  {
+   "lease_id": "CAT-41",
+   "task_ids": [
+    "CAT-08"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/is_columns.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "information_schema.columns & friends plus the shared type-description helper.",
+   "spec": "Implement `describe_type_for_info_schema` (port _pg_char_max_length, _pg_numeric_precision, _pg_datetime_precision, _pg_interval_type and the data_type/udt CASE logic using pgarbor_types::typmod and registry) and the eight producers. Oracle rows are in the module docs; also read information_schema.sql. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-types/src/typmod.rs",
+    "~/develop/reference/postgres-18/src/backend/catalog/information_schema.sql"
+   ],
+   "depends_on_leases": [
+    "CAT-05",
+    "CAT-28",
+    "CAT-22"
+   ],
+   "acceptance": [
+    "columns for `id serial` -> data_type integer, numeric_precision 32, radix 2, scale 0, udt_name int4, column_default nextval('t_id_seq'::regclass), is_nullable NO",
+    "varchar(10) -> character varying, char_max_len 10, octet 40; text -> octet 1073741824; numeric(10,2) -> precision 10 radix 10 scale 2; int[] -> data_type ARRAY udt_name _int4; enum -> USER-DEFINED; domain over int -> integer with domain_* filled",
+    "generated column: is_generated ALWAYS, generation_expression text, column_default NULL; identity: is_identity YES and identity_generation ALWAYS",
+    "ordinal_position equals attnum (gaps for dropped columns), dtd_identifier is the attnum text",
+    "domains/domain_constraints/column_domain_usage rows as documented"
+   ]
+  },
+  {
+   "lease_id": "CAT-42",
+   "task_ids": [
+    "CAT-08"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/is_constraints.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "information_schema constraint views.",
+   "spec": "Port the six views of information_schema.sql; oracle outputs are in the module docs and must be reproduced. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/model/constraint.rs",
+    "~/develop/reference/postgres-18/src/backend/catalog/information_schema.sql"
+   ],
+   "depends_on_leases": [
+    "CAT-28",
+    "CAT-22"
+   ],
+   "acceptance": [
+    "table_constraints for p(id pk, b unique, x check) and c(...) matches the documented eight rows incl. NOT NULL reported as CHECK",
+    "key_column_usage FK row has position_in_unique_constraint 1; referential_constraints unique_constraint_name p_pkey, match_option NONE, update_rule NO ACTION, delete_rule CASCADE",
+    "constraint_column_usage lists the REFERENCED columns for an FK; check_constraints lists `a IS NOT NULL` for NOT NULL constraints"
+   ]
+  },
+  {
+   "lease_id": "CAT-43",
+   "task_ids": [
+    "CAT-08"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/is_routines.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "information_schema.routines, parameters and the routine/view usage views.",
+   "spec": "Port the views; builtin pg_proc rows are included (3413 rows in the oracle). Oracle column values are in the module docs. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/vrel/is_columns.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "~/develop/reference/postgres-18/src/backend/catalog/information_schema.sql"
+   ],
+   "depends_on_leases": [
+    "CAT-41",
+    "CAT-28"
+   ],
+   "acceptance": [
+    "routines for a user SQL function f: specific_name f_<oid>, routine_type FUNCTION, data_type integer, routine_body SQL, external_language SQL, is_deterministic YES for immutable, sql_data_access MODIFIES, is_null_call YES for strict, security_type INVOKER",
+    "parameters rows have parameter_mode IN/OUT/INOUT, parameter_name NULL when unnamed, parameter_default text",
+    "view_table_usage lists tables a view reads"
+   ]
+  },
+  {
+   "lease_id": "CAT-44",
+   "task_ids": [
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/vrel/is_privileges.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "information_schema privilege views.",
+   "spec": "Port the privilege views; use acl::acldefault when the ACL is None. Oracle: a fresh table owned by postgres yields exactly 7 table_privileges rows (INSERT SELECT UPDATE DELETE TRUNCATE REFERENCES TRIGGER) with is_grantable YES and with_hierarchy YES only for SELECT. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/vrel/mod.rs",
+    "crates/pgarbor-catalog/src/acl.rs",
+    "~/develop/reference/postgres-18/src/backend/catalog/information_schema.sql"
+   ],
+   "depends_on_leases": [
+    "CAT-22",
+    "CAT-28"
+   ],
+   "acceptance": [
+    "table_privileges of a default-ACL table gives the 7 owner rows in the documented order",
+    "a GRANT SELECT TO PUBLIC row shows grantee PUBLIC is_grantable NO",
+    "role_table_grants only shows rows where grantor or grantee is an enabled role",
+    "routine_privileges shows EXECUTE for PUBLIC on every function"
+   ]
+  },
+  {
+   "lease_id": "CAT-45",
+   "task_ids": [
+    "CAT-05"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/sysfuncs/visible.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_*_is_visible, to_reg*, regclass, current_schema(s), temp schema functions.",
+   "spec": "Implement `call` per the table in the module docs (dispatch on proc.name; argument forms by args.len()/types). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/sysfuncs/mod.rs",
+    "crates/pgarbor-catalog/src/resolve.rs",
+    "crates/pgarbor-catalog/src/typeenv.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-04",
+    "CAT-05"
+   ],
+   "acceptance": [
+    "to_regclass('nosuch') is NULL without error; to_regclass('public.t') returns the OID",
+    "regclass('nosuch') -> 42P01 relation \"nosuch\" does not exist",
+    "current_schemas(true) == {pg_catalog,public} and (false) == {public} for the default path; current_schema() == public",
+    "pg_table_is_visible of an unknown OID is NULL"
+   ]
+  },
+  {
+   "lease_id": "CAT-46",
+   "task_ids": [
+    "CAT-09"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/sysfuncs/info.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "pg_get_*def, descriptions, sequence info, sizes, index property, keyword and option functions.",
+   "spec": "Implement `call` per the table in the module docs (dispatch on proc.name and argument count/types; read each PG function for NULL/error behavior); `call_set` stays an empty dispatch because this file has no set-returning procs (return the internal error for any name). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/sysfuncs/mod.rs",
+    "crates/pgarbor-catalog/src/deparse.rs",
+    "crates/pgarbor-catalog/src/describe.rs",
+    "contracts/reference/pg18/pg_keywords.csv"
+   ],
+   "depends_on_leases": [
+    "CAT-26",
+    "CAT-07",
+    "CAT-05"
+   ],
+   "acceptance": [
+    "pg_get_expr(text, oid) returns its first argument",
+    "pg_get_userbyid(10) == postgres; unknown -> `unknown (OID=999999)`",
+    "obj_description(oid,'pg_class') returns the comment or NULL; col_description uses objsubid",
+    "pg_describe_object(1259, oid, 0) == `table t`",
+    "pg_get_viewdef(oid) returns the stored view text; pg_get_constraintdef/indexdef delegate to deparse",
+    "pg_get_serial_sequence('t','id') returns the owned sequence name"
+   ]
+  },
+  {
+   "lease_id": "CAT-49",
+   "task_ids": [
+    "CAT-09"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/sysfuncs/introspect.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Sequence info, updatability, sizes, index properties, keywords, option parsing, input validation, partition stubs.",
+   "spec": "Implement `call` and `call_set` per the table in the module docs (dispatch on proc.name). pg_get_keywords reads `include_str!(\"../../../../contracts/reference/pg18/pg_keywords.csv\")` (columns word, catcode, barelabel, catdesc, baredesc - check the CSV header). Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/sysfuncs/mod.rs",
+    "crates/pgarbor-catalog/src/session.rs",
+    "contracts/reference/pg18/pg_keywords.csv",
+    "crates/pgarbor-types/src/names.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-05",
+    "CAT-26"
+   ],
+   "acceptance": [
+    "pg_sequence_parameters(seq) returns (start, min, max, increment, cycle, cache, type oid)",
+    "pg_index_column_has_property(btree index, 1, 'asc') is true; unknown property is NULL",
+    "pg_get_keywords returns one row per keyword with the PG categories",
+    "pg_options_to_table('{a=1,b}') yields (a,1),(b,NULL)",
+    "pg_input_is_valid('abc','int4') is false and pg_input_error_info returns the 22P02 message",
+    "pg_relation_size(oid) delegates to session.relation_size; unknown OID -> NULL",
+    "pg_relation_is_updatable(table, true) == 28; view == 0"
+   ]
+  },
+  {
+   "lease_id": "CAT-47",
+   "task_ids": [
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/sysfuncs/privs.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "has_*_privilege, pg_has_role, row_security_active.",
+   "spec": "Implement per the module docs on top of `acl::{RoleGraph, privilege_mask}`; privilege string parsing per PG convert_*_priv_string. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/sysfuncs/mod.rs",
+    "crates/pgarbor-catalog/src/acl.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-22",
+    "CAT-04"
+   ],
+   "acceptance": [
+    "has_table_privilege('postgres','t','SELECT') true for the owner; for another role false until granted; 'select, insert' means ANY",
+    "has_schema_privilege('public','USAGE') true for PUBLIC-granted public",
+    "unknown word -> 22023 unrecognized privilege type: \"foo\"",
+    "pg_has_role('postgres','pg_monitor','USAGE') true for a superuser",
+    "unknown table name -> 42P01; unknown OID -> NULL"
+   ]
+  },
+  {
+   "lease_id": "CAT-48",
+   "task_ids": [
+    "CAT-11"
+   ],
+   "files": [
+    "crates/pgarbor-catalog/src/sysfuncs/session_fns.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "current_user, session_user, current_database, backend/engine state functions and their SRFs.",
+   "spec": "Implement `call`/`call_set` per the module docs; records are Datum::Record in the proc's out-column order. Replace every `Err(PgError::unimplemented(\"CAT-NN\", ...))` body of the file with a real implementation that follows the module and function doc comments EXACTLY (they are the contract: PG 18.6 messages, SQLSTATEs, oracle-verified values). Do not change any signature, pub item, `// CONTRACT` item or other file; do not add dependencies; no todo!/unimplemented!/panic!/unwrap on user-derived data; build every user-facing error with the constructors in `crate::errors` (add nothing there: if one is missing use PgError::new with the exact PG text). Keep `#[allow(unused_variables)]` removal tidy. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file. Test setup: use `crate::testing` - `let (mut kv, env) = testing::bootstrapped()?;` then `let (res, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;` (each statement's env must come from the previous `DdlResult::snapshot`: NEVER build an env with `CatalogVersion::ZERO` over a bootstrapped KV, `CatalogTxn::begin` compares versions and would fail 40001). Pure-function tests may use `CatalogSnapshot::build(CatalogVersion::ZERO, CatalogData{..})`, `CatalogEnv::with_default_path` and `pgarbor_common::MemKv`. Tests are compiled/run centrally later; you cannot compile. PostgreSQL 18 sources for reference reading (never copy verbatim): ~/develop/reference/postgres-18. A live oracle can be queried read-only with `podman exec -i pgarbor-oracle psql -U postgres -X -c \"...\"` (use a scratch schema and drop it).",
+   "reads": [
+    "contracts/crates/pgarbor-catalog.md",
+    "crates/pgarbor-catalog/src/sysfuncs/mod.rs",
+    "crates/pgarbor-catalog/src/session.rs",
+    "crates/pgarbor-types/src/catalog_data/mod.rs"
+   ],
+   "depends_on_leases": [
+    "CAT-38"
+   ],
+   "acceptance": [
+    "current_user returns the env's current user name; current_database() == postgres",
+    "pg_backend_pid returns session.backend_pid",
+    "pg_show_all_settings yields one record per SettingRow with 17 fields",
+    "unsupported-relation backing functions raise 0A000 via unimplemented(\"CAT-48\")"
+   ]
+  }
+ ]
+}
