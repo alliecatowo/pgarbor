@@ -68,10 +68,10 @@ function reviewPrompt(l, sub) {
 
 const results = await pipeline(
   args.leases,
-  (l) => agent(workerPrompt(l), { label: `impl:${l.lease_id}`, phase: 'Implement', model: MODEL[l.model_tier || 'haiku'], isolation: 'worktree', schema: SUBMISSION }),
+  (l) => agent(workerPrompt(l), { label: `impl:${l.lease_id}`, phase: 'Implement', model: 'haiku', isolation: 'worktree', schema: SUBMISSION }),
   async (sub, l) => {
     if (!sub || !sub.sha) return { lease: l, sub, review: null }
-    const review = await agent(reviewPrompt(l, sub), { label: `review:${l.lease_id}`, phase: 'Review', model: 'haiku', schema: REVIEW })
+    const review = await agent(reviewPrompt(l, sub), { label: `review:${l.lease_id}`, phase: 'Review', model: (l.model_tier === 'haiku' ? 'haiku' : 'sonnet'), schema: REVIEW })
     return { lease: l, sub, review }
   },
   async (r, l) => {
@@ -79,7 +79,7 @@ const results = await pipeline(
     if (!needRetry) return r
     const notes = r.review ? JSON.stringify(r.review).slice(0, 6000) : 'previous attempt produced no commit'
     const prior = r.sub && r.sub.sha ? `A previous attempt exists at commit ${r.sub.sha}: start from it with \`git checkout ${r.sub.sha} -- ${l.files.join(' ')}\` and fix it.` : ''
-    const tier = l.model_tier === 'haiku' ? 'sonnet' : l.model_tier
+    const tier = 'haiku'  // max-savings: sonnet only identifies (review), haiku always fixes
     const sub2 = await agent(workerPrompt(l, `RETRY: ${prior}\nReviewer findings to address: ${notes}`), { label: `retry:${l.lease_id}`, phase: 'Retry', model: MODEL[tier || 'sonnet'], isolation: 'worktree', schema: SUBMISSION })
     return { lease: l, sub: sub2 || r.sub, review: r.review, retried: true }
   },
