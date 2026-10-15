@@ -1,0 +1,36 @@
+# An ON UPDATE rule can read both OLD (pre-update) and NEW (post-update) column values, and fires only for matched rows.
+id: cmd-create-rule.update-old-new-references
+title: ON UPDATE rule action reads OLD and NEW values for each updated row
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, update, old-new, rules]
+required_capabilities: [create-table, create-rule, insert, update, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Parameters: NEW valid in ON INSERT and ON UPDATE; OLD valid in ON UPDATE and ON DELETE)"
+sessions: [a]
+setup: |
+  CREATE TABLE ut (id int4 PRIMARY KEY, bal int4);
+  CREATE TABLE ulog (id int4, old_bal int4, new_bal int4);
+  CREATE RULE r_upd AS ON UPDATE TO ut DO ALSO INSERT INTO ulog VALUES (NEW.id, OLD.bal, NEW.bal);
+  INSERT INTO ut VALUES (1, 100), (2, 200);
+steps:
+  - sql: |
+      UPDATE ut SET bal = bal + 5 WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, old_bal, new_bal FROM ulog ORDER BY id
+    expect: rows
+    order: ordered
+    comment: OLD is the pre-update 100, NEW is the post-update 105
+  - sql: |
+      UPDATE ut SET bal = 0 WHERE id = 99
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM ulog
+    expect: rows
+    comment: the update matched no row, so no rule action ran and the log is unchanged
+  - sql: |
+      SELECT id, bal FROM ut ORDER BY id
+    expect: rows
+    order: ordered

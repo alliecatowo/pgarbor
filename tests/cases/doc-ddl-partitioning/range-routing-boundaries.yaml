@@ -1,0 +1,46 @@
+# Declarative RANGE partitioning: rows route to the partition whose [from, to) bounds contain the key;
+# the partitioned parent itself stores no rows.
+id: doc-ddl-partitioning.range-routing-boundaries
+title: Range partitioning routes rows by inclusive-lower, exclusive-upper bounds
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, range-partitioning, partition-routing]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Declarative Partitioning, Example; Overview)"
+sessions: [a]
+setup: |
+  CREATE TABLE measurement (
+      city_id    int not null,
+      logdate    date not null,
+      peaktemp   int,
+      unitsales  int
+  ) PARTITION BY RANGE (logdate);
+  CREATE TABLE measurement_y2006m02 PARTITION OF measurement
+      FOR VALUES FROM ('2006-02-01') TO ('2006-03-01');
+  CREATE TABLE measurement_y2006m03 PARTITION OF measurement
+      FOR VALUES FROM ('2006-03-01') TO ('2006-04-01');
+steps:
+  - sql: |
+      INSERT INTO measurement VALUES
+        (1, '2006-02-01', 10, 5),
+        (1, '2006-02-28', 12, 6),
+        (1, '2006-03-01',  9, 7),
+        (2, '2006-03-31',  8, NULL)
+    expect: ok
+    comment: lower bound inclusive, upper bound exclusive; NULL unitsales allowed
+  - sql: |
+      SELECT tableoid::regclass::text AS part, city_id, logdate, peaktemp, unitsales
+      FROM measurement ORDER BY logdate, city_id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS parent_only_rows FROM ONLY measurement
+    expect: rows
+    order: ordered
+    comment: the partitioned table has no storage of its own
+  - sql: |
+      SELECT relkind::text FROM pg_class WHERE oid = 'measurement'::regclass
+    expect: rows
+    order: ordered

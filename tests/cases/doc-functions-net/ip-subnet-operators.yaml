@@ -1,0 +1,42 @@
+# Subnet containment and overlap operators (<<, <<=, >>, >>=, &&) on inet and cidr.
+id: doc-functions-net.ip-subnet-operators
+title: Subnet strict and non-strict containment and overlap operators on inet and cidr
+family: doc-functions-net
+tier: core
+feature_ids: [inet-operators, subnet-containment, subnet-overlap, cidr]
+required_capabilities: [select, inet, cidr]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-net (IP Address Operators table: <<, <<=, >>, >>=, &&)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT inet '192.168.1.5' << inet '192.168.1/24' AS strict_in, inet '192.168.0.5' << inet '192.168.1/24' AS other_net, inet '192.168.1/24' << inet '192.168.1/24' AS self_strict
+    expect: rows
+    order: multiset
+    comment: documented examples t, f, f; only network parts are compared
+  - sql: |
+      SELECT inet '192.168.1/24' <<= inet '192.168.1/24' AS self_or_in, inet '192.168.1/24' >> inet '192.168.1.5' AS contains_host, inet '192.168.1/24' >>= inet '192.168.1/24' AS contains_or_equal
+    expect: rows
+    order: multiset
+    comment: documented examples t, t, t
+  - sql: |
+      SELECT inet '192.168.1/24' && inet '192.168.1.80/28' AS overlap_sub, inet '192.168.1/24' && inet '192.168.2.0/28' AS disjoint
+    expect: rows
+    order: multiset
+    comment: documented examples t, f
+  - sql: |
+      SELECT inet '192.168.1.5/24' >> inet '192.168.1.0/24' AS host_bits_ignored, inet '192.168.1.5/24' <<= inet '192.168.1.200/24' AS equal_network_masks
+    expect: rows
+    order: multiset
+    comment: bits to the right of the netmask are ignored, so the first is f and the second is t
+  - sql: |
+      SELECT inet '192.168.1.5' << cidr '192.168.1.0/24' AS inet_in_cidr, cidr '192.168.1.0/24' >>= inet '192.168.1.5' AS cidr_contains_inet, cidr '10.0.0.0/8' && inet '10.1.0.0/16' AS cidr_overlap_inet
+    expect: rows
+    order: multiset
+    comment: cidr is implicitly cast to inet, so the operators apply across both types
+  - sql: |
+      SELECT inet '2001:db8::/32' >> inet '2001:db8::1' AS v6_contains, inet '10.0.0.0/8' << inet '2001:db8::/32' AS mixed_families
+    expect: rows
+    order: multiset
+    comment: IPv4 and IPv6 networks never contain each other

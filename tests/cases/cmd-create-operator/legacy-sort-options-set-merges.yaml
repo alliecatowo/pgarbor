@@ -1,0 +1,30 @@
+# SORT1, SORT2, LTCMP and GTCMP are obsolete. They are ignored, except that giving any of them implicitly sets MERGES.
+id: cmd-create-operator.legacy-sort-options-set-merges
+title: "Obsolete SORT1/SORT2/LTCMP/GTCMP options are ignored apart from implicitly setting MERGES"
+family: cmd-create-operator
+tier: extended
+feature_ids: [create-operator, merges, legacy-options]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#notes (obsolete SORT1, SORT2, LTCMP, GTCMP)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_lt8b(int8, int8) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR #<<# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_lt8b, SORT1 = int8lt, SORT2 = int8lt, LTCMP = int8lt, GTCMP = int8gt)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #<<<# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_lt8b)
+    expect: ok
+  - sql: |
+      SELECT oprname, oprcanmerge, oprcanhash, oprcode::regproc AS fn
+      FROM pg_operator WHERE oprname IN ('#<<#', '#<<<#') AND oprleft = 'int8'::regtype
+      ORDER BY oprname
+    expect: rows
+    order: ordered
+    comment: "#<<# is merge-joinable only because of the legacy options; #<<<# is not"
+  - sql: |
+      SELECT 1 #<<# 2 AS result
+    expect: rows

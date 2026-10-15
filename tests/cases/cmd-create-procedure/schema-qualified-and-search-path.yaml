@@ -1,0 +1,50 @@
+# A schema-qualified name creates the procedure in that schema; an unqualified CALL only finds it through
+# the search_path. Creating in a missing schema is rejected, and the same name can live in another schema.
+id: cmd-create-procedure.schema-qualified-and-search-path
+title: Schema-qualified CREATE PROCEDURE, unqualified CALL through search_path, and missing schema
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, schemas, search-path, call, overloading]
+required_capabilities: [create-table, select, create-procedure, call, schemas]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure-description (schema name)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA cp_s
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE cp_s.qual(a int) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'qual'
+    expect: rows
+  - sql: |
+      CALL cp_s.qual(1)
+    expect: ok
+  - sql: |
+      CALL qual(1)
+    expect: error
+    sqlstate: "42883"
+    comment: cp_s is not on the search_path
+  - sql: |
+      CREATE PROCEDURE cp_s.qual(a int) LANGUAGE sql AS 'SELECT 2'
+    expect: error
+    sqlstate: "42723"
+    comment: duplicate within the same schema
+  - sql: |
+      CREATE PROCEDURE nos_missing.p() LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      CREATE PROCEDURE public.qual(a int) LANGUAGE sql AS 'SELECT 3'
+    expect: ok
+    comment: same name in a different schema is a distinct procedure
+  - sql: |
+      CALL qual(1)
+    expect: ok
+  - sql: |
+      SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'qual' ORDER BY 1
+    expect: rows
+    order: ordered

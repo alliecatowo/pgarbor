@@ -1,0 +1,36 @@
+# Documented: ALTER ... RENAME TO new_name renames the dictionary; the new name must be free.
+id: cmd-alter-tsdictionary.rename-and-conflicts
+title: "RENAME TO renames a dictionary and rejects missing sources and name collisions"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, rename, errors]
+required_capabilities: [create-text-search-dictionary, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY j_dict (TEMPLATE = snowball, language = english);
+  CREATE TEXT SEARCH DICTIONARY j_other (TEMPLATE = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY j_dict RENAME TO j_renamed
+    expect: ok
+  - sql: |
+      SELECT dictname FROM pg_ts_dict WHERE dictname IN ('j_dict', 'j_renamed') ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY j_dict RENAME TO j_other
+    expect: error
+    sqlstate: "42704"
+    comment: the old name no longer exists
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY j_renamed RENAME TO j_other
+    expect: error
+    sqlstate: "42710"
+    comment: j_other already exists in the schema
+  - sql: |
+      SELECT ts_lexize('j_renamed', 'running')
+    expect: rows
+    comment: the renamed dictionary keeps its options

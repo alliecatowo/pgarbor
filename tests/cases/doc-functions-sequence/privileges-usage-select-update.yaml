@@ -1,0 +1,94 @@
+# nextval needs USAGE or UPDATE, currval needs USAGE or SELECT, setval needs UPDATE; the role is denied (42501) until granted.
+id: doc-functions-sequence.privileges-usage-select-update
+title: Sequence functions check USAGE, SELECT and UPDATE privileges per function
+family: doc-functions-sequence
+tier: extended
+feature_ids: [nextval, currval, setval, privileges, grant, roles, errors]
+required_capabilities: [sequences, roles, select, errors, grant]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (privilege requirements of nextval, setval, currval)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE seqdoc_r1
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE s_priv
+    expect: ok
+  - sql: |
+      SELECT nextval('s_priv') AS v
+    expect: rows
+    comment: the owner (superuser) advances the sequence once
+  - sql: |
+      SET ROLE seqdoc_r1
+    expect: ok
+  - sql: |
+      SELECT nextval('s_priv')
+    expect: error
+    sqlstate: "42501"
+    comment: no privilege on the sequence
+  - sql: |
+      SELECT currval('s_priv')
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT SELECT ON s_priv TO seqdoc_r1
+    expect: ok
+  - sql: |
+      SET ROLE seqdoc_r1
+    expect: ok
+  - sql: |
+      SELECT currval('s_priv') AS v
+    expect: rows
+    comment: SELECT privilege is enough for currval
+  - sql: |
+      SELECT nextval('s_priv')
+    expect: error
+    sqlstate: "42501"
+    comment: SELECT privilege is not enough for nextval
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT USAGE ON s_priv TO seqdoc_r1
+    expect: ok
+  - sql: |
+      SET ROLE seqdoc_r1
+    expect: ok
+  - sql: |
+      SELECT nextval('s_priv') AS n, currval('s_priv') AS c
+    expect: rows
+    comment: USAGE allows nextval and currval
+  - sql: |
+      SELECT setval('s_priv', 10)
+    expect: error
+    sqlstate: "42501"
+    comment: setval needs UPDATE, USAGE is not enough
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT UPDATE ON s_priv TO seqdoc_r1
+    expect: ok
+  - sql: |
+      SET ROLE seqdoc_r1
+    expect: ok
+  - sql: |
+      SELECT setval('s_priv', 10) AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('s_priv') AS v
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP SEQUENCE s_priv
+    expect: ok
+  - sql: |
+      DROP ROLE seqdoc_r1
+    expect: ok

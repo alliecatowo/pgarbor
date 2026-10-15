@@ -1,0 +1,44 @@
+# ALTER INDEX ... SET TABLESPACE: pg_default is a valid target, unknown tablespaces fail, and ALL IN TABLESPACE validates its source.
+id: cmd-alter-index.tablespace-moves
+title: SET TABLESPACE to pg_default succeeds; unknown tablespace names fail with 42704
+family: cmd-alter-index
+tier: extended
+feature_ids: [alter-index, tablespaces, errors]
+required_capabilities: [create-table, create-index, alter-index, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (SET TABLESPACE; ALL IN TABLESPACE; NOWAIT)"
+sessions: [a]
+setup: |
+  CREATE TABLE ts_t (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX ts_t_v ON ts_t (v);
+steps:
+  - sql: |
+      ALTER INDEX ts_t_v SET TABLESPACE no_such_tablespace
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER INDEX ts_t_v SET TABLESPACE pg_default
+    expect: ok
+    comment: the default tablespace is always a valid target
+  - sql: |
+      ALTER INDEX ts_t_pkey SET TABLESPACE pg_default
+    expect: ok
+  - sql: |
+      SELECT indexname, tablespace FROM pg_indexes WHERE tablename = 'ts_t' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: tablespace NULL in pg_indexes means the database default
+  - sql: |
+      ALTER INDEX ALL IN TABLESPACE no_such_tablespace SET TABLESPACE pg_default
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER INDEX ALL IN TABLESPACE pg_default SET TABLESPACE pg_default NOWAIT
+    expect: ok
+    comment: moves every index in the database's default tablespace to itself, a no-op that takes the locks
+  - sql: |
+      SELECT id, v FROM ts_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no data is required, table still readable

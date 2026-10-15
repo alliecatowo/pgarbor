@@ -1,0 +1,29 @@
+# COMMUTATOR must name an existing operator with the reversed argument types. A missing one is refused; ALTER
+# OPERATOR does not create a shell operator for it, and the commutator link is not written.
+id: cmd-alter-operator.commutator-missing-no-shell
+title: "ALTER OPERATOR SET COMMUTATOR to a missing operator fails with 42883 and creates no shell operator"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, commutator, errors]
+required_capabilities: [alter-operator, create-operator, create-function-sql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#parameters (com_op)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_cm_lt(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR <<< (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_cm_lt);
+steps:
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (COMMUTATOR = cmd_ao_no_such_op)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT count(*) AS n FROM pg_operator WHERE oprname = 'cmd_ao_no_such_op'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT oprcom = 0 AS no_commutator
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered

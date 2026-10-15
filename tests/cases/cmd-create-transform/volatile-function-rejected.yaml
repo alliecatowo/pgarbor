@@ -1,0 +1,23 @@
+# Transform functions must not be VOLATILE. The PG docs do not state this rule; it is an implementation check (error 42P17), recorded as a documented-behavior probe.
+id: cmd-create-transform.volatile-function-rejected
+title: "CREATE TRANSFORM rejects a VOLATILE transform function but accepts an IMMUTABLE one"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, function-volatility, transform-from-sql]
+required_capabilities: [create-transform, create-function, internal-language-functions]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-parameters"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ct_vol(val internal) RETURNS internal LANGUAGE internal AS 'text_starts_with_support';
+  CREATE FUNCTION ct_immut(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_vol(internal))
+    expect: error
+    sqlstate: "42P17"
+    comment: default volatility is VOLATILE for LANGUAGE internal functions
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_immut(internal))
+    expect: ok

@@ -1,0 +1,52 @@
+# ALTER DOMAIN ... SET/DROP DEFAULT affects only subsequent INSERTs; stored rows keep their values.
+id: cmd-alter-domain.set-drop-default
+title: "SET DEFAULT and DROP DEFAULT apply only to later INSERTs, and a column default overrides the domain default"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, domain-default, insert]
+required_capabilities: [create-domain, alter-domain, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (SET/DROP DEFAULT)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN code AS text DEFAULT 'AAA' CHECK (VALUE <> 'ZZZ');
+  CREATE TABLE items (id int, c code);
+steps:
+  - sql: |
+      INSERT INTO items (id) VALUES (1)
+    expect: ok
+    comment: the domain default 'AAA' is filled in
+  - sql: |
+      ALTER DOMAIN code SET DEFAULT 'BBB'
+    expect: ok
+  - sql: |
+      INSERT INTO items (id) VALUES (2)
+    expect: ok
+  - sql: |
+      SELECT id, c FROM items ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 1 keeps AAA; only the new insert sees BBB
+  - sql: |
+      ALTER DOMAIN code DROP DEFAULT
+    expect: ok
+  - sql: |
+      INSERT INTO items (id) VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT id, c FROM items ORDER BY id
+    expect: rows
+    order: ordered
+    comment: with no default the column is NULL
+  - sql: |
+      CREATE TABLE items2 (id int, c code DEFAULT 'CCC')
+    expect: ok
+  - sql: |
+      INSERT INTO items2 (id) VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT c FROM items2
+    expect: rows
+    order: ordered
+    comment: the column default takes precedence over the domain default

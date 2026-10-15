@@ -1,0 +1,37 @@
+# DROP OWNED is transactional: inside a transaction block, ROLLBACK restores the owned objects and COMMIT removes them.
+id: cmd-drop-owned.rollback-restores-objects
+title: "DROP OWNED inside a transaction is undone by ROLLBACK and applied by COMMIT"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, transactions, rollback, commit]
+required_capabilities: [roles, drop-role, create-table, select, transactions, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-description"
+sessions: [a]
+setup: |
+  CREATE ROLE dtx_r;
+  CREATE TABLE dtx_t (a int4);
+  ALTER TABLE dtx_t OWNER TO dtx_r;
+  INSERT INTO dtx_t VALUES (5);
+steps:
+  - sql: |
+      BEGIN;
+      DROP OWNED BY dtx_r;
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT a FROM dtx_t ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the table and its row are back after ROLLBACK
+  - sql: |
+      BEGIN;
+      DROP OWNED BY dtx_r;
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname = 'dtx_t'
+    expect: rows
+    order: multiset
+    comment: after COMMIT the table is gone

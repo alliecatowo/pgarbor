@@ -1,0 +1,40 @@
+# A column default may not refer to other columns and may be volatile; a generation expression
+# may refer to other columns but must be immutable. Each side of that contrast is checked.
+id: doc-ddl-generated-columns.default-vs-generated
+title: Column defaults may be volatile but not reference columns; generation expressions must be immutable
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, column-defaults, immutability]
+required_capabilities: [create-table, insert, select, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE dv_ref (x int, y int DEFAULT x)
+    expect: error
+    sqlstate: "0A000"
+    comment: a column default may not refer to other columns; a generation expression would
+  - sql: |
+      CREATE TABLE dv (x int, r int DEFAULT random()::int, y int DEFAULT 7, g int GENERATED ALWAYS AS (x + 1) STORED)
+    expect: ok
+    comment: volatile default is fine; r is never selected because its value is random
+  - sql: |
+      INSERT INTO dv (x) VALUES (4)
+    expect: ok
+  - sql: |
+      SELECT x, y, g FROM dv
+    expect: rows
+    order: multiset
+    comment: the default y applies; g is computed from x, not from the default
+  - sql: |
+      CREATE TABLE dvg_rand (x int, g int GENERATED ALWAYS AS (random()::int) STORED)
+    expect: error
+    sqlstate: "42P17"
+    comment: random() is volatile, so the generation expression is not immutable
+  - sql: |
+      CREATE TABLE dvg_now (x int, g timestamptz GENERATED ALWAYS AS (now()) STORED)
+    expect: error
+    sqlstate: "42P17"
+    comment: now() is stable, not immutable, so it is rejected too

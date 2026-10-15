@@ -1,0 +1,57 @@
+# tsvector_update_trigger keeps a derived tsvector column in sync on INSERT and UPDATE; NULL input
+# columns are skipped while the other columns are still indexed.
+id: doc-textsearch-features.trigger-builtin-update
+title: Built-in tsvector_update_trigger maintains the tsvector column on insert and update
+family: doc-textsearch-features
+tier: core
+feature_ids: [tsvector-update-trigger, triggers, match-operator]
+required_capabilities: [create-table, create-trigger, insert, update, select, triggers, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-update-triggers"
+steps:
+  - sql: |
+      CREATE TABLE messages (
+          title       text,
+          body        text,
+          tsv         tsvector
+      )
+    expect: ok
+  - sql: |
+      CREATE TRIGGER tsvectorupdate BEFORE INSERT OR UPDATE
+      ON messages FOR EACH ROW EXECUTE FUNCTION
+      tsvector_update_trigger(tsv, 'pg_catalog.english', title, body)
+    expect: ok
+  - sql: |
+      INSERT INTO messages VALUES('title here', 'the body text is here')
+    expect: ok
+  - sql: |
+      SELECT title, body, tsv::text AS tsv FROM messages
+    expect: rows
+    order: multiset
+    comment: documented example; stop words dropped, positions counted over the body
+  - sql: |
+      SELECT title, body FROM messages WHERE tsv @@ to_tsquery('english', 'title & body')
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO messages (title, body) VALUES (NULL, 'quick fox')
+    expect: ok
+  - sql: |
+      SELECT body, tsv::text AS tsv FROM messages WHERE body = 'quick fox'
+    expect: rows
+    order: multiset
+    comment: NULL title is skipped, body is still indexed
+  - sql: |
+      UPDATE messages SET title = 'new heading' WHERE title = 'title here'
+    expect: ok
+  - sql: |
+      SELECT title, tsv::text AS tsv FROM messages WHERE body = 'the body text is here'
+    expect: rows
+    order: multiset
+    comment: the trigger recomputes tsv when a text column changes
+  - sql: |
+      SELECT count(*) FROM messages WHERE tsv @@ to_tsquery('english', 'title')
+    expect: rows
+    order: multiset
+    comment: the old title no longer matches after the update

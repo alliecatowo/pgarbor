@@ -1,0 +1,31 @@
+# DROP OWNED does not remove role memberships; the member keeps its group membership until DROP ROLE.
+id: cmd-drop-owned.membership-retained
+title: "DROP OWNED leaves the role's group memberships in place"
+family: cmd-drop-owned
+tier: extended
+feature_ids: [drop-owned, role-membership, grant-role]
+required_capabilities: [roles, drop-role, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-description (memberships are not named among the things removed)"
+sessions: [a]
+setup: |
+  CREATE ROLE dmr_group;
+  CREATE ROLE dmr_user;
+  GRANT dmr_group TO dmr_user;
+  CREATE TABLE dmr_t (a int4);
+  ALTER TABLE dmr_t OWNER TO dmr_user;
+steps:
+  - sql: |
+      DROP OWNED BY dmr_user
+    expect: ok
+  - sql: |
+      SELECT count(*) AS memberships FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member JOIN pg_roles g ON g.oid = m.roleid WHERE r.rolname = 'dmr_user' AND g.rolname = 'dmr_group'
+    expect: rows
+    order: multiset
+    comment: the membership is still there after DROP OWNED
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname = 'dmr_t'
+    expect: rows
+    order: multiset
+    comment: the owned table is gone

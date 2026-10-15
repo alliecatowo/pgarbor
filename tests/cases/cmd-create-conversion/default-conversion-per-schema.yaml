@@ -1,0 +1,53 @@
+# DEFAULT conversions: one default per (schema, source, destination). A second default for the same pair
+# in the same schema fails with 42710; another schema may hold its own default; non-default conversions
+# are unrestricted; dropping the default frees the pair.
+id: cmd-create-conversion.default-conversion-per-schema
+title: DEFAULT conversions allow one default per schema and encoding pair
+family: cmd-create-conversion
+tier: core
+feature_ids: [create-conversion, default-conversion, encoding-conversion, errors]
+required_capabilities: [create-conversion, drop-conversion, create-schema, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_conversion.sgml#sql-createconversion (DEFAULT parameter)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DEFAULT CONVERSION cc_def_main FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - sql: |
+      CREATE DEFAULT CONVERSION cc_def_dup FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: error
+    sqlstate: "42710"
+    comment: second default for UTF8 to LATIN1 in the same schema
+  - sql: |
+      CREATE CONVERSION cc_def_nondef FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+    comment: a non-default conversion for the same pair is allowed beside the default
+  - sql: |
+      CREATE SCHEMA cc_def_s
+    expect: ok
+  - sql: |
+      CREATE DEFAULT CONVERSION cc_def_s.cc_def_other FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+    comment: the one-default rule is per schema
+  - sql: |
+      SELECT c.conname, n.nspname, c.condefault
+      FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE c.conname LIKE 'cc_def%'
+      ORDER BY n.nspname, c.conname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP CONVERSION cc_def_main
+    expect: ok
+  - sql: |
+      CREATE DEFAULT CONVERSION cc_def_again FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+    comment: dropping the default frees the pair in that schema
+  - sql: |
+      DROP CONVERSION cc_def_again;
+      DROP CONVERSION cc_def_nondef;
+      DROP CONVERSION cc_def_s.cc_def_other;
+      DROP SCHEMA cc_def_s
+    expect: ok

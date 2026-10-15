@@ -1,0 +1,37 @@
+# Documented input quoting: fields with commas or parentheses must be double-quoted, a doubled
+# double quote is a quote character, and backslash escapes protect data characters. An INSERT
+# with '("\"\\")' stores the text "\ after both levels of backslash processing.
+id: doc-rowtypes.composite-input-quoting-escapes
+title: Quoted composite fields keep commas and parentheses, and backslash escapes reduce to the stored text
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, composite-input, quoting, escapes]
+required_capabilities: [create-type, create-table, insert, composite-types, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-io-syntax"
+sessions: [a]
+setup: |
+  CREATE TYPE onet AS (t text);
+  CREATE TYPE pair2 AS (a integer, b text);
+  CREATE TABLE esc (id integer, p onet);
+steps:
+  - sql: |
+      SELECT ('(1,"x,y")'::pair2).b AS comma_inside, ('(1,"x)y")'::pair2).b AS paren_inside, ('(1,"a""b")'::pair2).b AS doubled_quote
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ('(1,x\,y)'::pair2).b AS backslash_escaped_comma, ('(1,"x\"y")'::pair2).b AS backslash_quote
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO esc VALUES (1, '("\"\\")')
+    expect: ok
+  - sql: |
+      INSERT INTO esc VALUES (2, $$("\"\\")$$)
+    expect: ok
+    comment: dollar quoting avoids doubling the backslashes
+  - sql: |
+      SELECT id, (p).t, length((p).t) AS len FROM esc ORDER BY id
+    expect: rows
+    order: ordered

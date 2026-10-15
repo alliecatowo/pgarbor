@@ -1,0 +1,49 @@
+id: cmd-create-materialized-view.duplicate-name
+title: Materialized view name must be distinct from any table, view or materialized view in the schema
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, name-conflicts, drop-materialized-view]
+required_capabilities: [create-table, create-view, create-materialized-view, drop-materialized-view, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (table_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4);
+  CREATE VIEW vw AS SELECT 1 AS x;
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv AS SELECT 1 AS x
+    expect: ok
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv AS SELECT 2 AS x
+    expect: error
+    sqlstate: "42P07"
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW base AS SELECT 1 AS x
+    expect: error
+    sqlstate: "42P07"
+    comment: clashes with a table
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW vw AS SELECT 1 AS x
+    expect: error
+    sqlstate: "42P07"
+    comment: clashes with a view
+  - session: a
+    sql: |
+      DROP MATERIALIZED VIEW mv
+    expect: ok
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv AS SELECT 3 AS x
+    expect: ok
+    comment: name is reusable after DROP
+  - session: a
+    sql: |
+      SELECT x FROM mv
+    expect: rows
+    order: ordered

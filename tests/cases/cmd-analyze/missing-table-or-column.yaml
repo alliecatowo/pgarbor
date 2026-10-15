@@ -1,0 +1,35 @@
+# Naming a nonexistent table or column is an error, and no statistics are written.
+id: cmd-analyze.missing-table-or-column
+title: "ANALYZE of a missing table or column fails and records nothing"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, errors, column-list]
+required_capabilities: [create-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Parameters: table_name, column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_mt2 (id int4, v text);
+  INSERT INTO an_mt2 VALUES (1, 'a');
+steps:
+  - sql: |
+      ANALYZE an_nosuch
+    expect: error
+    sqlstate: "42P01"
+    comment: undefined table
+  - sql: |
+      ANALYZE (VERBOSE) an_nosuch
+    expect: error
+    sqlstate: "42P01"
+    comment: undefined table with options
+  - sql: |
+      ANALYZE an_mt2 (nosuchcol)
+    expect: error
+    sqlstate: "42703"
+    comment: undefined column
+  - sql: |
+      SELECT count(*) FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_mt2'
+    expect: rows
+    order: ordered
+    comment: the failed column ANALYZE collected nothing

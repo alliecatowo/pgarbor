@@ -1,0 +1,38 @@
+# CREATE OR REPLACE RULE swaps a rule of the same name on the same table; plain CREATE RULE with that name fails.
+id: cmd-create-rule.or-replace-redefines
+title: CREATE OR REPLACE RULE redefines an existing rule while plain CREATE RULE fails with duplicate_object
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, or-replace, rules, insert, errors]
+required_capabilities: [create-table, create-rule, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Description: CREATE OR REPLACE RULE; Parameters: name must be distinct for the same table)"
+sessions: [a]
+setup: |
+  CREATE TABLE tg (a int4);
+  CREATE TABLE lg (a int4);
+  CREATE RULE rep AS ON INSERT TO tg DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      INSERT INTO tg VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM tg
+    expect: rows
+    comment: the INSTEAD NOTHING rule from setup swallowed the insert
+  - sql: |
+      CREATE RULE rep AS ON INSERT TO tg DO ALSO INSERT INTO lg VALUES (NEW.a)
+    expect: error
+    sqlstate: "42710"
+    comment: same name on the same table without OR REPLACE is duplicate_object
+  - sql: |
+      CREATE OR REPLACE RULE rep AS ON INSERT TO tg DO ALSO INSERT INTO lg VALUES (NEW.a)
+    expect: ok
+  - sql: |
+      INSERT INTO tg VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM tg) AS tg_rows, (SELECT count(*) FROM lg) AS lg_rows, (SELECT min(a) FROM lg) AS lg_min
+    expect: rows
+    comment: the replaced rule is now ALSO, so row 3 lands in tg and is logged to lg; row 1 was swallowed earlier

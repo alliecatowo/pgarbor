@@ -1,0 +1,49 @@
+# Doc example: REVOKE role FROM role removes membership, after which the member no longer inherits the role's privileges.
+id: cmd-revoke.role-membership-example
+title: REVOKE role membership removes membership and the inherited privileges with it
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, role-membership, roles, inherit, privileges]
+required_capabilities: [create-table, select, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-examples (Revoke membership in role admins from user joe)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvr_admins;
+  CREATE ROLE rvr_joe;
+  CREATE TABLE rvr_t (id int4);
+  INSERT INTO rvr_t VALUES (1), (2);
+  GRANT SELECT ON rvr_t TO rvr_admins;
+  GRANT rvr_admins TO rvr_joe;
+steps:
+  - sql: |
+      SELECT pg_has_role('rvr_joe', 'rvr_admins', 'MEMBER') AS member_before
+    expect: rows
+  - sql: |
+      SET ROLE rvr_joe
+    expect: ok
+  - sql: |
+      SELECT id FROM rvr_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: joe reads through the admins membership
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE rvr_admins FROM rvr_joe
+    expect: ok
+  - sql: |
+      SELECT pg_has_role('rvr_joe', 'rvr_admins', 'MEMBER') AS member_after
+    expect: rows
+  - sql: |
+      SET ROLE rvr_joe
+    expect: ok
+  - sql: |
+      SELECT id FROM rvr_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,37 @@
+# A domain is a named data type with constraints: CHECK applies to every value of the type, and a
+# NOT NULL column of a domain type rejects NULL.
+id: doc-ddl-others.domain-check-not-null
+title: Domain CHECK constraint and NOT NULL column reject invalid values
+family: doc-ddl-others
+tier: core
+feature_ids: [domains, check-constraints, not-null, errors]
+required_capabilities: [create-table, create-domain, insert, select, cast, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-others (Data types and domains); ref: sql-createdomain.html"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS int4 CHECK (VALUE > 0);
+  CREATE TABLE dt (id int4 PRIMARY KEY, n posint NOT NULL);
+steps:
+  - sql: |
+      INSERT INTO dt VALUES (1, 7) RETURNING id, n
+    expect: rows
+  - sql: |
+      INSERT INTO dt VALUES (2, 0)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      INSERT INTO dt VALUES (3, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT 0::posint
+    expect: error
+    sqlstate: "23514"
+    comment: the CHECK also applies to a cast to the domain type
+  - sql: |
+      SELECT id, n, pg_typeof(n)::text AS declared FROM dt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a domain column reports the domain name as its type

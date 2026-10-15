@@ -1,0 +1,53 @@
+# Documented and implied error conditions for tsquery parsing and text search object lookup.
+id: doc-functions-textsearch.errors
+title: Malformed tsquery, unknown configurations, parsers and dictionaries, and bad phrase distance raise the documented errors
+family: doc-functions-textsearch
+tier: core
+feature_ids: [to-tsquery, tsquery-syntax, text-search-configuration, text-search-parser, text-search-dictionary, tsquery-phrase-operator]
+required_capabilities: [select, errors, text-search]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-textsearch (to_tsquery, tsquery_phrase, ts_lexize, ts_token_type, ts_parse, ts_headline)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_tsquery('fat & | rat')
+    expect: error
+    sqlstate: "42601"
+    comment: a binary operator with no left operand is a tsquery syntax error
+  - sql: |
+      SELECT numnode('!!'::tsquery)
+    expect: error
+    sqlstate: "42601"
+    comment: a NOT operator with no operand is rejected
+  - sql: |
+      SELECT to_tsvector('nosuchconfig', 'x')
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT ts_lexize('nodict', 'x')
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT ts_token_type('nosuchparser')
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT ts_parse('nosuchparser', 'x')
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), -1)
+    expect: error
+    sqlstate: "22023"
+    comment: phrase distance must be between zero and 16384
+  - sql: |
+      SELECT 'fat:2 cat:3'::tsvector @> 'fat'::tsvector
+    expect: error
+    sqlstate: "42883"
+    comment: tsvector has no containment operator; only tsquery does
+  - sql: |
+      SELECT ts_rewrite('a & b'::tsquery, 'SELECT 1')
+    expect: error
+    sqlstate: "22023"
+    comment: the rewrite query must return two tsquery columns

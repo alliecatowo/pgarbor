@@ -1,0 +1,29 @@
+# A WITH HOLD cursor declared inside a transaction is part of that transaction, so ROLLBACK closes it.
+id: cmd-rollback.discards-held-cursor
+title: ROLLBACK closes a WITH HOLD cursor declared inside the transaction
+family: cmd-rollback
+tier: extended
+feature_ids: [rollback, declare-cursor, with-hold, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback (Description: rolls back the current transaction)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  INSERT INTO p VALUES (1), (2);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE cur CURSOR WITH HOLD FOR SELECT id FROM p ORDER BY id
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      FETCH ALL FROM cur
+    expect: error
+    sqlstate: "34000"
+    comment: the cursor was discarded even though WITH HOLD normally survives commit

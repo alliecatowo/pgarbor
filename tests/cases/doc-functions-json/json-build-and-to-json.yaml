@@ -1,0 +1,48 @@
+# Documented to_json/to_jsonb, array_to_json, row_to_json and json[b]_build_array/object conversions, including NULL handling and pretty-print flags.
+id: doc-functions-json.json-build-and-to-json
+title: to_json, row_to_json, array_to_json and json_build_* conversions with documented examples
+family: doc-functions-json
+tier: core
+feature_ids: [json-creation-functions, to-json, json-build-object, json-build-array]
+required_capabilities: [select, json, jsonb, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-creation (JSON Creation Functions table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_json('Fred said "Hi."'::text) AS quoted_text,
+             to_jsonb(row(42, 'Fred said "Hi."'::text)) AS row_as_jsonb,
+             array_to_json('{{1,5},{99,100}}'::int[]) AS nested_array,
+             row_to_json(row(1,'foo')) AS row_json
+    expect: rows
+    comment: "documented examples: quotes escaped, arrays recursive, composites become objects with f1/f2 keys"
+  - sql: |
+      SELECT to_json(NULL::int) IS NULL AS null_int_is_sql_null,
+             to_jsonb(NULL::text) IS NULL AS null_text_is_sql_null,
+             to_json(true) AS bool_json,
+             to_json(1.50::numeric) AS numeric_json
+    expect: rows
+  - sql: |
+      SELECT array_to_json(array[1,2], true) AS pretty_array,
+             row_to_json(row(1,'foo'), true) AS pretty_row
+    expect: rows
+    comment: "the optional boolean adds line feeds between top-level elements"
+  - sql: |
+      SELECT json_build_array(1, 2, 'foo', 4, 5) AS build_arr,
+             json_build_array(NULL::int, 1) AS arr_with_null,
+             jsonb_build_array('[3, 4]'::jsonb) AS jsonb_wrapped,
+             json_build_array() AS empty_arr
+    expect: rows
+  - sql: |
+      SELECT json_build_object('foo', 1, 2, row(3,'bar')) AS build_obj,
+             json_build_object('k', NULL::int) AS null_value_kept,
+             json_build_object() AS empty_obj,
+             jsonb_build_object('a', 'b', 'c', 2) AS jsonb_obj
+    expect: rows
+    comment: "documented: key 2 is coerced to text \"2\"; a NULL value is kept as JSON null"
+  - sql: |
+      SELECT json_build_object(NULL::text, 1) AS null_key
+    expect: error
+    sqlstate: "22004"
+    comment: "json_build_object rejects a NULL key"

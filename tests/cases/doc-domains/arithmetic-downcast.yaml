@@ -1,0 +1,31 @@
+# Operators on a domain value down-cast to the underlying type; casting back re-checks the domain.
+id: doc-domains.arithmetic-downcast
+title: id - 1 is integer, and casting it back to posint rechecks the domain
+family: doc-domains
+tier: core
+feature_ids: [domains, create-domain, implicit-downcast, explicit-cast]
+required_capabilities: [create-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#domains"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS integer CHECK (VALUE > 0);
+  CREATE TABLE mytable (id posint);
+  INSERT INTO mytable VALUES (1), (2)
+steps:
+  - sql: |
+      SELECT id, pg_typeof(id)::text AS col_type, pg_typeof(id - 1)::text AS expr_type, id - 1 AS dec FROM mytable ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the column keeps the domain type, the expression is plain integer
+  - sql: |
+      SELECT ((id - 1)::posint) FROM mytable ORDER BY id
+    expect: error
+    sqlstate: "23514"
+    comment: id 1 gives 0, which violates posint when cast back
+  - sql: |
+      SELECT ((id - 1)::posint) FROM mytable WHERE id = 2
+    expect: rows
+    order: ordered
+    comment: id 2 gives 1, which is accepted

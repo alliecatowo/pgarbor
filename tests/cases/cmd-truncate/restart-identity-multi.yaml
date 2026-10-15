@@ -1,0 +1,30 @@
+# Doc example: TRUNCATE ... RESTART IDENTITY restarts sequences owned by the truncated columns.
+id: cmd-truncate.restart-identity-multi
+title: "RESTART IDENTITY on a multi-table TRUNCATE resets owned serial and identity sequences"
+family: cmd-truncate
+tier: core
+feature_ids: [truncate, restart-identity, identity, serial, insert, select]
+required_capabilities: [create-table, insert, select, identity, sequences, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#examples (TRUNCATE bigtable, fattable RESTART IDENTITY)"
+sessions: [a]
+setup: |
+  CREATE TABLE bigtable (id serial PRIMARY KEY, v text);
+  CREATE TABLE fattable (id int4 GENERATED ALWAYS AS IDENTITY PRIMARY KEY, v text);
+  INSERT INTO bigtable (v) VALUES ('a'), ('b'), ('c');
+  INSERT INTO fattable (v) VALUES ('x'), ('y');
+steps:
+  - sql: |
+      TRUNCATE bigtable, fattable RESTART IDENTITY
+    expect: ok
+  - sql: |
+      INSERT INTO bigtable (v) VALUES ('new') RETURNING id
+    expect: rows
+    order: ordered
+    comment: serial restarted, so the first id is 1
+  - sql: |
+      INSERT INTO fattable (v) VALUES ('new') RETURNING id
+    expect: rows
+    order: ordered
+    comment: identity restarted, so the first id is 1

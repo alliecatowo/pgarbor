@@ -1,0 +1,33 @@
+# A duplicate name errors; IF NOT EXISTS downgrades that to a notice and keeps the original definition; IF NOT EXISTS requires a name.
+id: cmd-create-statistics.duplicate-name-and-if-not-exists
+title: Duplicate statistics name errors, while IF NOT EXISTS skips and keeps the original definition
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, if-not-exists, name-conflicts]
+required_capabilities: [create-table, extended-statistics, catalog-introspection, notices]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Parameters: IF NOT EXISTS; statistics_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_dup (a int, b int, c int);
+  CREATE STATISTICS cs_dup_s ON a, b FROM cs_dup;
+steps:
+  - sql: |
+      CREATE STATISTICS cs_dup_s ON b, c FROM cs_dup
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      CREATE STATISTICS IF NOT EXISTS cs_dup_s ON b, c FROM cs_dup
+    expect: notice
+    comment: a notice is issued and the new definition is ignored
+  - sql: |
+      SELECT stxname, stxkind, stxkeys::text FROM pg_statistic_ext WHERE stxrelid = 'cs_dup'::regclass ORDER BY stxname
+    expect: rows
+    order: ordered
+    comment: still the original (a, b) definition
+  - sql: |
+      CREATE STATISTICS IF NOT EXISTS ON a, c FROM cs_dup
+    expect: error
+    sqlstate: "42601"
+    comment: IF NOT EXISTS requires an explicit statistics name

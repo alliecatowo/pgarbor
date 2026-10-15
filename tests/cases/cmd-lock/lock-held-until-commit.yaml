@@ -1,0 +1,43 @@
+# Locks are held for the rest of the transaction and released only at its end. A reader blocked by
+# ACCESS EXCLUSIVE proceeds once the holder commits, and then sees the committed row.
+id: cmd-lock.held-until-commit
+title: ACCESS EXCLUSIVE lock blocks a reader until the holder commits, then the reader sees the commit
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, lock-modes, transactions, multi-session, select, insert]
+required_capabilities: [create-table, insert, select, lock-table, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (Description: locks held until transaction end)"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE t_hold (a int4 PRIMARY KEY);
+  INSERT INTO t_hold VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE t_hold
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO t_hold VALUES (2)
+    expect: ok
+  - session: b
+    sql: |
+      SELECT a FROM t_hold ORDER BY a
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    order: ordered
+    comment: the waiter sees the committed row 2

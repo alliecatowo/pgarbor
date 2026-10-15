@@ -1,0 +1,48 @@
+# xml has no =, <, ORDER BY, DISTINCT or GROUP-style equality; the documented workaround is casting to text.
+id: doc-datatype-xml.xml-no-comparison-operators
+title: xml values have no comparison operators, so =, <, ORDER BY and DISTINCT fail with undefined-operator errors
+family: doc-datatype-xml
+tier: core
+feature_ids: [xml, no-comparison, errors, order-by, distinct]
+required_capabilities: [create-table, insert, select, xml, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-xml-accessing-xml-values (the xml type does not provide any comparison operators)"
+sessions: [a]
+setup: |
+  CREATE TABLE xc (id int4 PRIMARY KEY, x xml);
+  INSERT INTO xc VALUES (1, '<a/>'), (2, '<b/>'), (3, NULL);
+steps:
+  - sql: |
+      SELECT '<a/>'::xml = '<a/>'::xml
+    expect: error
+    sqlstate: "42883"
+    comment: no equality operator
+  - sql: |
+      SELECT '<a/>'::xml < '<b/>'::xml
+    expect: error
+    sqlstate: "42883"
+    comment: no ordering operator
+  - sql: |
+      SELECT id FROM xc WHERE x = '<a/>'::xml
+    expect: error
+    sqlstate: "42883"
+    comment: a search by value against an xml column is impossible
+  - sql: |
+      SELECT x FROM xc ORDER BY x
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT DISTINCT x FROM xc
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT id FROM xc WHERE x::text = '<a/>' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: documented workaround, compare as character strings
+  - sql: |
+      SELECT id FROM xc WHERE x IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL tests do not need an operator

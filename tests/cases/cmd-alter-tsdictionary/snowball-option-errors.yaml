@@ -1,0 +1,33 @@
+# Documented semantics: a failing ALTER changes nothing; unknown template options and invalid values are rejected.
+id: cmd-alter-tsdictionary.snowball-option-errors
+title: "ALTER rejects unknown Snowball options, unknown languages and removal of the required language"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, snowball-template, template-option, errors]
+required_capabilities: [create-text-search-dictionary, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (option is a template-specific option; the dictionary is re-initialized by its template)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY my_dict (TEMPLATE = snowball, language = english, stopwords = english);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY my_dict ( nosuch = 'x' )
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized Snowball parameter
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY my_dict ( language = 'klingon' )
+    expect: error
+    sqlstate: "42704"
+    comment: no Snowball stemmer for that language
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY my_dict ( language )
+    expect: error
+    sqlstate: "22023"
+    comment: removing the language option leaves no language; the template requires it
+  - sql: |
+      SELECT dictinitoption FROM pg_ts_dict WHERE dictname = 'my_dict'
+    expect: rows
+    comment: all three failed ALTERs left the definition untouched

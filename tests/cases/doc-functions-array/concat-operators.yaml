@@ -1,0 +1,31 @@
+# The || operator in its three forms (array||array, element||array, array||element): documented
+# examples, NULL and empty no-op behavior, and the dimension rules for concatenation.
+id: doc-functions-array.concat-operators
+title: Array concatenation operator in all forms with NULL no-op and dimension errors
+family: doc-functions-array
+tier: core
+feature_ids: [array-operators, array-concatenation, nulls, errors]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-array (array-operators-table, || rows)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT ARRAY[1,2,3] || ARRAY[4,5,6,7] AS flat, ARRAY[1,2,3] || ARRAY[[4,5,6],[7,8,9.9]] AS one_dim_onto_two_dim, ARRAY[1,2] || ARRAY[[1,2],[3,4]] AS one_dim_prepended_to_matrix, 3 || ARRAY[4,5,6] AS elem_front, ARRAY[4,5,6] || 7 AS elem_back
+    expect: rows
+    comment: documented examples; the 9.9 element coerces the whole matrix to numeric
+  - sql: |
+      SELECT NULL::int[] || ARRAY[1,2] AS null_left, ARRAY[]::int[] || ARRAY[1,2] AS empty_left, ARRAY[1,2] || NULL::int[] AS null_right, ARRAY[1,2] || ARRAY[]::int[] AS empty_right
+    expect: rows
+    comment: concatenating a NULL or empty array is a no-op
+  - sql: |
+      SELECT ARRAY[[1,2],[3,4]] || ARRAY[[[1]]]
+    expect: error
+    sqlstate: "2202E"
+    comment: two-dimensional with three-dimensional differs by more than the allowed one dimension
+  - sql: |
+      SELECT 3 || ARRAY[[4,5]]
+    expect: error
+    sqlstate: "22000"
+    comment: element prepended to a multi-dimensional array is rejected

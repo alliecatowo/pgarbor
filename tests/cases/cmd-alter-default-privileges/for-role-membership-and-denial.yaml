@@ -1,0 +1,46 @@
+# A role may change defaults for a role it is a member of, and is denied for an unrelated role (42501).
+id: cmd-alter-default-privileges.for-role-membership-and-denial
+title: FOR ROLE needs membership in the target role and is denied with 42501 otherwise
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, role-membership, permissions, set-role, errors]
+required_capabilities: [create-schema, roles, set-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-description (you can change the defaults of roles that you are a member of)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_parent') THEN CREATE ROLE adp_parent; END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_child') THEN CREATE ROLE adp_child IN ROLE adp_parent; END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_admin') THEN CREATE ROLE adp_admin; END IF;
+  END $$;
+  CREATE SCHEMA adp_fr;
+steps:
+  - sql: |
+      SET ROLE adp_child
+    expect: ok
+  - sql: |
+      ALTER DEFAULT PRIVILEGES FOR ROLE adp_parent IN SCHEMA adp_fr GRANT SELECT ON TABLES TO PUBLIC
+    expect: ok
+    comment: child is a member of parent so the change is allowed
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE adp_child
+    expect: ok
+  - sql: |
+      ALTER DEFAULT PRIVILEGES FOR ROLE adp_admin IN SCHEMA adp_fr GRANT SELECT ON TABLES TO PUBLIC
+    expect: error
+    sqlstate: "42501"
+    comment: adp_admin is not a role adp_child is a member of
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT defaclrole::regrole::text, defaclnamespace::regnamespace::text, defaclobjtype, defaclacl::text
+      FROM pg_default_acl WHERE defaclnamespace = 'adp_fr'::regnamespace ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+    comment: only the parent role entry was written

@@ -1,0 +1,39 @@
+# An uncommitted DROP VIEW holds an access-exclusive lock: a concurrent reader blocks, then gets 42P01 after commit.
+id: cmd-drop-view.reader-blocked-until-commit
+title: A reader of a view blocks behind an uncommitted DROP VIEW, then gets 42P01 after commit
+family: cmd-drop-view
+tier: core
+feature_ids: [drop-view, locks, transactions]
+required_capabilities: [create-table, insert, create-view, drop-view, select, transactions, multi-session, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_view.sgml#sql-dropview (Description); doc/src/sgml/mvcc.sgml (table-level locks)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE rbv_base (id int4);
+  INSERT INTO rbv_base VALUES (1), (2);
+  CREATE VIEW rbv_v AS SELECT id FROM rbv_base;
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      DROP VIEW rbv_v
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id FROM rbv_v ORDER BY id
+    async: true
+    expect_blocked: true
+    comment: b waits on a's access-exclusive lock and does not see the uncommitted drop
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: error
+    sqlstate: "42P01"
+    comment: after commit the name no longer resolves

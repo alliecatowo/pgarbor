@@ -1,0 +1,50 @@
+id: cmd-refresh-materialized-view.concurrently-null-unique-column
+title: CONCURRENTLY allows NULL-containing duplicate rows, and a real unique conflict on the new data fails with 23505
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, refresh-concurrently, unique-index, nulls]
+required_capabilities: [create-table, insert, select, create-index, create-materialized-view, refresh-materialized-view, nulls]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (CONCURRENTLY); pg source matview.c duplicate-row check"
+sessions: [a]
+setup: |
+  CREATE TABLE src2 (id int4, grp text);
+  INSERT INTO src2 VALUES (1, 'x'), (2, NULL), (3, NULL), (4, 'y');
+  CREATE MATERIALIZED VIEW mv_nulls AS SELECT id, grp FROM src2;
+  CREATE UNIQUE INDEX mv_nulls_grp ON mv_nulls (grp);
+  CREATE TABLE dup (k int4, v text);
+  INSERT INTO dup VALUES (1, NULL), (1, NULL), (2, 'p');
+  CREATE MATERIALIZED VIEW mv_dupnull AS SELECT k, v FROM dup;
+  CREATE UNIQUE INDEX mv_dupnull_v ON mv_dupnull (v);
+steps:
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nulls
+    expect: ok
+    comment: multiple NULLs in the unique column are permitted
+  - sql: |
+      SELECT id, grp FROM mv_nulls ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_dupnull
+    expect: ok
+    comment: exact duplicate rows are allowed when they contain a NULL column
+  - sql: |
+      SELECT k, v FROM mv_dupnull ORDER BY k, v
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO src2 VALUES (5, 'x')
+    expect: ok
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nulls
+    expect: error
+    sqlstate: "23505"
+    compare_message: false
+    comment: new data has two 'x' rows; unique index rejects it; message context embeds a backend temp schema name
+  - sql: |
+      SELECT id, grp FROM mv_nulls ORDER BY id
+    expect: rows
+    order: ordered
+    comment: failed refresh leaves the previous contents in place

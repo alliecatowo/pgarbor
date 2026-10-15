@@ -1,0 +1,33 @@
+# Rule names are scoped to their table: a rename may reuse a name that a rule on another table already has.
+id: cmd-alter-rule.rename-to-name-on-other-table
+title: Renaming a rule to a name used on a different table succeeds
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, rules, scope]
+required_capabilities: [create-table, create-rule, select, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 alter_rule.sgml#description; rule names are unique per table (CREATE RULE, sql-createrule.html)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4);
+  CREATE TABLE other (id int4);
+  CREATE RULE r_emp AS ON INSERT TO emp DO INSTEAD NOTHING;
+  CREATE RULE shared_name AS ON INSERT TO other DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      ALTER RULE r_emp ON emp RENAME TO shared_name
+    expect: ok
+    comment: no conflict, because shared_name exists only on other
+  - sql: |
+      SELECT tablename, rulename FROM pg_rules WHERE schemaname = 'public' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER RULE shared_name ON emp RENAME TO r_emp
+    expect: ok
+    comment: the same name may be reused in the other direction too
+  - sql: |
+      SELECT tablename, rulename FROM pg_rules WHERE schemaname = 'public' ORDER BY 1, 2
+    expect: rows
+    order: ordered

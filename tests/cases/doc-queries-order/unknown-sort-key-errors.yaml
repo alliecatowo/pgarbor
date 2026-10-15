@@ -1,0 +1,40 @@
+# Sort expressions must resolve against the input table or output labels; type and qualifier errors are reported.
+id: doc-queries-order.unknown-sort-key-errors
+title: ORDER BY reports unknown columns, unknown qualifiers, non-integer constants and bad collations
+family: doc-queries-order
+tier: core
+feature_ids: [order-by, errors, name-resolution, collation]
+required_capabilities: [create-table, insert, select, order-by, errors]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-order (sort_expression can be any expression valid in the query's select list)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4, b int4);
+  INSERT INTO t VALUES (1, 2), (2, NULL);
+steps:
+  - sql: |
+      SELECT a FROM t ORDER BY nosuch
+    expect: error
+    sqlstate: "42703"
+    comment: unknown bare name
+  - sql: |
+      SELECT a FROM t ORDER BY nosuch.a
+    expect: error
+    sqlstate: "42P01"
+    comment: qualifier that is not in the FROM clause
+  - sql: |
+      SELECT a FROM t ORDER BY 'x'
+    expect: error
+    sqlstate: "42601"
+    comment: a string constant is not a valid sort key
+  - sql: |
+      SELECT a FROM t ORDER BY a COLLATE "C"
+    expect: error
+    sqlstate: "42804"
+    comment: integer columns do not accept a collation
+  - sql: |
+      SELECT a, b FROM t ORDER BY a, a
+    expect: rows
+    order: ordered
+    comment: repeating a sort key is allowed

@@ -1,0 +1,44 @@
+# An explicit tsv value written on INSERT is replaced by the trigger. On UPDATE the built-in trigger
+# recomputes only when a text input column changes, so an explicit tsv assignment on its own is kept.
+id: doc-functions-trigger.tsvector-trigger-explicit-tsv-value
+title: tsvector_update_trigger overwrites explicit tsv on insert and keeps it on text-unchanged update
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, text-search, tsvector, insert, update]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, text-search, returning]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#builtin-triggers-table (tsvector_update_trigger); textsearch.sgml#textsearch-update-triggers"
+sessions: [a]
+setup: |
+  CREATE TABLE ov (id int, title text, body text, tsv tsvector);
+  CREATE TRIGGER ov_t BEFORE INSERT OR UPDATE ON ov FOR EACH ROW
+    EXECUTE FUNCTION tsvector_update_trigger(tsv, 'pg_catalog.english', title, body);
+steps:
+  - sql: |
+      INSERT INTO ov (id, title, body, tsv) VALUES (1, 'alpha', 'beta', 'zzz:1')
+    expect: ok
+  - sql: |
+      SELECT id, tsv FROM ov
+    expect: rows
+    order: ordered
+    comment: the explicit 'zzz:1' is overwritten with 'alpha':1 'beta':2
+  - sql: |
+      UPDATE ov SET tsv = 'qqq:2' WHERE id = 1 RETURNING tsv
+    expect: rows
+    comment: no text input column changed, so the explicit tsv value is kept
+  - sql: |
+      UPDATE ov SET body = 'gamma' WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, tsv FROM ov
+    expect: rows
+    order: ordered
+    comment: a body change recomputes tsv from both inputs
+  - sql: |
+      INSERT INTO ov (id) VALUES (2)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM ov WHERE tsv = ''::tsvector
+    expect: rows
+    comment: all-NULL inputs give the empty tsvector, expect 1

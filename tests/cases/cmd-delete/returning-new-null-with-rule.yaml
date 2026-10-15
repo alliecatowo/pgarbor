@@ -1,0 +1,26 @@
+# Under an ON DELETE DO ALSO rule the RETURNING NEW columns are still NULL, because the rule's INSERT does not change the deleted row's NEW values.
+id: cmd-delete.returning-new-null-with-rule
+title: RETURNING NEW stays NULL when an ON DELETE rule runs an extra INSERT
+family: cmd-delete
+tier: extended
+feature_ids: [delete, rules, returning, returning-old-new, create-table, insert, select]
+required_capabilities: [create-table, insert, select, delete, rules, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#parameters (output_expression: for a simple DELETE all new values are NULL)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text);
+  CREATE TABLE film_log (film_id int4, note text);
+  INSERT INTO films VALUES (1, 'Heat'), (2, 'Alien');
+  CREATE RULE films_log AS ON DELETE TO films DO ALSO INSERT INTO film_log VALUES (OLD.id, 'deleted');
+steps:
+  - sql: |
+      DELETE FROM films WHERE id = 1 RETURNING OLD.id AS old_id, NEW.id AS new_id, NEW.title AS new_title
+    expect: rows
+    order: ordered
+    comment: rule inserted a log row; NEW.* columns are NULL, OLD values are returned
+  - sql: |
+      SELECT film_id, note FROM film_log ORDER BY film_id
+    expect: rows
+    order: ordered

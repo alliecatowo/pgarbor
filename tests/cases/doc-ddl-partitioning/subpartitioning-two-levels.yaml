@@ -1,0 +1,35 @@
+# Sub-partitioning: a partition may itself be partitioned. Rows are routed through both levels and land
+# in leaf tables; a direct insert into an intermediate partition must satisfy its own key bounds.
+id: doc-ddl-partitioning.subpartitioning-two-levels
+title: Two-level sub-partitioning routes rows to leaf partitions
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, sub-partitioning, range-partitioning, partition-routing]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Declarative Partitioning: 'Partitions may themselves be defined as partitioned tables')"
+sessions: [a]
+setup: |
+  CREATE TABLE sm (city_id int, logdate date, peaktemp int) PARTITION BY RANGE (logdate);
+  CREATE TABLE sm_2006m02 PARTITION OF sm FOR VALUES FROM ('2006-02-01') TO ('2006-03-01')
+      PARTITION BY RANGE (peaktemp);
+  CREATE TABLE sm_2006m02_cold PARTITION OF sm_2006m02 FOR VALUES FROM (-50) TO (0);
+  CREATE TABLE sm_2006m02_warm PARTITION OF sm_2006m02 FOR VALUES FROM (0) TO (50);
+steps:
+  - sql: |
+      INSERT INTO sm VALUES (1, '2006-02-10', -5), (2, '2006-02-11', 30), (3, '2006-02-12', 0)
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS leaf, city_id, peaktemp FROM sm ORDER BY city_id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO sm_2006m02 VALUES (4, '2006-02-13', 60)
+    expect: error
+    sqlstate: "23514"
+    comment: intermediate partition enforces its own bounds on peaktemp
+  - sql: |
+      SELECT relkind::text AS kind, relname::text FROM pg_class WHERE relname LIKE 'sm_2006m02%' ORDER BY relname
+    expect: rows
+    order: ordered

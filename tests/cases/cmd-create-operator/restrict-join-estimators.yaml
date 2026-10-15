@@ -1,0 +1,41 @@
+# RESTRICT and JOIN name selectivity estimators. Results do not depend on them; an unknown estimator function is refused.
+id: cmd-create-operator.restrict-join-estimators
+title: "Selectivity estimators are recorded on the operator, and unknown estimator functions are refused"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, selectivity-estimators, joins, where-clause]
+required_capabilities: [create-operator, create-function-sql, create-table, insert, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#parameters (res_proc, join_proc)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_box_area_eq(box, box) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT area($1) = area($2) $$;
+  CREATE TABLE cco_b (id int4 PRIMARY KEY, b box);
+  INSERT INTO cco_b VALUES (1, '((0,0),(2,2))'), (2, '((5,5),(7,7))'), (3, '((0,0),(1,1))');
+steps:
+  - sql: |
+      CREATE OPERATOR %=% (LEFTARG = box, RIGHTARG = box, FUNCTION = cco_box_area_eq, RESTRICT = areasel, JOIN = areajoinsel)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR %!% (LEFTARG = box, RIGHTARG = box, FUNCTION = cco_box_area_eq, RESTRICT = cco_no_such_sel)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE OPERATOR %!% (LEFTARG = box, RIGHTARG = box, FUNCTION = cco_box_area_eq, JOIN = cco_no_such_join)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT oprname, oprrest::regproc AS restrict_fn, oprjoin::regproc AS join_fn
+      FROM pg_operator WHERE oprname = '%=%' AND oprleft = 'box'::regtype
+    expect: rows
+  - sql: |
+      SELECT a.id AS a_id, b.id AS b_id
+      FROM cco_b a JOIN cco_b b ON a.b %=% b.b AND a.id < b.id
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM cco_b WHERE b %=% '((0,0),(2,2))'::box ORDER BY id
+    expect: rows
+    order: ordered

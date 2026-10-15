@@ -1,0 +1,33 @@
+# Per-product totals from the table-expressions section: LEFT JOIN keeps products with no sales, and
+# the aggregate over no rows is NULL, while count() over no rows is 0.
+id: doc-queries-table-expressions.group-product-sales-left-join
+title: LEFT JOIN with GROUP BY gives per-product totals; products without sales get NULL or 0
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [group-by, left-join, aggregates, null-semantics]
+required_capabilities: [create-table, insert, select, join, aggregates]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-group"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_id int4 PRIMARY KEY, name text, price numeric(8,2));
+  CREATE TABLE sales (sale_id int4 PRIMARY KEY, product_id int4, units int4);
+  INSERT INTO products VALUES (1, 'widget', 2.50), (2, 'gadget', 10.00), (3, 'gizmo', 1.00);
+  INSERT INTO sales VALUES (1, 1, 4), (2, 1, 6), (3, 2, 2);
+steps:
+  - sql: |
+      SELECT product_id, p.name, (sum(s.units) * p.price) AS sales FROM products p LEFT JOIN sales s USING (product_id) GROUP BY product_id, p.name, p.price ORDER BY product_id
+    expect: rows
+    order: ordered
+    comment: product 3 has no sales, so its sum and sales are NULL
+  - sql: |
+      SELECT p.product_id, count(s.sale_id) AS n_sales, count(*) AS n_rows FROM products p LEFT JOIN sales s ON s.product_id = p.product_id GROUP BY p.product_id ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: count(s.sale_id) is 0 for product 3 while count(*) counts the NULL-extended row
+  - sql: |
+      SELECT p.name FROM products p LEFT JOIN sales s USING (product_id) WHERE s.sale_id IS NULL
+    expect: rows
+    order: multiset
+    comment: gizmo only

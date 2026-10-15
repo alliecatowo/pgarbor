@@ -1,0 +1,33 @@
+id: cmd-declare.binary-cursor-text-fetch-override
+title: A BINARY cursor can be fetched in text format when the extended protocol requests it
+family: cmd-declare
+tier: extended
+feature_ids: [declare-cursor, binary-cursor, extended-protocol, fetch, pg-cursors]
+required_capabilities: [create-table, insert, select, transactions, cursors, extended-protocol, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare (BINARY; Notes: Bind message overrides the cursor's format)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE b BINARY CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      SELECT is_binary FROM pg_cursors WHERE name = 'b'
+    expect: rows
+    comment: the cursor is marked binary in the catalog view
+  - exec_params:
+      sql: "FETCH 1 FROM b"
+      result_format: text
+    expect: rows
+    order: ordered
+    comment: the Bind result format (text) overrides the cursor definition
+  - sql: |
+      COMMIT
+    expect: ok

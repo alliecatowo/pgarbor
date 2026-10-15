@@ -1,0 +1,50 @@
+# Partitioning by inheritance: child tables carry non-overlapping CHECK constraints and a BEFORE INSERT
+# trigger on the root redirects rows to the matching child. The trigger RAISEs for rows that match none.
+id: doc-ddl-partitioning.inheritance-trigger-routing
+title: Inheritance-based partitioning routes inserts through a BEFORE INSERT trigger
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, inheritance, check-constraints, triggers, plpgsql]
+required_capabilities: [create-table, insert, select, triggers, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning-inheritance (Partitioning Using Inheritance: insert trigger example)"
+sessions: [a]
+setup: |
+  CREATE TABLE ih_measurement (city_id int NOT NULL, logdate date NOT NULL, peaktemp int, unitsales int);
+  CREATE TABLE ih_2006m02 () INHERITS (ih_measurement);
+  CREATE TABLE ih_2006m03 () INHERITS (ih_measurement);
+  ALTER TABLE ih_2006m02 ADD CONSTRAINT ih_2006m02_chk CHECK (logdate >= DATE '2006-02-01' AND logdate < DATE '2006-03-01');
+  ALTER TABLE ih_2006m03 ADD CONSTRAINT ih_2006m03_chk CHECK (logdate >= DATE '2006-03-01' AND logdate < DATE '2006-04-01');
+  CREATE INDEX ih_2006m02_logdate ON ih_2006m02 (logdate);
+  CREATE INDEX ih_2006m03_logdate ON ih_2006m03 (logdate);
+  CREATE OR REPLACE FUNCTION ih_insert_trigger() RETURNS TRIGGER AS $$
+  BEGIN
+      IF ( NEW.logdate >= DATE '2006-02-01' AND NEW.logdate < DATE '2006-03-01' ) THEN
+          INSERT INTO ih_2006m02 VALUES (NEW.*);
+      ELSIF ( NEW.logdate >= DATE '2006-03-01' AND NEW.logdate < DATE '2006-04-01' ) THEN
+          INSERT INTO ih_2006m03 VALUES (NEW.*);
+      ELSE
+          RAISE EXCEPTION 'Date out of range.  Fix the ih_insert_trigger() function!';
+      END IF;
+      RETURN NULL;
+  END;
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER ih_insert BEFORE INSERT ON ih_measurement FOR EACH ROW EXECUTE FUNCTION ih_insert_trigger();
+steps:
+  - sql: |
+      INSERT INTO ih_measurement VALUES (1, '2006-02-14', 3, 9), (2, '2006-03-02', 7, 1)
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS child, city_id, logdate FROM ih_measurement ORDER BY city_id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS parent_rows FROM ONLY ih_measurement
+    expect: rows
+    order: ordered
+    comment: the BEFORE trigger returns NULL, so nothing is stored in the root itself
+  - sql: |
+      INSERT INTO ih_measurement VALUES (3, '2007-01-01', 0, 0)
+    expect: error
+    sqlstate: "P0001"

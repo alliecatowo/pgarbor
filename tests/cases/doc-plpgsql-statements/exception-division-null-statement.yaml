@@ -1,0 +1,68 @@
+# The documented NULL statement and empty EXCEPTION handler are equivalent placeholders; a handler for
+# division_by_zero catches 22012 while an unhandled division still raises it.
+id: doc-plpgsql-statements.exception-division-null-statement
+title: NULL statement and empty WHEN handler are no-op placeholders; division_by_zero is caught or raised
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, null-statement, exception-handling, division-by-zero, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-null"
+sessions: [a]
+setup: |
+  CREATE FUNCTION f_div_handler(x int, y int) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN x / y;
+  EXCEPTION
+    WHEN division_by_zero THEN
+      RETURN -1;
+  END $$;
+  CREATE FUNCTION f_div_swallow(x int, y int) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE z int;
+  BEGIN
+    BEGIN
+      z := x / y;
+    EXCEPTION
+      WHEN division_by_zero THEN
+        NULL;  -- ignore the error
+    END;
+    RETURN coalesce(z, 99);
+  END $$;
+  CREATE FUNCTION f_div_empty_handler(x int) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE y int;
+  BEGIN
+    BEGIN
+      y := x / 0;
+    EXCEPTION
+      WHEN division_by_zero THEN  -- ignore the error
+    END;
+    RETURN coalesce(y, -5);
+  END $$;
+  CREATE FUNCTION f_null_stmt() RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    NULL;
+    RETURN 1;
+  END $$;
+  CREATE FUNCTION f_div_unhandled(x int) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN x / 0;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_div_handler(7, 0) AS handled, f_div_handler(7, 2) AS normal
+    expect: rows
+  - sql: |
+      SELECT f_div_swallow(7, 0) AS null_branch, f_div_swallow(7, 2) AS normal
+    expect: rows
+    comment: the NULL statement handler leaves z unassigned, so coalesce gives 99
+  - sql: |
+      SELECT f_div_empty_handler(3) AS empty_handler
+    expect: rows
+  - sql: |
+      SELECT f_null_stmt() AS null_statement
+    expect: rows
+  - sql: |
+      SELECT f_div_unhandled(1)
+    expect: error
+    sqlstate: "22012"

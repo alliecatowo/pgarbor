@@ -1,0 +1,83 @@
+# INSTEAD OF triggers on an updatable view from the manual: the view's writes are routed to emp and audited, with a view-only column.
+id: doc-plpgsql-trigger.instead-of-view-audit
+title: INSTEAD OF INSERT, UPDATE and DELETE on a view write through to the base table and audit table
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, instead-of-triggers, views, plpgsql, tg-op, audit, insert, update, delete]
+required_capabilities: [create-table, create-view, create-function, triggers, plpgsql, insert, update, delete, select, group-by]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (A PL/pgSQL View Trigger Function for Auditing)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (
+      empname           text PRIMARY KEY,
+      salary            integer
+  );
+  CREATE TABLE emp_audit(
+      operation         char(1)   NOT NULL,
+      userid            text      NOT NULL,
+      empname           text      NOT NULL,
+      salary            integer,
+      stamp             timestamp NOT NULL
+  );
+  CREATE VIEW emp_view AS
+      SELECT e.empname,
+             e.salary,
+             max(ea.stamp) AS last_updated
+        FROM emp e
+        LEFT JOIN emp_audit ea ON ea.empname = e.empname
+       GROUP BY 1, 2;
+  CREATE OR REPLACE FUNCTION update_emp_view() RETURNS TRIGGER AS $$
+      BEGIN
+          IF (TG_OP = 'DELETE') THEN
+              DELETE FROM emp WHERE empname = OLD.empname;
+              IF NOT FOUND THEN RETURN NULL; END IF;
+              OLD.last_updated = now();
+              INSERT INTO emp_audit VALUES('D', current_user, OLD.*);
+              RETURN OLD;
+          ELSIF (TG_OP = 'UPDATE') THEN
+              UPDATE emp SET salary = NEW.salary WHERE empname = OLD.empname;
+              IF NOT FOUND THEN RETURN NULL; END IF;
+              NEW.last_updated = now();
+              INSERT INTO emp_audit VALUES('U', current_user, NEW.*);
+              RETURN NEW;
+          ELSIF (TG_OP = 'INSERT') THEN
+              INSERT INTO emp VALUES(NEW.empname, NEW.salary);
+              NEW.last_updated = now();
+              INSERT INTO emp_audit VALUES('I', current_user, NEW.*);
+              RETURN NEW;
+          END IF;
+      END;
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER emp_audit
+  INSTEAD OF INSERT OR UPDATE OR DELETE ON emp_view
+      FOR EACH ROW EXECUTE FUNCTION update_emp_view();
+steps:
+  - sql: |
+      INSERT INTO emp_view (empname, salary) VALUES ('x', 10)
+    expect: ok
+    comment: INSERT through the view writes emp and one audit row
+  - sql: |
+      UPDATE emp_view SET salary = 20 WHERE empname = 'x'
+    expect: ok
+  - sql: |
+      SELECT empname, salary FROM emp_view ORDER BY empname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT operation, empname, salary FROM emp_audit ORDER BY operation, salary
+    expect: rows
+    order: ordered
+    comment: the view rows came from the audit table (I 10 and U 20)
+  - sql: |
+      DELETE FROM emp_view WHERE empname = 'x'
+    expect: ok
+  - sql: |
+      SELECT operation, userid = current_user AS by_me FROM emp_audit ORDER BY operation
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS remaining FROM emp
+    expect: rows
+    order: ordered

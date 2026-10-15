@@ -1,0 +1,50 @@
+id: cmd-fetch.fetch-with-hold-positions-across-commit
+title: A WITH HOLD scroll cursor keeps its position across COMMIT and supports FETCH afterwards
+family: cmd-fetch
+tier: extended
+feature_ids: [fetch, holdable-cursor, scroll-cursor, fetch-absolute, fetch-prior, commit]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare (WITH HOLD); ref/fetch.sgml#sql-fetch"
+sessions: [a]
+setup: |
+  CREATE TABLE nums (n int4 PRIMARY KEY);
+  INSERT INTO nums VALUES (1), (2), (3), (4), (5);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE h SCROLL CURSOR WITH HOLD FOR SELECT n FROM nums ORDER BY n
+    expect: ok
+  - sql: |
+      FETCH 2 FROM h
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      FETCH FORWARD 1 FROM h
+    expect: rows
+    order: ordered
+    comment: row 3, the position survived COMMIT
+  - sql: |
+      FETCH ABSOLUTE 1 FROM h
+    expect: rows
+    order: ordered
+    comment: a backward absolute move works on the held cursor, row 1
+  - sql: |
+      FETCH PRIOR FROM h
+    expect: rows
+    order: ordered
+    comment: PRIOR from row 1 positions before the first row, no row returned
+  - sql: |
+      FETCH LAST FROM h
+    expect: rows
+    order: ordered
+    comment: row 5
+  - sql: |
+      CLOSE h
+    expect: ok

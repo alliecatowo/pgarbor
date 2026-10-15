@@ -1,0 +1,47 @@
+# MAINTAIN covers LOCK TABLE and ANALYZE; a role without it cannot take an ACCESS EXCLUSIVE lock.
+id: doc-ddl-priv.maintain-privilege-lock
+title: MAINTAIN privilege permits LOCK TABLE and ANALYZE on the granted table only
+family: doc-ddl-priv
+tier: core
+feature_ids: [maintain, lock-table, analyze, grant, privileges, transactions, errors]
+required_capabilities: [create-table, lock-table, transactions, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (MAINTAIN: allows VACUUM, ANALYZE, CLUSTER, REFRESH MATERIALIZED VIEW, REINDEX, LOCK TABLE)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_mt_rw;
+  CREATE TABLE mt_t (a int4);
+  CREATE TABLE mt_u (a int4);
+  GRANT MAINTAIN ON mt_t TO ddp_mt_rw;
+steps:
+  - sql: |
+      SET ROLE ddp_mt_rw
+    expect: ok
+  - sql: |
+      ANALYZE mt_t
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE mt_t IN ACCESS EXCLUSIVE MODE
+    expect: ok
+    comment: MAINTAIN allows the ACCESS EXCLUSIVE lock
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE mt_u IN ACCESS EXCLUSIVE MODE
+    expect: error
+    sqlstate: "42501"
+    comment: no MAINTAIN on mt_u
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,49 @@
+# Documented CREATE SCHEMA rules: pg_ prefix is reserved, names are unique, schemas cannot be nested,
+# AUTHORIZATION needs an existing role; DROP SCHEMA of a missing schema fails unless IF EXISTS is used.
+id: doc-ddl-schemas.create-schema-errors
+title: CREATE SCHEMA rejects pg_ names, duplicates, nested names and unknown owners
+family: doc-ddl-schemas
+tier: core
+feature_ids: [create-schema, drop-schema, schema-naming, errors]
+required_capabilities: [create-schema, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-create (schema names beginning with pg_ are reserved; schemas cannot be nested)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA pg_reserved_demo
+    expect: error
+    sqlstate: "42939"
+    comment: names beginning with pg_ are reserved for system purposes
+  - sql: |
+      CREATE SCHEMA dup_s
+    expect: ok
+  - sql: |
+      CREATE SCHEMA dup_s
+    expect: error
+    sqlstate: "42P06"
+    comment: a second schema with the same name is a duplicate_schema error
+  - sql: |
+      CREATE SCHEMA dup_s.nested
+    expect: error
+    sqlstate: "42601"
+    comment: schemas cannot be nested
+  - sql: |
+      CREATE SCHEMA owned_by_nobody AUTHORIZATION no_such_role_xyz
+    expect: error
+    sqlstate: "42704"
+    comment: AUTHORIZATION must name an existing role
+  - sql: |
+      DROP SCHEMA no_such_schema_xyz
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      DROP SCHEMA IF EXISTS no_such_schema_xyz
+    expect: notice
+    comment: IF EXISTS turns the missing schema into a notice
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname IN ('dup_s', 'owned_by_nobody', 'pg_reserved_demo') ORDER BY nspname
+    expect: rows
+    order: ordered
+    comment: only dup_s exists; the failed statements created nothing

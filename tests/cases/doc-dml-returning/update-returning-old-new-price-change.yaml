@@ -1,0 +1,29 @@
+# RETURNING old.* and new.* qualify the pre-update and post-update values, with an expression over both.
+id: doc-dml-returning.update-returning-old-new-price-change
+title: UPDATE RETURNING old and new qualifiers expose before and after values and their difference
+family: doc-dml-returning
+tier: core
+feature_ids: [returning, returning-old-new, update, numeric, aliases]
+required_capabilities: [create-table, insert, update, select, returning, returning-old-new]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (RETURNING name, old.price AS old_price, new.price AS new_price, new.price - old.price AS price_change)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no int4 PRIMARY KEY, name text, price numeric(10,2));
+  INSERT INTO products VALUES (1, 'cheese', 9.99), (2, 'bread', 99.99), (3, 'pricey', 100.00);
+steps:
+  - sql: |
+      UPDATE products SET price = price * 1.10
+        WHERE price <= 99.99
+        RETURNING name, old.price AS old_price, new.price AS new_price,
+                  new.price - old.price AS price_change
+    expect: rows
+    order: multiset
+  - sql: |
+      UPDATE products SET price = price
+        WHERE product_no = 1
+        RETURNING new.price = old.price AS unchanged, new.price IS NULL AS new_null
+    expect: rows
+    order: multiset
+    comment: a no-op assignment still yields old and new rows that compare equal

@@ -1,0 +1,73 @@
+# Statement-level AFTER triggers with transition tables from the manual: one audit insert per statement reads all changed rows.
+id: doc-plpgsql-trigger.transition-tables-audit
+title: Statement-level AFTER triggers read OLD TABLE and NEW TABLE to audit multi-row statements
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, after-triggers, statement-triggers, transition-tables, plpgsql, tg-op, audit]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, update, delete, select, transition-tables]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (Auditing with Transition Tables)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (
+      empname           text NOT NULL,
+      salary            integer
+  );
+  CREATE TABLE emp_audit(
+      operation         char(1)   NOT NULL,
+      stamp             timestamp NOT NULL,
+      userid            text      NOT NULL,
+      empname           text      NOT NULL,
+      salary            integer
+  );
+  CREATE OR REPLACE FUNCTION process_emp_audit() RETURNS TRIGGER AS $emp_audit$
+      BEGIN
+          IF (TG_OP = 'DELETE') THEN
+              INSERT INTO emp_audit
+                  SELECT 'D', now(), current_user, o.* FROM old_table o;
+          ELSIF (TG_OP = 'UPDATE') THEN
+              INSERT INTO emp_audit
+                  SELECT 'U', now(), current_user, n.* FROM new_table n;
+          ELSIF (TG_OP = 'INSERT') THEN
+              INSERT INTO emp_audit
+                  SELECT 'I', now(), current_user, n.* FROM new_table n;
+          END IF;
+          RETURN NULL;
+      END;
+  $emp_audit$ LANGUAGE plpgsql;
+  CREATE TRIGGER emp_audit_ins
+      AFTER INSERT ON emp
+      REFERENCING NEW TABLE AS new_table
+      FOR EACH STATEMENT EXECUTE FUNCTION process_emp_audit();
+  CREATE TRIGGER emp_audit_upd
+      AFTER UPDATE ON emp
+      REFERENCING OLD TABLE AS old_table NEW TABLE AS new_table
+      FOR EACH STATEMENT EXECUTE FUNCTION process_emp_audit();
+  CREATE TRIGGER emp_audit_del
+      AFTER DELETE ON emp
+      REFERENCING OLD TABLE AS old_table
+      FOR EACH STATEMENT EXECUTE FUNCTION process_emp_audit();
+steps:
+  - sql: |
+      INSERT INTO emp VALUES ('a', 1), ('b', 2), ('c', 3)
+    expect: ok
+  - sql: |
+      UPDATE emp SET salary = salary * 10 WHERE empname <> 'c'
+    expect: ok
+    comment: UPDATE 2; the update audit rows come from new_table
+  - sql: |
+      DELETE FROM emp WHERE salary > 15
+    expect: ok
+    comment: deletes only b (salary 20); the delete audit row comes from old_table
+  - sql: |
+      SELECT operation, empname, salary, userid = current_user AS by_me FROM emp_audit ORDER BY operation, empname, salary
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TRIGGER emp_audit_bad BEFORE INSERT ON emp
+          REFERENCING NEW TABLE AS nt
+          FOR EACH STATEMENT EXECUTE FUNCTION process_emp_audit()
+    expect: error
+    sqlstate: "42P17"
+    comment: transition tables are only allowed on AFTER triggers

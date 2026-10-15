@@ -1,0 +1,56 @@
+# CREATE OR REPLACE TRIGGER replaces timing and events of the same-named trigger on the same table only,
+# creates when absent, and leaves the old trigger in place if the replacement is rejected.
+id: cmd-create-trigger.or-replace-semantics
+title: CREATE OR REPLACE TRIGGER replaces per table, creates when absent, and is atomic on error
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, or-replace, trigger-name-scope, catalog-introspection, errors]
+required_capabilities: [create-table, insert, update, delete, select, plpgsql, triggers, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER description (OR REPLACE replaces all properties)"
+setup: |
+  CREATE TABLE t1 (id int);
+  CREATE TABLE t2 (id int);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  CREATE FUNCTION log_fn() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ' ' || TG_WHEN || ' ' || TG_OP || ' ' || TG_TABLE_NAME);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION not_trig() RETURNS int LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      CREATE TRIGGER tg BEFORE INSERT ON t1 FOR EACH ROW EXECUTE FUNCTION log_fn()
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE TRIGGER tg AFTER INSERT OR DELETE ON t1 FOR EACH ROW EXECUTE FUNCTION log_fn()
+    expect: ok
+    comment: replaces timing and events on t1
+  - sql: |
+      CREATE OR REPLACE TRIGGER tg AFTER INSERT ON t2 FOR EACH ROW EXECUTE FUNCTION log_fn()
+    expect: ok
+    comment: no trigger named tg on t2 yet, so this creates one and leaves t1 alone
+  - sql: |
+      CREATE OR REPLACE TRIGGER tg AFTER INSERT ON t1 FOR EACH ROW EXECUTE FUNCTION not_trig()
+    expect: error
+    sqlstate: "42P17"
+    comment: the replacement is rejected, so the existing trigger stays as it was
+  - sql: |
+      INSERT INTO t1 VALUES (1)
+    expect: ok
+  - sql: |
+      DELETE FROM t1
+    expect: ok
+  - sql: |
+      INSERT INTO t2 VALUES (2)
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c.relname, t.tgname, t.tgtype & 2 = 2 AS is_before, t.tgtype & 4 = 4 AS on_insert, t.tgtype & 8 = 8 AS on_delete FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal ORDER BY 1, 2
+    expect: rows
+    order: ordered

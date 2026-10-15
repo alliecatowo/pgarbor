@@ -1,0 +1,43 @@
+# Once a REPEATABLE READ snapshot is frozen by its first query, a later explicit lock does not refresh it.
+id: doc-applevel-consistency.repeatable-read-snapshot-frozen-at-first-query
+title: REPEATABLE READ keeps its first-query snapshot after a later LOCK TABLE
+family: doc-applevel-consistency
+tier: core
+feature_ids: [repeatable-read, lock-table, mvcc-snapshot]
+required_capabilities: [create-table, insert, select, update, transactions, isolation-levels, lock-table, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: first query freezes the snapshot
+  - session: b
+    sql: |
+      UPDATE acct SET balance = 999 WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE acct IN SHARE MODE
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: still the old 100, the lock does not move the snapshot
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

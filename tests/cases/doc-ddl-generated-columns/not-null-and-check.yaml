@@ -1,0 +1,32 @@
+# NOT NULL and CHECK constraints apply to the computed value of a generated column, and a NULL
+# base value propagates to a NOT NULL generated column as a violation.
+id: doc-ddl-generated-columns.not-null-and-check
+title: NOT NULL and CHECK constraints apply to the computed value of a generated column
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, not-null, check-constraint]
+required_capabilities: [create-table, insert, select, not-null, check-constraint, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE nc (x int, s int GENERATED ALWAYS AS (x + 1) STORED NOT NULL, g int GENERATED ALWAYS AS (x * 2) STORED, CONSTRAINT g_pos CHECK (g > 0))
+steps:
+  - sql: |
+      INSERT INTO nc (x) VALUES (NULL)
+    expect: error
+    sqlstate: "23502"
+    comment: x NULL makes the NOT NULL generated column s NULL
+  - sql: |
+      INSERT INTO nc (x) VALUES (0)
+    expect: error
+    sqlstate: "23514"
+    comment: g = 0 fails the CHECK on the computed value
+  - sql: |
+      INSERT INTO nc (x) VALUES (3) RETURNING x, s, g
+    expect: rows
+  - sql: |
+      SELECT x, s, g FROM nc ORDER BY x
+    expect: rows
+    order: ordered

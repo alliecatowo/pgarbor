@@ -1,0 +1,29 @@
+# LIST partitioning: each value maps to exactly one partition, NULL can be listed explicitly, and
+# anything unlisted goes to DEFAULT. Overlapping value lists are rejected.
+id: doc-ddl-partitioning.list-partitions-null-and-default
+title: List partitioning with explicit NULL and DEFAULT catch-all
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, list-partitioning, default-partition, null-semantics]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (List Partitioning)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales (id int, region text) PARTITION BY LIST (region);
+  CREATE TABLE sales_west PARTITION OF sales FOR VALUES IN ('west', 'pacific');
+  CREATE TABLE sales_null PARTITION OF sales FOR VALUES IN (NULL);
+  CREATE TABLE sales_other PARTITION OF sales DEFAULT;
+steps:
+  - sql: |
+      INSERT INTO sales VALUES (1, 'west'), (2, NULL), (3, 'pacific'), (4, 'antarctica'), (5, 'WEST')
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, id, region FROM sales ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE sales_dup PARTITION OF sales FOR VALUES IN ('pacific', 'east')
+    expect: error
+    sqlstate: "42P17"

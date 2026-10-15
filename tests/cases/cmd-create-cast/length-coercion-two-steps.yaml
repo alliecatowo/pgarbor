@@ -1,0 +1,33 @@
+# Coercion to varchar(3) is a two-step conversion: explicit casts truncate silently, assignment and literal stores raise 22001.
+id: cmd-create-cast.length-coercion-two-steps
+title: "Coercion to a length-limited type truncates explicitly and rejects overlong values on assignment"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, type-modifiers, varchar, assignment-cast]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-description (type modifier coercion takes two cast steps)"
+sessions: [a]
+setup: |
+  CREATE TABLE lc_t (v varchar(3));
+steps:
+  - sql: |
+      SELECT CAST('abcdef'::text AS varchar(3)) AS trunc_explicit, 'abcdef'::varchar(3) AS lit_explicit
+    expect: rows
+    comment: explicit coercion silently truncates to the modifier length
+  - sql: |
+      INSERT INTO lc_t SELECT 'abcdef'::text
+    expect: error
+    sqlstate: "22001"
+    comment: assignment coercion of an overlong value is an error
+  - sql: |
+      INSERT INTO lc_t VALUES ('abcdef')
+    expect: error
+    sqlstate: "22001"
+  - sql: |
+      INSERT INTO lc_t VALUES ('abc')
+    expect: ok
+  - sql: |
+      SELECT v FROM lc_t
+    expect: rows

@@ -1,0 +1,32 @@
+# DROP ROUTINE is transactional: a rolled-back drop leaves the routine, a committed drop removes it.
+id: cmd-drop-routine.transaction-rollback-and-commit
+title: "DROP ROUTINE inside a transaction is undone by ROLLBACK and kept by COMMIT"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, transactions]
+required_capabilities: [create-function, transactions, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 sql-droproutine; transactional DDL"
+sessions: [a]
+setup: |
+  CREATE FUNCTION tx_f(integer) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      BEGIN;
+      DROP ROUTINE tx_f(integer);
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'tx_f'
+    expect: rows
+    order: multiset
+  - sql: |
+      BEGIN;
+      DROP ROUTINE tx_f(integer);
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'tx_f'
+    expect: rows
+    order: multiset

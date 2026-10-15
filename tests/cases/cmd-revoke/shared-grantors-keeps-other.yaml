@@ -1,0 +1,60 @@
+# Doc note: if two grantors both granted the same privilege to C, revoking one grant leaves the other in place.
+id: cmd-revoke.shared-grantors-keeps-other
+title: Revoking the owner's grant leaves the same privilege granted independently by another grantor
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, grant, grant-option, multiple-grantors, privileges]
+required_capabilities: [create-table, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-notes (if both A and B have granted the same privilege to C, A can revoke their own grant but not B's grant)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvs_owner;
+  CREATE ROLE rvs_b;
+  CREATE ROLE rvs_c;
+  CREATE TABLE rvs_t (id int4);
+  INSERT INTO rvs_t VALUES (7);
+  ALTER TABLE rvs_t OWNER TO rvs_owner;
+steps:
+  - sql: |
+      SET ROLE rvs_owner
+    expect: ok
+  - sql: |
+      GRANT SELECT ON rvs_t TO rvs_b WITH GRANT OPTION
+    expect: ok
+  - sql: |
+      GRANT SELECT ON rvs_t TO rvs_c
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE rvs_b
+    expect: ok
+  - sql: |
+      GRANT SELECT ON rvs_t TO rvs_c
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE rvs_owner
+    expect: ok
+  - sql: |
+      REVOKE SELECT ON rvs_t FROM rvs_c
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('rvs_c', 'rvs_t', 'SELECT') AS c_still_has_select
+    expect: rows
+    comment: rvs_b's independent grant to rvs_c still stands
+  - sql: |
+      SET ROLE rvs_c
+    expect: ok
+  - sql: |
+      SELECT id FROM rvs_t
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok

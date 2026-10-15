@@ -1,0 +1,29 @@
+# Without ONLY, DELETE also removes matching rows from children; writing "*" after the table name says so explicitly.
+id: cmd-delete.inheritance-default-and-star
+title: DELETE reaches inheriting children by default and with explicit *
+family: cmd-delete
+tier: core
+feature_ids: [delete, inheritance, star-descendants, create-table, insert, select]
+required_capabilities: [create-table, insert, select, delete, inheritance]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#parameters (table_name: descendant tables and *)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4, v text);
+  CREATE TABLE child (extra int4) INHERITS (parent);
+  INSERT INTO parent VALUES (1, 'p1'), (2, 'p2');
+  INSERT INTO child VALUES (3, 'c3', 30), (4, 'c4', 40), (5, 'c5', 50);
+steps:
+  - sql: |
+      DELETE FROM parent WHERE id = 3
+    expect: ok
+    comment: "default behaviour: the matching child row is deleted too"
+  - sql: |
+      DELETE FROM parent * WHERE id = 4
+    expect: ok
+    comment: explicit * includes descendants
+  - sql: |
+      SELECT tableoid::regclass::text AS src, id, v FROM parent ORDER BY src, id
+    expect: rows
+    order: ordered

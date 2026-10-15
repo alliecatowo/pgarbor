@@ -1,0 +1,29 @@
+# Domain inputs: if all inputs are the same domain, the domain is kept; otherwise the base type is used.
+id: doc-typeconv-union-case.domain-union-preservation
+title: UNION keeps a domain only when every arm is that exact domain
+family: doc-typeconv-union-case
+tier: core
+feature_ids: [union, domains, type-resolution, errors]
+required_capabilities: [create-domain, select, union]
+provenance:
+  source: pg-docs
+  ref: "typeconv.sgml#typeconv-union-case (If any input is of a domain type, treat it as being of the domain's base type)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS int4 CHECK (VALUE > 0);
+steps:
+  - sql: |
+      SELECT pg_typeof(x), x FROM (SELECT 5::posint UNION ALL SELECT 6::posint) s(x) ORDER BY 2
+    expect: rows
+    order: ordered
+    comment: all inputs are exactly posint, so the domain is preserved
+  - sql: |
+      SELECT pg_typeof(x), x FROM (SELECT 5::posint UNION ALL SELECT 6) s(x) ORDER BY 2
+    expect: rows
+    order: ordered
+    comment: mixed domain and base type falls back to the base type integer
+  - sql: |
+      SELECT pg_typeof(x) FROM (SELECT 5::posint UNION ALL SELECT 'seven') s(x)
+    expect: error
+    sqlstate: "22P02"
+    comment: the domain is treated as integer, so the unknown literal is coerced to integer and fails

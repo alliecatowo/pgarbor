@@ -1,0 +1,44 @@
+# OPERATOR and FUNCTION clauses may appear in any order; a dropped slot can be filled again.
+id: cmd-alter-opfamily.clause-order-and-slot-reuse
+title: FUNCTION clause before OPERATOR clause, then loose drop and re-add of the same slot
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, add-drop-members, clause-order, search-default]
+required_capabilities: [alter-operator-family, create-operator-family, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Parameters: The OPERATOR and FUNCTION clauses can appear in any order)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_order USING btree;
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_order USING btree ADD
+        FUNCTION 1 btint42cmp(int4, int2) ,
+        OPERATOR 1 < (int4, int2)
+    expect: ok
+    comment: FUNCTION clause first
+  - sql: |
+      SELECT 'op' AS kind, o.amopstrategy AS slot, o.amoppurpose::text AS purpose, o.amopopr::regoperator::text AS member
+      FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_order'
+      UNION ALL
+      SELECT 'fn', p.amprocnum, '', p.amproc::regproc::text
+      FROM pg_amproc p JOIN pg_opfamily f ON f.oid = p.amprocfamily WHERE f.opfname = 'cmd_aof_order'
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_order USING btree DROP OPERATOR 1 (int4, int2)
+    expect: ok
+    comment: loose members may be dropped at any time
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_order USING btree ADD OPERATOR 1 < (int4, int2)
+    expect: ok
+    comment: the freed slot accepts the same operator again
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_order USING btree DROP FUNCTION 1 (int4, int2)
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_order') AS ops,
+             (SELECT count(*) FROM pg_amproc p JOIN pg_opfamily f ON f.oid = p.amprocfamily WHERE f.opfname = 'cmd_aof_order') AS procs
+    expect: rows

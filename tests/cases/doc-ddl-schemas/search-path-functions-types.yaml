@@ -1,0 +1,47 @@
+# Function and type names follow the same search path rules as tables; schema-qualified names
+# always work, and the first match on the path wins for unqualified names.
+id: doc-ddl-schemas.search-path-functions-types
+title: Schema-qualified functions and types resolve; unqualified names follow search_path order
+family: doc-ddl-schemas
+tier: core
+feature_ids: [search-path, create-function-sql, create-type-enum, qualified-names]
+required_capabilities: [create-schema, create-function-sql, create-type, select, errors, guc]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-path (Data type and function names can be qualified in exactly the same way as table names)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA ff
+    expect: ok
+  - sql: |
+      CREATE FUNCTION ff.f() RETURNS int LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION public.f() RETURNS int LANGUAGE sql AS 'SELECT 2'
+    expect: ok
+  - sql: |
+      CREATE TYPE ff.e AS ENUM ('a', 'b')
+    expect: ok
+  - sql: |
+      SELECT ff.f() AS in_ff, public.f() AS in_public
+    expect: rows
+    comment: qualified function names pick the exact function
+  - sql: |
+      SET search_path TO ff, public
+    expect: ok
+  - sql: |
+      SELECT f() AS shadowed, 'a'::e AS unqualified_type
+    expect: rows
+    comment: ff comes first on the path, so f() is ff.f()
+  - sql: |
+      RESET search_path
+    expect: ok
+  - sql: |
+      SELECT 'a'::e
+    expect: error
+    sqlstate: "42704"
+    comment: the type is not on the default path
+  - sql: |
+      SELECT 'a'::ff.e AS qualified_type
+    expect: rows

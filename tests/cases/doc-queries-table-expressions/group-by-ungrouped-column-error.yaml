@@ -1,0 +1,39 @@
+# In a grouped query, a column that is neither grouped nor aggregated is an error (42803).
+id: doc-queries-table-expressions.group-by-ungrouped-column-error
+title: Ungrouped column references in a grouped query raise grouping error 42803
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [group-by, having, errors]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-group"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (x text, y int4);
+  INSERT INTO test1 VALUES ('a', 3), ('c', 2), ('b', 5), ('a', 1);
+steps:
+  - sql: |
+      SELECT * FROM test1 GROUP BY x
+    expect: error
+    sqlstate: "42803"
+    comment: y cannot appear in the select list; there is no single value per group
+  - sql: |
+      SELECT x, y FROM test1 GROUP BY x
+    expect: error
+    sqlstate: "42803"
+  - sql: |
+      SELECT x FROM test1 GROUP BY x HAVING y > 1
+    expect: error
+    sqlstate: "42803"
+    comment: HAVING has the same restriction as the select list
+  - sql: |
+      SELECT x FROM test1 GROUP BY x
+    expect: rows
+    order: multiset
+    comment: the grouped column alone is fine
+  - sql: |
+      SELECT x, y FROM test1 GROUP BY x, y ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: grouping by both columns makes both valid

@@ -1,0 +1,30 @@
+# ALTER POLICY with only name and table is accepted and changes nothing; the table may be schema-qualified.
+id: cmd-alter-policy.no-clause-is-noop
+title: "ALTER POLICY with no optional clauses leaves the policy unchanged"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, policies, catalog-introspection]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (second form: all clauses optional)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  CREATE POLICY p ON t TO PUBLIC USING (v > 1) WITH CHECK (v < 9);
+steps:
+  - sql: |
+      ALTER POLICY p ON t
+    expect: ok
+  - sql: |
+      SELECT policyname, roles::text, qual, with_check FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: roles, USING and WITH CHECK are all unchanged
+  - sql: |
+      ALTER POLICY p ON public.t
+    expect: ok
+    comment: schema-qualified table name is accepted
+  - sql: |
+      SELECT policyname, roles::text, qual, with_check FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: still unchanged

@@ -1,0 +1,30 @@
+# VALUES may be used as a sub-SELECT in IN; the first quoted/cast entry fixes the assumed type of the rest.
+# Documented machines/ip_address example.
+id: cmd-values.in-list-values-inet
+title: IN (VALUES ...) with a cast first entry resolves unknown literals to inet
+family: cmd-values
+tier: core
+feature_ids: [values, in-predicate, inet]
+required_capabilities: [create-table, values, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/values.sgml#sql-values (Examples: VALUES in IN, coercion of first entry)"
+sessions: [a]
+setup: |
+  CREATE TABLE machines (name text, ip_address inet);
+  INSERT INTO machines VALUES ('alpha', '192.168.0.1'), ('beta', '192.168.0.2'), ('gamma', '192.168.0.10'), ('delta', '192.168.1.43'), ('eps', '10.0.0.1');
+steps:
+  - sql: |
+      SELECT name FROM machines WHERE ip_address IN (VALUES('192.168.0.1'::inet), ('192.168.0.10'), ('192.168.1.43')) ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name FROM machines WHERE ip_address NOT IN (VALUES('192.168.0.1'::inet), ('192.168.0.10')) ORDER BY name
+    expect: rows
+    order: ordered
+    comment: NOT IN over a VALUES list with no NULLs
+  - sql: |
+      SELECT count(*) FROM machines WHERE ip_address IN (VALUES (NULL::inet), ('10.0.0.1'))
+    expect: rows
+    order: ordered
+    comment: a NULL entry makes non-matching IN results NULL, not false; only the 10.0.0.1 row matches

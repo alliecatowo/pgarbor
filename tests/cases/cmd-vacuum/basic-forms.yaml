@@ -1,0 +1,48 @@
+# Plain VACUUM accepts no list (all tables and matviews), a single table, schema-qualified names, ONLY, the * inheritance marker and multi-table lists.
+id: cmd-vacuum.basic-forms
+title: "VACUUM accepts all-database, single, ONLY, * and multi-table forms"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, inheritance, create-materialized-view]
+required_capabilities: [create-table, create-materialized-view, insert, select, inheritance]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Description; Parameters: table_name, ONLY, *)"
+sessions: [a]
+setup: |
+  CREATE TABLE vb (id int4 PRIMARY KEY, v int4);
+  CREATE TABLE vb_child () INHERITS (vb);
+  CREATE MATERIALIZED VIEW vb_mv AS SELECT id FROM vb;
+  INSERT INTO vb SELECT g, g FROM generate_series(1, 20) g;
+  INSERT INTO vb_child VALUES (100, 100);
+steps:
+  - sql: |
+      VACUUM
+    expect: ok
+    comment: no list processes every table and materialized view in the database
+  - sql: |
+      VACUUM vb
+    expect: ok
+  - sql: |
+      VACUUM public.vb
+    expect: ok
+    comment: schema-qualified table name
+  - sql: |
+      VACUUM ONLY vb
+    expect: ok
+  - sql: |
+      VACUUM vb *
+    expect: ok
+    comment: explicit * also includes inheritance children
+  - sql: |
+      VACUUM vb_mv
+    expect: ok
+    comment: materialized views may be vacuumed
+  - sql: |
+      VACUUM vb, vb_mv
+    expect: ok
+  - sql: |
+      SELECT count(*), sum(v) FROM vb
+    expect: rows
+    order: ordered
+    comment: VACUUM never changes row contents; the child row is visible through the parent

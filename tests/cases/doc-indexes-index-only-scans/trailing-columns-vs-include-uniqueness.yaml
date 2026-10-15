@@ -1,0 +1,32 @@
+# Documented: pre-INCLUDE covering indexes wrote payload as trailing key columns; that cannot enforce uniqueness on the leading column alone.
+id: doc-indexes-index-only-scans.trailing-columns-vs-include-uniqueness
+title: Trailing payload columns as key columns do not make the leading column unique
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, unique-index, multicolumn-index]
+required_capabilities: [create-table, create-index, unique-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (CREATE INDEX tab_x_y ON tab(x, y) pre-INCLUDE style; this method doesn't support enforcing uniqueness on the key column(s))"
+sessions: [a]
+setup: |
+  CREATE TABLE w (x int, y text);
+  CREATE UNIQUE INDEX w_xy ON w (x, y);
+steps:
+  - sql: |
+      INSERT INTO w VALUES (1, 'a'), (1, 'b')
+    expect: ok
+    comment: two rows share x=1 because uniqueness covers the pair (x, y)
+  - sql: |
+      INSERT INTO w VALUES (1, 'a')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      CREATE UNIQUE INDEX w_x ON w (x)
+    expect: error
+    sqlstate: "23505"
+    comment: cannot enforce uniqueness on x alone while duplicates of x exist
+  - sql: |
+      SELECT x, y FROM w ORDER BY y
+    expect: rows
+    order: ordered

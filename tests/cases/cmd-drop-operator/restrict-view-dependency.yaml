@@ -1,0 +1,41 @@
+# RESTRICT is the default: an operator used by a view cannot be dropped until CASCADE removes the view too.
+id: cmd-drop-operator.restrict-view-dependency
+title: DROP OPERATOR refuses while a view depends on it, and CASCADE drops the view with it
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, restrict, cascade, views, dependencies]
+required_capabilities: [drop-operator, create-operator, create-function-sql, create-view, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#parameters (CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION drv_pow(integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 10 + $2 $$;
+  CREATE OPERATOR !^! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = drv_pow);
+  CREATE VIEW drv_v AS SELECT 3 !^! 4 AS r;
+steps:
+  - sql: |
+      DROP OPERATOR !^! (integer, integer)
+    expect: error
+    sqlstate: "2BP01"
+    comment: default RESTRICT refuses because view drv_v depends on the operator
+  - sql: |
+      DROP OPERATOR !^! (integer, integer) RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT behaves the same
+  - sql: |
+      SELECT r FROM drv_v
+    expect: rows
+    comment: the view still works and returns 34
+  - sql: |
+      DROP OPERATOR !^! (integer, integer) CASCADE
+    expect: notice
+    comment: CASCADE drops the dependent view and reports it as a notice
+  - sql: |
+      SELECT count(*) AS views_left FROM pg_class WHERE relname = 'drv_v' AND relnamespace = 'public'::regnamespace
+    expect: rows
+  - sql: |
+      SELECT 3 !^! 4
+    expect: error
+    sqlstate: "42883"

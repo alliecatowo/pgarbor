@@ -1,0 +1,36 @@
+# current_setting: missing_ok controls whether an unknown setting is an error or NULL.
+id: doc-functions-admin.config-current-setting
+title: current_setting returns NULL for unknown settings only when missing_ok is true
+family: doc-functions-admin
+tier: core
+feature_ids: [current-setting, custom-guc, missing-ok]
+required_capabilities: [select, guc]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-admin-set (current_setting: throws unless missing_ok is true, then NULL)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT current_setting('app.nope', true) IS NULL AS missing_ok_is_null
+    expect: rows
+  - sql: |
+      SELECT current_setting('app.nope')
+    expect: error
+    sqlstate: "42704"
+    comment: no missing_ok argument means the default is to throw
+  - sql: |
+      SELECT current_setting('nosuch_guc', false)
+    expect: error
+    sqlstate: "42704"
+    comment: explicit false also throws
+  - sql: |
+      SELECT current_setting(NULL::text) IS NULL AS null_name_is_null
+    expect: rows
+    comment: the function is strict, so a NULL name yields NULL without an error
+  - sql: |
+      SELECT set_config('app.v', '7', false)
+    expect: rows
+  - sql: |
+      SELECT current_setting('app.v')::int + 1 AS next_value
+    expect: rows
+    comment: a value set with set_config is read back as text and can be cast

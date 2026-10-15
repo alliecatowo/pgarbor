@@ -1,0 +1,58 @@
+# RETURN with no expression in void functions and in functions with OUT parameters, with and without a final RETURN.
+id: doc-plpgsql-control-structures.return-void-output-params
+title: "Bare RETURN exits void functions early; OUT-parameter functions return their final values"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, return, void, output-parameters]
+required_capabilities: [plpgsql, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Returning from a Function: output parameters)"
+sessions: [a]
+setup: |
+  CREATE TABLE void_log (v int);
+  CREATE FUNCTION log_if_positive(x int) RETURNS void LANGUAGE plpgsql AS $$
+  BEGIN
+    IF x <= 0 THEN
+      RETURN;
+    END IF;
+    INSERT INTO void_log VALUES (x);
+  END $$;
+  CREATE FUNCTION minmax(IN a int, IN b int, OUT lo int, OUT hi int) LANGUAGE plpgsql AS $$
+  BEGIN
+    IF a <= b THEN
+      lo := a; hi := b;
+    ELSE
+      lo := b; hi := a;
+    END IF;
+    RETURN;
+  END $$;
+  CREATE FUNCTION minmax_implicit(IN a int, IN b int, OUT lo int, OUT hi int) LANGUAGE plpgsql AS $$
+  BEGIN
+    IF a <= b THEN
+      lo := a; hi := b;
+    ELSE
+      lo := b; hi := a;
+    END IF;
+  END $$;
+steps:
+  - sql: |
+      SELECT log_if_positive(5)
+    expect: rows
+    comment: void function returns one row with an empty value
+  - sql: |
+      SELECT log_if_positive(-1)
+    expect: rows
+    comment: the early bare RETURN skips the insert
+  - sql: |
+      SELECT v FROM void_log ORDER BY v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM minmax(9, 4)
+    expect: rows
+    comment: explicit bare RETURN with OUT parameters
+  - sql: |
+      SELECT * FROM minmax_implicit(9, 4)
+    expect: rows
+    comment: reaching the end of the block returns the OUT parameters automatically

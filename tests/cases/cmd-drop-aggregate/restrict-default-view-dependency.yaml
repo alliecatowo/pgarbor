@@ -1,0 +1,31 @@
+# RESTRICT is the default: an aggregate used by a view cannot be dropped and stays usable.
+id: cmd-drop-aggregate.restrict-default-view-dependency
+title: DROP AGGREGATE refuses when a view depends on it, with default and explicit RESTRICT
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, create-view, create-aggregate, dependency-tracking]
+required_capabilities: [aggregates, create-aggregate, create-function, create-view, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (RESTRICT, the default)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2';
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0');
+      CREATE VIEW v_avg AS SELECT myavg(1) AS a
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(integer)
+    expect: error
+    sqlstate: "2BP01"
+    comment: "DETAIL names view v_avg as the dependent object"
+  - sql: |
+      DROP AGGREGATE myavg(integer) RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT a FROM v_avg
+    expect: rows
+    order: multiset
+    comment: the view and aggregate are untouched after the refused drops

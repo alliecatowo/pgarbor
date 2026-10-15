@@ -1,0 +1,36 @@
+# EXPLAIN ANALYZE of an INSERT runs it, so a surrounding transaction that rolls back also undoes the insert.
+id: cmd-explain.analyze-insert-rolled-back
+title: EXPLAIN ANALYZE INSERT inside a rolled-back transaction leaves no row
+family: cmd-explain
+tier: core
+feature_ids: [explain, explain-analyze, insert, transactions, rollback]
+required_capabilities: [create-table, insert, select, explain, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/explain.sgml#parameters-analyze"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4, b text, c int4);
+  INSERT INTO t VALUES (1, 'x', 10), (2, NULL, 20), (3, 'z', NULL);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF) INSERT INTO t VALUES (4, 'w', 40)
+    expect: rows
+    order: ordered
+    comment: the plan shows Insert with actual rows 0 on the top node and 1 from the VALUES child
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    order: ordered
+    comment: inside the transaction the insert is visible
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    order: ordered
+    comment: after rollback the executed insert is gone

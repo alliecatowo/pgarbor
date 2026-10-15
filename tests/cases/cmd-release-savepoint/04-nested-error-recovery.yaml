@@ -1,0 +1,49 @@
+# Documented error path: after RELEASE of sp2 the failing insert aborts the block; only ROLLBACK TO sp1 can recover,
+# keeping value 1 (from before sp1) and discarding 2, 3 and 4.
+id: cmd-release-savepoint.nested-error-recovery
+title: After a failure following RELEASE of an inner savepoint, ROLLBACK TO the outer savepoint keeps only earlier work
+family: cmd-release-savepoint
+tier: core
+feature_ids: [release-savepoint, savepoints, rollback-to, errors, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/release_savepoint.sgml#sql-release-savepoint (Examples: nested example; ROLLBACK TO SAVEPOINT sp1 retains value 1)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1);
+      SAVEPOINT sp1;
+      INSERT INTO t VALUES (2);
+      SAVEPOINT sp2;
+      INSERT INTO t VALUES (3);
+      RELEASE SAVEPOINT sp2
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (4)))
+    expect: error
+    sqlstate: "42601"
+    comment: the documented example's stray parentheses; the block is now aborted
+  - sql: |
+      RELEASE SAVEPOINT sp1
+    expect: error
+    sqlstate: "25P02"
+    comment: releasing is not allowed in an aborted block
+  - sql: |
+      ROLLBACK TO SAVEPOINT sp1
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: value 1 is retained; 2, 3 and 4 were in the rolled-back savepoint
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered

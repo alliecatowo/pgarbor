@@ -1,0 +1,33 @@
+# Attributes not named in ALTER ROLE keep their previous values.
+id: cmd-alter-role.attributes-retained
+title: ALTER ROLE leaves attributes it does not mention unchanged
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, login, createdb, connection-limit, valid-until, password, attribute-retention]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-desc (Attributes not mentioned in the command retain their previous settings)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE alr_keep CREATEDB CONNECTION LIMIT 3 VALID UNTIL 'infinity' INHERIT LOGIN
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_keep NOLOGIN
+    expect: ok
+  - sql: |
+      SELECT rolcreatedb, rolconnlimit, rolinherit, rolcanlogin, rolvaliduntil = 'infinity'::timestamptz AS forever FROM pg_authid WHERE rolname = 'alr_keep'
+    expect: rows
+  - sql: |
+      ALTER ROLE alr_keep CONNECTION LIMIT -1
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_keep PASSWORD 'pw_keep'
+    expect: ok
+  - sql: |
+      SELECT rolcreatedb, rolconnlimit, rolinherit, rolcanlogin, rolvaliduntil = 'infinity'::timestamptz AS forever, rolpassword IS NOT NULL AS has_password FROM pg_authid WHERE rolname = 'alr_keep'
+    expect: rows
+  - sql: |
+      DROP ROLE alr_keep
+    expect: ok

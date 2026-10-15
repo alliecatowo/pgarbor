@@ -1,0 +1,50 @@
+# REVOKE EXECUTE from PUBLIC on a specific function signature, and on ALL FUNCTIONS IN SCHEMA.
+id: cmd-revoke.function-execute-revoke
+title: REVOKE EXECUTE FROM PUBLIC works for one function signature and for every function in a schema
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, function, execute-privilege, public-role, schema-wide-grants, errors]
+required_capabilities: [create-table, select, roles, create-function-sql, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke (REVOKE ... ON { FUNCTION | PROCEDURE | ROUTINE } function_name [ ( [argmode] [arg_name] arg_type ...) ]; ALL FUNCTIONS IN SCHEMA)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvf_u;
+  CREATE SCHEMA rvf_sch;
+  CREATE FUNCTION rvf_sch.add2(int4, int4) RETURNS int4 LANGUAGE sql AS 'SELECT $1 + $2';
+  CREATE FUNCTION rvf_sch.neg(int4) RETURNS int4 LANGUAGE sql AS 'SELECT -$1';
+steps:
+  - sql: |
+      SET ROLE rvf_u
+    expect: ok
+  - sql: |
+      SELECT rvf_sch.add2(1, 2)
+    expect: rows
+    comment: EXECUTE is granted to PUBLIC by default
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE EXECUTE ON FUNCTION rvf_sch.add2(int4, int4) FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT has_function_privilege('rvf_u', 'rvf_sch.add2(int4, int4)', 'EXECUTE') AS add2_exec, has_function_privilege('rvf_u', 'rvf_sch.neg(int4)', 'EXECUTE') AS neg_exec
+    expect: rows
+    comment: only the named signature loses EXECUTE
+  - sql: |
+      REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA rvf_sch FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT has_function_privilege('rvf_u', 'rvf_sch.add2(int4, int4)', 'EXECUTE') AS add2_exec, has_function_privilege('rvf_u', 'rvf_sch.neg(int4)', 'EXECUTE') AS neg_exec
+    expect: rows
+  - sql: |
+      SET ROLE rvf_u
+    expect: ok
+  - sql: |
+      SELECT rvf_sch.neg(5)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,43 @@
+# ALTER SCHEMA is transactional: a rename inside a rolled-back transaction is undone, and a committed rename persists.
+id: cmd-alter-schema.rename-rolled-back
+title: A schema rename inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-alter-schema
+tier: core
+feature_ids: [alter-schema, rename, transactions, rollback]
+required_capabilities: [create-schema, alter-schema, select, transactions, errors]
+provenance:
+  source: hand
+  ref: "ref/alter_schema.sgml#sql-alterschema; PG18 transactional DDL"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cmd_as_rb_a;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER SCHEMA cmd_as_rb_a RENAME TO cmd_as_rb_b
+    expect: ok
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname LIKE 'cmd_as_rb_%' ORDER BY nspname
+    expect: rows
+    order: ordered
+    comment: visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname LIKE 'cmd_as_rb_%' ORDER BY nspname
+    expect: rows
+    order: ordered
+    comment: back to the original name
+  - sql: |
+      BEGIN; ALTER SCHEMA cmd_as_rb_a RENAME TO cmd_as_rb_c; COMMIT
+    expect: ok
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname LIKE 'cmd_as_rb_%' ORDER BY nspname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP SCHEMA cmd_as_rb_c
+    expect: ok

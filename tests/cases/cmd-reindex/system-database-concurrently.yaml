@@ -1,0 +1,38 @@
+# SYSTEM cannot be concurrent; DATABASE may be, with or without a name that matches the current database.
+id: cmd-reindex.system-database-concurrently
+title: REINDEX SYSTEM CONCURRENTLY is rejected while REINDEX DATABASE CONCURRENTLY runs
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-system, reindex-database, reindex-concurrently, errors]
+required_capabilities: [create-table, create-index, insert, select, reindex, reindex-concurrently, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex-concurrently (REINDEX SYSTEM does not support CONCURRENTLY); Parameters: DATABASE"
+sessions: [a]
+setup: |
+  CREATE TABLE sd (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX sd_v ON sd (v);
+  INSERT INTO sd VALUES (1, 1), (2, 2);
+steps:
+  - sql: |
+      REINDEX SYSTEM CONCURRENTLY
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      REINDEX DATABASE CONCURRENTLY
+    expect: ok
+    comment: rebuilds the user indexes of the current database
+  - sql: |
+      REINDEX DATABASE
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM sd WHERE v = 2
+    expect: rows
+  - sql: |
+      SELECT c.relname, i.indisvalid
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'sd'::regclass
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+    comment: every index is valid after the rebuild

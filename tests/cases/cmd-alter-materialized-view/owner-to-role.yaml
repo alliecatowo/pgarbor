@@ -1,0 +1,38 @@
+# OWNER TO changes the owner; CURRENT_USER is accepted and an unknown role is rejected.
+id: cmd-alter-materialized-view.owner-to-role
+title: "ALTER MATERIALIZED VIEW OWNER TO changes ownership and rejects an unknown role"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, owner, roles]
+required_capabilities: [create-table, select, create-role, create-materialized-view, alter-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (OWNER TO new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_ow_base (id int4);
+  CREATE MATERIALIZED VIEW amv_ow_mv AS SELECT id FROM amv_ow_base;
+  CREATE ROLE amv_ow_newowner;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ow_mv OWNER TO amv_ow_newowner
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'amv_ow_mv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ow_mv OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT relowner = (SELECT oid FROM pg_roles WHERE rolname = CURRENT_USER) AS owned_by_current FROM pg_class WHERE oid = 'amv_ow_mv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ow_mv OWNER TO amv_ow_nosuchrole
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP ROLE amv_ow_newowner
+    expect: ok
+    comment: the role no longer owns anything, so it can be dropped

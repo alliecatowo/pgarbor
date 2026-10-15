@@ -1,0 +1,37 @@
+# Without an argument list the name must identify exactly one routine. Overloads give 42725 with a
+# hint; a unique procedure resolves by name alone; an argument list then selects the overload.
+id: cmd-alter-routine.no-arglist-resolution
+title: ALTER ROUTINE by bare name needs a unique match, and the argument list selects overloads
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, function-identity, overloading]
+required_capabilities: [create-function, create-procedure, alter-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: argument list optional); ref/alter_function.sgml (Parameters: name)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION foo(text) RETURNS text LANGUAGE sql AS 'SELECT $1';
+  CREATE PROCEDURE pr1(int) LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      ALTER ROUTINE foo RENAME TO foo2
+    expect: error
+    sqlstate: "42725"
+    comment: two overloads named foo, so the name alone is ambiguous
+  - sql: |
+      ALTER ROUTINE pr1 RENAME TO pr2
+    expect: ok
+    comment: only one routine named pr1 exists, so no argument list is needed
+  - sql: |
+      ALTER ROUTINE foo(text) RENAME TO foo_text
+    expect: ok
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname IN ('foo', 'foo2', 'foo_text', 'pr1', 'pr2') AND pronamespace = 'public'::regnamespace ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT foo(5) AS i, foo_text('x') AS t
+    expect: rows
+    order: ordered

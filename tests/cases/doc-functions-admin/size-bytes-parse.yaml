@@ -1,0 +1,46 @@
+# pg_size_bytes parses the output format of pg_size_pretty and rejects unknown or empty input.
+id: doc-functions-admin.size-bytes-parse
+title: pg_size_bytes parses size strings with units and rejects invalid input
+family: doc-functions-admin
+tier: core
+feature_ids: [pg-size-bytes, size-units, error-paths]
+required_capabilities: [select, admin-functions]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-admin-dbsize (pg_size_bytes: converts human-readable size to bytes; valid units bytes, B, kB, MB, GB, TB, PB)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_size_bytes('1 kB') AS kb, pg_size_bytes('10 MB') AS mb, pg_size_bytes('1GB') AS gb
+    expect: rows
+    comment: the space between number and unit is optional
+  - sql: |
+      SELECT pg_size_bytes('1 B') AS b, pg_size_bytes('10 bytes') AS bytes_unit, pg_size_bytes('123') AS bare_number
+    expect: rows
+  - sql: |
+      SELECT pg_size_bytes('1.5 kB') AS fractional, pg_size_bytes(' 2 PB ') AS padded, pg_size_bytes('1 TB') AS tb
+    expect: rows
+  - sql: |
+      SELECT pg_size_bytes('-1 kB') AS negative
+    expect: rows
+  - sql: |
+      SELECT pg_size_bytes(pg_size_pretty(10240::bigint)) AS round_trip
+    expect: rows
+    comment: pg_size_pretty output parses back to the original byte count
+  - sql: |
+      SELECT pg_size_bytes('12 xx')
+    expect: error
+    sqlstate: "22023"
+    comment: unknown unit
+  - sql: |
+      SELECT pg_size_bytes('')
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT pg_size_bytes('bytes')
+    expect: error
+    sqlstate: "22023"
+    comment: a unit with no number is not a valid size
+  - sql: |
+      SELECT pg_size_bytes(NULL::text) IS NULL AS null_in_null_out
+    expect: rows

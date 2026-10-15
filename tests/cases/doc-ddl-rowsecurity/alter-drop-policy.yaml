@@ -1,0 +1,74 @@
+# ALTER POLICY changes the USING expression and name; DROP POLICY removes it, IF EXISTS downgrades to a notice.
+id: doc-ddl-rowsecurity.alter-drop-policy
+title: "ALTER POLICY changes visibility and name; DROP POLICY removes it"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, alter-policy, drop-policy, select]
+required_capabilities: [create-table, insert, select, rls, roles, alter-table]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: Policies are created using CREATE POLICY, altered using ALTER POLICY, and dropped using DROP POLICY"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr15_u;
+  CREATE TABLE t (id int4, v int4);
+  INSERT INTO t VALUES (1, 10), (2, 20), (3, 30);
+  GRANT SELECT ON t TO pgarbor_case_role_dr15_u;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY pp ON t FOR SELECT USING (v > 15);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr15_u
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER POLICY pp ON t USING (v > 25)
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr15_u
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only row 3 satisfies the new expression
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER POLICY pp ON t RENAME TO pq
+    expect: ok
+  - sql: |
+      DROP POLICY pp ON t
+    expect: error
+    sqlstate: "42704"
+    comment: the policy no longer has that name
+  - sql: |
+      DROP POLICY IF EXISTS pp ON t
+    expect: notice
+  - sql: |
+      DROP POLICY pq ON t
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr15_u
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: with no policy left, default deny applies again
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr15_u
+    expect: ok

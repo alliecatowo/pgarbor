@@ -1,0 +1,50 @@
+# SET STATISTICS stores an explicit target; DEFAULT and the obsolete spelling -1 both clear it to NULL.
+id: cmd-alter-statistics.set-statistics-default-and-minus-one
+title: "ALTER STATISTICS SET STATISTICS stores targets and DEFAULT or -1 clears them"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, statistics-target, default-statistics-target]
+required_capabilities: [create-table, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (new_target, DEFAULT, -1 obsolete)"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_st (a int, b int);
+  CREATE STATISTICS ast_st_s1 (ndistinct) ON a, b FROM ast_st;
+steps:
+  - sql: |
+      SELECT stxstattarget, stxstattarget IS NULL AS is_default FROM pg_statistic_ext WHERE stxname = 'ast_st_s1'
+    expect: rows
+    order: ordered
+    comment: a new object has no explicit target
+  - sql: |
+      ALTER STATISTICS ast_st_s1 SET STATISTICS 500
+    expect: ok
+  - sql: |
+      SELECT stxstattarget, stxstattarget IS NULL AS is_default FROM pg_statistic_ext WHERE stxname = 'ast_st_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_st_s1 SET STATISTICS DEFAULT
+    expect: ok
+  - sql: |
+      SELECT stxstattarget, stxstattarget IS NULL AS is_default FROM pg_statistic_ext WHERE stxname = 'ast_st_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_st_s1 SET STATISTICS 0
+    expect: ok
+  - sql: |
+      SELECT stxstattarget, stxstattarget IS NULL AS is_default FROM pg_statistic_ext WHERE stxname = 'ast_st_s1'
+    expect: rows
+    order: ordered
+    comment: zero is an explicit target, not the default
+  - sql: |
+      ALTER STATISTICS ast_st_s1 SET STATISTICS -1
+    expect: ok
+    comment: obsolete spelling of DEFAULT
+  - sql: |
+      SELECT stxstattarget, stxstattarget IS NULL AS is_default FROM pg_statistic_ext WHERE stxname = 'ast_st_s1'
+    expect: rows
+    order: ordered

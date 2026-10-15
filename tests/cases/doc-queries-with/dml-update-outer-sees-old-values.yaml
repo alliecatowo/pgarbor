@@ -1,0 +1,33 @@
+# The primary query sees the pre-UPDATE snapshot; only the RETURNING output of the WITH shows new values.
+id: doc-queries-with.dml-update-outer-sees-old-values
+title: Outer SELECT sees pre-update rows while RETURNING of a data-modifying WITH shows updated rows
+family: doc-queries-with
+tier: core
+feature_ids: [with-clause, data-modifying-cte, update, returning, snapshot]
+required_capabilities: [create-table, insert, update, select, with, returning]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-with (Data-Modifying Statements in WITH, outer SELECT returns original prices)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (id int PRIMARY KEY, price numeric(10,2));
+  INSERT INTO products VALUES (1, 100), (2, 200);
+steps:
+  - sql: |
+      WITH t AS (
+          UPDATE products SET price = price * 1.05
+          RETURNING *
+      )
+      SELECT id, price FROM products ORDER BY id
+    expect: rows
+    order: ordered
+    comment: all statements in one WITH share one snapshot; the outer SELECT returns the original prices
+  - sql: |
+      WITH t AS (
+          UPDATE products SET price = price * 1.05
+          RETURNING *
+      )
+      SELECT id, price FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: reading the RETURNING output returns the updated prices; the update applies once per execution

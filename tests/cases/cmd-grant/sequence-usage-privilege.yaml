@@ -1,0 +1,53 @@
+# USAGE on a sequence allows nextval and currval; reading last_value needs SELECT and setval needs UPDATE.
+id: cmd-grant.sequence-usage-privilege
+title: GRANT USAGE on a sequence permits nextval and currval but not last_value or setval, which need SELECT and UPDATE
+family: cmd-grant
+tier: core
+feature_ids: [grant, sequences, usage, nextval, currval, privileges, errors]
+required_capabilities: [sequence, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-compatibility (sequence USAGE, SELECT and UPDATE privileges)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_seq_r;
+  CREATE SEQUENCE cgg_seq;
+steps:
+  - sql: |
+      GRANT USAGE ON SEQUENCE cgg_seq TO cgg_seq_r
+    expect: ok
+  - sql: |
+      SET ROLE cgg_seq_r
+    expect: ok
+  - sql: |
+      SELECT nextval('cgg_seq')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT currval('cgg_seq')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT last_value FROM cgg_seq
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SELECT setval('cgg_seq', 10)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT UPDATE ON SEQUENCE cgg_seq TO cgg_seq_r
+    expect: ok
+  - sql: |
+      SET ROLE cgg_seq_r
+    expect: ok
+  - sql: |
+      SELECT setval('cgg_seq', 10)
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok

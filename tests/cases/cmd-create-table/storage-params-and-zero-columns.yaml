@@ -1,0 +1,39 @@
+# Storage parameters on a table and on a UNIQUE index, plus a zero-column table.
+id: cmd-create-table.storage-params-and-zero-columns
+title: WITH storage parameters are recorded on the table and its unique index, and a zero-column table is allowed
+family: cmd-create-table
+tier: extended
+feature_ids: [create-table, storage-parameters, fillfactor, unique-constraint, zero-column-table]
+required_capabilities: [create-table, insert, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_table.sgml#sql-createtable-examples (fill factor example); ref/create_table.sgml#sql-createtable-storage-parameters; Compatibility: Zero-Column Tables"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE distributors (
+          did     integer,
+          name    varchar(40),
+          UNIQUE(name) WITH (fillfactor=70)
+      )
+      WITH (fillfactor=70)
+    expect: ok
+  - sql: |
+      SELECT c.relname, c.reloptions FROM pg_class c WHERE c.relname IN ('distributors', 'distributors_name_key') ORDER BY c.relname
+    expect: rows
+    order: ordered
+    comment: both the table and its unique index record fillfactor=70
+  - sql: |
+      CREATE TABLE zero_cols ()
+    expect: ok
+  - sql: |
+      SELECT relnatts FROM pg_class WHERE relname = 'zero_cols'
+    expect: rows
+    comment: a table with no columns is legal and has zero attributes
+  - sql: |
+      INSERT INTO zero_cols DEFAULT VALUES
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM zero_cols
+    expect: rows
+    comment: rows can still be inserted into a zero-column table

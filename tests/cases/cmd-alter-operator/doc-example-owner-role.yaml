@@ -1,0 +1,36 @@
+# Documented example: ALTER OPERATOR @@ (text, text) OWNER TO joe. The role is renamed (cmd_ao_joe) to avoid
+# colliding with other cases on the shared cluster; the statement shape is the documented one. The operator is
+# schema-qualified because pg_catalog already has a text @@ text operator, so the bare name is ambiguous.
+id: cmd-alter-operator.doc-example-owner-role
+title: "Documented OWNER TO example changes a custom operator's owner to a named role"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, owner, doc-example]
+required_capabilities: [alter-operator, create-operator, create-function-sql, create-role, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#examples (Change the owner of a custom operator a @@ b for type text)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_ao_joe;
+  CREATE FUNCTION cmd_ao_txt_match(text, text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 = $2 $$;
+  CREATE OPERATOR @@ (LEFTARG = text, RIGHTARG = text, PROCEDURE = cmd_ao_txt_match);
+steps:
+  - sql: |
+      ALTER OPERATOR public.@@ (text, text) OWNER TO cmd_ao_joe
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(oprowner) AS owner FROM pg_operator
+      WHERE oprname = '@@' AND oprleft = 'text'::regtype AND oprright = 'text'::regtype
+        AND oprnamespace = 'public'::regnamespace
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP OPERATOR public.@@ (text, text)
+    expect: ok
+  - sql: |
+      DROP FUNCTION cmd_ao_txt_match(text, text)
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_ao_joe
+    expect: ok

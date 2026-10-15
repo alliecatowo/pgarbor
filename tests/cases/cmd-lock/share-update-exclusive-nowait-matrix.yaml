@@ -1,0 +1,65 @@
+# SHARE UPDATE EXCLUSIVE conflicts with itself, SHARE, SHARE ROW EXCLUSIVE and EXCLUSIVE, but not with
+# ROW EXCLUSIVE or ACCESS SHARE. Probes under NOWAIT show each outcome; refused probes roll back.
+id: cmd-lock.share-update-exclusive-nowait-matrix
+title: "SHARE UPDATE EXCLUSIVE holder: NOWAIT refuses SHARE UPDATE EXCLUSIVE, admits ROW EXCLUSIVE and ACCESS SHARE"
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, lock-modes, nowait, transactions, multi-session]
+required_capabilities: [create-table, lock-table, transactions, multi-session, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (lockmode list); explicit-locking table-level conflicts"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE t_sue (a int4);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE t_sue IN SHARE UPDATE EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE t_sue IN SHARE UPDATE EXCLUSIVE MODE NOWAIT
+    expect: error
+    sqlstate: "55P03"
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE t_sue IN ROW EXCLUSIVE MODE NOWAIT
+    expect: ok
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE t_sue IN ACCESS SHARE MODE NOWAIT
+    expect: ok
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

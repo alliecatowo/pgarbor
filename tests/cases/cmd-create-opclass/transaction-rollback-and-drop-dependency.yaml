@@ -1,0 +1,52 @@
+# CREATE OPERATOR CLASS is transactional: a rolled-back class is absent. A class used by an index cannot be dropped without CASCADE (2BP01) until the index is gone.
+id: cmd-create-opclass.transaction-rollback-and-drop-dependency
+title: "Operator class creation rolls back with its transaction; drop is refused while an index depends on it"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, transactions, drop-operator-class, dependencies, create-index, errors]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, create-table, create-index, drop-operator-class, transactions, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass; doc/src/sgml/ref/drop_opclass.sgml (dependent objects)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_tx FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opclass WHERE opcname = 'cr_tx'
+    expect: rows
+    order: ordered
+    comment: zero rows after rollback
+  - sql: |
+      CREATE OPERATOR CLASS cr_tx FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      CREATE TABLE cr_tx_t (v cr_pt); CREATE INDEX cr_tx_idx ON cr_tx_t USING btree (v cr_tx)
+    expect: ok
+  - sql: |
+      DROP OPERATOR CLASS cr_tx USING btree
+    expect: error
+    sqlstate: "2BP01"
+    comment: the index depends on the class
+  - sql: |
+      DROP INDEX cr_tx_idx
+    expect: ok
+  - sql: |
+      DROP OPERATOR CLASS cr_tx USING btree
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opclass WHERE opcname = 'cr_tx'
+    expect: rows
+    order: ordered

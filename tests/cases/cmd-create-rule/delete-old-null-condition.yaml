@@ -1,0 +1,33 @@
+# A conditional ON DELETE rule tests OLD in its WHERE clause; a NULL OLD value makes the condition unknown, so the rule does not fire.
+id: cmd-create-rule.delete-old-null-condition
+title: Conditional ON DELETE rule fires per deleted row and skips rows whose OLD value makes the condition NULL
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, delete, old-new, null-semantics, rules]
+required_capabilities: [create-table, create-rule, insert, delete, select]
+provenance:
+  source: hand
+  ref: "ref/create_rule.sgml#(condition may refer to NEW and OLD; OLD valid in ON DELETE); NULL comparison three-valued logic"
+sessions: [a]
+setup: |
+  CREATE TABLE d (a int4);
+  CREATE TABLE dlog (a int4);
+  CREATE RULE d_del AS ON DELETE TO d WHERE OLD.a > 1 DO ALSO INSERT INTO dlog VALUES (OLD.a);
+  INSERT INTO d VALUES (1), (2), (3), (NULL);
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM d
+    expect: rows
+    comment: four rows including the NULL row
+  - sql: |
+      DELETE FROM d
+    expect: ok
+  - sql: |
+      SELECT a FROM dlog ORDER BY a
+    expect: rows
+    order: ordered
+    comment: 2 and 3 satisfy OLD.a > 1; 1 does not; NULL > 1 is unknown so that row is not logged
+  - sql: |
+      SELECT count(*) AS n FROM d
+    expect: rows
+    comment: the rule was ALSO, so the deletes still happened

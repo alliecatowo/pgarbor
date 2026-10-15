@@ -1,0 +1,53 @@
+# Integer and unit-suffixed SET values are shown in the largest exact unit; a rejected SET leaves the previous value in place.
+id: cmd-show.unit-normalization
+title: SHOW displays memory and time values in their normalized unit, and a rejected SET keeps the old value
+family: cmd-show
+tier: core
+feature_ids: [show, set, guc, units, memory-size, time-duration]
+required_capabilities: [select, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/show.sgml#sql-show; ref/set.sgml#sql-set (Examples: SET statement_timeout / memory units)"
+sessions: [a]
+steps:
+  - sql: |
+      SET statement_timeout = 2000
+    expect: ok
+  - sql: |
+      SHOW statement_timeout
+    expect: rows
+    order: ordered
+    comment: 2000 ms is shown as 2s
+  - sql: |
+      SET work_mem = 1024
+    expect: ok
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    order: ordered
+    comment: a bare integer for work_mem is in kB, shown as 1MB
+  - sql: |
+      SET work_mem = '1GB'
+    expect: ok
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    order: ordered
+  - sql: |
+      SET work_mem = 'bogus'
+    expect: error
+    sqlstate: "22023"
+    comment: invalid value is rejected with invalid_parameter_value
+  - sql: |
+      SHOW work_mem
+    expect: rows
+    order: ordered
+    comment: the failed SET did not change the value
+  - sql: |
+      SET statement_timeout = 0
+    expect: ok
+  - sql: |
+      SHOW statement_timeout
+    expect: rows
+    order: ordered
+    comment: zero disables the timeout and is shown as 0

@@ -1,0 +1,38 @@
+# SET XML OPTION changes the implicit cast of character strings; explicit XMLPARSE is not affected.
+id: doc-datatype-xml.xml-option-session-setting
+title: SET XML OPTION DOCUMENT rejects fragments on implicit cast until SET xmloption TO CONTENT restores it
+family: doc-datatype-xml
+tier: core
+feature_ids: [xml, xml-option, guc, xmlparse]
+required_capabilities: [select, xml, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-xml-creating (SET XML OPTION { DOCUMENT | CONTENT }; default CONTENT)"
+sessions: [a]
+steps:
+  - sql: |
+      SHOW xmloption
+    expect: rows
+    comment: documented default is CONTENT
+  - sql: |
+      SET XML OPTION DOCUMENT
+    expect: ok
+  - sql: |
+      SELECT '<foo>bar</foo>'::xml IS DOCUMENT AS doc_under_option
+    expect: rows
+  - sql: |
+      SELECT 'abc<foo/>'::xml
+    expect: error
+    sqlstate: "2200M"
+    comment: implicit cast now requires a full document
+  - sql: |
+      SELECT XMLPARSE (CONTENT 'abc<foo>bar</foo><bar>foo</bar>') IS DOCUMENT AS explicit_content
+    expect: rows
+    comment: explicit XMLPARSE ignores the session option
+  - sql: |
+      SET xmloption TO CONTENT
+    expect: ok
+    comment: PostgreSQL-style spelling of the same setting
+  - sql: |
+      SELECT 'abc<foo/>'::xml IS NOT DOCUMENT AS fragment_again_ok
+    expect: rows

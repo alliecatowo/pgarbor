@@ -1,0 +1,25 @@
+# SET SCHEMA fails with duplicate_object when the target schema already has an opclass of that name for the same access method.
+id: cmd-alter-opclass.set-schema-name-clash-42710
+title: "SET SCHEMA into a schema that already has an opclass of the same name raises duplicate_object"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, set-schema, unique-name]
+required_capabilities: [create-operator-class, alter-operator-class, create-schema, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA aoc_cmd_s12;
+  CREATE OPERATOR CLASS aoc_cmd_o12 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  CREATE OPERATOR CLASS aoc_cmd_s12.aoc_cmd_o12 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS public.aoc_cmd_o12 USING btree SET SCHEMA aoc_cmd_s12
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT n.nspname FROM pg_opclass o JOIN pg_namespace n ON n.oid = o.opcnamespace WHERE o.opcname = 'aoc_cmd_o12' ORDER BY n.nspname
+    expect: rows
+    order: ordered
+    comment: both opclasses remain in their own schemas

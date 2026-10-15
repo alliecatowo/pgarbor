@@ -1,0 +1,33 @@
+# DO can run loops and EXECUTE dynamic statements against tables; its effects are visible to later statements.
+id: cmd-do.plpgsql-loop-dynamic-sql
+title: DO block loops with EXECUTE to insert and delete rows, with effects visible afterwards
+family: cmd-do
+tier: extended
+feature_ids: [do, plpgsql, loops, dynamic-sql, format]
+required_capabilities: [create-table, insert, delete, select, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "ref/do.sgml#sql-do (Description; Examples: FOR loop with EXECUTE)"
+sessions: [a]
+setup: |
+  CREATE TABLE sq (n int4 PRIMARY KEY, sq int8 NOT NULL);
+steps:
+  - sql: |
+      DO $$DECLARE i int;
+      BEGIN
+          FOR i IN 1..5 LOOP
+              EXECUTE format('INSERT INTO sq VALUES (%s, %s)', i, i * i);
+          END LOOP;
+      END$$
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n, sum(sq) AS total FROM sq
+    expect: rows
+    order: ordered
+  - sql: |
+      DO $$ BEGIN EXECUTE 'DELETE FROM sq WHERE n > 3'; END $$
+    expect: ok
+  - sql: |
+      SELECT n, sq FROM sq ORDER BY n
+    expect: rows
+    order: ordered

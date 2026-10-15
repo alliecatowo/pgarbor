@@ -1,0 +1,40 @@
+# An AFTER STATEMENT trigger can request a transition table with the new rows. It is visible to SQL in the
+# trigger function, and the statement-level trigger fires even when zero rows are inserted.
+id: doc-trigger-definition.transition-tables-statement-trigger
+title: AFTER STATEMENT trigger reads the NEW transition table, including for a zero-row statement
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, transition-tables, plpgsql, insert, aggregates]
+required_capabilities: [create-table, create-function, insert, select, plpgsql, triggers, aggregates, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (transition tables for AFTER STATEMENT triggers)"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (id int, amt int);
+  CREATE TABLE audit (seq int GENERATED ALWAYS AS IDENTITY, n bigint, total bigint);
+  CREATE FUNCTION on_ins() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO audit (n, total) SELECT count(*), sum(amt) FROM newrows;
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER orders_ins AFTER INSERT ON orders
+    REFERENCING NEW TABLE AS newrows
+    FOR EACH STATEMENT EXECUTE FUNCTION on_ins();
+steps:
+  - sql: |
+      INSERT INTO orders VALUES (1, 10), (2, 20), (3, NULL)
+    expect: ok
+  - sql: |
+      SELECT n, total FROM audit ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO orders SELECT * FROM orders WHERE false
+    expect: ok
+    comment: zero rows inserted, yet the statement trigger fires and sees an empty transition table
+  - sql: |
+      SELECT n, total FROM audit ORDER BY seq
+    expect: rows
+    order: ordered

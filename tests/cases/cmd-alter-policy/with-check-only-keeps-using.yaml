@@ -1,0 +1,47 @@
+# Omitting USING keeps the existing visibility predicate: after replacing WITH CHECK, reads still use
+# the original USING and writes use the new check.
+id: cmd-alter-policy.with-check-only-keeps-using
+title: "ALTER POLICY WITH CHECK alone replaces the insert check but keeps USING"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, rls, policies, insert, errors]
+required_capabilities: [create-table, insert, select, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (clauses are replaced independently)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_ap_wc;
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, 1), (2, 5), (3, 10), (4, NULL);
+  GRANT SELECT, INSERT ON t TO pgarbor_case_ap_wc;
+  CREATE POLICY p ON t TO pgarbor_case_ap_wc USING (v > 3) WITH CHECK (v < 8);
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      ALTER POLICY p ON t WITH CHECK (v < 20)
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_ap_wc
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: USING (v > 3) is unchanged, so rows 2 and 3 are visible
+  - sql: |
+      INSERT INTO t VALUES (5, 15)
+    expect: ok
+    comment: the new WITH CHECK (v < 20) accepts 15
+  - sql: |
+      INSERT INTO t VALUES (6, 25)
+    expect: error
+    sqlstate: "42501"
+    comment: 25 fails the new check
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP OWNED BY pgarbor_case_ap_wc; DROP ROLE pgarbor_case_ap_wc
+    expect: ok
+    comment: drop the cluster-global case role so a retry can recreate it

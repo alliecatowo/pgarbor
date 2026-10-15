@@ -1,0 +1,36 @@
+# INCLUDE adds non-key columns: they are stored in the index but ignored by the uniqueness check.
+id: cmd-create-index.include-columns-catalog
+title: INCLUDE columns are non-key, ignored by uniqueness, and visible in pg_index
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, include-columns, unique-index, catalog]
+required_capabilities: [create-table, create-index, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Parameters: INCLUDE; Examples: unique B-tree index with included columns director and rating)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, director text, rating int4);
+  INSERT INTO films VALUES (1, 'Alpha', 'Ann', 5), (2, 'Beta', 'Ann', 3);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX title_idx ON films (title) INCLUDE (director, rating)
+    expect: ok
+  - sql: |
+      SELECT indnatts, indnkeyatts, indisunique FROM pg_index WHERE indexrelid = 'title_idx'::regclass
+    expect: rows
+    order: ordered
+    comment: three stored attributes, one of them a key
+  - sql: |
+      INSERT INTO films VALUES (3, 'Gamma', 'Ann', 5), (4, 'Alpha', 'Zed', 5)
+    expect: error
+    sqlstate: "23505"
+    comment: the key title Alpha collides even though the director differs
+  - sql: |
+      INSERT INTO films VALUES (3, 'Gamma', 'Ann', 5)
+    expect: ok
+    comment: repeating included director and rating values is not a violation
+  - sql: |
+      SELECT id, title, director, rating FROM films ORDER BY id
+    expect: rows
+    order: ordered

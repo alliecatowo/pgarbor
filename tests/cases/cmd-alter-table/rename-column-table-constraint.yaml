@@ -1,0 +1,51 @@
+# RENAME COLUMN, RENAME CONSTRAINT and RENAME TO with their duplicate-name and missing-object errors; renamed objects keep their data and rules.
+id: cmd-alter-table.rename-column-table-constraint
+title: "RENAME COLUMN, RENAME CONSTRAINT and RENAME TO, with duplicate and missing-name errors"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, rename-column, rename-constraint, rename-table, errors]
+required_capabilities: [create-table, alter-table, insert, select, constraints, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: RENAME COLUMN, RENAME TO, RENAME CONSTRAINT)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (dist_id int4, zipcode text, address text, CONSTRAINT zipchk CHECK (char_length(zipcode) = 5));
+  INSERT INTO distributors VALUES (1, '12345', 'main');
+steps:
+  - sql: |
+      ALTER TABLE distributors RENAME COLUMN address TO city
+    expect: ok
+  - sql: |
+      ALTER TABLE distributors RENAME COLUMN city TO zipcode
+    expect: error
+    sqlstate: "42701"
+    comment: zipcode already exists
+  - sql: |
+      ALTER TABLE distributors RENAME CONSTRAINT zipchk TO zip_check
+    expect: ok
+  - sql: |
+      ALTER TABLE distributors RENAME CONSTRAINT zipchk TO zip_check2
+    expect: error
+    sqlstate: "42704"
+    comment: the old constraint name no longer exists
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE conrelid = 'distributors'::regclass AND contype = 'c' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE distributors RENAME TO suppliers
+    expect: ok
+  - sql: |
+      SELECT dist_id, city, zipcode FROM suppliers ORDER BY dist_id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO suppliers (dist_id, city, zipcode) VALUES (2, 'elm', '9999')
+    expect: error
+    sqlstate: "23514"
+    comment: the renamed CHECK constraint still enforces length 5
+  - sql: |
+      ALTER TABLE distributors RENAME TO suppliers2
+    expect: error
+    sqlstate: "42P01"

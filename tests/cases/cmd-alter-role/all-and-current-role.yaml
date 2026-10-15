@@ -1,0 +1,64 @@
+# ALL targets every role (superuser only), CURRENT_USER/CURRENT_ROLE/SESSION_USER target the connected role, and ALL IN DATABASE scopes to the current database.
+id: cmd-alter-role.all-and-current-role
+title: ALTER ROLE ALL, CURRENT_USER, CURRENT_ROLE and SESSION_USER target the expected roles
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, all-roles, current-user, session-user, current-role, in-database]
+required_capabilities: [roles, catalog-introspection, select, guc, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-desc (ALL, IN DATABASE); ref/alter_role.sgml#sql-alterrole-params-current-role; ref/alter_role.sgml#sql-alterrole-params-session-user"
+sessions: [a]
+notes: "application_name is used for cluster-wide ALL settings because it does not change server behavior for other cases. In a session with SET SESSION AUTHORIZATION, CURRENT_USER and SESSION_USER name the same role."
+steps:
+  - sql: |
+      CREATE ROLE alr_u
+    expect: ok
+  - sql: |
+      ALTER ROLE ALL SET application_name = 'alr_all_any'
+    expect: ok
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER ROLE ALL IN DATABASE %I SET application_name = %L', current_database(), 'alr_all_db'); END $$
+    expect: ok
+  - sql: |
+      SELECT COALESCE(r.rolname, '(all roles)') AS target, s.setdatabase = 0 AS all_databases, s.setconfig FROM pg_db_role_setting s LEFT JOIN pg_roles r ON r.oid = s.setrole WHERE s.setrole = 0 AND s.setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database())) ORDER BY 2 DESC
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROLE ALL RESET application_name
+    expect: ok
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER ROLE ALL IN DATABASE %I RESET application_name', current_database()); END $$
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_db_role_setting WHERE setrole = 0 AND setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
+    expect: rows
+    comment: no cluster-wide or current-database ALL rows remain
+  - sql: |
+      SET SESSION AUTHORIZATION alr_u
+    expect: ok
+  - sql: |
+      ALTER ROLE CURRENT_USER SET work_mem = '5MB'
+    expect: ok
+  - sql: |
+      SELECT unnest(s.setconfig) AS setting FROM pg_db_role_setting s WHERE s.setrole = 'alr_u'::regrole AND s.setdatabase = 0
+    expect: rows
+  - sql: |
+      ALTER ROLE SESSION_USER SET work_mem = '6MB'
+    expect: ok
+  - sql: |
+      SELECT unnest(s.setconfig) AS setting FROM pg_db_role_setting s WHERE s.setrole = 'alr_u'::regrole AND s.setdatabase = 0
+    expect: rows
+    comment: SESSION_USER replaces the value set through CURRENT_USER
+  - sql: |
+      ALTER ROLE CURRENT_ROLE RESET work_mem
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_db_role_setting WHERE setrole = 'alr_u'::regrole
+    expect: rows
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      DROP ROLE alr_u
+    expect: ok

@@ -1,0 +1,41 @@
+# ONLY restricts ANALYZE to the parent; the default also analyzes inheritance children.
+id: cmd-analyze.inheritance-only-vs-default
+title: "ANALYZE ONLY skips inheritance children while the default analyzes them"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, inheritance, only-keyword, pg-stats]
+required_capabilities: [create-table, insert, select, inheritance, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Parameters: table_name; ONLY; inheritance)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_par (id int4, v int4);
+  CREATE TABLE an_chi () INHERITS (an_par);
+  INSERT INTO an_par VALUES (1, 1), (2, 2), (3, 3);
+  INSERT INTO an_chi VALUES (4, 4), (5, 5);
+steps:
+  - sql: |
+      ANALYZE ONLY an_par
+    expect: ok
+  - sql: |
+      SELECT tablename, attname, inherited FROM pg_stats WHERE schemaname = 'public' AND tablename IN ('an_par', 'an_chi') ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+    comment: parent gets its own and inherited statistics; the child has none
+  - sql: |
+      ANALYZE an_par
+    expect: ok
+  - sql: |
+      SELECT tablename, attname, inherited FROM pg_stats WHERE schemaname = 'public' AND tablename IN ('an_par', 'an_chi') ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+    comment: the child now has its own statistics
+  - sql: |
+      ANALYZE an_par *
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_chi' AND inherited = false
+    expect: rows
+    order: ordered
+    comment: explicit star gives the same result as the default

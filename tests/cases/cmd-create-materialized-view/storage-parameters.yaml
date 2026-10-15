@@ -1,0 +1,46 @@
+id: cmd-create-materialized-view.storage-parameters
+title: WITH storage parameters are stored in reloptions and validated against CREATE TABLE rules
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, storage-parameters, fillfactor]
+required_capabilities: [create-materialized-view, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (WITH storage_parameter)"
+sessions: [a]
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_ff50 WITH (fillfactor = 50) AS SELECT 1 AS one
+    expect: ok
+  - session: a
+    sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'mv_ff50'::regclass
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_ff100 WITH (fillfactor = 100) AS SELECT 1 AS one
+    expect: ok
+  - session: a
+    sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'mv_ff100'::regclass
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_ff_low WITH (fillfactor = 5) AS SELECT 1 AS one
+    expect: error
+    sqlstate: "22023"
+    comment: fillfactor must be between 10 and 100
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_bad_opt WITH (no_such_option = 1) AS SELECT 1 AS one
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized storage parameter
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname IN ('mv_ff_low', 'mv_bad_opt')
+    expect: rows
+    order: ordered

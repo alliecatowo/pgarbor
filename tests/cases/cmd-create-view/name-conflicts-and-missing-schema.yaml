@@ -1,0 +1,43 @@
+# A view name must be distinct from other relations; plain CREATE VIEW does not replace; a missing schema is an error.
+id: cmd-create-view.name-conflicts-and-missing-schema
+title: View name clashing with a table, a repeated plain CREATE VIEW, and a missing schema are errors
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, or-replace, schema, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview (description, schema and name rules)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text);
+steps:
+  - sql: |
+      CREATE VIEW films AS SELECT 1
+    expect: error
+    sqlstate: "42P07"
+    comment: the view name must be distinct from every other relation in the schema
+  - sql: |
+      CREATE OR REPLACE VIEW films AS SELECT 1
+    expect: error
+    sqlstate: "42809"
+    comment: OR REPLACE cannot replace a table
+  - sql: |
+      CREATE VIEW no_such_schema.v AS SELECT 1
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema named for the view must exist
+  - sql: |
+      CREATE VIEW films_v AS SELECT 1
+    expect: ok
+  - sql: |
+      CREATE VIEW films_v AS SELECT 2
+    expect: error
+    sqlstate: "42P07"
+    comment: plain CREATE VIEW does not replace an existing view
+  - sql: |
+      CREATE OR REPLACE VIEW films_v AS SELECT 2
+    expect: ok
+  - sql: |
+      SELECT * FROM films_v
+    expect: rows

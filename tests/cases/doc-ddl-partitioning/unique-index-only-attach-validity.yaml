@@ -1,0 +1,51 @@
+# CREATE INDEX ON ONLY creates an invalid parent index that does not touch existing partitions. The
+# parent index becomes valid only after every partition's index is attached to it.
+id: doc-ddl-partitioning.unique-index-only-attach-validity
+title: CREATE INDEX ON ONLY stays invalid until every partition index is attached
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, indexes, index-attach, partition-maintenance]
+required_capabilities: [create-table, create-index, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (CREATE INDEX ON ONLY ... ALTER INDEX ... ATTACH PARTITION)"
+sessions: [a]
+setup: |
+  CREATE TABLE ms (city_id int, unitsales int) PARTITION BY RANGE (city_id);
+  CREATE TABLE ms_1 PARTITION OF ms FOR VALUES FROM (0) TO (100);
+  CREATE TABLE ms_2 PARTITION OF ms FOR VALUES FROM (100) TO (200);
+steps:
+  - sql: |
+      CREATE INDEX ms_usls_idx ON ONLY ms (unitsales)
+    expect: ok
+  - sql: |
+      SELECT i.indexrelid::regclass::text AS idx, i.indisvalid FROM pg_index i WHERE i.indexrelid = 'ms_usls_idx'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT indexrelid::regclass::text AS partition_index FROM pg_index WHERE indrelid = 'ms_1'::regclass
+    expect: rows
+    order: ordered
+    comment: no index on partitions yet
+  - sql: |
+      CREATE INDEX ms_1_usls_idx ON ms_1 (unitsales)
+    expect: ok
+  - sql: |
+      ALTER INDEX ms_usls_idx ATTACH PARTITION ms_1_usls_idx
+    expect: ok
+  - sql: |
+      SELECT i.indexrelid::regclass::text AS idx, i.indisvalid FROM pg_index i WHERE i.indexrelid = 'ms_usls_idx'::regclass
+    expect: rows
+    order: ordered
+    comment: still invalid, ms_2 has no attached index
+  - sql: |
+      CREATE INDEX ms_2_usls_idx ON ms_2 (unitsales)
+    expect: ok
+  - sql: |
+      ALTER INDEX ms_usls_idx ATTACH PARTITION ms_2_usls_idx
+    expect: ok
+  - sql: |
+      SELECT i.indexrelid::regclass::text AS idx, i.indisvalid FROM pg_index i WHERE i.indexrelid = 'ms_usls_idx'::regclass
+    expect: rows
+    order: ordered
+    comment: all partitions attached, so the parent index is valid

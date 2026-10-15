@@ -1,0 +1,41 @@
+# Partial unique index: at most one successful row per (subject, target); unsuccessful and NULL rows are unconstrained.
+id: doc-indexes-partial.unique-success-only
+title: Partial unique index allows many unsuccessful and NULL-status rows but one successful row per key
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, unique-index, boolean-type, null-semantics, errors]
+required_capabilities: [create-table, create-index, unique-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex3 (Setting up a Partial Unique Index)"
+sessions: [a]
+setup: |
+  CREATE TABLE tests (subject text, target text, success boolean, note text);
+  CREATE UNIQUE INDEX tests_success_constraint ON tests (subject, target) WHERE success;
+steps:
+  - sql: |
+      INSERT INTO tests VALUES ('s1', 't1', true, 'first'), ('s1', 't1', false, 'f1'), ('s1', 't1', false, 'f2'), ('s1', 't1', NULL, 'n1'), ('s1', 't1', NULL, 'n2')
+    expect: ok
+    comment: many rows with the same key are allowed when success is false or NULL
+  - sql: |
+      SELECT note, success FROM tests ORDER BY note
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO tests VALUES ('s1', 't1', true, 'dup')
+    expect: error
+    sqlstate: "23505"
+    comment: a second successful row for the same key violates the unique index
+  - sql: |
+      INSERT INTO tests VALUES ('s1', 't1', true, 'a'), ('s2', 't2', true, 'b'), ('s1', 't1', true, 'c')
+    expect: error
+    sqlstate: "23505"
+    comment: the multi-row insert is atomic; the non-conflicting row 'b' is not inserted either
+  - sql: |
+      SELECT count(*) FROM tests
+    expect: rows
+    comment: still five rows; the failed statements left nothing behind
+  - sql: |
+      INSERT INTO tests VALUES ('s2', 't2', true, 'b')
+    expect: ok
+    comment: a different key can still have its own successful row

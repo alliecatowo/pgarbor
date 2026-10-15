@@ -1,0 +1,54 @@
+# An EXCLUDE constraint declared DEFERRABLE is checked at COMMIT under SET CONSTRAINTS DEFERRED, and at the SET statement when switched IMMEDIATE.
+id: cmd-set-constraints.deferred-exclusion-at-commit
+title: Deferred exclusion constraint on overlapping ranges fails at COMMIT (23P01) or at a switch to IMMEDIATE
+family: cmd-set-constraints
+tier: extended
+feature_ids: [set-constraints, deferrable, exclude-constraint, gist, range-types, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, gist-index, range-types, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: UNIQUE, PRIMARY KEY, REFERENCES and EXCLUDE constraints are affected by this setting)"
+sessions: [a]
+setup: |
+  CREATE TABLE rooms (id int4, span int4range, CONSTRAINT rooms_no_overlap EXCLUDE USING gist (span WITH &&) DEFERRABLE INITIALLY IMMEDIATE);
+  INSERT INTO rooms VALUES (1, '[1,10)');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS rooms_no_overlap DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO rooms VALUES (2, '[5,15)')
+    expect: ok
+    comment: overlaps the committed row, allowed until commit
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23P01"
+  - sql: |
+      SELECT id, span FROM rooms ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS rooms_no_overlap DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO rooms VALUES (3, '[20,30)')
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS rooms_no_overlap IMMEDIATE
+    expect: ok
+    comment: no conflict for [20,30), so the switch succeeds
+  - sql: |
+      INSERT INTO rooms VALUES (4, '[3,4)')
+    expect: error
+    sqlstate: "23P01"
+    comment: now IMMEDIATE, so the conflict is reported at the INSERT
+  - sql: |
+      ROLLBACK
+    expect: ok

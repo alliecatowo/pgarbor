@@ -1,0 +1,30 @@
+# A prepared statement referencing a dropped table fails on EXECUTE with 42P01 and is not silently repaired.
+id: cmd-execute.replan-after-drop-table-errors
+title: EXECUTE after the referenced table is dropped raises 42P01
+family: cmd-execute
+tier: extended
+feature_ids: [execute, prepare, prepared-statements, drop-table, errors]
+required_capabilities: [create-table, insert, select, prepared-statements, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/execute.sgml#sql-execute (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      PREPARE sel AS SELECT id, name FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      EXECUTE sel
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      EXECUTE sel
+    expect: error
+    sqlstate: "42P01"
+    comment: the statement is not dropped with its tables; EXECUTE re-analyzes and fails

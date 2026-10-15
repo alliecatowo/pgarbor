@@ -1,0 +1,57 @@
+# CREATE LANGUAGE is transactional: other sessions do not see an uncommitted language, and ROLLBACK removes it.
+id: cmd-create-language.transaction-visibility-rollback
+title: CREATE LANGUAGE is invisible to other sessions until commit and disappears on rollback
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, transactions, catalog-visibility, rollback]
+required_capabilities: [create-language, multi-session, transactions, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Description)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      CREATE LANGUAGE cl_tx_rolled HANDLER plpgsql_call_handler
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS seen_by_a FROM pg_language WHERE lanname = 'cl_tx_rolled'
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      SELECT count(*) AS seen_by_b FROM pg_language WHERE lanname = 'cl_tx_rolled'
+    expect: rows
+    order: ordered
+    comment: the creating transaction has not committed, so b sees no such language
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) AS after_rollback FROM pg_language WHERE lanname = 'cl_tx_rolled'
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      CREATE LANGUAGE cl_tx_kept HANDLER plpgsql_call_handler
+    expect: ok
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    sql: |
+      SELECT lanname, lanispl FROM pg_language WHERE lanname IN ('cl_tx_kept', 'cl_tx_rolled') ORDER BY lanname
+    expect: rows
+    order: ordered

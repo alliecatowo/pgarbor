@@ -1,0 +1,33 @@
+# CREATE TABLE AS with a WHERE filter: the doc's first example. NULL dates are filtered out, not copied.
+id: cmd-create-table-as.films-recent
+title: CREATE TABLE AS copies only the rows matching the query predicate
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, where-clause, null-semantics]
+required_capabilities: [create-table-as, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (Examples: films_recent)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4, title text, date_prod date);
+  INSERT INTO films VALUES (1, 'alpha', '2001-05-01'), (2, 'beta', '2002-06-15'), (3, 'gamma', '2003-01-01'), (4, 'delta', NULL);
+steps:
+  - sql: |
+      CREATE TABLE films_recent AS
+        SELECT * FROM films WHERE date_prod >= '2002-01-01'
+    expect: ok
+  - sql: |
+      SELECT id, title, date_prod FROM films_recent ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM films WHERE date_prod >= '2002-01-01'
+    expect: rows
+  - sql: |
+      INSERT INTO films VALUES (5, 'epsilon', '2010-01-01')
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM films_recent
+    expect: rows
+    comment: new table is a snapshot; the later insert into films is not visible

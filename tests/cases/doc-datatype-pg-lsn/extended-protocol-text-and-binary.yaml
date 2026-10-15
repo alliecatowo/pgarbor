@@ -1,0 +1,58 @@
+# pg_lsn bound and returned through the extended protocol in text and binary formats (binary is 8-byte big-endian).
+id: doc-datatype-pg-lsn.extended-protocol-text-and-binary
+title: pg_lsn parameters and results round-trip over the extended protocol in text and binary formats
+family: doc-datatype-pg-lsn
+tier: extended
+feature_ids: [pg-lsn, extended-protocol, binary-format, exec-params, prepared-statements]
+required_capabilities: [create-table, insert, select, extended-protocol, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-pg-lsn"
+sessions: [a]
+setup: |
+  CREATE TABLE lsn_proto (id int4, pos pg_lsn);
+steps:
+  - exec_params:
+      sql: |
+        INSERT INTO lsn_proto VALUES ($1, $2)
+      params: ["1", "16/B374D848"]
+      param_types: [23, 3220]
+      param_formats: [text, text]
+    expect: ok
+  - exec_params:
+      sql: |
+        INSERT INTO lsn_proto VALUES ($1, $2)
+      params: ["2", "0000000000000010"]
+      param_types: [23, 3220]
+      param_formats: [text, binary]
+    expect: ok
+    comment: binary pg_lsn is the 8-byte big-endian integer, so this is 0/10
+  - exec_params:
+      sql: |
+        SELECT id, pos FROM lsn_proto WHERE pos = $1 ORDER BY id
+      params: ["0000000000000010"]
+      param_types: [3220]
+      param_formats: [binary]
+      result_format: binary
+    expect: rows
+    order: ordered
+  - exec_params:
+      sql: |
+        SELECT id, pos::text FROM lsn_proto ORDER BY id
+      params: []
+      result_format: text
+    expect: rows
+    order: ordered
+  - exec_params:
+      sql: |
+        SELECT $1::pg_lsn - $2::pg_lsn AS distance
+      params: ["16/B374D848", "16/B374D000"]
+      param_types: [3220, 3220]
+    expect: rows
+  - exec_params:
+      sql: |
+        SELECT $1::pg_lsn + $2::numeric AS moved
+      params: ["0/10", null]
+      param_types: [3220, 1700]
+    expect: rows
+    comment: NULL numeric parameter yields NULL

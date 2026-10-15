@@ -1,0 +1,43 @@
+# Ordinary aggregates used as window functions: running default frame, whole partition, FILTER, NULL handling; plain aggregate collapses.
+id: doc-functions-window.aggregate-as-window
+title: Ordinary aggregates as window functions versus plain aggregates
+family: doc-functions-window
+tier: core
+feature_ids: [window-functions, aggregates, window-frames, filter-clause]
+required_capabilities: [create-table, insert, select, window-functions, aggregates]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (aggregate functions as window functions)"
+setup: |
+  CREATE TABLE a (id int4 PRIMARY KEY, grp text, n int4);
+  INSERT INTO a VALUES (1,'x',1), (2,'x',2), (3,'y',NULL), (4,'y',4), (5,'y',NULL);
+steps:
+  - sql: |
+      SELECT id, sum(id) OVER () AS whole, sum(id) OVER (ORDER BY id) AS running,
+             sum(id) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS whole2
+      FROM a ORDER BY id
+    expect: rows
+    order: ordered
+    comment: ORDER BY with the default frame yields a running sum; omitting ORDER BY or using an unbounded frame aggregates the partition
+  - sql: |
+      SELECT id, grp, avg(n) OVER (PARTITION BY grp) AS g_avg, count(n) OVER (PARTITION BY grp) AS g_cnt, count(*) OVER (PARTITION BY grp) AS g_rows
+      FROM a ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL inputs are skipped by count(n) and avg(n); count(*) counts all rows
+  - sql: |
+      SELECT id, sum(n) FILTER (WHERE n > 1) OVER (ORDER BY id) AS f
+      FROM a ORDER BY id
+    expect: rows
+    order: ordered
+    comment: FILTER restricts the aggregated rows inside the frame; an empty filtered frame gives NULL for sum
+  - sql: |
+      SELECT sum(id), count(*) FROM a
+    expect: rows
+    order: multiset
+    comment: without OVER the aggregate collapses to a single row
+  - sql: |
+      SELECT count(*) OVER () AS c FROM a WHERE false
+    expect: rows
+    order: multiset
+    comment: no input rows, no output rows

@@ -1,0 +1,35 @@
+# The documented logfunc1 case: 'now' in an INSERT VALUES list is converted to a timestamp constant when the
+# statement is first analyzed, so later calls in the same session reuse the frozen value.
+id: doc-plpgsql-implementation.plan-cache-frozen-now-literal
+title: Cached plan freezes a 'now' literal across calls in one session
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, plan-cache, timestamp, insert]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, timestamp]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Variable Substitution)"
+sessions: [a]
+setup: |
+  CREATE TABLE logtable (logtxt text, logtime timestamp);
+  CREATE FUNCTION logfunc1(logtxt text) RETURNS void AS $$
+      BEGIN
+          INSERT INTO logtable VALUES (logtxt, 'now');
+      END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT logfunc1('a1')
+    expect: rows
+  - sql: |
+      SELECT pg_sleep(0.05)
+    expect: rows
+    comment: make later transactions observably later
+  - sql: |
+      SELECT logfunc1('a2')
+    expect: rows
+  - sql: |
+      SELECT count(*) AS calls, count(DISTINCT logtime) AS distinct_times FROM logtable
+    expect: rows
+    order: ordered
+    comment: documented behavior is one shared timestamp; the logfunc2 variant (assignment of 'now' to a local) was NOT observed to re-evaluate per call on PostgreSQL 18.6 in this scratch check, so it is not asserted here

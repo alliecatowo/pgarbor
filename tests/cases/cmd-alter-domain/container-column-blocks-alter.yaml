@@ -1,0 +1,37 @@
+# SET NOT NULL and ADD CONSTRAINT are refused while any column of a base or derived domain's array type exists; SET DEFAULT is not.
+id: cmd-alter-domain.container-column-blocks-alter
+title: "Domain used inside an array column blocks SET NOT NULL and ADD CONSTRAINT, but not SET DEFAULT"
+family: cmd-alter-domain
+tier: extended
+feature_ids: [alter-domain, arrays, domain-container-restriction]
+required_capabilities: [create-domain, alter-domain, create-table, insert, drop-table, arrays, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (Notes: container-type columns)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS int;
+  CREATE DOMAIN posint2 AS posint;
+  CREATE TABLE nums (id int, vals posint2[]);
+  INSERT INTO nums VALUES (1, ARRAY[1, 2]::posint2[]);
+steps:
+  - sql: |
+      ALTER DOMAIN posint SET NOT NULL
+    expect: error
+    sqlstate: "0A000"
+    comment: the derived domain posint2 is used in an array column
+  - sql: |
+      ALTER DOMAIN posint ADD CONSTRAINT posint_lt CHECK (VALUE < 10)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      ALTER DOMAIN posint SET DEFAULT 1
+    expect: ok
+    comment: defaults are not restricted by container columns
+  - sql: |
+      DROP TABLE nums
+    expect: ok
+  - sql: |
+      ALTER DOMAIN posint SET NOT NULL
+    expect: ok
+    comment: once no container column remains the command succeeds

@@ -1,0 +1,32 @@
+# A new RANGE partition whose bounds overlap an existing partition is rejected, and the failed
+# CREATE TABLE leaves no table behind. Adjacent (non-overlapping) bounds are accepted.
+id: doc-ddl-partitioning.range-overlap-rejected
+title: Overlapping range partition bounds are rejected atomically
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, range-partitioning, partition-bounds, partition-overlap]
+required_capabilities: [create-table, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Declarative Partitioning step 2: 'specifying bounds ... will cause an error')"
+sessions: [a]
+setup: |
+  CREATE TABLE ov (id int, v int) PARTITION BY RANGE (v);
+  CREATE TABLE ov_a PARTITION OF ov FOR VALUES FROM (1) TO (10);
+steps:
+  - sql: |
+      CREATE TABLE ov_b PARTITION OF ov FOR VALUES FROM (5) TO (15)
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      SELECT to_regclass('ov_b') IS NULL AS ov_b_absent
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE ov_c PARTITION OF ov FOR VALUES FROM (10) TO (15)
+    expect: ok
+    comment: upper bound 10 of ov_a is exclusive, so [10,15) does not overlap
+  - sql: |
+      SELECT tableoid::regclass::text AS part, count(*) FROM ov GROUP BY 1 ORDER BY 1
+    expect: rows
+    order: ordered

@@ -1,0 +1,30 @@
+# Row-level AFTER UPDATE firings run after the whole statement, so each one sees the final state of the table.
+id: doc-trigger-datachanges.row-after-update-sees-statement
+title: Row-level AFTER UPDATE triggers see every change of the outer UPDATE
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, row-level-triggers, plpgsql, update, visibility]
+required_capabilities: [create-table, insert, select, update, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (row-level AFTER trigger sees all data changes made by the outer command)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+  CREATE FUNCTION ra_upd() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('ra_upd', (SELECT sum(v) FROM t));
+    RETURN NULL;
+  END $$;
+  CREATE TRIGGER trg_ra_upd AFTER UPDATE ON t FOR EACH ROW EXECUTE FUNCTION ra_upd();
+steps:
+  - sql: |
+      UPDATE t SET v = v + 1 WHERE id <= 3
+    expect: ok
+  - sql: |
+      SELECT n FROM lg WHERE tag = 'ra_upd'
+    expect: rows
+    order: multiset
+    comment: all three firings report the same total, the one after all updates of the statement

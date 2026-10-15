@@ -1,0 +1,25 @@
+# Rows inserted by one transaction share its xmin, and cmin counts commands within it.
+id: doc-ddl-system-columns.xmin-same-transaction
+title: xmin is the inserting transaction and cmin the command number within it
+family: doc-ddl-system-columns
+tier: core
+feature_ids: [system-columns, xmin, cmin, transactions]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-system-columns (xmin: inserting transaction; cmin: command identifier starting at zero)"
+setup: |
+  CREATE TABLE t (id int4, v text);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1, 'a');
+      INSERT INTO t VALUES (2, 'b'), (3, 'c');
+      SELECT id, cmin, xmin = pg_current_xact_id()::xid AS mine FROM t ORDER BY id;
+      COMMIT
+    expect: ok
+    comment: cmin is 0 for the first command and 1 for the second, both rows of which share cmin 1
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

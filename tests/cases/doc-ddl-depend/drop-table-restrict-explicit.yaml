@@ -1,0 +1,26 @@
+# Explicit RESTRICT behaves identically to the default: the drop is refused and the FK constraint remains.
+id: doc-ddl-depend.drop-table-restrict-explicit
+title: DROP TABLE ... RESTRICT refuses to drop a referenced table and keeps the foreign key
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-table, foreign-keys, dependency-tracking, drop-restrict]
+required_capabilities: [create-table, insert, select, drop-table, foreign-keys, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (\"You can also write RESTRICT instead of CASCADE to get the default behavior\")"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text);
+  CREATE TABLE orders (order_id integer PRIMARY KEY, product_no integer REFERENCES products (product_no), quantity integer);
+steps:
+  - sql: |
+      DROP TABLE products RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT count(*) FROM information_schema.table_constraints
+      WHERE constraint_name = 'orders_product_no_fkey' AND constraint_type = 'FOREIGN KEY'
+    expect: rows
+  - sql: |
+      SELECT to_regclass('products') IS NOT NULL AS products_exists
+    expect: rows

@@ -1,0 +1,48 @@
+# Documented trigger-function rules: no declared arguments (use TG_ARGV), trigger functions cannot be called directly, and the returned row must match the table.
+id: doc-plpgsql-trigger.trigger-function-error-conditions
+title: Trigger functions with declared arguments, direct calls and mismatched returned rows fail with documented errors
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, plpgsql, create-function, function-arguments, return-type, errors]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (trigger function must be declared with no arguments; must return a row matching the table)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (id int);
+  CREATE TYPE t_pair AS (x int, y int);
+  CREATE FUNCTION f_plain() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      RETURN NEW;
+  END $$;
+  CREATE FUNCTION f_bad_shape() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      RETURN ROW(1, 2)::t_pair;
+  END $$;
+steps:
+  - sql: |
+      CREATE FUNCTION f_args(a int) RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+          RETURN NULL;
+      END $$
+    expect: error
+    sqlstate: "42P13"
+    comment: trigger functions must not declare arguments; CREATE TRIGGER arguments go through TG_ARGV
+  - sql: |
+      SELECT f_plain()
+    expect: error
+    sqlstate: "0A000"
+    comment: a trigger function can only be invoked by the trigger manager
+  - sql: |
+      CREATE TRIGGER t1_shape BEFORE INSERT ON t1 FOR EACH ROW EXECUTE FUNCTION f_bad_shape()
+    expect: ok
+  - sql: |
+      INSERT INTO t1 VALUES (1)
+    expect: error
+    sqlstate: "42804"
+    comment: the returned record has two columns but the table has one
+  - sql: |
+      SELECT count(*) AS n FROM t1
+    expect: rows
+    order: ordered

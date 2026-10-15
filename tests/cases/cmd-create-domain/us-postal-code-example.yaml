@@ -1,0 +1,52 @@
+# The CREATE DOMAIN reference page's worked example: a regex-checked text domain used as a column type.
+id: cmd-create-domain.us-postal-code-example
+title: Documented us_postal_code example creates a checked domain and enforces it on insert and update
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, check-constraint, domain-constraint, serial]
+required_capabilities: [create-domain, create-table, insert, select, update, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (Examples)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DOMAIN us_postal_code AS TEXT
+      CHECK(
+         VALUE ~ '^\d{5}$'
+      OR VALUE ~ '^\d{5}-\d{4}$'
+      )
+    expect: ok
+  - sql: |
+      CREATE TABLE us_snail_addy (
+        address_id SERIAL PRIMARY KEY,
+        street1 TEXT NOT NULL,
+        street2 TEXT,
+        street3 TEXT,
+        city TEXT NOT NULL,
+        postal us_postal_code NOT NULL
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO us_snail_addy (street1, city, postal)
+      VALUES ('1 Main St', 'Springfield', '12345'), ('2 Oak Ave', 'Shelbyville', '12345-6789')
+    expect: ok
+  - sql: |
+      INSERT INTO us_snail_addy (street1, city, postal) VALUES ('3 Elm St', 'Capital City', '1234')
+    expect: error
+    sqlstate: "23514"
+    comment: four digits fail both regex alternatives
+  - sql: |
+      INSERT INTO us_snail_addy (street1, city, postal) VALUES ('4 Pine St', 'Ogdenville', NULL)
+    expect: error
+    sqlstate: "23502"
+    comment: the column NOT NULL rejects NULL before the domain check matters
+  - sql: |
+      UPDATE us_snail_addy SET postal = '99999-00' WHERE address_id = 1
+    expect: error
+    sqlstate: "23514"
+    comment: updates are coerced to the domain too
+  - sql: |
+      SELECT address_id, street2 IS NULL AS no_street2, postal FROM us_snail_addy ORDER BY address_id
+    expect: rows
+    order: ordered

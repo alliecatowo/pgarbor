@@ -1,0 +1,47 @@
+# Docs merge_db example: UPDATE first, INSERT inside a sub-block on miss, loop again when a concurrent unique_violation occurs.
+id: doc-plpgsql-control-structures.exception-merge-db-upsert
+title: "merge_db upsert loop updates an existing key and inserts a new one"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, exceptions, loops, upsert, unique-violation]
+required_capabilities: [plpgsql, create-function, create-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Exceptions with UPDATE/INSERT)"
+sessions: [a]
+setup: |
+  CREATE TABLE db (a INT PRIMARY KEY, b TEXT);
+  CREATE FUNCTION merge_db(key INT, data TEXT) RETURNS VOID AS
+  $$
+  BEGIN
+      LOOP
+          UPDATE db SET b = data WHERE a = key;
+          IF found THEN
+              RETURN;
+          END IF;
+          BEGIN
+              INSERT INTO db(a,b) VALUES (key, data);
+              RETURN;
+          EXCEPTION WHEN unique_violation THEN
+              -- loop to try the UPDATE again
+          END;
+      END LOOP;
+  END;
+  $$
+  LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT merge_db(1, 'david')
+    expect: rows
+    comment: key 1 is missing, so the UPDATE finds nothing and the INSERT runs
+  - sql: |
+      SELECT merge_db(1, 'dennis')
+    expect: rows
+    comment: key 1 exists, so only the UPDATE runs
+  - sql: |
+      SELECT merge_db(2, 'x')
+    expect: rows
+  - sql: |
+      SELECT a, b FROM db ORDER BY a
+    expect: rows
+    order: ordered

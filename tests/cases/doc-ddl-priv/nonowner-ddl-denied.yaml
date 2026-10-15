@@ -1,0 +1,46 @@
+# Ownership: only the owner (or a superuser) can destroy or alter an object, whatever ordinary privileges a role holds.
+id: doc-ddl-priv.nonowner-ddl-denied
+title: A non-owner with SELECT cannot DROP, ALTER or UPDATE the table
+family: doc-ddl-priv
+tier: core
+feature_ids: [owner, drop-table, alter-table, select, privileges, errors]
+required_capabilities: [create-table, insert, select, drop-table, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (the right to modify or destroy an object is inherent in being the object's owner)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_no_rw;
+  CREATE TABLE no_t (col1 int4, col2 text);
+  INSERT INTO no_t VALUES (1, 'a');
+  GRANT SELECT ON no_t TO ddp_no_rw;
+steps:
+  - sql: |
+      SET ROLE ddp_no_rw
+    expect: ok
+  - sql: |
+      SELECT col1 FROM no_t
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP TABLE no_t
+    expect: error
+    sqlstate: "42501"
+    comment: destroying the object requires ownership
+  - sql: |
+      ALTER TABLE no_t ADD COLUMN x int4
+    expect: error
+    sqlstate: "42501"
+    comment: altering the object requires ownership
+  - sql: |
+      UPDATE no_t SET col1 = 9
+    expect: error
+    sqlstate: "42501"
+    comment: no UPDATE privilege was granted
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM no_t
+    expect: rows
+    comment: the table survived the denied DROP and ALTER

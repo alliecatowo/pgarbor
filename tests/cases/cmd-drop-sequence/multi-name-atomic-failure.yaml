@@ -1,0 +1,33 @@
+# DROP SEQUENCE with several names: one missing name aborts the whole command, so the existing sequence survives.
+id: cmd-drop-sequence.multi-name-atomic-failure
+title: Multi-name DROP SEQUENCE with one missing name fails as a whole and drops nothing
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, multiple-names, errors, transactions]
+required_capabilities: [sequences, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (synopsis: name [, ...])"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s1;
+  CREATE SEQUENCE s2;
+steps:
+  - sql: |
+      DROP SEQUENCE s1, no_such_seq
+    expect: error
+    sqlstate: "42P01"
+    comment: the missing name is an error
+  - sql: |
+      SELECT relname FROM pg_class WHERE relkind = 'S' AND relnamespace = 'public'::regnamespace ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: s1 must still exist; the list is all-or-nothing
+  - sql: |
+      DROP SEQUENCE s1, s2
+    expect: ok
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_class WHERE relkind = 'S' AND relnamespace = 'public'::regnamespace
+    expect: rows
+    order: ordered
+    comment: both named sequences are gone after a successful multi-name drop

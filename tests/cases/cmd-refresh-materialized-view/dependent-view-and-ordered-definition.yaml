@@ -1,0 +1,48 @@
+id: cmd-refresh-materialized-view.dependent-view-and-ordered-definition
+title: A refresh updates views built on the materialized view; ORDER BY and LIMIT in the definition are re-evaluated
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, order-by, limit, views, numeric]
+required_capabilities: [create-table, insert, select, create-view, create-materialized-view, refresh-materialized-view, order-by, limit, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (Notes: ORDER BY in defining query)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales (id int4 PRIMARY KEY, region text NOT NULL, amt numeric(8,2) NOT NULL);
+  INSERT INTO sales VALUES (1, 'north', 10.50), (2, 'south', 4.25), (3, 'north', 0.25), (4, 'east', 7.00);
+  CREATE MATERIALIZED VIEW top2 AS SELECT region, amt FROM sales ORDER BY amt DESC LIMIT 2;
+  CREATE VIEW top2_summary AS SELECT count(*) AS n, sum(amt) AS s FROM top2;
+steps:
+  - sql: |
+      SELECT n, s FROM top2_summary
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO sales VALUES (5, 'west', 99.99)
+    expect: ok
+  - sql: |
+      SELECT n, s FROM top2_summary
+    expect: rows
+    order: ordered
+    comment: materialized view not yet refreshed
+  - sql: |
+      REFRESH MATERIALIZED VIEW top2
+    expect: ok
+  - sql: |
+      SELECT n, s FROM top2_summary
+    expect: rows
+    order: ordered
+    comment: the dependent view sees the refreshed top two (99.99 and 10.50)
+  - sql: |
+      SELECT region, amt FROM top2
+    expect: rows
+    order: multiset
+    comment: ORDER BY of the definition is not guaranteed to be preserved on read
+  - sql: |
+      REFRESH MATERIALIZED VIEW top2 WITH NO DATA
+    expect: ok
+  - sql: |
+      SELECT region FROM top2
+    expect: error
+    sqlstate: "55000"

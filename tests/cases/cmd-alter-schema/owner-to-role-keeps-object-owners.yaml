@@ -1,0 +1,34 @@
+# OWNER TO changes only the schema's owner; tables inside keep their previous owner.
+id: cmd-alter-schema.owner-to-role-keeps-object-owners
+title: ALTER SCHEMA OWNER TO changes the schema owner and leaves contained tables owned by their creator
+family: cmd-alter-schema
+tier: core
+feature_ids: [alter-schema, owner, roles, ownership-scope]
+required_capabilities: [create-schema, create-role, alter-schema, create-table, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_schema.sgml#sql-alterschema (Description; Synopsis: OWNER TO)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_as_own NOLOGIN;
+  CREATE SCHEMA cmd_as_own_s;
+  CREATE TABLE cmd_as_own_s.t (id int4);
+  INSERT INTO cmd_as_own_s.t VALUES (1), (2);
+steps:
+  - sql: |
+      ALTER SCHEMA cmd_as_own_s OWNER TO cmd_as_own
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(nspowner) = 'cmd_as_own' AS schema_owner_changed FROM pg_namespace WHERE nspname = 'cmd_as_own_s'
+    expect: rows
+  - sql: |
+      SELECT pg_get_userbyid(relowner) <> 'cmd_as_own' AS table_owner_unchanged FROM pg_class WHERE oid = 'cmd_as_own_s.t'::regclass
+    expect: rows
+    comment: owner of contained objects is not altered
+  - sql: |
+      SELECT id FROM cmd_as_own_s.t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE cmd_as_own_s.t; DROP SCHEMA cmd_as_own_s; DROP ROLE cmd_as_own
+    expect: ok

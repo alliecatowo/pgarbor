@@ -1,0 +1,35 @@
+# RENAME TO changes the name used by lookups; a missing source or a name taken in the same schema is an error.
+id: cmd-alter-tsconfig.rename-configuration
+title: "ALTER TEXT SEARCH CONFIGURATION RENAME TO renames, and rejects missing or duplicate names"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, rename, errors]
+required_capabilities: [create-text-search-configuration, alter-text-search-configuration, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+  CREATE TEXT SEARCH CONFIGURATION taken (copy = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config RENAME TO cfg_renamed
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('cfg_renamed', 'Fox 42') AS vec
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_tsvector('my_config', 'Fox 42')
+    expect: error
+    sqlstate: "42704"
+    comment: the old name no longer resolves
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config RENAME TO cfg_again
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION cfg_renamed RENAME TO taken
+    expect: error
+    sqlstate: "42710"

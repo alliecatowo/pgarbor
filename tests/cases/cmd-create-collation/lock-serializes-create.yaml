@@ -1,0 +1,39 @@
+# Documented in Notes: CREATE COLLATION takes a self-conflicting SHARE ROW EXCLUSIVE lock on pg_collation, so a second CREATE COLLATION waits until the first transaction ends.
+id: cmd-create-collation.lock-serializes-create
+title: "A second CREATE COLLATION blocks until the first creating transaction commits"
+family: cmd-create-collation
+tier: core
+feature_ids: [create-collation, locking, transactions]
+required_capabilities: [create-collation, icu-provider, multi-session, transactions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_collation.sgml#sql-createcollation-notes (SHARE ROW EXCLUSIVE lock)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      CREATE COLLATION cmd_cc_lock_a (provider = icu, locale = 'und')
+    expect: ok
+  - session: b
+    sql: |
+      CREATE COLLATION cmd_cc_lock_b (provider = icu, locale = 'und')
+    async: true
+    expect_blocked: true
+    comment: the self-conflicting catalog lock makes b wait
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: b proceeds once a has committed
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_collation WHERE collname IN ('cmd_cc_lock_a', 'cmd_cc_lock_b')
+    expect: rows
+    order: ordered

@@ -1,0 +1,43 @@
+# Each object type accepts only its own privilege letters: SELECT on a function, EXECUTE on a table, and so on are rejected.
+id: doc-ddl-priv.invalid-privilege-type
+title: GRANT rejects privileges that do not apply to the object type
+family: doc-ddl-priv
+tier: core
+feature_ids: [grant, revoke, privileges, function-execute, errors]
+required_capabilities: [create-table, roles, errors, create-function-sql]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (the privileges applicable to a particular object vary by type; EXECUTE is the only privilege for functions)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_ip_rw;
+  CREATE TABLE ip_t (a int4);
+  CREATE FUNCTION ip_f() RETURNS int4 LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      GRANT SELECT ON FUNCTION ip_f() TO ddp_ip_rw
+    expect: error
+    sqlstate: "0LP01"
+    comment: SELECT is not a function privilege
+  - sql: |
+      GRANT EXECUTE ON TABLE ip_t TO ddp_ip_rw
+    expect: error
+    sqlstate: "0LP01"
+    comment: EXECUTE is not a table privilege
+  - sql: |
+      GRANT TEMPORARY ON TABLE ip_t TO ddp_ip_rw
+    expect: error
+    sqlstate: "0LP01"
+    comment: TEMPORARY is a database privilege
+  - sql: |
+      GRANT USAGE ON TABLE ip_t TO ddp_ip_rw
+    expect: error
+    sqlstate: "0LP01"
+    comment: USAGE does not apply to tables
+  - sql: |
+      GRANT EXECUTE ON FUNCTION ip_f() TO ddp_ip_rw
+    expect: ok
+  - sql: |
+      REVOKE SELECT ON ip_t FROM ddp_ip_rw
+    expect: ok
+    comment: revoking a privilege that was never granted is not an error

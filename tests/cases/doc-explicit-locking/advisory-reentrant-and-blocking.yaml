@@ -1,0 +1,46 @@
+# Session-level advisory locks count re-acquisitions; other sessions get the lock only after every unlock.
+id: doc-explicit-locking.advisory-reentrant-and-blocking
+title: Advisory lock held twice by one session is released only after two unlocks
+family: doc-explicit-locking
+tier: core
+feature_ids: [advisory-locks, multi-session]
+required_capabilities: [advisory-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#advisory-locks (a lock can be acquired multiple times; each request needs a matching unlock)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT pg_advisory_lock(5)
+    expect: rows
+  - session: a
+    sql: |
+      SELECT pg_advisory_lock(5)
+    expect: rows
+    comment: second acquisition by the same session succeeds
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(5) AS acquired
+    expect: rows
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(5) AS released
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(5) AS acquired
+    expect: rows
+    comment: one hold remains, still false
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(5) AS released
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(5) AS acquired
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock(5) AS released
+    expect: rows

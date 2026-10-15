@@ -1,0 +1,46 @@
+# OWNER TO accepts a role name or CURRENT_ROLE, CURRENT_USER and SESSION_USER; the superuser session can hand ownership in both directions.
+id: cmd-alter-opclass.owner-keywords-and-role
+title: "OWNER TO accepts a role name and the CURRENT_ROLE, CURRENT_USER and SESSION_USER keywords"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, owner, roles]
+required_capabilities: [create-operator-class, alter-operator-class, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (OWNER TO new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE ROLE aoc_cmd_own5;
+  CREATE OPERATOR CLASS aoc_cmd_o5 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o5 USING btree OWNER TO aoc_cmd_own5
+    expect: ok
+  - sql: |
+      SELECT opcowner = (SELECT oid FROM pg_roles WHERE rolname = 'aoc_cmd_own5') FROM pg_opclass WHERE opcname = 'aoc_cmd_o5'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o5 USING btree OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      SELECT opcowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) FROM pg_opclass WHERE opcname = 'aoc_cmd_o5'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o5 USING btree OWNER TO aoc_cmd_own5
+    expect: ok
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o5 USING btree OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT opcowner = (SELECT oid FROM pg_roles WHERE rolname = session_user) FROM pg_opclass WHERE opcname = 'aoc_cmd_o5'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o5 USING btree OWNER TO CURRENT_USER
+    expect: ok
+    comment: hand ownership back so the role can be dropped
+  - sql: |
+      DROP ROLE aoc_cmd_own5
+    expect: ok

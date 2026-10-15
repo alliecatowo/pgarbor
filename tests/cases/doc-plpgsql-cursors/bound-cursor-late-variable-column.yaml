@@ -1,0 +1,44 @@
+# Only variables declared before a bound cursor are substituted into its query. A later variable is not,
+# so the name resolves as a column reference.
+id: doc-plpgsql-cursors.bound-cursor-late-variable-column
+title: Variable declared after a bound cursor is not substituted into its query
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, bound-cursor, variable-substitution, scoping]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-open-bound-cursor"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION bound_var_declared_before() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    key int := 2;
+    c CURSOR FOR SELECT name FROM items WHERE grp = key ORDER BY id;
+    r text;
+  BEGIN
+    OPEN c;
+    FETCH c INTO r;
+    RETURN r;
+  END $$;
+  CREATE FUNCTION bound_var_declared_after() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c CURSOR FOR SELECT name FROM items WHERE grp = key ORDER BY id;
+    key int := 2;
+    r text;
+  BEGIN
+    OPEN c;
+    FETCH c INTO r;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT bound_var_declared_before()
+    expect: rows
+  - sql: |
+      SELECT bound_var_declared_after()
+    expect: error
+    sqlstate: "42703"
+    comment: key is not a column of items, so the reference fails at OPEN

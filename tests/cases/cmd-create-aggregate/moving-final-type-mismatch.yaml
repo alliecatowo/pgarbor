@@ -1,0 +1,25 @@
+# Moving-aggregate mode: the moving final function must return the same type as the plain
+# implementation. A valid moving implementation without MFINALFUNC is accepted.
+id: cmd-create-aggregate.moving-final-type-mismatch
+title: "Moving-aggregate implementation with a final function of a different result type is rejected"
+family: cmd-create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, moving-aggregates, window-functions, errors]
+required_capabilities: [create-table, insert, select, aggregates, window-functions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (MFINALFUNC, moving-aggregate mode)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE AGGREGATE mm_ok (int4) (sfunc = int4pl, stype = int4, initcond = '0', msfunc = int4pl, minvfunc = int4mi, mstype = int4, minitcond = '0');
+steps:
+  - sql: |
+      SELECT x, mm_ok(x) OVER (ORDER BY x ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE AGGREGATE mm (int4) (sfunc = int4pl, stype = int4, initcond = '0', msfunc = int4pl, minvfunc = int4mi, mstype = int4, minitcond = '0', mfinalfunc = numeric)
+    expect: error
+    sqlstate: "42P13"
+    comment: numeric result from the moving final function differs from integer

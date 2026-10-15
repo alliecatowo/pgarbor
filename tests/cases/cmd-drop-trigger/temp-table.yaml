@@ -1,0 +1,33 @@
+# DROP TRIGGER works the same on a temporary table, and the trigger is gone for the rest of the session.
+id: cmd-drop-trigger.temp-table
+title: "DROP TRIGGER on a temporary table removes its trigger for the rest of the session"
+family: cmd-drop-trigger
+tier: extended
+feature_ids: [drop-trigger, temp-tables, triggers]
+required_capabilities: [temp-tables, create-table, insert, select, create-function, plpgsql, triggers, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Parameters: table_name)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION noop_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TEMP TABLE tt (id int4);
+  CREATE TRIGGER tt_tg BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION noop_tg();
+steps:
+  - sql: |
+      DROP TRIGGER tt_tg ON tt
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 'tt'::regclass AND NOT tgisinternal
+    expect: rows
+  - sql: |
+      DROP TRIGGER tt_tg ON tt
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP TRIGGER IF EXISTS tt_tg ON tt
+    expect: notice
+    comment: IF EXISTS turns the second drop into a notice
+  - sql: |
+      INSERT INTO tt VALUES (1)
+    expect: ok

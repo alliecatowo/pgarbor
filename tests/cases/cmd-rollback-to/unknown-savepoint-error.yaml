@@ -1,0 +1,44 @@
+id: cmd-rollback-to.unknown-savepoint-error
+title: "ROLLBACK TO an unestablished savepoint is an error that aborts the transaction"
+family: cmd-rollback-to
+tier: core
+feature_ids: [rollback-to-savepoint, savepoints, errors]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/rollback_to.sgml#sql-rollback-to (Notes: Specifying a savepoint name that has not been established is an error.)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4)
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SAVEPOINT s
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT nosuch
+    expect: error
+    sqlstate: "3B001"
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: error
+    sqlstate: "25P02"
+    comment: ordinary statements are refused until the transaction ends or rolls back to a valid savepoint
+  - sql: |
+      ROLLBACK TO SAVEPOINT s
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok

@@ -1,0 +1,41 @@
+# A waiter on a SELECT FOR UPDATE row lock proceeds when the holder rolls back.
+id: doc-applevel-consistency.for-update-rollback-releases-waiter
+title: UPDATE waiting on a FOR UPDATE lock proceeds after the holder rolls back
+family: doc-applevel-consistency
+tier: core
+feature_ids: [select-for-update, row-locks, rollback]
+required_capabilities: [create-table, insert, select, update, transactions, row-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, balance FROM acct WHERE id = 1 FOR UPDATE
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      UPDATE acct SET balance = 9 WHERE id = 1
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered

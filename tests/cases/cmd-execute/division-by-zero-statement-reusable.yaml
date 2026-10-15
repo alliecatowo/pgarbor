@@ -1,0 +1,27 @@
+# A run-time error inside EXECUTE raises 22012, and the prepared statement remains usable afterwards.
+id: cmd-execute.division-by-zero-statement-reusable
+title: Run-time error in EXECUTE does not discard the prepared statement
+family: cmd-execute
+tier: core
+feature_ids: [execute, prepare, prepared-statements, errors, arithmetic]
+required_capabilities: [select, prepared-statements, errors]
+provenance:
+  source: hand
+  ref: "PG18 ref/execute.sgml#sql-execute (Description: statement remains until DEALLOCATE)"
+sessions: [a]
+steps:
+  - sql: |
+      PREPARE dz(int) AS SELECT 1 / $1 AS q
+    expect: ok
+  - sql: |
+      EXECUTE dz(0)
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      EXECUTE dz(4)
+    expect: rows
+    comment: same statement succeeds with a non-zero divisor
+  - sql: |
+      SELECT name, parameter_types::text FROM pg_prepared_statements WHERE name = 'dz'
+    expect: rows
+    comment: still registered in the session

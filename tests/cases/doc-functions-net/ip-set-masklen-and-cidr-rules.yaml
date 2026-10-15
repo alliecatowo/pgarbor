@@ -1,0 +1,46 @@
+# set_masklen on inet and cidr, the cidr zeroing rules, and the documented range boundaries of the mask length.
+id: doc-functions-net.ip-set-masklen-and-cidr-rules
+title: set_masklen on inet and cidr, cidr input rejects bits right of the mask, and mask length bounds
+family: doc-functions-net
+tier: core
+feature_ids: [inet-functions, set-masklen, cidr, inet-to-cidr-cast]
+required_capabilities: [select, inet, cidr, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-net (set_masklen, network, and the inet/cidr paragraph)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT set_masklen(inet '192.168.1.5/24', 16) AS inet_keeps_address, set_masklen(cidr '192.168.1.0/24', 16) AS cidr_zeroes_bits
+    expect: rows
+    order: multiset
+    comment: documented examples 192.168.1.5/16 and 192.168.0.0/16
+  - sql: |
+      SELECT set_masklen(inet '::ffff:1.2.3.4', 128) AS full_v6_mask, set_masklen(inet '10.0.0.1', 0) AS zero_mask
+    expect: rows
+    order: multiset
+    comment: a mask length equal to the maximum for the family is accepted
+  - sql: |
+      SELECT set_masklen(inet '10.0.0.1', 33) AS too_long
+    expect: error
+    sqlstate: "22023"
+    comment: 33 exceeds the 32-bit maximum for IPv4
+  - sql: |
+      SELECT set_masklen(cidr '10.0.0.0/8', 33) AS too_long_cidr
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT cidr '192.168.1.5/24' AS cidr_with_host_bits
+    expect: error
+    sqlstate: "22P02"
+    comment: cidr input rejects any bits set to the right of the netmask
+  - sql: |
+      SELECT cidr '192.168.1.0/24' AS cidr_clean, inet '192.168.1.5/24'::cidr AS inet_cast_zeroes, cidr '10.1.0.0/16'::inet AS cidr_cast_to_inet
+    expect: rows
+    order: multiset
+    comment: cidr to inet is a lossless cast; inet to cidr zeroes host bits
+  - sql: |
+      SELECT inet '192.168.1.256' AS bad_octet
+    expect: error
+    sqlstate: "22P02"
+    comment: an out-of-range octet is invalid input syntax for inet

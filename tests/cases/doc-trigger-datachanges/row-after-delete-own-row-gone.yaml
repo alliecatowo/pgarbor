@@ -1,0 +1,39 @@
+# Row-level AFTER DELETE runs after the statement, so the deleted row is gone and the remaining rows are final.
+id: doc-trigger-datachanges.row-after-delete-own-row-gone
+title: Row-level AFTER DELETE sees the deleted row removed and the final remaining row set
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, row-level-triggers, plpgsql, delete, visibility]
+required_capabilities: [create-table, insert, select, delete, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (when a row-level AFTER trigger is fired, all data changes are complete)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+  CREATE FUNCTION rd_aft() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('rd_aft_own', (SELECT count(*) FROM t WHERE id = OLD.id));
+    INSERT INTO lg(tag, n) VALUES ('rd_aft_total', (SELECT count(*) FROM t));
+    RETURN OLD;
+  END $$;
+  CREATE TRIGGER trg_rd_aft AFTER DELETE ON t FOR EACH ROW EXECUTE FUNCTION rd_aft();
+steps:
+  - sql: |
+      DELETE FROM t WHERE id IN (1, 2, 3)
+    expect: ok
+  - sql: |
+      SELECT tag, n FROM lg WHERE tag = 'rd_aft_own'
+    expect: rows
+    order: multiset
+    comment: each deleted row is already gone when its AFTER firing runs
+  - sql: |
+      SELECT n FROM lg WHERE tag = 'rd_aft_total'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

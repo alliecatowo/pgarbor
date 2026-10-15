@@ -1,0 +1,34 @@
+# Index COLLATE and operator class options: a text_pattern_ops index is created and LIKE prefix queries return the right rows.
+id: cmd-create-index.collate-and-text-pattern-ops
+title: COLLATE "C" and text_pattern_ops index options are accepted and serve prefix matches
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, collation, operator-class, like]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Parameters: collation, opclass; Examples: title COLLATE de_DE, non-default collation)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text);
+  INSERT INTO films VALUES (1, 'abc'), (2, 'abd'), (3, 'ab'), (4, 'B'), (5, 'b');
+steps:
+  - sql: |
+      CREATE INDEX f_ct ON films (title COLLATE "C")
+    expect: ok
+  - sql: |
+      CREATE INDEX f_pat ON films (title text_pattern_ops)
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'films' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, title FROM films WHERE title LIKE 'ab%' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, title FROM films ORDER BY title COLLATE "C"
+    expect: rows
+    order: ordered
+    comment: byte order puts uppercase B before lowercase letters

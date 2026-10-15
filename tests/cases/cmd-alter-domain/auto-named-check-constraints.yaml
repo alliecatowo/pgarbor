@@ -1,0 +1,51 @@
+# Unnamed CHECK constraints get generated names (domain_check, domain_check1, domain_not_null); dropping by those names works.
+id: cmd-alter-domain.auto-named-check-constraints
+title: "Unnamed domain CHECK constraints receive generated names that DROP CONSTRAINT and error messages use"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, check-constraint, not-null, constraint-naming]
+required_capabilities: [create-domain, alter-domain, select, constraints, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (ADD domain_constraint; DROP CONSTRAINT)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DOMAIN dd AS int CHECK (VALUE > 0) NOT NULL
+    expect: ok
+  - sql: |
+      ALTER DOMAIN dd ADD CHECK (VALUE < 100)
+    expect: ok
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE contypid = 'dd'::regtype ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: dd_check, dd_check1 and dd_not_null
+  - sql: |
+      SELECT 50::dd AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 0::dd
+    expect: error
+    sqlstate: "23514"
+    comment: the error names dd_check
+  - sql: |
+      SELECT 100::dd
+    expect: error
+    sqlstate: "23514"
+    comment: the error names dd_check1
+  - sql: |
+      ALTER DOMAIN dd DROP CONSTRAINT dd_check1
+    expect: ok
+  - sql: |
+      ALTER DOMAIN dd DROP CONSTRAINT dd_check1
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER DOMAIN dd DROP CONSTRAINT dd_check
+    expect: ok
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE contypid = 'dd'::regtype ORDER BY conname
+    expect: rows
+    order: ordered

@@ -1,0 +1,40 @@
+# The documented GROUPING/ROLLUP example, a CUBE variant, and the rule that GROUPING arguments must be grouping expressions.
+id: doc-functions-aggregate.grouping-rollup-cube
+title: GROUPING() bit masks over ROLLUP and CUBE, and rejection of non-grouping arguments
+family: doc-functions-aggregate
+tier: core
+feature_ids: [grouping-function, rollup, cube, grouping-sets, grouping-operations]
+required_capabilities: [select, aggregates, group-by, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-grouping-table (Grouping Operations: items_sold ROLLUP example)"
+sessions: [a]
+setup: |
+  CREATE TABLE items_sold (make text, model text, sales int);
+  INSERT INTO items_sold VALUES ('Foo', 'GT', 10), ('Foo', 'Tour', 20), ('Bar', 'City', 15), ('Bar', 'Sport', 5);
+steps:
+  - sql: |
+      SELECT make, model, GROUPING(make, model) AS grouping, sum(sales)
+      FROM items_sold
+      GROUP BY ROLLUP(make, model)
+    expect: rows
+    order: multiset
+    comment: the documented example; 0 = both grouped, 1 = model rolled up, 3 = both rolled up (grand total 50)
+  - sql: |
+      SELECT make, model, GROUPING(make) AS g_make, GROUPING(model) AS g_model,
+             GROUPING(make, model) AS g_both, sum(sales)
+      FROM items_sold
+      GROUP BY CUBE(make, model)
+    expect: rows
+    order: multiset
+    comment: CUBE produces every combination of the grouping columns, so 11 rows
+  - sql: |
+      SELECT GROUPING(make) FROM items_sold GROUP BY model
+    expect: error
+    sqlstate: "42803"
+    comment: GROUPING arguments must be among the GROUP BY expressions of the same query level
+  - sql: |
+      SELECT make, GROUPING(model) FROM items_sold GROUP BY make
+    expect: error
+    sqlstate: "42803"
+    comment: model is not grouped, so GROUPING(model) is rejected

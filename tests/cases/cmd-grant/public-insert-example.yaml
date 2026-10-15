@@ -1,0 +1,43 @@
+# Documented example GRANT INSERT ON films TO PUBLIC; PUBLIC privileges also reach roles created after the grant.
+id: cmd-grant.public-insert-example
+title: GRANT INSERT TO PUBLIC applies to a role created later and does not grant SELECT
+family: cmd-grant
+tier: core
+feature_ids: [grant, public, insert, select, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-examples (GRANT INSERT ON films TO PUBLIC)"
+sessions: [a]
+notes: Documented table name films is renamed to cgg_films to avoid cluster-wide collisions.
+setup: |
+  CREATE TABLE cgg_films (id int4, title text)
+steps:
+  - sql: |
+      GRANT INSERT ON cgg_films TO PUBLIC
+    expect: ok
+  - sql: |
+      CREATE ROLE cgg_late_user
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('cgg_late_user', 'cgg_films', 'INSERT') AS can_insert,
+             has_table_privilege('cgg_late_user', 'cgg_films', 'SELECT') AS can_select
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE cgg_late_user
+    expect: ok
+  - sql: |
+      INSERT INTO cgg_films VALUES (1, 'Metropolis')
+    expect: ok
+  - sql: |
+      SELECT id FROM cgg_films
+    expect: error
+    sqlstate: "42501"
+    comment: INSERT privilege alone does not allow reading rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM cgg_films
+    expect: rows

@@ -1,0 +1,32 @@
+# CREATE INDEX CONCURRENTLY is refused inside a transaction block; a plain CREATE INDEX is allowed there.
+id: cmd-create-index.concurrently-in-transaction-error
+title: CREATE INDEX CONCURRENTLY inside a transaction block fails with 25001
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, concurrently, transactions, errors]
+required_capabilities: [create-table, create-index, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Building Indexes Concurrently: a regular CREATE INDEX can be performed within a transaction block, but CREATE INDEX CONCURRENTLY cannot)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales_table (id int4 PRIMARY KEY, quantity int4);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE INDEX CONCURRENTLY sales_quantity_index ON sales_table (quantity)
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      CREATE INDEX sales_quantity_index ON sales_table (quantity)
+    expect: ok
+    comment: the non-concurrent form is allowed in the block
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'sales_table' ORDER BY indexname
+    expect: rows
+    order: ordered

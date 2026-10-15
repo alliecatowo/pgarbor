@@ -1,0 +1,33 @@
+# A unique or primary key on a partitioned table must include every partition key column, because
+# each partition's index can only enforce uniqueness locally. Supersets of the key are fine.
+id: doc-ddl-partitioning.pk-must-include-partition-key
+title: Unique and primary keys on a partitioned table must cover the partition key
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, primary-key, unique-constraint, partition-keys]
+required_capabilities: [create-table, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning-limitations (unique constraint on partitioned table must include partition key)"
+sessions: [a]
+setup: |
+  CREATE TABLE pkp (a int, b int, c int) PARTITION BY RANGE (b);
+  CREATE TABLE pkp_1 PARTITION OF pkp FOR VALUES FROM (0) TO (100);
+steps:
+  - sql: |
+      ALTER TABLE pkp ADD PRIMARY KEY (a)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      CREATE UNIQUE INDEX pkp_a_uq ON pkp (a)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      ALTER TABLE pkp ADD PRIMARY KEY (a, b)
+    expect: ok
+    comment: the partition key column b is included, so the key is allowed
+  - sql: |
+      SELECT tableoid::regclass::text AS part, conname FROM pg_constraint WHERE conrelid IN ('pkp'::regclass, 'pkp_1'::regclass) AND contype = 'p' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the parent key is also created on the existing partition

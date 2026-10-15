@@ -1,0 +1,45 @@
+# Policy names are unique per table only: a rename fails when the target name exists on the same table,
+# but the same name may be used on another table. Renaming to the current name is also a conflict.
+id: cmd-alter-policy.rename-name-conflicts
+title: "RENAME TO conflicts only within one table; unknown policy on another table is 42704"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, rename, policies, errors]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (RENAME TO, new_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  CREATE TABLE u (id int4 PRIMARY KEY, v int4);
+  CREATE POLICY pa ON t USING (true);
+  CREATE POLICY pb ON t USING (true);
+  CREATE POLICY pa ON u USING (true);
+steps:
+  - sql: |
+      ALTER POLICY pa ON t RENAME TO pb
+    expect: error
+    sqlstate: "42710"
+    comment: pb already exists on table t
+  - sql: |
+      ALTER POLICY pa ON t RENAME TO pa
+    expect: error
+    sqlstate: "42710"
+    comment: renaming a policy to its own name is also a duplicate
+  - sql: |
+      ALTER POLICY pa ON t RENAME TO pc
+    expect: ok
+  - sql: |
+      ALTER POLICY pa ON u RENAME TO pb
+    expect: ok
+    comment: pb is free on table u, so the same name is allowed on a different table
+  - sql: |
+      ALTER POLICY pc ON u RENAME TO z
+    expect: error
+    sqlstate: "42704"
+    comment: pc exists only on table t
+  - sql: |
+      SELECT tablename, policyname FROM pg_policies WHERE tablename IN ('t', 'u') ORDER BY tablename, policyname
+    expect: rows
+    order: ordered

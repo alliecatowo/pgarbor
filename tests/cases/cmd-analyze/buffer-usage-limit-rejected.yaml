@@ -1,0 +1,40 @@
+# BUFFER_USAGE_LIMIT outside 0 or 128 kB..16 GB, or not a size, is rejected with invalid_parameter_value.
+id: cmd-analyze.buffer-usage-limit-rejected
+title: "ANALYZE BUFFER_USAGE_LIMIT rejects sizes out of range or malformed"
+family: cmd-analyze
+tier: extended
+feature_ids: [analyze, buffer-usage-limit, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Parameters: BUFFER_USAGE_LIMIT minimum 128 kB and maximum 16 GB)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_br (id int4);
+  INSERT INTO an_br VALUES (1);
+steps:
+  - sql: |
+      ANALYZE (BUFFER_USAGE_LIMIT '64 kB') an_br
+    expect: error
+    sqlstate: "22023"
+    comment: below the 128 kB minimum
+  - sql: |
+      ANALYZE (BUFFER_USAGE_LIMIT '16777217 kB') an_br
+    expect: error
+    sqlstate: "22023"
+    comment: one kilobyte above the maximum
+  - sql: |
+      ANALYZE (BUFFER_USAGE_LIMIT '2 TB') an_br
+    expect: error
+    sqlstate: "22023"
+    comment: above the maximum
+  - sql: |
+      ANALYZE (BUFFER_USAGE_LIMIT -1) an_br
+    expect: error
+    sqlstate: "22023"
+    comment: negative
+  - sql: |
+      ANALYZE (BUFFER_USAGE_LIMIT 'abc') an_br
+    expect: error
+    sqlstate: "22023"
+    comment: not a size

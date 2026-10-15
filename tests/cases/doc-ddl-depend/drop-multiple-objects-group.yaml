@@ -1,0 +1,32 @@
+# DROP TABLE with several names needs CASCADE only for dependencies outside the listed group.
+id: doc-ddl-depend.drop-multiple-objects-group
+title: DROP TABLE of a referenced and referencing table together succeeds without CASCADE
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-table, foreign-keys, dependency-tracking, drop-restrict]
+required_capabilities: [create-table, insert, select, drop-table, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (\"DROP TABLE tab1, tab2 the existence of a foreign key referencing tab1 from tab2 would not mean that CASCADE is needed\")"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (id integer PRIMARY KEY);
+  CREATE TABLE tab2 (id integer PRIMARY KEY, t1_id integer REFERENCES tab1 (id));
+  INSERT INTO tab1 VALUES (1);
+  INSERT INTO tab2 VALUES (1, 1);
+steps:
+  - sql: |
+      DROP TABLE tab1
+    expect: error
+    sqlstate: "2BP01"
+    comment: alone, tab1 has the dependent FK from tab2
+  - sql: |
+      SELECT count(*) FROM tab2
+    expect: rows
+  - sql: |
+      DROP TABLE tab1, tab2
+    expect: ok
+    comment: the dependency is inside the dropped group, so no CASCADE is needed
+  - sql: |
+      SELECT to_regclass('tab1') IS NULL AS tab1_gone, to_regclass('tab2') IS NULL AS tab2_gone
+    expect: rows

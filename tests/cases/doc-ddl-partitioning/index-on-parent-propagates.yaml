@@ -1,0 +1,28 @@
+# An index created on the partitioned table is created on every existing partition and on partitions
+# created or attached later. The index on the parent is virtual, so pg_index lists only leaf indexes.
+id: doc-ddl-partitioning.index-on-parent-propagates
+title: Indexes on a partitioned table propagate to existing and later partitions
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, indexes, index-propagation]
+required_capabilities: [create-table, create-index, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Declarative Partitioning: 'This automatically creates a matching index on each partition')"
+sessions: [a]
+setup: |
+  CREATE TABLE ix (id int, logdate date NOT NULL) PARTITION BY RANGE (logdate);
+  CREATE TABLE ix_2006 PARTITION OF ix FOR VALUES FROM ('2006-01-01') TO ('2007-01-01');
+  CREATE INDEX ix_logdate_idx ON ix (logdate);
+steps:
+  - sql: |
+      CREATE TABLE ix_2007 PARTITION OF ix FOR VALUES FROM ('2007-01-01') TO ('2008-01-01')
+    expect: ok
+  - sql: |
+      SELECT tablename, indexname FROM pg_indexes WHERE tablename LIKE 'ix%' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT indrelid::regclass::text AS tbl, indisvalid, indisunique FROM pg_index WHERE indrelid IN ('ix_2006'::regclass, 'ix_2007'::regclass) ORDER BY 1
+    expect: rows
+    order: ordered

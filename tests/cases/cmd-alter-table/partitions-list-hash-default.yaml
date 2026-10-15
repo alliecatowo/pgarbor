@@ -1,0 +1,53 @@
+# LIST partitions with a DEFAULT partition, overlap rules for LIST and HASH partitions, and routing of unmatched values to DEFAULT.
+id: cmd-alter-table.partitions-list-hash-default
+title: "LIST and HASH partition attach rules: overlap, single DEFAULT, and routing to DEFAULT"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, partitioning, list-partitions, hash-partitions, default-partition, attach-partition, errors]
+required_capabilities: [create-table, alter-table, insert, select, partitioning, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: ATTACH PARTITION ... FOR VALUES IN; FOR VALUES WITH (MODULUS, REMAINDER); ATTACH PARTITION ... DEFAULT)"
+sessions: [a]
+setup: |
+  CREATE TABLE cities (name text NOT NULL, population int4) PARTITION BY LIST (name);
+  CREATE TABLE cities_ab (name text NOT NULL, population int4);
+  CREATE TABLE cities_default (name text NOT NULL, population int4);
+  CREATE TABLE cities_default2 (name text NOT NULL, population int4);
+  CREATE TABLE cities_a (name text NOT NULL, population int4);
+  CREATE TABLE orders (id int4, o int4) PARTITION BY HASH (id);
+  CREATE TABLE orders_p4 (id int4, o int4);
+  CREATE TABLE orders_p4b (id int4, o int4);
+steps:
+  - sql: |
+      ALTER TABLE cities ATTACH PARTITION cities_ab FOR VALUES IN ('a', 'b')
+    expect: ok
+  - sql: |
+      ALTER TABLE cities ATTACH PARTITION cities_default DEFAULT
+    expect: ok
+  - sql: |
+      ALTER TABLE cities ATTACH PARTITION cities_default2 DEFAULT
+    expect: error
+    sqlstate: "42P17"
+    comment: only one default partition is allowed
+  - sql: |
+      ALTER TABLE cities ATTACH PARTITION cities_a FOR VALUES IN ('a')
+    expect: error
+    sqlstate: "42P17"
+    comment: "a is already listed by cities_ab"
+  - sql: |
+      INSERT INTO cities VALUES ('a', 1), ('z', 2)
+    expect: ok
+    comment: "z matches no list, so it routes to the default partition"
+  - sql: |
+      SELECT tableoid::regclass::text AS part, name FROM cities ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE orders ATTACH PARTITION orders_p4 FOR VALUES WITH (MODULUS 4, REMAINDER 3)
+    expect: ok
+  - sql: |
+      ALTER TABLE orders ATTACH PARTITION orders_p4b FOR VALUES WITH (MODULUS 4, REMAINDER 3)
+    expect: error
+    sqlstate: "42P17"
+    comment: same modulus and remainder as orders_p4

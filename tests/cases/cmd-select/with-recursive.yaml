@@ -1,0 +1,53 @@
+# WITH RECURSIVE: subordinate hierarchy with distance, UNION termination over a cycle, and a bounded counter.
+id: cmd-select.with-recursive
+title: WITH RECURSIVE walks a hierarchy, terminates on a cycle under UNION, and counts to a bound
+family: cmd-select
+tier: core
+feature_ids: [select, with, with-recursive, union]
+required_capabilities: [create-table, insert, select, with, recursive-cte]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-with (WITH RECURSIVE employee example)"
+sessions: [a]
+setup: |
+  CREATE TABLE employee (employee_name text, manager_name text);
+  INSERT INTO employee VALUES
+    ('Mary', NULL), ('Bob', 'Mary'), ('Dan', 'Mary'), ('Alice', 'Bob'),
+    ('Carol', 'Alice'), ('Eve', 'Carol'), ('Zoe', 'Dan'), ('Ned', 'Nobody');
+  CREATE TABLE edges (a int4, b int4);
+  INSERT INTO edges VALUES (1, 2), (2, 3), (3, 1);
+steps:
+  - sql: |
+      WITH RECURSIVE employee_recursive(distance, employee_name, manager_name) AS (
+          SELECT 1, employee_name, manager_name
+          FROM employee
+          WHERE manager_name = 'Mary'
+        UNION ALL
+          SELECT er.distance + 1, e.employee_name, e.manager_name
+          FROM employee_recursive er, employee e
+          WHERE er.employee_name = e.manager_name
+        )
+      SELECT distance, employee_name FROM employee_recursive ORDER BY distance, employee_name
+    expect: rows
+    order: ordered
+    comment: all direct and indirect subordinates of Mary with their depth
+  - sql: |
+      WITH RECURSIVE r(n) AS (
+          SELECT 1
+        UNION
+          SELECT e.b FROM r JOIN edges e ON e.a = r.n
+        )
+      SELECT n FROM r ORDER BY n
+    expect: rows
+    order: ordered
+    comment: UNION discards repeated rows, so the 1-2-3-1 cycle terminates
+  - sql: |
+      WITH RECURSIVE c AS (
+          SELECT 1 AS n
+        UNION ALL
+          SELECT n + 1 FROM c WHERE n < 5
+        )
+      SELECT sum(n) AS total, count(*) AS cnt FROM c
+    expect: rows
+    order: multiset
+    comment: bounded recursion yields 1..5

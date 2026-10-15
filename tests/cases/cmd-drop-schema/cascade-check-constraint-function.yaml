@@ -1,0 +1,42 @@
+# A CHECK constraint that calls a function in the dropped schema blocks RESTRICT; CASCADE drops only the constraint.
+id: cmd-drop-schema.cascade-check-constraint-function
+title: DROP SCHEMA CASCADE drops a CHECK constraint that calls a function in the schema and leaves the table enforcing nothing else
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, cascade, check-constraints, create-function-sql]
+required_capabilities: [create-schema, create-table, create-function, constraints, insert, select, drop-schema, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Notes: CASCADE may remove objects in other schemas; Parameters: CASCADE)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA fs;
+  CREATE FUNCTION fs.is_positive(int) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT $1 > 0';
+  CREATE TABLE public.measurements (n int CONSTRAINT n_positive CHECK (fs.is_positive(n)));
+  INSERT INTO public.measurements VALUES (5);
+steps:
+  - sql: |
+      DROP SCHEMA fs
+    expect: error
+    sqlstate: "2BP01"
+    comment: the CHECK constraint depends on fs.is_positive
+  - sql: |
+      INSERT INTO public.measurements VALUES (-1)
+    expect: error
+    sqlstate: "23514"
+    comment: the refused drop left the constraint enforced
+  - sql: |
+      DROP SCHEMA fs CASCADE
+    expect: notice
+  - sql: |
+      INSERT INTO public.measurements VALUES (-1)
+    expect: ok
+    comment: the constraint is gone after the cascade
+  - sql: |
+      SELECT n FROM public.measurements ORDER BY n
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM pg_constraint WHERE conname = 'n_positive'
+    expect: rows
+    order: ordered

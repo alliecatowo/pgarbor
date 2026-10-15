@@ -1,0 +1,23 @@
+# An EXCEPTION clause inside DO catches a unique violation; the failed statement is undone and the handler's insert persists.
+id: cmd-do.exception-block-handles-error
+title: EXCEPTION clause in DO catches unique_violation and the handler's work commits
+family: cmd-do
+tier: core
+feature_ids: [do, plpgsql, exception-handling, unique-constraints, errors]
+required_capabilities: [create-table, insert, select, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/do.sgml#sql-do (Description: block executed as a function body); PL/pgSQL exception handling (plpgsql-control-structures)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'one');
+steps:
+  - sql: |
+      DO $$ BEGIN INSERT INTO t VALUES (1, 'dup'); EXCEPTION WHEN unique_violation THEN INSERT INTO t VALUES (2, 'handled'); END $$
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 1 is untouched; row 2 comes from the handler

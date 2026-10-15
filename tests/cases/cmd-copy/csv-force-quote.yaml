@@ -1,0 +1,35 @@
+# FORCE_QUOTE quotes every non-NULL value in the named columns (or all columns with *); NULL output is never quoted.
+id: cmd-copy.csv-force-quote
+title: "COPY CSV FORCE_QUOTE with a column list and with *"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-to, copy-csv-format, copy-force-quote]
+required_capabilities: [create-table, insert, select, copy]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy option FORCE_QUOTE; CSV Format"
+sessions: [a]
+setup: |
+  CREATE TABLE fq (id int4, name text, note text, flag bool);
+  INSERT INTO fq VALUES (1, 'plain', 'x', true), (2, 'has,comma', NULL, false), (3, '', 'y', NULL);
+steps:
+  - sql: |
+      COPY (SELECT id, name, note, flag FROM fq ORDER BY id) TO STDOUT (FORMAT csv, FORCE_QUOTE *)
+    expect: ok
+    order: ordered
+    comment: every non-NULL value is quoted; NULLs are never quoted
+  - sql: |
+      COPY (SELECT id, name, note, flag FROM fq ORDER BY id) TO STDOUT (FORMAT csv, FORCE_QUOTE (name, note))
+    expect: ok
+    order: ordered
+    comment: only the listed columns are forced; id and flag stay unquoted
+  - sql: |
+      COPY fq (name, id) TO STDOUT (FORMAT csv, FORCE_QUOTE (id))
+    expect: ok
+    order: ordered
+    comment: column list order applies; FORCE_QUOTE names a column of the list
+  - sql: |
+      COPY (SELECT id, name, note, flag FROM fq ORDER BY id) TO STDOUT (FORMAT csv, FORCE_QUOTE *, HEADER)
+    expect: ok
+    order: ordered
+    comment: the header line is not quoted by FORCE_QUOTE

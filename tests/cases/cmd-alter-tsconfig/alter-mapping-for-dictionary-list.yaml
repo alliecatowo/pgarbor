@@ -1,0 +1,51 @@
+# ALTER MAPPING FOR replaces the whole dictionary list in order; an unknown token type aborts the whole statement.
+id: cmd-alter-tsconfig.alter-mapping-for-dictionary-list
+title: "ALTER MAPPING FOR installs an ordered dictionary list and rejects unknown token types atomically"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, alter-mapping-for, dictionary-order, token-type]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (dictionary_name list is consulted in the specified order)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY english (template = snowball, language = english);
+  CREATE TEXT SEARCH DICTIONARY swedish (template = snowball, language = swedish);
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config
+        ALTER MAPPING FOR word WITH english, swedish, simple
+    expect: ok
+  - sql: |
+      SELECT m.mapseqno, d.dictname
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig AND m.maptokentype = 2
+       ORDER BY m.mapseqno
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config
+        ALTER MAPPING FOR word WITH swedish
+    expect: ok
+    comment: ALTER MAPPING FOR drops the previous list first
+  - sql: |
+      SELECT m.mapseqno, d.dictname
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig AND m.maptokentype = 2
+       ORDER BY m.mapseqno
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config
+        ALTER MAPPING FOR asciiword, nosuchtok WITH english
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT m.maptokentype, d.dictname
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig AND m.maptokentype = 1
+    expect: rows
+    order: multiset
+    comment: the failed statement left asciiword with its copied simple mapping

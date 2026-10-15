@@ -1,0 +1,35 @@
+# Binary COPY TO: fixed header and tuple framing; DELIMITER, NULL and HEADER are rejected in binary mode.
+id: cmd-copy.binary-format-output
+title: "COPY TO binary format output and rejection of text-only options"
+family: cmd-copy
+tier: extended
+feature_ids: [copy, copy-to, copy-binary-format, copy-options, errors]
+required_capabilities: [copy, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy-binary-format; option FORMAT"
+sessions: [a]
+steps:
+  - sql: |
+      COPY (SELECT 1::int4 AS a, 'x'::text AS b, NULL::int4 AS c) TO STDOUT (FORMAT binary)
+    expect: ok
+    comment: 11-byte signature, 32-bit flags, 32-bit extension length, tuple with count 3, then trailer -1; compared byte for byte
+  - sql: |
+      COPY (SELECT 1::int4 AS a) TO STDOUT (FORMAT binary, DELIMITER '|')
+    expect: error
+    sqlstate: "42601"
+    comment: cannot specify DELIMITER in BINARY mode
+  - sql: |
+      COPY (SELECT 1::int4 AS a) TO STDOUT (FORMAT binary, NULL 'x')
+    expect: error
+    sqlstate: "42601"
+    comment: cannot specify NULL in BINARY mode
+  - sql: |
+      COPY (SELECT 1::int4 AS a) TO STDOUT (FORMAT binary, HEADER)
+    expect: error
+    sqlstate: "0A000"
+    comment: cannot specify HEADER in BINARY mode
+  - sql: |
+      COPY (SELECT 1::int4 AS a) TO STDOUT (FORMAT binary, QUOTE '"')
+    expect: error
+    comment: QUOTE requires CSV mode

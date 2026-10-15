@@ -1,0 +1,48 @@
+# RETURN NEXT of a row variable, RETURN NEXT mixed with RETURN QUERY, and a SETOF function with no rows.
+id: doc-plpgsql-control-structures.return-next-setof-composite
+title: "RETURN NEXT of a composite row, mixed with RETURN QUERY in one SETOF function"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, return-next, setof, composite-types]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, composite-types, set-returning-functions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Returning from a Function: RETURN NEXT and RETURN QUERY)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (fooid INT, foosubid INT, fooname TEXT);
+  INSERT INTO foo VALUES (1, 2, 'three'), (4, 5, 'six'), (-1, 0, 'neg');
+  CREATE FUNCTION get_all_foo() RETURNS SETOF foo LANGUAGE plpgsql AS $$
+  DECLARE r foo%ROWTYPE;
+  BEGIN
+    FOR r IN SELECT * FROM foo WHERE fooid > 0 LOOP
+      RETURN NEXT r;
+    END LOOP;
+    RETURN;
+  END $$;
+  CREATE FUNCTION mixed_rows() RETURNS SETOF int LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN NEXT 10;
+    RETURN QUERY SELECT g FROM generate_series(1, 3) g ORDER BY g;
+    RETURN NEXT 20;
+    RETURN;
+  END $$;
+  CREATE FUNCTION no_rows() RETURNS SETOF int LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN;
+  END $$;
+steps:
+  - sql: |
+      SELECT * FROM get_all_foo() ORDER BY fooid
+    expect: rows
+    order: ordered
+    comment: only rows with fooid > 0 are returned
+  - sql: |
+      SELECT * FROM mixed_rows()
+    expect: rows
+    order: ordered
+    comment: RETURN NEXT and RETURN QUERY results are concatenated in execution order
+  - sql: |
+      SELECT count(*) FROM no_rows()
+    expect: rows
+    comment: a bare RETURN with no RETURN NEXT yields an empty result set

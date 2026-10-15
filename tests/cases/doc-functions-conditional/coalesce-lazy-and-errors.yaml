@@ -1,0 +1,40 @@
+# COALESCE evaluates arguments only up to the first non-null one, and reports errors from arguments it does evaluate.
+id: doc-functions-conditional.coalesce-lazy-and-errors
+title: COALESCE skips arguments to the right of the first non-null value and raises errors for needed ones
+family: doc-functions-conditional
+tier: core
+feature_ids: [coalesce, short-circuit-evaluation, errors]
+required_capabilities: [select, create-table, insert, errors, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-coalesce-nvl-ifnull (arguments to the right of the first non-null are not evaluated)"
+sessions: [a]
+setup: |
+  CREATE TABLE z (a int4);
+  INSERT INTO z VALUES (0), (4);
+steps:
+  - sql: |
+      SELECT a, COALESCE(a, 1 / a) AS c FROM z ORDER BY a
+    expect: rows
+    order: ordered
+    comment: for a = 0 the first argument is non-null, so 1 / a is never evaluated
+  - sql: |
+      SELECT COALESCE(1, 1 / 0) AS const_first
+    expect: rows
+    order: multiset
+    comment: constant right-hand argument is not needed
+  - sql: |
+      SELECT COALESCE(NULL, 1 / 0) AS needed_div
+    expect: error
+    sqlstate: "22012"
+    comment: the first argument is null, so the division is needed and fails
+  - sql: |
+      SELECT COALESCE(NULL::int4, 'abc') AS bad_literal
+    expect: error
+    sqlstate: "22P02"
+    comment: the unknown literal is coerced to integer and fails
+  - sql: |
+      SELECT COALESCE() AS no_args
+    expect: error
+    sqlstate: "42601"
+    comment: COALESCE requires at least one argument

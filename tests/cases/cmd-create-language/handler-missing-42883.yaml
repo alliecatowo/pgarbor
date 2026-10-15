@@ -1,0 +1,33 @@
+# HANDLER must name a previously registered function with no arguments; otherwise lookup fails and nothing is created.
+id: cmd-create-language.handler-missing-42883
+title: HANDLER naming an unregistered or argument-taking function fails with 42883 and creates no language
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, handler, error-handling]
+required_capabilities: [create-language, create-function-sql, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Parameters: HANDLER call_handler)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cl_h_takes_int(int) RETURNS language_handler LANGUAGE internal AS 'fmgr_internal_validator';
+steps:
+  - sql: |
+      CREATE LANGUAGE cl_nohandler HANDLER cl_no_such_handler
+    expect: error
+    sqlstate: "42883"
+    comment: the handler function is not registered
+  - sql: |
+      CREATE LANGUAGE cl_lowerhandler HANDLER lower
+    expect: error
+    sqlstate: "42883"
+    comment: lower exists only with text arguments, so the zero-argument call form does not resolve
+  - sql: |
+      CREATE LANGUAGE cl_arghandler HANDLER cl_h_takes_int
+    expect: error
+    sqlstate: "42883"
+    comment: the handler must take no arguments; cl_h_takes_int() does not exist
+  - sql: |
+      SELECT count(*) AS created FROM pg_language WHERE lanname IN ('cl_nohandler', 'cl_lowerhandler', 'cl_arghandler')
+    expect: rows
+    order: ordered

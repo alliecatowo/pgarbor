@@ -1,0 +1,56 @@
+# The SET clause of CREATE FUNCTION: entered value applies during the call; SET LOCAL inside the
+# body is undone at exit; a plain SET inside the body persists; SET FROM CURRENT captures the
+# value present at creation time.
+id: cmd-create-function.set-clause-search-path
+title: SET clause applies during the call and is restored on exit; plain SET in a body persists; SET FROM CURRENT captures creation-time value
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, set-clause, search-path, set-local, set-from-current]
+required_capabilities: [create-function, sql-functions, plpgsql, select, set-config]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-description (SET configuration_parameter); #sql-createfunction-security"
+sessions: [a]
+steps:
+  - sql: |
+      SET search_path = public, pg_catalog
+    expect: ok
+  - sql: |
+      CREATE FUNCTION spc() RETURNS text LANGUAGE sql SET search_path = pg_catalog AS 'SELECT current_setting(''search_path'')'
+    expect: ok
+  - sql: |
+      SELECT spc() AS inside_call
+    expect: rows
+    comment: the SET clause value (pg_catalog) is in effect during the call
+  - sql: |
+      SELECT current_setting('search_path') AS after_call
+    expect: rows
+    comment: restored to public, pg_catalog
+  - sql: |
+      CREATE FUNCTION sp3q() RETURNS text LANGUAGE plpgsql SET search_path = pg_catalog AS $$ BEGIN SET LOCAL search_path = public; RETURN current_setting('search_path'); END $$
+    expect: ok
+  - sql: |
+      SELECT sp3q() AS inside_call, current_setting('search_path') AS after_call
+    expect: rows
+    comment: inside public; after the call the clause value is undone, and SET LOCAL is also undone
+  - sql: |
+      CREATE FUNCTION sp4q() RETURNS text LANGUAGE plpgsql SET search_path = pg_catalog AS $$ BEGIN SET search_path = public; RETURN current_setting('search_path'); END $$
+    expect: ok
+  - sql: |
+      SELECT sp4q() AS inside_call, current_setting('search_path') AS after_call
+    expect: rows
+    comment: a plain (non-LOCAL) SET in the body overrides the clause and persists after exit
+  - sql: |
+      SET search_path = public, pg_catalog
+    expect: ok
+  - sql: |
+      CREATE FUNCTION sp2c() RETURNS text LANGUAGE plpgsql SET search_path FROM CURRENT AS $$ BEGIN RETURN current_setting('search_path'); END $$
+    expect: ok
+    comment: captures public, pg_catalog at creation time
+  - sql: |
+      SET search_path = pg_catalog
+    expect: ok
+  - sql: |
+      SELECT public.sp2c() AS captured
+    expect: rows
+    comment: the captured value public, pg_catalog is applied on entry even though the session value is now pg_catalog

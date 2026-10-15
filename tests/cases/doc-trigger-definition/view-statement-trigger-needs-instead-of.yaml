@@ -1,0 +1,53 @@
+# Statement-level triggers on a view fire only when the view also has an INSTEAD OF trigger. Without
+# one, the statement is rewritten onto the base table and only base-table triggers fire.
+id: doc-trigger-definition.view-statement-trigger-needs-instead-of
+title: Statement-level trigger on a view fires only if the view has an INSTEAD OF trigger
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, instead-of-triggers, views, plpgsql, insert]
+required_capabilities: [create-table, create-view, create-function, insert, select, plpgsql, triggers, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (triggers on views: statement-level triggers fire only with an INSTEAD OF trigger)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int);
+  CREATE VIEW v AS SELECT id FROM base;
+  CREATE TABLE trig_log (seq int GENERATED ALWAYS AS IDENTITY, tbl text, ev text);
+  CREATE FUNCTION log_stmt() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (tbl, ev) VALUES (TG_TABLE_NAME, TG_WHEN || ' ' || TG_LEVEL || ' ' || TG_OP);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION v_ins() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO base VALUES (NEW.id);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER v_stmt BEFORE INSERT ON v FOR EACH STATEMENT EXECUTE FUNCTION log_stmt();
+steps:
+  - sql: |
+      INSERT INTO v VALUES (1)
+    expect: ok
+    comment: no INSTEAD OF trigger, so the statement is rewritten onto base and v_stmt does not fire
+  - sql: |
+      SELECT tbl, ev FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TRIGGER v_instead INSTEAD OF INSERT ON v FOR EACH ROW EXECUTE FUNCTION v_ins()
+    expect: ok
+  - sql: |
+      INSERT INTO v VALUES (2), (3)
+    expect: ok
+    comment: now the view-level statement trigger fires once for the statement
+  - sql: |
+      SELECT tbl, ev FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM base ORDER BY id
+    expect: rows
+    order: ordered

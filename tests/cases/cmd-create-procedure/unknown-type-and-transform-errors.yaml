@@ -1,0 +1,30 @@
+# Argument types must exist, %TYPE must name an existing table column, and a TRANSFORM FOR TYPE
+# clause needs a transform for that type and language. Rejected definitions leave nothing behind.
+id: cmd-create-procedure.unknown-type-and-transform-errors
+title: Unknown argument types, %TYPE references and missing TRANSFORM are rejected cleanly
+family: cmd-create-procedure
+tier: extended
+feature_ids: [create-procedure, transform, pct-type, errors]
+required_capabilities: [create-table, select, create-procedure, call, transforms]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (argtype, TRANSFORM)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE badtype(x nosuchtype) LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE PROCEDURE badpct(x nosuch_tbl.c%TYPE) LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      CREATE PROCEDURE tr(x int) TRANSFORM FOR TYPE int4 LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: "42704"
+    comment: no CREATE TRANSFORM exists for integer with language sql
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname IN ('badtype', 'badpct', 'tr')
+    expect: rows
+    comment: no partial procedure was created

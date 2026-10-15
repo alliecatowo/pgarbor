@@ -1,0 +1,43 @@
+# IN ROLE and its deprecated IN GROUP spelling make the new role a SET member, not ADMIN; inherit follows NOINHERIT; USER behaves like ROLE.
+id: cmd-create-role.in-role-in-group-options
+title: IN ROLE and IN GROUP add memberships with SET on, ADMIN off, and INHERIT honouring NOINHERIT; USER clause adds members
+family: cmd-create-role
+tier: core
+feature_ids: [create-role, role-membership, in-role, in-group, user-clause, catalog-introspection]
+required_capabilities: [roles, catalog-introspection, select, role-membership]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_role.sgml#parameters (IN ROLE, ROLE, ADMIN, USER, IN GROUP)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE ccr_g1
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_g2
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_u1
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_m1 IN ROLE ccr_g1
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_m2 IN GROUP ccr_g1 NOINHERIT
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_grp2 USER ccr_u1
+    expect: ok
+  - sql: |
+      SELECT r.rolname AS role, m.rolname AS member, am.admin_option, am.inherit_option, am.set_option,
+             am.grantor = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS granted_by_session_user
+        FROM pg_auth_members am
+        JOIN pg_roles r ON r.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+       WHERE r.rolname IN ('ccr_g1', 'ccr_grp2')
+       ORDER BY role, member
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ccr_m1, ccr_m2, ccr_grp2, ccr_u1, ccr_g1, ccr_g2
+    expect: ok

@@ -1,0 +1,41 @@
+# Materialized views and partitioned parents are valid targets; statistics on a partitioned parent are created on the parent itself.
+id: cmd-create-statistics.matview-and-partitioned-table
+title: Statistics are accepted on a materialized view and on a partitioned parent table
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, materialized-views, partitioning]
+required_capabilities: [create-table, create-materialized-view, partitioned-tables, extended-statistics, catalog-introspection, insert]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Description; Parameters: table_name; ANALYZE partition handling)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_src (a int, b int);
+  INSERT INTO cs_src SELECT g % 10, g % 10 FROM generate_series(1, 100) g;
+  CREATE MATERIALIZED VIEW cs_mv AS SELECT a, b FROM cs_src;
+  CREATE TABLE cs_pt (a int, b int) PARTITION BY RANGE (a);
+  CREATE TABLE cs_pt1 PARTITION OF cs_pt FOR VALUES FROM (0) TO (5);
+  CREATE TABLE cs_pt2 PARTITION OF cs_pt FOR VALUES FROM (5) TO (10);
+  INSERT INTO cs_pt SELECT a, b FROM cs_src;
+steps:
+  - sql: |
+      CREATE STATISTICS cs_mv_s (mcv) ON a, b FROM cs_mv
+    expect: ok
+  - sql: |
+      CREATE STATISTICS cs_pt_s (ndistinct, dependencies) ON a, b FROM cs_pt
+    expect: ok
+  - sql: |
+      SELECT stxname, stxrelid::regclass::text AS rel, stxkind::text FROM pg_statistic_ext ORDER BY stxname
+    expect: rows
+    order: ordered
+    comment: the object is recorded against the parent and the matview, not the partitions
+  - sql: |
+      ANALYZE cs_mv
+    expect: ok
+  - sql: |
+      ANALYZE cs_pt
+    expect: ok
+  - sql: |
+      SELECT statistics_name, tablename FROM pg_stats_ext WHERE statistics_name IN ('cs_mv_s', 'cs_pt_s') ORDER BY statistics_name
+    expect: rows
+    order: ordered

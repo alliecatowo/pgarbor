@@ -1,0 +1,40 @@
+# SQL functions: a same-signature CREATE FUNCTION fails, CREATE OR REPLACE may change the body but
+# not the return type or input parameter names.
+id: doc-ddl-others.sql-function-replace-rules
+title: CREATE OR REPLACE FUNCTION changes body only; signature changes are rejected
+family: doc-ddl-others
+tier: core
+feature_ids: [functions, create-function, create-function-sql, errors]
+required_capabilities: [create-function-sql, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-others (Functions, procedures, and operators); ref: sql-createfunction.html"
+sessions: [a]
+setup: |
+  CREATE FUNCTION add2(a int4, b int4) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT a + b';
+steps:
+  - sql: |
+      SELECT add2(2, 3) AS sum, add2(NULL, 3) IS NULL AS null_propagates
+    expect: rows
+    comment: NULL input propagates because the body uses + and * on NULL
+  - sql: |
+      CREATE FUNCTION add2(a int4, b int4) RETURNS int4 LANGUAGE sql AS 'SELECT a * b'
+    expect: error
+    sqlstate: "42723"
+    comment: same name and argument types already exist
+  - sql: |
+      CREATE OR REPLACE FUNCTION add2(a int4, b int4) RETURNS int4 LANGUAGE sql AS 'SELECT a * b'
+    expect: ok
+  - sql: |
+      SELECT add2(2, 3) AS product
+    expect: rows
+  - sql: |
+      CREATE OR REPLACE FUNCTION add2(a int4, b int4) RETURNS int8 LANGUAGE sql AS 'SELECT a * b'
+    expect: error
+    sqlstate: "42P13"
+    comment: the return type cannot change in place
+  - sql: |
+      CREATE OR REPLACE FUNCTION add2(x int4, b int4) RETURNS int4 LANGUAGE sql AS 'SELECT x * b'
+    expect: error
+    sqlstate: "42P13"
+    comment: input parameter names cannot change in place

@@ -1,0 +1,34 @@
+# Equality on both indexed columns, in either predicate order; a NULL name is returned as NULL.
+id: doc-indexes-multicolumn.equality-both-columns
+title: Equality constraints on both index columns return the matching rows in either predicate order
+family: doc-indexes-multicolumn
+tier: core
+feature_ids: [multicolumn-index, btree-index, where-clause, null-semantics]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (SELECT name FROM test2 WHERE major = constant AND minor = constant)"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (major int, minor int, name varchar);
+  CREATE INDEX test2_mm_idx ON test2 (major, minor);
+  INSERT INTO test2 VALUES (1, 1, 'a'), (1, 2, 'b'), (2, 1, NULL), (2, 2, 'd'), (NULL, 1, 'e'), (1, NULL, 'f')
+steps:
+  - sql: |
+      SELECT name FROM test2 WHERE major = 1 AND minor = 2 ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name FROM test2 WHERE minor = 2 AND major = 1 ORDER BY name
+    expect: rows
+    order: ordered
+    comment: predicate order does not change the result
+  - sql: |
+      SELECT name FROM test2 WHERE major = 2 AND minor = 1
+    expect: rows
+    order: multiset
+    comment: the matching row has a NULL name, which is returned as NULL
+  - sql: |
+      SELECT count(*) FROM test2 WHERE major = 1 AND minor = 99
+    expect: rows
+    comment: no match yields a count of zero

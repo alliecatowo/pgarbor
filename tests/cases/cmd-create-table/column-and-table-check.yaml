@@ -1,0 +1,48 @@
+# Column CHECK and named table CHECK constraints: violations are rejected, NULL passes, boundary values behave as written.
+id: cmd-create-table.column-and-table-check
+title: Column and named table CHECK constraints reject violating rows and pass NULL
+family: cmd-create-table
+tier: core
+feature_ids: [create-table, check-constraint, null-semantics]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_table.sgml#sql-createtable-examples (Define a check column constraint; Define a check table constraint)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE distributors_col (did integer CHECK (did > 100), name varchar(40))
+    expect: ok
+  - sql: |
+      CREATE TABLE distributors_tbl (did integer, name varchar(40), CONSTRAINT con1 CHECK (did > 100 AND name <> ''))
+    expect: ok
+  - sql: |
+      INSERT INTO distributors_col VALUES (50, 'low')
+    expect: error
+    sqlstate: "23514"
+    comment: did must be greater than 100
+  - sql: |
+      INSERT INTO distributors_col VALUES (100, 'boundary')
+    expect: error
+    sqlstate: "23514"
+    comment: the bound is strict, so 100 is rejected
+  - sql: |
+      INSERT INTO distributors_col VALUES (101, 'ok'), (NULL, 'null passes')
+    expect: ok
+    comment: a CHECK passes when its expression is NULL
+  - sql: |
+      SELECT did, name FROM distributors_col ORDER BY did NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO distributors_tbl VALUES (150, '')
+    expect: error
+    sqlstate: "23514"
+    comment: the named table constraint con1 rejects the empty name
+  - sql: |
+      INSERT INTO distributors_tbl VALUES (150, 'x')
+    expect: ok
+  - sql: |
+      SELECT did, name FROM distributors_tbl
+    expect: rows
+    order: multiset

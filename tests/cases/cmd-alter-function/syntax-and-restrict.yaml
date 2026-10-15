@@ -1,0 +1,41 @@
+# The grammar requires at least one action; RESTRICT is accepted and ignored; NOT STRICT and an
+# unknown PARALLEL value are syntax errors and change nothing.
+id: cmd-alter-function.syntax-and-restrict
+title: RESTRICT is accepted after an action; empty action list and invalid action keywords are syntax errors
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, restrict, syntax]
+required_capabilities: [create-function, alter-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (synopsis; Parameters: RESTRICT; Compatibility)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION syn1(text) RETURNS text LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION syn1(text) STABLE RESTRICT
+    expect: ok
+    comment: RESTRICT is ignored for SQL conformance
+  - sql: |
+      SELECT provolatile FROM pg_proc WHERE proname = 'syn1'
+    expect: rows
+    comment: expect s
+  - sql: |
+      ALTER FUNCTION syn1(text)
+    expect: error
+    sqlstate: "42601"
+    comment: at least one action is required
+  - sql: |
+      ALTER FUNCTION syn1(text) NOT STRICT
+    expect: error
+    sqlstate: "42601"
+    comment: there is no NOT STRICT action
+  - sql: |
+      ALTER FUNCTION syn1(text) PARALLEL BOGUS
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT provolatile FROM pg_proc WHERE proname = 'syn1'
+    expect: rows
+    comment: still s after the rejected statements

@@ -1,0 +1,51 @@
+# ALTER COLUMN TYPE: implicit conversion rounds numeric; text to integer needs USING; USING may use an explicit cast; int to text is allowed.
+id: doc-ddl-alter.alter-type-using
+title: "ALTER COLUMN TYPE: implicit numeric rounding, text-to-integer needs USING, int-to-text succeeds"
+family: doc-ddl-alter
+tier: core
+feature_ids: [alter-table, alter-column-type, using-clause, implicit-cast, numeric, errors]
+required_capabilities: [create-table, alter-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-alter (Changing a Column's Data Type)"
+sessions: [a]
+setup: |
+  CREATE TABLE measures (id integer PRIMARY KEY, price numeric, label text);
+  INSERT INTO measures VALUES (1, 3.456, '42'), (2, 10, '7'), (3, NULL, NULL);
+steps:
+  - sql: |
+      ALTER TABLE measures ALTER COLUMN price TYPE numeric(10,2)
+    expect: ok
+    comment: numeric to numeric(10,2) is an implicit cast and rounds the stored value
+  - sql: |
+      SELECT id, price FROM measures ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE measures ALTER COLUMN label TYPE integer
+    expect: error
+    sqlstate: "42804"
+    comment: text to integer is not an implicit cast, so a USING clause is required
+  - sql: |
+      ALTER TABLE measures ALTER COLUMN label TYPE integer USING label::integer
+    expect: ok
+  - sql: |
+      SELECT id, label + 1 AS next FROM measures ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE measures ALTER COLUMN price TYPE integer USING price::integer
+    expect: ok
+    comment: the USING expression is evaluated per row; 3.46 becomes 3 and 10.00 becomes 10
+  - sql: |
+      SELECT id, price FROM measures ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE measures ALTER COLUMN id TYPE text
+    expect: ok
+    comment: integer to text is allowed as an assignment cast
+  - sql: |
+      SELECT id, label FROM measures ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,36 @@
+# SET SESSION AUTHORIZATION cannot run inside a SECURITY DEFINER function; the call fails with 42501 and the session is unchanged.
+id: cmd-set-session-auth.security-definer-rejected
+title: SET SESSION AUTHORIZATION inside a SECURITY DEFINER function is rejected with 42501
+family: cmd-set-session-auth
+tier: extended
+feature_ids: [set-session-authorization, security-definer, plpgsql, errors]
+required_capabilities: [roles, session-authorization, security-definer, plpgsql, create-function, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_session_auth.sgml#notes (cannot be used within a SECURITY DEFINER function)"
+sessions: [a]
+setup: |
+  CREATE ROLE sa_sd_target
+steps:
+  - sql: |
+      CREATE FUNCTION sa_sd_switch() RETURNS text LANGUAGE plpgsql SECURITY DEFINER AS $$
+      BEGIN
+        EXECUTE 'SET SESSION AUTHORIZATION sa_sd_target';
+        RETURN 'switched';
+      END
+      $$
+    expect: ok
+  - sql: |
+      SELECT sa_sd_switch()
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SELECT SESSION_USER = CURRENT_USER AS unchanged
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP FUNCTION sa_sd_switch()
+    expect: ok
+  - sql: |
+      DROP ROLE sa_sd_target
+    expect: ok

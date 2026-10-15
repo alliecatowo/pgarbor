@@ -1,0 +1,47 @@
+# WITH on INSERT: a data-modifying CTE can feed the insert, and a WITH inside the source query shadows an
+# outer one because the more closely nested definition takes precedence.
+id: cmd-insert.with-query-insert
+title: WITH queries feeding INSERT, data-modifying CTE, and nested WITH precedence
+family: cmd-insert
+tier: core
+feature_ids: [insert, with-queries, data-modifying-cte, update]
+required_capabilities: [create-table, insert, select, update, with-queries]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-insert (with_query parameter; Examples: UPDATE ... RETURNING * fed into INSERT)"
+sessions: [a]
+setup: |
+  CREATE TABLE employees (id int PRIMARY KEY, name text, sales_count int NOT NULL);
+  CREATE TABLE accounts (name text PRIMARY KEY, sales_person int);
+  CREATE TABLE employees_log (id int, name text, sales_count int, logged_flag bool);
+  INSERT INTO employees VALUES (1, 'Ann', 10), (2, 'Bo', 20);
+  INSERT INTO accounts VALUES ('Acme Corporation', 2), ('Other Co', 1);
+steps:
+  - sql: |
+      WITH upd AS (
+        UPDATE employees SET sales_count = sales_count + 1
+          WHERE id = (SELECT sales_person FROM accounts WHERE name = 'Acme Corporation')
+          RETURNING *
+      )
+      INSERT INTO employees_log SELECT *, true FROM upd
+    expect: ok
+    comment: the updated row is logged; only Bo (id 2) matches the account
+  - sql: |
+      WITH q AS (SELECT 1 AS v)
+      INSERT INTO employees_log (id, name, sales_count, logged_flag)
+        WITH q AS (SELECT 2 AS v)
+        SELECT v, 'nested', v * 100, false FROM q
+    expect: ok
+    comment: the inner WITH q is more closely nested, so its value 2 is the one inserted
+  - sql: |
+      WITH src (id, name) AS (VALUES (3, 'Cy'), (4, 'Di'))
+      INSERT INTO employees (id, name, sales_count) SELECT id, name, 0 FROM src
+    expect: ok
+  - sql: |
+      SELECT id, name, sales_count FROM employees ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, name, sales_count, logged_flag FROM employees_log ORDER BY id, name
+    expect: rows
+    order: ordered

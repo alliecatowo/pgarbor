@@ -1,0 +1,44 @@
+# Documented json_object constructor forms (VALUE/colon, text[] one-dimensional and two-dimensional, parallel key/value arrays) and their NULL and uniqueness rules.
+id: doc-functions-json.json-object-constructors
+title: json_object and jsonb_object constructor forms, NULL handling and unique-key errors
+family: doc-functions-json
+tier: core
+feature_ids: [json-object, jsonb-object, sql-json-constructor, json-object-null-handling]
+required_capabilities: [select, json, jsonb, arrays]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-creation (json_object and jsonb_object rows)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT json_object('code' VALUE 'P123', 'title': 'Jaws') AS sql_standard_form,
+             json_object() AS empty_form
+    expect: rows
+    comment: "documented example uses VALUE and colon separators"
+  - sql: |
+      SELECT json_object('{a, 1, b, "def", c, 3.5}') AS one_dim_array,
+             json_object('{{a, 1}, {b, "def"}, {c, 3.5}}') AS two_dim_array,
+             json_object('{a,b}', '{1,2}') AS parallel_arrays,
+             jsonb_object('{a,b}', '{1,2}') AS jsonb_parallel_arrays
+    expect: rows
+    comment: "documented: all values come out as JSON strings"
+  - sql: |
+      SELECT json_object('a' VALUE NULL) AS null_kept,
+             json_object('a' VALUE NULL ABSENT ON NULL) AS null_omitted,
+             json_object('a' VALUE NULL NULL ON NULL) AS null_explicit
+    expect: rows
+    comment: "NULL ON NULL is the default and keeps the key with JSON null"
+  - sql: |
+      SELECT json_object('a' VALUE 1, 'a' VALUE 2 WITH UNIQUE KEYS) AS dup_keys
+    expect: error
+    sqlstate: "22030"
+    comment: "WITH UNIQUE KEYS rejects duplicate key_expression values"
+  - sql: |
+      SELECT json_object('a' VALUE 1, 'a' VALUE 2 WITHOUT UNIQUE KEYS) AS dup_keys_allowed
+    expect: rows
+    comment: "without the clause, duplicate keys are allowed in the output"
+  - sql: |
+      SELECT json_object(NULL VALUE 1) AS null_key
+    expect: error
+    sqlstate: "22004"
+    comment: "documented: key_expression cannot be NULL"

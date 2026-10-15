@@ -1,0 +1,28 @@
+# CREATE TRIGGER is an accepted schema element. The trigger function lives outside the schema (functions are not
+# schema elements), and its RAISE aborts the insert, so the table stays empty.
+id: cmd-create-schema.trigger-element-fires-in-schema
+title: A trigger created as a schema element fires on INSERT and aborts it
+family: cmd-create-schema
+tier: core
+feature_ids: [create-schema, create-trigger, create-function, errors, insert]
+required_capabilities: [create-schema, create-table, create-trigger, create-function, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_schema.sgml#sql-createschema (Parameters: schema_element lists CREATE TRIGGER)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION public.trg_block() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by trigger'; END $$
+steps:
+  - sql: |
+      CREATE SCHEMA s21
+        CREATE TABLE t21 (id int4)
+        CREATE TRIGGER t21_b BEFORE INSERT ON t21 FOR EACH ROW EXECUTE FUNCTION public.trg_block()
+    expect: ok
+  - sql: |
+      INSERT INTO s21.t21 VALUES (1)
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      SELECT count(*) FROM s21.t21
+    expect: rows
+    comment: the BEFORE trigger raised, so the row was never inserted

@@ -1,0 +1,47 @@
+# Without IF EXISTS, each missing piece of the name raises its own SQLSTATE; the existing trigger is untouched by the failures.
+id: cmd-drop-trigger.missing-errors
+title: "DROP TRIGGER without IF EXISTS raises 42704, 42P01 or 3F000 for a missing trigger, table, or schema, and 42704 for a materialized view"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, errors, triggers, materialized-views]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, create-materialized-view, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Parameters: name, table_name)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION noop_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TABLE films (id int4, title text);
+  CREATE TRIGGER tg BEFORE INSERT ON films FOR EACH ROW EXECUTE FUNCTION noop_tg();
+  CREATE SCHEMA s1;
+  CREATE MATERIALIZED VIEW mv AS SELECT 1 AS a;
+steps:
+  - sql: |
+      DROP TRIGGER nope ON films
+    expect: error
+    sqlstate: "42704"
+    comment: the table exists but has no trigger with that name
+  - sql: |
+      DROP TRIGGER tg ON nosuchtable
+    expect: error
+    sqlstate: "42P01"
+    comment: the table does not exist
+  - sql: |
+      DROP TRIGGER tg ON nosuchschema.films
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema does not exist
+  - sql: |
+      DROP TRIGGER tg ON mv
+    expect: error
+    sqlstate: "42704"
+    comment: a materialized view has no triggers, so the name lookup fails
+  - sql: |
+      DROP TRIGGER tg ON s1
+    expect: error
+    sqlstate: "42P01"
+    comment: a schema name is not a table
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 'films'::regclass AND tgname = 'tg'
+    expect: rows
+    comment: none of the failed drops touched the trigger on films

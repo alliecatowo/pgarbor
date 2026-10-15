@@ -1,0 +1,35 @@
+# A UNIQUE expression index cannot be built over existing rows that collide once lowered; a non-unique one can.
+id: doc-indexes-expressional.unique-build-fails-on-existing-duplicates
+title: Building a UNIQUE index on lower(col1) fails over existing case-variant duplicates
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, unique-index, lower, create-index, errors]
+required_capabilities: [create-table, create-index, insert, delete, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (UNIQUE on lower(col1) would prevent case-variant rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE dup (id int4 PRIMARY KEY, col1 text);
+  INSERT INTO dup VALUES (1, 'Foo'), (2, 'foo'), (3, 'bar');
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX dup_lower_u ON dup (lower(col1))
+    expect: error
+    sqlstate: "23505"
+    comment: the existing rows 'Foo' and 'foo' collide under lower()
+  - sql: |
+      CREATE INDEX dup_lower_idx ON dup (lower(col1))
+    expect: ok
+    comment: a non-unique expression index accepts the same data
+  - sql: |
+      DELETE FROM dup WHERE id = 2
+    expect: ok
+  - sql: |
+      CREATE UNIQUE INDEX dup_lower_u ON dup (lower(col1))
+    expect: ok
+    comment: once the collision is removed, the unique build succeeds
+  - sql: |
+      SELECT id FROM dup WHERE lower(col1) = 'foo' ORDER BY id
+    expect: rows
+    order: ordered

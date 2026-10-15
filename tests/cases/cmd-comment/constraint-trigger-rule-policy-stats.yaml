@@ -1,0 +1,107 @@
+# Comments attach to named sub-objects of a table or domain (constraint ON table, constraint ON DOMAIN, trigger, rule, policy), plus statistics objects and text search objects.
+id: cmd-comment.constraint-trigger-rule-policy-stats
+title: COMMENT ON CONSTRAINT, TRIGGER, RULE, POLICY, STATISTICS and TEXT SEARCH objects attach to the named object
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-constraint, comment-domain-constraint, comment-trigger, comment-rule, comment-policy, comment-statistics, comment-text-search]
+required_capabilities: [comment, create-table, create-domain, constraints, create-function, plpgsql, triggers, create-rule, rls, extended-statistics, text-search, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-params-table-name (constraint, trigger, rule, policy ON table); ref/comment.sgml#sql-comment-examples (CONSTRAINT, TRIGGER, RULE, POLICY, STATISTICS, TEXT SEARCH examples)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE cmt_orders (id int4 PRIMARY KEY, amount int4 CONSTRAINT amount_pos CHECK (amount > 0), status text UNIQUE)
+    expect: ok
+  - sql: |
+      CREATE DOMAIN cmt_dom AS int4 CONSTRAINT dom_pos CHECK (VALUE > 0)
+    expect: ok
+  - sql: |
+      COMMENT ON CONSTRAINT amount_pos ON cmt_orders IS 'Constrains amount'
+    expect: ok
+  - sql: |
+      COMMENT ON CONSTRAINT cmt_orders_status_key ON cmt_orders IS 'status is unique'
+    expect: ok
+  - sql: |
+      COMMENT ON CONSTRAINT dom_pos ON DOMAIN cmt_dom IS 'Constrains col of domain'
+    expect: ok
+  - sql: |
+      COMMENT ON DOMAIN cmt_dom IS 'Positive integer domain'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cmt_trg_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$
+    expect: ok
+  - sql: |
+      CREATE TRIGGER cmt_bi BEFORE INSERT ON cmt_orders FOR EACH ROW EXECUTE FUNCTION cmt_trg_fn()
+    expect: ok
+  - sql: |
+      COMMENT ON TRIGGER cmt_bi ON cmt_orders IS 'Used for RI'
+    expect: ok
+  - sql: |
+      CREATE RULE cmt_rule AS ON INSERT TO cmt_orders DO ALSO NOTHING
+    expect: ok
+  - sql: |
+      COMMENT ON RULE cmt_rule ON cmt_orders IS 'Logs inserts'
+    expect: ok
+  - sql: |
+      ALTER TABLE cmt_orders ENABLE ROW LEVEL SECURITY
+    expect: ok
+  - sql: |
+      CREATE POLICY cmt_pol ON cmt_orders USING (true)
+    expect: ok
+  - sql: |
+      COMMENT ON POLICY cmt_pol ON cmt_orders IS 'Filter rows by users'
+    expect: ok
+  - sql: |
+      CREATE STATISTICS cmt_stat (ndistinct) ON id, amount FROM cmt_orders
+    expect: ok
+  - sql: |
+      COMMENT ON STATISTICS cmt_stat IS 'Improves planner row estimations'
+    expect: ok
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY cmt_dict (TEMPLATE = simple)
+    expect: ok
+  - sql: |
+      COMMENT ON TEXT SEARCH DICTIONARY cmt_dict IS 'Simple dictionary'
+    expect: ok
+  - sql: |
+      COMMENT ON TEXT SEARCH CONFIGURATION english IS 'Special word filtering'
+    expect: ok
+  - sql: |
+      SELECT
+        (SELECT obj_description(oid, 'pg_constraint') FROM pg_constraint WHERE conname = 'amount_pos') AS check_con,
+        (SELECT obj_description(oid, 'pg_constraint') FROM pg_constraint WHERE conname = 'cmt_orders_status_key') AS unique_con,
+        (SELECT obj_description(oid, 'pg_constraint') FROM pg_constraint WHERE conname = 'dom_pos') AS domain_con,
+        obj_description('cmt_dom'::regtype, 'pg_type') AS domain_descr,
+        (SELECT obj_description(oid, 'pg_trigger') FROM pg_trigger WHERE tgname = 'cmt_bi') AS trigger_descr,
+        (SELECT obj_description(oid, 'pg_rewrite') FROM pg_rewrite WHERE rulename = 'cmt_rule') AS rule_descr,
+        (SELECT obj_description(oid, 'pg_policy') FROM pg_policy WHERE polname = 'cmt_pol') AS policy_descr,
+        (SELECT obj_description(oid, 'pg_statistic_ext') FROM pg_statistic_ext WHERE stxname = 'cmt_stat') AS stat_descr,
+        (SELECT obj_description(oid, 'pg_ts_dict') FROM pg_ts_dict WHERE dictname = 'cmt_dict') AS dict_descr,
+        (SELECT obj_description(oid, 'pg_ts_config') FROM pg_ts_config WHERE cfgname = 'english') AS config_descr
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMENT ON CONSTRAINT nope ON cmt_orders IS 'no such constraint'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON TRIGGER nosuch ON cmt_orders IS 'no such trigger'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON RULE nosuch ON cmt_orders IS 'no such rule'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON POLICY nosuch ON cmt_orders IS 'no such policy'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON STATISTICS cmt_nosuch IS 'no such statistics object'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON TEXT SEARCH DICTIONARY cmt_nosuch IS 'no such dictionary'
+    expect: error
+    sqlstate: "42704"

@@ -1,0 +1,37 @@
+# An xml column stores documents and fragments per row, NULL is allowed, and a malformed DOCUMENT insert is rejected atomically.
+id: doc-datatype-xml.xml-table-storage
+title: xml column stores documents, fragments and NULL per row; malformed DOCUMENT insert leaves the table unchanged
+family: doc-datatype-xml
+tier: core
+feature_ids: [xml, insert, select, is-document, xmlparse, constraints]
+required_capabilities: [create-table, insert, select, xml, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-xml-creating (xmlparse, IS DOCUMENT); datatype.sgml#datatype-xml (well-formedness check on input)"
+sessions: [a]
+setup: |
+  CREATE TABLE xs (id int4 PRIMARY KEY, x xml);
+steps:
+  - sql: |
+      INSERT INTO xs VALUES
+        (1, XMLPARSE (DOCUMENT '<book><title>Manual</title></book>')),
+        (2, XMLPARSE (CONTENT 'abc<foo>bar</foo><bar>foo</bar>')),
+        (3, NULL),
+        (4, '<a/><b/>'::xml)
+    expect: ok
+  - sql: |
+      SELECT id, x IS DOCUMENT AS is_doc, xmlserialize(CONTENT x AS text) AS s FROM xs ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO xs VALUES (5, XMLPARSE (DOCUMENT 'abc<foo/>'))
+    expect: error
+    sqlstate: "2200M"
+  - sql: |
+      SELECT count(*) FROM xs
+    expect: rows
+    comment: the rejected row was not inserted
+  - sql: |
+      SELECT id FROM xs WHERE x IS NULL
+    expect: rows
+    order: multiset

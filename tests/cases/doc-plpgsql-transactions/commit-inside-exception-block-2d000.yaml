@@ -1,0 +1,30 @@
+# A block with an exception handler forms a subtransaction, so COMMIT inside it fails with 2D000.
+id: doc-plpgsql-transactions.commit-inside-exception-block-2d000
+title: COMMIT inside a block with an exception handler fails with 2D000 (subtransaction active)
+family: doc-plpgsql-transactions
+tier: core
+feature_ids: [plpgsql, exception-blocks, commit, errors, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE log (sqlstate text);
+steps:
+  - sql: |
+      DO $$
+      BEGIN
+          BEGIN
+              COMMIT;
+          EXCEPTION WHEN others THEN
+              INSERT INTO log VALUES (SQLSTATE);
+          END;
+      END;
+      $$
+    expect: ok
+  - sql: |
+      SELECT sqlstate FROM log
+    expect: rows
+    order: multiset
+    comment: the handler caught 2D000 (cannot commit while a subtransaction is active)

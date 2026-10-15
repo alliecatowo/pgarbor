@@ -1,0 +1,38 @@
+# PL/pgSQL docs example: COMMIT inside a read-only cursor FOR loop (the cursor becomes holdable at the first COMMIT).
+id: doc-plpgsql-transactions.cursor-loop-commit-per-row
+title: COMMIT inside a read-only cursor loop inserts every row
+family: doc-plpgsql-transactions
+tier: core
+feature_ids: [plpgsql, cursors, commit, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, create-procedure, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (a int4);
+  CREATE TABLE test2 (x int4);
+  INSERT INTO test2 VALUES (3), (1), (2);
+steps:
+  - sql: |
+      CREATE PROCEDURE transaction_test2()
+      LANGUAGE plpgsql
+      AS $$
+      DECLARE
+          r RECORD;
+      BEGIN
+          FOR r IN SELECT * FROM test2 ORDER BY x LOOP
+              INSERT INTO test1 (a) VALUES (r.x);
+              COMMIT;
+          END LOOP;
+      END;
+      $$
+    expect: ok
+  - sql: |
+      CALL transaction_test2()
+    expect: ok
+  - sql: |
+      SELECT a FROM test1 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: rows are read in x order (1,2,3) and each insert is committed in turn

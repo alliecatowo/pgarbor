@@ -1,0 +1,38 @@
+# U&"..." delimited identifiers with 4-digit, 6-digit and UESCAPE forms.
+id: doc-sql-syntax-lexical.identifiers-unicode-escape
+title: "Unicode escapes in delimited identifiers with optional UESCAPE"
+family: doc-sql-syntax-lexical
+tier: extended
+feature_ids: [lexical-structure, identifiers, unicode-escape, uescape]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-syntax-lexical (Unicode escape in identifiers)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE u_t (U&"d\0061t\+000061" int4, U&"\0441\043B\043E\043D" text)
+    expect: ok
+    comment: "the 4-digit and 6-digit forms both spell data"
+  - sql: |
+      INSERT INTO u_t ("data", "слон") VALUES (1, 'elephant')
+    expect: ok
+  - sql: |
+      SELECT "data", "слон" FROM u_t
+    expect: rows
+  - sql: |
+      SELECT U&"d!0061t!+000061" UESCAPE '!' AS c4 FROM u_t
+    expect: rows
+    comment: "a custom escape character set with UESCAPE"
+  - sql: |
+      SELECT 1 AS U&"a!!b" UESCAPE '!', 2 AS "x"
+    expect: rows
+    comment: "a doubled escape character yields a literal one, so the alias is a!b"
+  - sql: |
+      SELECT "a!b" FROM (SELECT 1 AS U&"a!!b" UESCAPE '!') s
+    expect: rows
+  - sql: |
+      SELECT U&"x\zz" FROM u_t
+    expect: error
+    sqlstate: "42601"
+    comment: "a backslash must be followed by four hex digits or a plus and six hex digits"

@@ -1,0 +1,31 @@
+# CLUSTER on a named table, unlike bare CLUSTER, is allowed inside a transaction block and is undone by ROLLBACK.
+id: cmd-cluster.table-in-transaction-allowed
+title: CLUSTER of a named table works inside a transaction block
+family: cmd-cluster
+tier: core
+feature_ids: [cluster, cluster-using, transactions]
+required_capabilities: [create-table, create-index, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/cluster.sgml#sql-cluster (Description: CLUSTER without a table_name cannot be executed inside a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX t_v ON t (v);
+  INSERT INTO t VALUES (1, 30), (2, 10);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CLUSTER t USING t_v
+    expect: ok
+    compare_message: false
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: data is unchanged by the reordering

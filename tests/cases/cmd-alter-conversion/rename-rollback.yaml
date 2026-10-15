@@ -1,0 +1,33 @@
+# ALTER CONVERSION is transactional: a rename inside a rolled-back transaction is undone.
+id: cmd-alter-conversion.rename-rollback
+title: A rename inside a rolled-back transaction leaves the old name in place
+family: cmd-alter-conversion
+tier: core
+feature_ids: [alter-conversion, rename, transactions]
+required_capabilities: [alter-conversion, create-conversion, catalog-introspection, transactions]
+provenance:
+  source: hand
+  ref: "PG18 alter_conversion.sgml RENAME TO; transactional DDL"
+sessions: [a]
+setup: |
+  CREATE CONVERSION txn_conv FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER CONVERSION txn_conv RENAME TO txn_conv_new
+    expect: ok
+  - sql: |
+      SELECT conname FROM pg_conversion WHERE conname LIKE 'txn_conv%' ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: the rename is visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT conname FROM pg_conversion WHERE conname LIKE 'txn_conv%' ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: back to the original name

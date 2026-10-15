@@ -1,0 +1,40 @@
+# Same INSERT ... SELECT under the two per-function directives: use_variable picks the parameters,
+# use_column picks the src columns. The default (error) mode is covered by ambiguous-reference-default-error.
+id: doc-plpgsql-implementation.variable-conflict-directives-insert-select
+title: "#variable_conflict use_variable and use_column choose different meanings for the same name"
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, variable-conflict, insert-select, variable-substitution]
+required_capabilities: [create-table, insert, select, create-function, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Variable Substitution)"
+sessions: [a]
+setup: |
+  CREATE TABLE src (foo int, bar int);
+  CREATE TABLE dest (col int);
+  INSERT INTO src VALUES (1, 2);
+  CREATE FUNCTION conf_var(foo int, bar int) RETURNS void AS $$
+  #variable_conflict use_variable
+  BEGIN
+    INSERT INTO dest (col) SELECT foo + bar FROM src;
+  END;
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION conf_col(foo int, bar int) RETURNS void AS $$
+  #variable_conflict use_column
+  BEGIN
+    INSERT INTO dest (col) SELECT foo + bar FROM src;
+  END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT conf_var(10, 20)
+    expect: rows
+  - sql: |
+      SELECT conf_col(10, 20)
+    expect: rows
+  - sql: |
+      SELECT col FROM dest ORDER BY col
+    expect: rows
+    order: ordered
+    comment: 30 from the parameters (use_variable) and 3 from the columns (use_column)

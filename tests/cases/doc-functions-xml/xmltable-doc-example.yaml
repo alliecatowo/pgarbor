@@ -1,0 +1,50 @@
+# XMLTABLE doc example: row XPath, a text column from an attribute, FOR ORDINALITY, computed paths and a default value.
+id: doc-functions-xml.xmltable-doc-example
+title: XMLTABLE documented country example yields the documented rows, ordinality and defaults
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, xmltable, for-ordinality, column-default, xpath]
+required_capabilities: [xml, select, create-table, insert]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-processing-xml-xmltable (doc example with ROWS/ROW)"
+sessions: [a]
+setup: |
+  CREATE TABLE xmldata AS SELECT
+  xml $$
+  <ROWS>
+    <ROW id="1">
+      <COUNTRY_ID>AU</COUNTRY_ID>
+      <COUNTRY_NAME>Australia</COUNTRY_NAME>
+    </ROW>
+    <ROW id="5">
+      <COUNTRY_ID>JP</COUNTRY_ID>
+      <COUNTRY_NAME>Japan</COUNTRY_NAME>
+      <PREMIER_NAME>Shinzo Abe</PREMIER_NAME>
+      <SIZE unit="sq_mi">145935</SIZE>
+    </ROW>
+    <ROW id="6">
+      <COUNTRY_ID>SG</COUNTRY_ID>
+      <COUNTRY_NAME>Singapore</COUNTRY_NAME>
+      <SIZE unit="sq_km">697</SIZE>
+    </ROW>
+  </ROWS>
+  $$ AS data;
+steps:
+  - sql: |
+      SELECT xmltable.*
+        FROM xmldata,
+             XMLTABLE('//ROWS/ROW'
+                      PASSING data
+                      COLUMNS id int PATH '@id',
+                              ordinality FOR ORDINALITY,
+                              "COUNTRY_NAME" text,
+                              country_id text PATH 'COUNTRY_ID',
+                              size_sq_km float PATH 'SIZE[@unit = "sq_km"]',
+                              size_other text PATH
+                                   'concat(SIZE[@unit!="sq_km"], " ", SIZE[@unit!="sq_km"]/@unit)',
+                              premier_name text PATH 'PREMIER_NAME' DEFAULT 'not specified')
+       ORDER BY ordinality
+    expect: rows
+    order: ordered
+    comment: doc example; ORDER BY ordinality added so the row order is fixed

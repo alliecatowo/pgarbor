@@ -1,0 +1,44 @@
+# Docs example: AFTER UPDATE FOR EACH ROW with both OLD TABLE and NEW TABLE transition relations.
+id: cmd-create-trigger.transition-tables-row-level
+title: Row-level AFTER UPDATE trigger with OLD TABLE and NEW TABLE sees the whole statement
+family: cmd-create-trigger
+tier: extended
+feature_ids: [create-trigger, transition-tables, referencing-clause, row-level-trigger, plpgsql-trigger-function]
+required_capabilities: [create-table, insert, update, select, plpgsql, triggers]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER examples (paired_items_update REFERENCING NEW TABLE AS newtab OLD TABLE AS oldtab FOR EACH ROW)"
+setup: |
+  CREATE TABLE paired_items (pair_id int, item text, qty int);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  INSERT INTO paired_items VALUES (1, 'a', 1), (1, 'b', 1), (2, 'c', 5);
+  CREATE FUNCTION check_matching_pairs() RETURNS trigger AS $$
+  DECLARE
+    n_old int;
+    n_new int;
+  BEGIN
+    SELECT count(*) INTO n_old FROM oldtab;
+    SELECT count(*) INTO n_new FROM newtab;
+    INSERT INTO trig_log (msg) VALUES ('old=' || n_old || ' new=' || n_new || ' item=' || NEW.item);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER paired_items_update AFTER UPDATE ON paired_items REFERENCING NEW TABLE AS newtab OLD TABLE AS oldtab FOR EACH ROW EXECUTE FUNCTION check_matching_pairs()
+    expect: ok
+  - sql: |
+      UPDATE paired_items SET qty = qty + 1 WHERE pair_id = 1
+    expect: ok
+    comment: two rows updated, so the row-level trigger fires twice and each call sees both transition relations
+  - sql: |
+      UPDATE paired_items SET qty = qty WHERE pair_id = 2
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pair_id, item, qty FROM paired_items ORDER BY item
+    expect: rows
+    order: ordered

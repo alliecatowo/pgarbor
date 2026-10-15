@@ -1,0 +1,29 @@
+# Built-in families in pg_catalog do not block a same-named family in the current schema; the new one is created in public.
+id: cmd-create-opfamily.shadows-pg-catalog-family
+title: Same name as a built-in family creates a separate family in the current schema
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, default-schema, name-uniqueness, builtin-families]
+required_capabilities: [create-operator-family, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: created in the current schema; same name allowed across schemas for the same method)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY integer_ops USING btree
+    expect: ok
+    comment: pg_catalog.integer_ops exists for btree, but the name is free in public
+  - sql: |
+      SELECT n.nspname, am.amname
+      FROM pg_opfamily f
+      JOIN pg_am am ON am.oid = f.opfmethod
+      JOIN pg_namespace n ON n.oid = f.opfnamespace
+      WHERE f.opfname = 'integer_ops' AND n.nspname IN ('public', 'pg_catalog')
+      ORDER BY n.nspname, am.amname
+    expect: rows
+    order: ordered
+    comment: the built-in pg_catalog rows are unchanged, plus one public btree row
+  - sql: |
+      DROP OPERATOR FAMILY public.integer_ops USING btree
+    expect: ok

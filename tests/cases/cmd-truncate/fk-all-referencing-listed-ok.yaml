@@ -1,0 +1,28 @@
+# A referenced table may be truncated without CASCADE when every referencing table is listed in the same command.
+id: cmd-truncate.fk-all-referencing-listed-ok
+title: "TRUNCATE parent and child together succeeds without CASCADE"
+family: cmd-truncate
+tier: core
+feature_ids: [truncate, foreign-key, multi-table, create-table, insert, select]
+required_capabilities: [create-table, insert, select, foreign-key, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#notes (unless all such tables are also truncated in the same command)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY);
+  CREATE TABLE child (id int4 PRIMARY KEY, pid int4 REFERENCES parent (id));
+  CREATE TABLE grandchild (id int4 PRIMARY KEY, cid int4 REFERENCES child (id));
+  INSERT INTO parent VALUES (1);
+  INSERT INTO child VALUES (1, 1);
+  INSERT INTO grandchild VALUES (1, 1);
+steps:
+  - sql: |
+      TRUNCATE parent, child, grandchild
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM parent) AS p,
+             (SELECT count(*) FROM child) AS c,
+             (SELECT count(*) FROM grandchild) AS g
+    expect: rows
+    order: ordered

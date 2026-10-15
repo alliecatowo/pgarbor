@@ -1,0 +1,41 @@
+# The count and offset are expressions. A scalar subquery is evaluated once and NULL means no limit.
+id: doc-queries-limit.limit-expression-and-subquery
+title: LIMIT and OFFSET as constant expressions and scalar subqueries, with their error cases
+family: doc-queries-limit
+tier: extended
+feature_ids: [limit, offset, subqueries, expressions, errors]
+required_capabilities: [create-table, insert, select, subqueries]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-limit (count | ALL, start); sql-select.html (LIMIT/OFFSET)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n int4);
+  INSERT INTO t VALUES (1), (2), (3), (4);
+steps:
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT 1 + 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT (SELECT 2) OFFSET (SELECT 1)
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT (SELECT NULL::int8)
+    expect: rows
+    order: ordered
+    comment: a NULL from a subquery is no limit
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT (SELECT 1, 2)
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT (VALUES (1), (2))
+    expect: error
+    sqlstate: "21000"
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT 1
+    expect: rows
+    order: ordered
+    comment: the session stays usable after an autocommit error

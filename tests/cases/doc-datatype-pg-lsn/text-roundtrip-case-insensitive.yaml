@@ -1,0 +1,37 @@
+# Documented LSN text form: two hex numbers of up to 8 digits separated by a slash, e.g. 16/B374D848.
+id: doc-datatype-pg-lsn.text-roundtrip-case-insensitive
+title: pg_lsn parses the documented X/Y hex form, accepts either hex case, and prints uppercase
+family: doc-datatype-pg-lsn
+tier: core
+feature_ids: [pg-lsn, text-io, hex-literal]
+required_capabilities: [select, create-table, insert]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-pg-lsn"
+sessions: [a]
+setup: |
+  CREATE TABLE lsn_text (id int4 PRIMARY KEY, v pg_lsn);
+steps:
+  - sql: |
+      SELECT '16/B374D848'::pg_lsn AS documented_example, '0/0'::pg_lsn AS zero, 'FFFFFFFF/FFFFFFFF'::pg_lsn AS maximum
+    expect: rows
+    comment: documented example prints as 16/B374D848; bounds of the type
+  - sql: |
+      SELECT 'a/b'::pg_lsn AS lower, 'A/B'::pg_lsn AS upper, '1/ABC'::pg_lsn AS mixed, '0/A'::pg_lsn AS short_digits
+    expect: rows
+    comment: hex digits are case-insensitive; output is always uppercase
+  - sql: |
+      SELECT '00000000/0'::pg_lsn AS leading_zeros, '0/00000001'::pg_lsn AS padded_low
+    expect: rows
+    comment: up to 8 digits per side, leading zeros allowed
+  - sql: |
+      INSERT INTO lsn_text VALUES (1, '16/B374D848'), (2, NULL), (3, '0/10')
+    expect: ok
+  - sql: |
+      SELECT id, v, v::text AS as_text FROM lsn_text ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT v::text FROM lsn_text WHERE v IS NOT NULL ORDER BY v
+    expect: rows
+    order: ordered

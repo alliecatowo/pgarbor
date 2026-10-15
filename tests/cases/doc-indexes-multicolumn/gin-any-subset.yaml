@@ -1,0 +1,33 @@
+# A multicolumn GIN index serves conditions on either column or both; results must be exact.
+id: doc-indexes-multicolumn.gin-any-subset
+title: Multicolumn GIN index returns exact results for conditions on either or both columns
+family: doc-indexes-multicolumn
+tier: extended
+feature_ids: [multicolumn-index, gin-index, array-operators, jsonb-operators]
+required_capabilities: [create-table, insert, select, create-index, gin-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (multicolumn GIN index used with any subset of columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE docs (id int, tags text[], meta jsonb);
+  CREATE INDEX docs_tags_meta ON docs USING gin (tags, meta);
+  INSERT INTO docs VALUES (1, ARRAY['red', 'big'], '{"k": 1}'), (2, ARRAY['red'], '{"k": 2}'), (3, ARRAY['blue'], '{"k": 1, "x": true}'), (4, NULL, NULL), (5, ARRAY['blue', 'red'], '{}')
+steps:
+  - sql: |
+      SELECT id FROM docs WHERE tags @> ARRAY['red'] ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE meta @> '{"k": 1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tags @> ARRAY['red'] AND meta @> '{"k": 1}' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tags && ARRAY['blue'] ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL tags never match

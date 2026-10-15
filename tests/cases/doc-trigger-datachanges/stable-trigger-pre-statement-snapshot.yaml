@@ -1,0 +1,32 @@
+# A trigger function declared STABLE does not see the changes made by the calling command, so every
+# firing of a multi-row INSERT counts the pre-statement rows.
+id: doc-trigger-datachanges.stable-trigger-pre-statement-snapshot
+title: STABLE trigger function sees the pre-statement table state for every firing
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, row-level-triggers, plpgsql, volatility, insert, visibility]
+required_capabilities: [create-table, insert, select, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (functions declared STABLE will not see changes made by the calling command)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  CREATE FUNCTION st_chk() RETURNS trigger LANGUAGE plpgsql STABLE AS $$
+  BEGIN
+    IF (SELECT count(*) FROM t) <> 2 THEN
+      RAISE EXCEPTION 'stable trigger saw changes of the calling command';
+    END IF;
+    RETURN NULL;
+  END $$;
+  CREATE TRIGGER trg_st_chk AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION st_chk();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (3, 30), (4, 40), (5, 50)
+    expect: ok
+    comment: no firing sees the three inserted rows, so no exception is raised
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

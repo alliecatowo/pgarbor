@@ -1,0 +1,28 @@
+# With IF EXISTS on a list, existing entries are dropped and missing ones are noticed, not raised.
+id: cmd-drop-operator.if-exists-mixed-list
+title: DROP OPERATOR IF EXISTS over a list drops the present entries and notices the rest
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, if-exists, multiple-operators]
+required_capabilities: [drop-operator, create-operator, create-function-sql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#parameters (IF EXISTS, [, ...])"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dmx_lt(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE FUNCTION dmx_gt(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 > $2 $$;
+  CREATE OPERATOR !<! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dmx_lt);
+  CREATE OPERATOR !>! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dmx_gt);
+steps:
+  - sql: |
+      DROP OPERATOR IF EXISTS !<! (integer, integer), !>! (integer, integer), !=!! (integer, integer)
+    expect: notice
+    comment: two entries are dropped, the third is a notice
+  - sql: |
+      SELECT count(*) AS left_after FROM pg_operator WHERE oprnamespace = 'public'::regnamespace
+    expect: rows
+  - sql: |
+      SELECT 1 !<! 2 AS lt
+    expect: error
+    sqlstate: "42883"

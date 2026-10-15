@@ -1,0 +1,24 @@
+# OWNER TO a role that does not exist fails and leaves the owner unchanged.
+id: cmd-alter-statistics.owner-to-unknown-role
+title: "ALTER STATISTICS OWNER TO a missing role fails without changing the owner"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, owner, errors]
+required_capabilities: [create-table, alter-statistics, extended-statistics, roles, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (OWNER TO new_owner); PG18 get_role_oid"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_ou (a int, b int);
+  CREATE STATISTICS ast_ou_s1 (ndistinct) ON a, b FROM ast_ou;
+steps:
+  - sql: |
+      ALTER STATISTICS ast_ou_s1 OWNER TO ast_ou_nobody
+    expect: error
+    sqlstate: "42704"
+    comment: role does not exist
+  - sql: |
+      SELECT pg_get_userbyid(stxowner) = current_user FROM pg_statistic_ext WHERE stxname = 'ast_ou_s1'
+    expect: rows
+    order: ordered

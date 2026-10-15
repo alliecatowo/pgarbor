@@ -1,0 +1,34 @@
+# Without IF EXISTS a missing statistics object is 42704; a missing schema is 3F000; a table name is not a statistics object.
+id: cmd-drop-statistics.missing-name-errors
+title: DROP STATISTICS on missing names, a missing schema, and a table name fails and changes nothing
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, extended-statistics, error-handling]
+required_capabilities: [create-table, extended-statistics, drop-statistics]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics (Parameters: name)"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_miss (a int, b int);
+  CREATE STATISTICS ds_miss_s ON a, b FROM ds_miss;
+steps:
+  - sql: |
+      DROP STATISTICS ds_nope
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP STATISTICS no_such_schema.ds_miss_s
+    expect: error
+    sqlstate: "3F000"
+    comment: invalid_schema_name, not undefined_object
+  - sql: |
+      DROP STATISTICS ds_miss
+    expect: error
+    sqlstate: "42704"
+    comment: a table name is not a statistics object
+  - sql: |
+      SELECT stxname FROM pg_statistic_ext ORDER BY stxname
+    expect: rows
+    order: ordered
+    comment: the failed drops left the statistics object in place

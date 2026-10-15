@@ -1,0 +1,64 @@
+# SET TRANSACTION ISOLATION LEVEL and [NOT] DEFERRABLE are rejected once the transaction has run a query or data-modification statement.
+id: cmd-set-transaction.isolation-level-after-query
+title: SET TRANSACTION isolation level and DEFERRABLE fail with 25001 after the first query
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, isolation-level, deferrable, errors, transactions]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: the transaction isolation level cannot be changed after the first query or data-modification statement)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SET TRANSACTION ISOLATION LEVEL SERIALIZABLE
+    expect: error
+    sqlstate: "25001"
+    comment: isolation level is frozen after the first query
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+    expect: error
+    sqlstate: "25001"
+    comment: also frozen after a data-modification statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT 1 AS one
+    expect: rows
+    order: ordered
+  - sql: |
+      SET TRANSACTION NOT DEFERRABLE
+    expect: error
+    sqlstate: "25001"
+    comment: the DEFERRABLE property is also frozen after the first query
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the rolled-back insert is gone, only row 1 remains

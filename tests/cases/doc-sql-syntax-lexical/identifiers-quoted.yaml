@@ -1,0 +1,44 @@
+# Delimited identifiers: keywords as names, case preservation, doubled quotes, and the keyword error.
+id: doc-sql-syntax-lexical.identifiers-quoted
+title: "Quoted identifiers preserve case, admit keywords and doubled quotes"
+family: doc-sql-syntax-lexical
+tier: core
+feature_ids: [lexical-structure, identifiers, quoted-identifiers, key-words]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-syntax-lexical (quotation marks and identifiers)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE "select" ("from" int4, "Mixed Case" text, "a""b" int4)
+    expect: ok
+  - sql: |
+      INSERT INTO "select" VALUES (7, 'x', 9)
+    expect: ok
+  - sql: |
+      SELECT "from", "Mixed Case", "a""b" FROM "select"
+    expect: rows
+  - sql: |
+      CREATE TABLE "Foo" (x int4)
+    expect: ok
+  - sql: |
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('Foo', 'foo', 'FOO')
+      ORDER BY table_name
+    expect: rows
+    order: ordered
+    comment: "only \"Foo\" exists; foo and FOO are different identifiers"
+  - sql: |
+      SELECT * FROM foo
+    expect: error
+    sqlstate: "42P01"
+    comment: "unquoted foo folds to lower case and does not match \"Foo\""
+  - sql: |
+      SELECT select FROM "select"
+    expect: error
+    sqlstate: "42601"
+    comment: "an unquoted key word cannot be used as a column name"
+  - sql: |
+      SELECT 1 AS "a""b", 2 AS "Mixed Case"
+    expect: rows

@@ -1,0 +1,41 @@
+# RAISE with no parameters re-throws the error being handled; it is an error outside an EXCEPTION clause.
+id: doc-plpgsql-errors-and-messages.raise-rethrow-in-handler
+title: Bare RAISE re-throws the handled error inside EXCEPTION, fails outside it, and is caught by an enclosing handler
+family: doc-plpgsql-errors-and-messages
+tier: core
+feature_ids: [plpgsql, raise, exception-handling, rethrow, errors]
+required_capabilities: [plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-errors-and-messages"
+sessions: [a]
+steps:
+  - sql: |
+      DO $$ BEGIN RAISE; END $$
+    expect: error
+    sqlstate: "0Z002"
+    comment: a bare RAISE outside an exception handler is an error
+  - sql: |
+      DO $$
+      BEGIN
+        RAISE EXCEPTION 'inner' USING ERRCODE = '22012';
+      EXCEPTION WHEN OTHERS THEN
+        RAISE;
+      END $$
+    expect: error
+    sqlstate: "22012"
+    comment: the bare RAISE re-throws the original error with its SQLSTATE and message
+  - sql: |
+      DO $$
+      BEGIN
+        BEGIN
+          RAISE EXCEPTION 'inner' USING ERRCODE = '22012';
+        EXCEPTION WHEN OTHERS THEN
+          RAISE NOTICE 'caught % %', SQLSTATE, SQLERRM;
+          RAISE;
+        END;
+      EXCEPTION WHEN division_by_zero THEN
+        RAISE NOTICE 'outer caught %', SQLSTATE;
+      END $$
+    expect: notice
+    comment: since PostgreSQL 9.1 the re-thrown error is caught by the enclosing EXCEPTION clause

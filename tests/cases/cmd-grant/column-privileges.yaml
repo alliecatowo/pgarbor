@@ -1,0 +1,60 @@
+# Column-level GRANT covers only the named columns, and reading or updating another column needs its own privilege.
+id: cmd-grant.column-privileges
+title: GRANT SELECT and UPDATE on named columns limits access to those columns and rejects unknown or inapplicable columns
+family: cmd-grant
+tier: core
+feature_ids: [grant, column-privileges, select, update, privileges, errors]
+required_capabilities: [create-table, insert, select, update, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant (column_name form of SELECT, INSERT, UPDATE, REFERENCES)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_cp;
+  CREATE TABLE cgg_cp_t (a int4, b text, c int4);
+  INSERT INTO cgg_cp_t VALUES (1, 'x', 10), (2, 'y', 20);
+  GRANT SELECT (a, b), UPDATE (c) ON cgg_cp_t TO cgg_cp;
+steps:
+  - sql: |
+      SELECT col, has_column_privilege('cgg_cp', 'cgg_cp_t', col, 'SELECT') AS sel,
+             has_column_privilege('cgg_cp', 'cgg_cp_t', col, 'UPDATE') AS upd
+        FROM unnest(ARRAY['a', 'b', 'c']) AS col
+       ORDER BY col
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE cgg_cp
+    expect: ok
+  - sql: |
+      SELECT a, b FROM cgg_cp_t ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c FROM cgg_cp_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      UPDATE cgg_cp_t SET c = c + 1
+    expect: error
+    sqlstate: "42501"
+    comment: the SET expression reads c, which needs SELECT on c
+  - sql: |
+      UPDATE cgg_cp_t SET c = 99 WHERE a = 2
+    expect: ok
+    comment: WHERE reads only the SELECT-granted column a
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM cgg_cp_t ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT SELECT (nosuchcol) ON cgg_cp_t TO cgg_cp
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      GRANT DELETE (a) ON cgg_cp_t TO cgg_cp
+    expect: error
+    sqlstate: "0LP01"
+    comment: DELETE is a table-level privilege and cannot be granted per column

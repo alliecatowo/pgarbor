@@ -1,0 +1,48 @@
+# DROP MATERIALIZED VIEW is transactional: rolled back it leaves the view; committed it is gone.
+id: cmd-drop-materialized-view.rollback-restores-view
+title: DROP MATERIALIZED VIEW inside a transaction is undone by ROLLBACK and final after COMMIT
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, transactions]
+required_capabilities: [create-table, insert, select, create-materialized-view, drop-materialized-view, transactions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE tr_base (id int4);
+  INSERT INTO tr_base VALUES (1), (2);
+  CREATE MATERIALIZED VIEW tr_mv AS SELECT id FROM tr_base;
+  CREATE MATERIALIZED VIEW tr_mv2 AS SELECT id FROM tr_base;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP MATERIALIZED VIEW tr_mv
+    expect: ok
+  - sql: |
+      SELECT to_regclass('tr_mv') IS NULL AS gone_in_txn
+    expect: rows
+    order: ordered
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id FROM tr_mv ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the rollback restored the view and its data
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP MATERIALIZED VIEW tr_mv2
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT to_regclass('tr_mv2') IS NULL AS gone_after_commit
+    expect: rows
+    order: ordered

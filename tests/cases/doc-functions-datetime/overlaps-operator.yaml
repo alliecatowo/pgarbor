@@ -1,0 +1,31 @@
+# The SQL OVERLAPS predicate: documented examples plus half-open boundary semantics and reversed endpoints.
+id: doc-functions-datetime.overlaps-operator
+title: OVERLAPS treats periods as half-open, swaps reversed endpoints, and accepts an interval as duration
+family: doc-functions-datetime
+tier: core
+feature_ids: [overlaps, half-open-periods, reversed-endpoints, interval-duration]
+required_capabilities: [select, date-type, timestamp, interval]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime (OVERLAPS predicate; half-open interval note)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT (DATE '2001-02-16', DATE '2001-12-21') OVERLAPS (DATE '2001-10-30', DATE '2002-10-30') AS doc_dates,
+             (TIMESTAMP '2001-02-16 00:00', TIMESTAMP '2001-02-16 10:00') OVERLAPS (TIMESTAMP '2001-02-16 10:00', TIMESTAMP '2001-02-16 12:00') AS touching,
+             (TIMESTAMP '2001-02-16 00:00', INTERVAL '1 day') OVERLAPS (TIMESTAMP '2001-02-16 23:00', TIMESTAMP '2001-02-17 06:00') AS iv_duration,
+             (TIME '09:00', TIME '10:00') OVERLAPS (TIME '08:00', TIME '09:30') AS times,
+             (DATE '2001-10-30', DATE '2001-02-16') OVERLAPS (DATE '2001-10-30', DATE '2002-10-30') AS reversed
+    expect: rows
+    order: multiset
+    comment: documented example true; periods are half-open so one ending exactly where another starts does not overlap (touching is false); endpoints are swapped when reversed, and the swapped period 2001-02-16..2001-10-30 ends where the other begins, so reversed is false
+  - sql: |
+      SELECT (DATE '2001-02-16', DATE '2001-02-16') OVERLAPS (DATE '2001-02-16', DATE '2001-02-17') AS empty_vs_day
+    expect: rows
+    order: multiset
+    comment: a zero-length period is the single point 2001-02-16; it lies inside [2001-02-16, 2001-02-17) so the first is true, while the point at the end of [2001-02-15, 2001-02-16) is outside it so the second is false
+  - sql: |
+      SELECT (DATE '2001-02-16', NULL::date) OVERLAPS (DATE '2001-02-01', DATE '2001-02-28') AS null_end
+    expect: rows
+    order: multiset
+    comment: a NULL end is taken to equal the start, so the period is the point 2001-02-16, which overlaps the second period

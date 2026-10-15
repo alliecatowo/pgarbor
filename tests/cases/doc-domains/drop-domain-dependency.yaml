@@ -1,0 +1,31 @@
+# DROP DOMAIN is RESTRICT by default: a column and a dependent domain block it, and the failed drop leaves them intact.
+id: doc-domains.drop-domain-dependency
+title: DROP DOMAIN refuses while a column or a dependent domain uses it (2BP01)
+family: doc-domains
+tier: core
+feature_ids: [domains, drop-domain, dependency, restrict]
+required_capabilities: [create-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#domains; sql-dropdomain"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS integer CHECK (VALUE > 0);
+  CREATE DOMAIN posint2 AS posint CHECK (VALUE < 100);
+  CREATE TABLE mytable (id posint);
+  INSERT INTO mytable VALUES (1)
+steps:
+  - sql: |
+      DROP DOMAIN posint
+    expect: error
+    sqlstate: "2BP01"
+    comment: blocked by the mytable column and by domain posint2
+  - sql: |
+      INSERT INTO mytable VALUES (-1)
+    expect: error
+    sqlstate: "23514"
+    comment: the domain constraint is still enforced after the failed drop
+  - sql: |
+      SELECT id FROM mytable ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,55 @@
+# GIN indexes on jsonb (default and jsonb_path_ops, plus an expression index on jdoc -> 'tags') and the queries they serve.
+id: doc-datatype-json.jsonb-gin-indexes
+title: GIN indexes on jsonb documents serve containment, existence and jsonpath match queries with the documented results
+family: doc-datatype-json
+tier: core
+feature_ids: [jsonb, gin-index, jsonb-path-ops, jsonb-containment, jsonpath-match]
+required_capabilities: [create-table, create-index, gin-index, insert, select, jsonb, jsonpath]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#json-indexing (jsonb Indexing: GIN operator classes and example api table)"
+sessions: [a]
+setup: |
+  CREATE TABLE api (jdoc jsonb);
+  INSERT INTO api VALUES
+    ('{"guid": "9c36adc1-7fb5-4d5b-83b4-90356a46061a", "name": "Angela Barton", "is_active": true, "company": "Magnafone", "latitude": 19.793713, "longitude": 86.513373, "tags": ["enim", "aliquip", "qui"]}'),
+    ('{"guid": "1111aaaa-0000-4000-8000-000000000001", "name": "Bo Ling", "is_active": false, "company": "Quibble", "tags": ["lorem", "dolor"]}'),
+    ('{"guid": "2222bbbb-0000-4000-8000-000000000002", "name": "Cy Dane", "is_active": true, "company": "Magnafone", "tags": [{"term": "paris"}, {"term": "food"}]}');
+  CREATE INDEX idxgin ON api USING GIN (jdoc);
+  CREATE INDEX idxginp ON api USING GIN (jdoc jsonb_path_ops);
+  CREATE INDEX idxgintags ON api USING GIN ((jdoc -> 'tags'));
+steps:
+  - sql: |
+      SELECT jdoc->'name' AS name FROM api WHERE jdoc @> '{"company": "Magnafone"}' ORDER BY name
+    expect: rows
+    order: ordered
+    comment: doc containment example
+  - sql: |
+      SELECT jdoc->'name' AS name FROM api WHERE jdoc -> 'tags' ? 'qui' ORDER BY name
+    expect: rows
+    order: ordered
+    comment: existence on an expression indexed by idxgintags
+  - sql: |
+      SELECT jdoc->'name' AS name FROM api WHERE jdoc @> '{"tags": ["qui"]}' ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT jdoc->'name' AS name FROM api WHERE jdoc @? '$.tags[*] ? (@ == "qui")' ORDER BY name
+    expect: rows
+    order: ordered
+    comment: jsonpath exists match, served by GIN
+  - sql: |
+      SELECT jdoc->'name' AS name FROM api WHERE jdoc @@ '$.tags[*] == "qui"' ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT jdoc->'name' AS name FROM api
+      WHERE jdoc @> '{"tags":[{"term":"paris"}, {"term":"food"}]}' ORDER BY name
+    expect: rows
+    order: ordered
+    comment: nested containment finds sub-objects inside the tags array only
+  - sql: |
+      SELECT jdoc->'name' AS name FROM api WHERE jdoc ? 'company' ORDER BY name
+    expect: rows
+    order: ordered
+    comment: key-exists operator is supported by the default jsonb_ops class

@@ -1,0 +1,46 @@
+id: cmd-create-materialized-view.privilege-required
+title: CREATE MATERIALIZED VIEW requires CREATE privilege on the target schema
+family: cmd-create-materialized-view
+tier: extended
+feature_ids: [create-materialized-view, privileges, roles]
+required_capabilities: [create-table, insert, select, create-role, create-schema, create-materialized-view, grant]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (Description)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmdmv_probe_nocreate NOLOGIN;
+  CREATE SCHEMA cmdmv_guard;
+  CREATE TABLE cmdmv_guard.src (id int4);
+  INSERT INTO cmdmv_guard.src VALUES (1);
+  GRANT SELECT ON cmdmv_guard.src TO cmdmv_probe_nocreate;
+steps:
+  - session: a
+    sql: |
+      SET ROLE cmdmv_probe_nocreate
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM cmdmv_guard.src
+    expect: rows
+    order: ordered
+    comment: the role can read the source table
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW cmdmv_guard.mv AS SELECT id FROM cmdmv_guard.src
+    expect: error
+    sqlstate: "42501"
+    comment: no CREATE privilege on schema cmdmv_guard
+  - session: a
+    sql: |
+      RESET ROLE
+    expect: ok
+  - session: a
+    sql: |
+      DROP SCHEMA cmdmv_guard CASCADE
+    expect: ok
+  - session: a
+    sql: |
+      DROP ROLE cmdmv_probe_nocreate
+    expect: ok
+    comment: cluster-wide cleanup; role name is unique to this case

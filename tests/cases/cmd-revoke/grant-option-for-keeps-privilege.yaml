@@ -1,0 +1,50 @@
+# REVOKE GRANT OPTION FOR removes only the right to re-grant; the privilege itself stays.
+id: cmd-revoke.grant-option-for-keeps-privilege
+title: REVOKE GRANT OPTION FOR keeps the privilege but removes the ability to re-grant it
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, grant-option, grant, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-description (If GRANT OPTION FOR is specified, only the grant option for the privilege is revoked)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvg_owner;
+  CREATE ROLE rvg_a;
+  CREATE ROLE rvg_b;
+  CREATE TABLE rvg_t (id int4);
+  INSERT INTO rvg_t VALUES (1), (2);
+  ALTER TABLE rvg_t OWNER TO rvg_owner;
+steps:
+  - sql: |
+      SET ROLE rvg_owner
+    expect: ok
+  - sql: |
+      GRANT SELECT ON rvg_t TO rvg_a WITH GRANT OPTION
+    expect: ok
+  - sql: |
+      REVOKE GRANT OPTION FOR SELECT ON rvg_t FROM rvg_a
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('rvg_a', 'rvg_t', 'SELECT') AS a_can_select
+    expect: rows
+  - sql: |
+      SET ROLE rvg_a
+    expect: ok
+  - sql: |
+      SELECT id FROM rvg_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the SELECT privilege itself is still held
+  - sql: |
+      GRANT SELECT ON rvg_t TO rvg_b
+    expect: error
+    sqlstate: "42501"
+    comment: without the grant option a cannot re-grant
+  - sql: |
+      RESET ROLE
+    expect: ok

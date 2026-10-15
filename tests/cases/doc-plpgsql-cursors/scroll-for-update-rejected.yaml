@@ -1,0 +1,41 @@
+# SCROLL cannot be combined with FOR UPDATE or FOR SHARE in a cursor query.
+id: doc-plpgsql-cursors.scroll-for-update-rejected
+title: SCROLL cursor with FOR UPDATE or FOR SHARE is rejected at OPEN
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, scroll, select-for-update, row-locks]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select, row-locks]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION scroll_for_update() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c SCROLL CURSOR FOR SELECT name FROM items FOR UPDATE;
+    r text;
+  BEGIN
+    OPEN c;
+    FETCH NEXT FROM c INTO r;
+    RETURN r;
+  END $$;
+  CREATE FUNCTION scroll_for_share() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c SCROLL CURSOR FOR SELECT name FROM items FOR SHARE;
+    r text;
+  BEGIN
+    OPEN c;
+    FETCH NEXT FROM c INTO r;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT scroll_for_update()
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      SELECT scroll_for_share()
+    expect: error
+    sqlstate: "0A000"

@@ -1,0 +1,58 @@
+# setval with is_called false on a fresh sequence: currval is an error until a nextval; false at MAXVALUE still allows that exact value.
+id: doc-functions-sequence.setval-iscalled-false-fresh
+title: setval with is_called false sets the next value without defining currval, and respects MAXVALUE
+family: doc-functions-sequence
+tier: core
+feature_ids: [setval, is-called, currval, nextval, errors, bounds]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (setval three-argument form with is_called false; currval unchanged)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_f;
+  CREATE SEQUENCE s_mx MINVALUE 1 MAXVALUE 3 NO CYCLE;
+steps:
+  - sql: |
+      SELECT setval('s_f', 5, false) AS v
+    expect: rows
+    comment: returns the second argument
+  - sql: |
+      SELECT currval('s_f') AS v
+    expect: error
+    sqlstate: "55000"
+    comment: is_called false does not change the value reported by currval, which is still undefined
+  - sql: |
+      SELECT nextval('s_f') AS v
+    expect: rows
+    comment: the next nextval returns exactly 5
+  - sql: |
+      SELECT currval('s_f') AS v
+    expect: rows
+  - sql: |
+      SELECT setval('s_mx', 2) AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('s_mx') AS v
+    expect: rows
+  - sql: |
+      SELECT setval('s_mx', 3, false) AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('s_mx') AS v
+    expect: rows
+    comment: with is_called false the value 3 itself is returned
+  - sql: |
+      SELECT nextval('s_mx') AS v
+    expect: error
+    sqlstate: "2200H"
+  - sql: |
+      SELECT setval('s_mx', 4) AS v
+    expect: error
+    sqlstate: "22003"
+    comment: 4 is above MAXVALUE 3
+  - sql: |
+      SELECT setval('s_mx', 0, false) AS v
+    expect: error
+    sqlstate: "22003"
+    comment: 0 is below MINVALUE 1 even with is_called false

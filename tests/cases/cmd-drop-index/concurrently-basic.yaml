@@ -1,0 +1,37 @@
+# DROP INDEX CONCURRENTLY outside a transaction block drops a plain index and query results are unchanged.
+id: cmd-drop-index.concurrently-basic
+title: DROP INDEX CONCURRENTLY outside a transaction drops the index and keeps query results
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, concurrently, index-catalog]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (Parameters: CONCURRENTLY)"
+sessions: [a]
+setup: |
+  CREATE TABLE readings (id int4 PRIMARY KEY, sensor int4, val int4);
+  CREATE INDEX readings_sensor_idx ON readings (sensor);
+  INSERT INTO readings VALUES (1, 10, 5), (2, 10, 7), (3, 20, 9), (4, 30, NULL);
+steps:
+  - sql: |
+      SELECT id, val FROM readings WHERE sensor = 10 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP INDEX CONCURRENTLY readings_sensor_idx
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'readings' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: only the primary key index remains
+  - sql: |
+      SELECT id, val FROM readings WHERE sensor = 10 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: same rows, now answered without the index
+  - sql: |
+      SELECT sensor, count(val) AS non_null_vals, count(*) AS total FROM readings GROUP BY sensor ORDER BY sensor
+    expect: rows
+    order: ordered

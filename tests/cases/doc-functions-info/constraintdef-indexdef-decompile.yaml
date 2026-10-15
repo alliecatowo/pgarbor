@@ -1,0 +1,46 @@
+# pg_get_constraintdef, pg_get_indexdef (whole and per-column), pretty flag, and index column properties.
+id: doc-functions-info.constraintdef-indexdef-decompile
+title: Decompiled constraint and index definitions with pretty and per-column variants
+family: doc-functions-info
+tier: core
+feature_ids: [pg-get-constraintdef, pg-get-indexdef, index-properties, check-constraints]
+required_capabilities: [create-table, create-index, constraints, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (Object Information: pg_get_constraintdef, pg_get_indexdef, pg_index_column_has_property)"
+sessions: [a]
+setup: |
+  CREATE TABLE ck (a int CONSTRAINT ck_pos CHECK (a > 0), b text, CONSTRAINT ck_pk PRIMARY KEY (a));
+  CREATE INDEX ck_b ON ck (b DESC NULLS FIRST, a) WHERE a > 1;
+steps:
+  - sql: |
+      SELECT conname,
+             pg_get_constraintdef(oid) AS def,
+             pg_get_constraintdef(oid, true) AS pretty_def
+      FROM pg_constraint
+      WHERE conrelid = 'ck'::regclass AND contype IN ('c', 'p')
+      ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: decompiled reconstruction; the pretty flag removes redundant parentheses
+  - sql: |
+      SELECT pg_get_indexdef('ck_b'::regclass) AS full_def,
+             pg_get_indexdef('ck_b'::regclass, 1, false) AS col1,
+             pg_get_indexdef('ck_b'::regclass, 2, false) AS col2
+    expect: rows
+    comment: documented, a nonzero column number reconstructs only that column
+  - sql: |
+      SELECT pg_get_indexdef('ck_b'::regclass, 0, true) AS pretty_full
+    expect: rows
+  - sql: |
+      SELECT pg_index_column_has_property('ck_b'::regclass, 1, 'desc') AS col1_desc,
+             pg_index_column_has_property('ck_b'::regclass, 1, 'nulls_first') AS col1_nulls_first,
+             pg_index_has_property('ck_b'::regclass, 'clusterable') AS clusterable,
+             pg_index_column_has_property('ck_b'::regclass, 1, 'no_such_prop') IS NULL AS unknown_is_null
+    expect: rows
+    comment: documented, an unknown property name yields NULL
+  - sql: |
+      SELECT pg_get_expr(conbin, conrelid) AS check_expr
+      FROM pg_constraint
+      WHERE conname = 'ck_pos'
+    expect: rows

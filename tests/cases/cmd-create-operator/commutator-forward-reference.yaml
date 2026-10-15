@@ -1,0 +1,44 @@
+# First operator names a COMMUTATOR and NEGATOR that do not exist yet: PostgreSQL makes shells for them. Defining the
+# second operator with the back-reference fills in the shell. A still-shell negator cannot be called.
+id: cmd-create-operator.commutator-forward-reference
+title: "Forward COMMUTATOR and NEGATOR references create shells that the later definition completes"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, commutator, negator, shell-operators]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#notes (commutator pairs, dummy entries)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_lt8(int8, int8) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE FUNCTION cco_gt8(int8, int8) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT $1 > $2 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR #<# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_lt8, COMMUTATOR = #>#, NEGATOR = #>=#)
+    expect: ok
+    comment: "#>#, #>=# do not exist yet, so shell entries are created"
+  - sql: |
+      SELECT oprname, oprcode::regproc AS fn, oprcom::regoperator AS commutator, oprnegate::regoperator AS negator
+      FROM pg_operator WHERE oprname IN ('#<#', '#>#', '#>=#') AND oprleft = 'int8'::regtype
+      ORDER BY oprname
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OPERATOR #>#  (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_gt8, COMMUTATOR = #<#)
+    expect: ok
+    comment: "completes the shell #>#; the commutator link on #<# is kept"
+  - sql: |
+      SELECT oprname, oprcode::regproc AS fn, oprcom::regoperator AS commutator, oprnegate::regoperator AS negator
+      FROM pg_operator WHERE oprname IN ('#<#', '#>#', '#>=#') AND oprleft = 'int8'::regtype
+      ORDER BY oprname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 1 #<# 2 AS lt_result, 2 #>#  1 AS gt_result
+    expect: rows
+  - sql: |
+      SELECT 1 #>=# 2
+    expect: error
+    sqlstate: "42883"
+    comment: "#>=# is still a shell with no procedure"

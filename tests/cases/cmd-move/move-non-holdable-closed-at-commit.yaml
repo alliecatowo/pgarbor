@@ -1,0 +1,31 @@
+id: cmd-move.move-non-holdable-closed-at-commit
+title: A non-holdable cursor moved inside a transaction is closed at COMMIT, so a later MOVE fails
+family: cmd-move
+tier: core
+feature_ids: [move, declare-cursor, transactions, cursor-lifetime]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/move.sgml#sql-move; ref/declare.sgml#sql-declare (cursor is closed at end of the transaction unless WITH HOLD)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c3 CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      MOVE 1 FROM c3
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      MOVE 1 FROM c3
+    expect: error
+    sqlstate: "34000"
+    comment: the cursor no longer exists after COMMIT

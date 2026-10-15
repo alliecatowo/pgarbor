@@ -1,0 +1,42 @@
+# Each ALTER TYPE form rejects a type of the wrong kind or a missing type with a specific SQLSTATE, and the target is unchanged.
+id: cmd-alter-type.missing-type-and-kind-errors
+title: "Wrong-kind and missing-type errors for ADD VALUE, ADD ATTRIBUTE and ALTER ATTRIBUTE"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, enum-type, composite-type, error-paths]
+required_capabilities: [create-type, alter-type, enum-type, composite-type, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (ADD VALUE applies to enum types; ADD/ALTER ATTRIBUTE apply to composite types)"
+sessions: [a]
+setup: |
+  CREATE TYPE compfoo AS (f1 int);
+  CREATE TYPE colors AS ENUM ('red');
+steps:
+  - sql: |
+      ALTER TYPE nosuch ADD VALUE 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER TYPE compfoo ADD VALUE 'x'
+    expect: error
+    sqlstate: "42809"
+    comment: ADD VALUE needs an enum
+  - sql: |
+      ALTER TYPE colors ADD ATTRIBUTE q int
+    expect: error
+    sqlstate: "42P01"
+    comment: ADD ATTRIBUTE needs a composite type
+  - sql: |
+      ALTER TYPE colors ALTER ATTRIBUTE f1 TYPE int
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER TYPE nosuch.compfoo ADD ATTRIBUTE q int
+    expect: error
+    sqlstate: "3F000"
+    comment: unknown schema in the qualified name
+  - sql: |
+      SELECT enum_range(NULL::colors)
+    expect: rows
+    comment: the enum is unchanged by the failed statements

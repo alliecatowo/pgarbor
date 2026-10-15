@@ -1,0 +1,33 @@
+# A new family is filled by CREATE OPERATOR CLASS; dropping the family also removes its member classes.
+id: cmd-create-opfamily.populate-then-drop
+title: Operator class added to a new family, then the family is dropped together with that class
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, create-operator-class, populate-family, drop-operator-family]
+required_capabilities: [create-operator-family, create-operator-class, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: populated by subsequent CREATE OPERATOR CLASS commands)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY cof_pop USING btree
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cof_pop_cls FOR TYPE int4 USING btree FAMILY cof_pop AS OPERATOR 1 < (int4, int4), FUNCTION 1 btint4cmp(int4, int4)
+    expect: ok
+  - sql: |
+      SELECT c.opcname, f.opfname, (SELECT count(*) FROM pg_amop o WHERE o.amopfamily = f.oid) AS ops
+      FROM pg_opclass c
+      JOIN pg_opfamily f ON f.oid = c.opcfamily
+      WHERE c.opcname = 'cof_pop_cls'
+    expect: rows
+    order: ordered
+    comment: the class is a member of the new family
+  - sql: |
+      DROP OPERATOR FAMILY cof_pop USING btree
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opclass WHERE opcname = 'cof_pop_cls'
+    expect: rows
+    comment: member class removed with its family

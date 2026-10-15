@@ -1,0 +1,67 @@
+# Argument validation for the tsvector trigger functions raises errors at the first row write.
+# Creating the trigger itself succeeds; each misconfiguration is in its own table.
+id: doc-functions-trigger.tsvector-trigger-argument-errors
+title: tsvector trigger functions reject wrong column types, missing columns, unknown configs and NULL config
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, text-search, tsvector, regconfig, errors]
+required_capabilities: [create-table, create-function, insert, select, triggers, text-search, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#builtin-triggers-table (tsvector_update_trigger, tsvector_update_trigger_column); textsearch.sgml#textsearch-update-triggers"
+sessions: [a]
+setup: |
+  CREATE TABLE e_type (tsv text, title text);
+  CREATE TRIGGER e_type_t BEFORE INSERT ON e_type FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger(tsv, 'pg_catalog.english', title);
+  CREATE TABLE e_nocol (tsv tsvector, title text);
+  CREATE TRIGGER e_nocol_t BEFORE INSERT ON e_nocol FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger(nosuch, 'pg_catalog.english', title);
+  CREATE TABLE e_cfg (tsv tsvector, title text);
+  CREATE TRIGGER e_cfg_t BEFORE INSERT ON e_cfg FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger(tsv, 'pg_catalog.no_such_config', title);
+  CREATE TABLE e_txt (tsv tsvector, title text);
+  CREATE TRIGGER e_txt_t BEFORE INSERT ON e_txt FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger(tsv, 'pg_catalog.english', nosuchcol);
+  CREATE TABLE e_nontext (tsv tsvector, title int);
+  CREATE TRIGGER e_nontext_t BEFORE INSERT ON e_nontext FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger(tsv, 'pg_catalog.english', title);
+  CREATE TABLE e_rc (tsv tsvector, cfg text, title text);
+  CREATE TRIGGER e_rc_t BEFORE INSERT ON e_rc FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger_column(tsv, cfg, title);
+  CREATE TABLE e_rcnull (tsv tsvector, cfg regconfig, title text);
+  CREATE TRIGGER e_rcnull_t BEFORE INSERT ON e_rcnull FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger_column(tsv, cfg, title);
+steps:
+  - sql: |
+      INSERT INTO e_type VALUES (NULL, 'x')
+    expect: error
+    sqlstate: "42804"
+    comment: tsv is not of tsvector type
+  - sql: |
+      INSERT INTO e_nocol VALUES (NULL, 'x')
+    expect: error
+    sqlstate: "42703"
+    comment: tsvector column does not exist
+  - sql: |
+      INSERT INTO e_cfg VALUES (NULL, 'x')
+    expect: error
+    sqlstate: "42704"
+    comment: text search configuration does not exist
+  - sql: |
+      INSERT INTO e_txt VALUES (NULL, 'x')
+    expect: error
+    sqlstate: "42703"
+    comment: text input column does not exist
+  - sql: |
+      INSERT INTO e_nontext VALUES (NULL, 1)
+    expect: error
+    sqlstate: "42804"
+    comment: input column is not a character type
+  - sql: |
+      INSERT INTO e_rc VALUES (NULL, 'english', 'x')
+    expect: error
+    sqlstate: "42804"
+    comment: configuration column must be regconfig for the _column variant
+  - sql: |
+      INSERT INTO e_rcnull VALUES (NULL, NULL, 'x')
+    expect: error
+    sqlstate: "22004"
+    comment: configuration column must not be null
+  - sql: |
+      SELECT count(*) FROM e_rcnull
+    expect: rows
+    comment: no row was written

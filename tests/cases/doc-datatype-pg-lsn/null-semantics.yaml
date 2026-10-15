@@ -1,0 +1,40 @@
+# NULL propagation through pg_lsn comparisons and arithmetic.
+id: doc-datatype-pg-lsn.null-semantics
+title: NULL pg_lsn operands yield NULL from comparisons and offset arithmetic, and DISTINCT treats NULLs as equal
+family: doc-datatype-pg-lsn
+tier: core
+feature_ids: [pg-lsn, null-semantics, comparison, arithmetic]
+required_capabilities: [select, create-table, insert, numeric]
+provenance:
+  source: hand
+  ref: "PG18 datatype.sgml#datatype-pg-lsn operators; standard NULL propagation"
+sessions: [a]
+setup: |
+  CREATE TABLE lsn_null (id int4, pos pg_lsn);
+  INSERT INTO lsn_null VALUES (1, '0/10'), (2, NULL), (3, NULL), (4, '0/10');
+steps:
+  - sql: |
+      SELECT NULL::pg_lsn = '0/1'::pg_lsn AS eq_null, '0/1'::pg_lsn < NULL::pg_lsn AS lt_null, NULL::pg_lsn <> NULL::pg_lsn AS ne_null
+    expect: rows
+  - sql: |
+      SELECT NULL::pg_lsn + 1::numeric AS add_null, '0/10'::pg_lsn - NULL::numeric AS sub_null, NULL::pg_lsn - NULL::pg_lsn AS lsn_diff_null
+    expect: rows
+  - sql: |
+      SELECT NULL::pg_lsn IS NULL AS a, NULL::pg_lsn IS DISTINCT FROM NULL::pg_lsn AS b, '0/10'::pg_lsn IS DISTINCT FROM NULL::pg_lsn AS c
+    expect: rows
+  - sql: |
+      SELECT id FROM lsn_null WHERE pos = '0/10'::pg_lsn ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM lsn_null WHERE pos IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pos, count(*) AS n FROM lsn_null GROUP BY pos ORDER BY pos NULLS LAST
+    expect: rows
+    order: ordered
+    comment: GROUP BY collapses NULLs into one group
+  - sql: |
+      SELECT count(DISTINCT pos) AS distinct_non_null, count(*) AS total FROM lsn_null
+    expect: rows

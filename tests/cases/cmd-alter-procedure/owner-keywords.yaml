@@ -1,0 +1,37 @@
+# OWNER TO accepts CURRENT_ROLE, CURRENT_USER and SESSION_USER; an unknown role or a non-matching
+# argument list is an error.
+id: cmd-alter-procedure.owner-keywords
+title: OWNER TO accepts the CURRENT_ROLE, CURRENT_USER and SESSION_USER keywords and rejects unknown roles
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, owner, roles]
+required_capabilities: [create-procedure, roles, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Parameters: new_owner; Description)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE own_p(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE own_p(integer) OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE own_p(integer) OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE own_p(integer) OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(proowner) = current_user AS owned_by_me FROM pg_proc WHERE proname = 'own_p'
+    expect: rows
+    comment: expect true
+  - sql: |
+      ALTER PROCEDURE own_p(integer) OWNER TO no_such_role_xyz
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER PROCEDURE own_p(text) OWNER TO CURRENT_USER
+    expect: error
+    sqlstate: "42883"
+    comment: the argument list must match a procedure

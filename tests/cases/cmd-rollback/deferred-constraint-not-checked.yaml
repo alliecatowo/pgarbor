@@ -1,0 +1,30 @@
+# A deferred constraint violation is only checked at COMMIT, so ROLLBACK succeeds and discards the violating row.
+id: cmd-rollback.deferred-constraint-not-checked
+title: ROLLBACK succeeds with a pending deferred constraint violation
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, deferrable-constraints, foreign-key, set-constraints, transactions]
+required_capabilities: [create-table, insert, select, transactions, foreign-key, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback (Description: discards updates; constraint checks happen only at commit)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 REFERENCES p (id) DEFERRABLE INITIALLY DEFERRED);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (1, 99)
+    expect: ok
+    comment: the foreign key is violated but not checked yet
+  - sql: |
+      ROLLBACK
+    expect: ok
+    comment: no constraint error is raised
+  - sql: |
+      SELECT count(*) AS n FROM c
+    expect: rows
+    order: ordered

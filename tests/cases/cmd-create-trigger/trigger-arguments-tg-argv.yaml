@@ -1,0 +1,37 @@
+# Trigger arguments are string constants exposed as TG_ARGV and TG_NARGS; numeric constants become strings.
+id: cmd-create-trigger.trigger-arguments-tg-argv
+title: Trigger arguments are stored as strings and exposed through TG_ARGV and TG_NARGS
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, trigger-arguments, tg-argv, tg-nargs, catalog-introspection]
+required_capabilities: [create-table, insert, select, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER parameters (arguments)"
+setup: |
+  CREATE TABLE t (id int);
+  CREATE TABLE trig_log (msg text);
+  CREATE FUNCTION log_args() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES ('n=' || TG_NARGS || ' argv=' || array_to_string(TG_ARGV, '|'));
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER t_args BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_args('a', 42, bare_name, 1.5)
+    expect: ok
+  - sql: |
+      CREATE TRIGGER t_noargs AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_args()
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tgname, tgnargs, encode(tgargs, 'escape') AS args FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

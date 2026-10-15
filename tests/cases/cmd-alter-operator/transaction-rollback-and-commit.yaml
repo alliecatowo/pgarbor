@@ -1,0 +1,70 @@
+# ALTER OPERATOR is transactional: a rolled-back SET is invisible afterward, a committed one persists, and a
+# failing option inside a transaction aborts it so later statements report 25P02 until ROLLBACK.
+id: cmd-alter-operator.transaction-rollback-and-commit
+title: "ALTER OPERATOR SET is rolled back with the transaction, committed when COMMIT runs, and aborts on error"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, transactions, restrict-selectivity, errors]
+required_capabilities: [alter-operator, create-operator, create-function-sql, internal-functions, transactions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#description (ALTER OPERATOR changes the definition)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_tx_lt(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR <<< (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_tx_lt);
+  CREATE FUNCTION cmd_ao_tx_contsel(internal, oid, internal, integer)
+  RETURNS float8 AS 'contsel' LANGUAGE internal STABLE STRICT;
+steps:
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (RESTRICT = cmd_ao_tx_contsel)
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (RESTRICT = NONE)
+    expect: ok
+  - sql: |
+      SELECT oprrest = 0 AS cleared_in_txn
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT oprrest::regproc::text AS restrict_fn
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered
+    comment: the rolled-back clear is gone
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (RESTRICT = NONE)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT oprrest = 0 AS cleared_after_commit
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (JOIN = cmd_ao_no_such_join)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT 1 AS after_error
+    expect: error
+    sqlstate: "25P02"
+    comment: the transaction is aborted until ROLLBACK
+  - sql: |
+      ROLLBACK
+    expect: ok

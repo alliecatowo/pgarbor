@@ -1,0 +1,36 @@
+# ts_debug shows the dictionary chain per token; a copied configuration can be remapped without changing the built-in english configuration.
+id: doc-textsearch-dictionaries.ts-debug-copy-config
+title: ts_debug reports the dictionary chain and a copied configuration can be remapped safely
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [ts-debug, text-search-configuration, text-search-dictionary, stemming]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Synonym Dictionary, Dictionaries)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT * FROM ts_debug('english', 'Paris')
+    expect: rows
+    order: ordered
+    comment: the english_stem dictionary turns Paris into pari
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY syn (template = synonym, synonyms = 'synonym_sample')
+    expect: ok
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION my_en (COPY = pg_catalog.english)
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_en ALTER MAPPING FOR asciiword WITH syn, english_stem
+    expect: ok
+  - sql: |
+      SELECT * FROM ts_debug('my_en', 'indices')
+    expect: rows
+    order: ordered
+    comment: the synonym dictionary runs first and english_stem is never consulted
+  - sql: |
+      SELECT * FROM ts_debug('english', 'Paris')
+    expect: rows
+    order: ordered
+    comment: the built-in english configuration is unchanged by the copy's remapping

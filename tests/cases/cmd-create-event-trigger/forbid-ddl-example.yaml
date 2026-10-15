@@ -1,0 +1,36 @@
+# Documented example: a ddl_command_start trigger that raises for every DDL command (tg_tag is the command tag).
+id: cmd-create-event-trigger.forbid-ddl-example
+title: Documented abort_ddl example blocks CREATE TABLE with the RAISE message and leaves no table behind
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-ddl-command-start]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger-examples"
+setup: |
+  CREATE OR REPLACE FUNCTION abort_any_command()
+    RETURNS event_trigger
+   LANGUAGE plpgsql
+    AS $$
+  BEGIN
+    RAISE EXCEPTION 'command % is disabled', tg_tag;
+  END;
+  $$;
+  CREATE EVENT TRIGGER abort_ddl ON ddl_command_start
+     EXECUTE FUNCTION abort_any_command();
+steps:
+  - sql: |
+      CREATE TABLE t1 (a int4)
+    expect: error
+    sqlstate: P0001
+    comment: the trigger raises before the command runs; the message names the command tag CREATE TABLE
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname = 't1'
+    expect: rows
+    order: ordered
+    comment: no relation was created
+  - sql: |
+      SELECT evtname, evtevent, evtenabled FROM pg_event_trigger ORDER BY evtname
+    expect: rows
+    order: ordered

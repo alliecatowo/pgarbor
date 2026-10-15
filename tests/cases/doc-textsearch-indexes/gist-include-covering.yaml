@@ -1,0 +1,37 @@
+# GiST INCLUDE stores extra columns in the index, including types with no GiST operator class; the key column still needs one.
+id: doc-textsearch-indexes.gist-include-covering
+title: GiST covering index with INCLUDE of non-GiST column types
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gist-index, index-include, covering-index, tsvector-match]
+required_capabilities: [create-table, insert, select, create-index, gist-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (GiST covering index with INCLUDE)"
+steps:
+  - sql: |
+      CREATE TABLE articles (id int4 PRIMARY KEY, title text, body text, tsv tsvector)
+    expect: ok
+  - sql: |
+      INSERT INTO articles (id, title, body, tsv) VALUES
+        (1, 'Fox', 'quick brown fox', to_tsvector('english', 'quick brown fox')),
+        (2, 'Dog', 'lazy dog', to_tsvector('english', 'lazy dog')),
+        (3, 'Nothing', 'none', NULL)
+    expect: ok
+  - sql: |
+      CREATE INDEX articles_cover ON articles USING GIST (tsv) INCLUDE (body, id)
+    expect: ok
+    comment: text has no GiST opclass but is allowed as an included column
+  - sql: |
+      SELECT id, body FROM articles WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT indexdef FROM pg_indexes WHERE indexname = 'articles_cover'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE INDEX articles_title_gist ON articles USING GIST (title)
+    expect: error
+    sqlstate: "42704"
+    comment: text as a key column has no default GiST opclass

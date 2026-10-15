@@ -1,0 +1,50 @@
+# Empty and stop-word-only vectors and queries, with NULL inputs, under GIN and GiST indexes.
+id: doc-textsearch-indexes.empty-and-null-semantics
+title: Empty tsvector, stop-word-only query and NULL vectors with text search indexes
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gin-index, gist-index, empty-tsvector, stopwords, null-semantics]
+required_capabilities: [create-table, insert, select, create-index, gin-index, gist-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (indexes store words only; NULL and empty handling)"
+steps:
+  - sql: |
+      CREATE TABLE docs (id int4 PRIMARY KEY, tsv tsvector)
+    expect: ok
+  - sql: |
+      INSERT INTO docs VALUES (1, ''::tsvector), (2, NULL), (3, to_tsvector('english', 'fox'))
+    expect: ok
+  - sql: |
+      CREATE INDEX docs_gin ON docs USING GIN (tsv)
+    expect: ok
+  - sql: |
+      CREATE INDEX docs_gist ON docs USING GIST (tsv)
+    expect: ok
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE (tsv @@ to_tsquery('english', 'fox')) IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the NULL vector gives a NULL match
+  - sql: |
+      SELECT ''::tsvector @@ 'a'::tsquery AS empty_vector_match
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'a'::tsvector @@ ''::tsquery AS empty_query_match
+    expect: rows
+    order: ordered
+    comment: an empty tsquery raises a NOTICE and matches nothing
+  - sql: |
+      SELECT to_tsvector('english', 'the and of') = ''::tsvector AS stopwords_only_is_empty
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'the') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: stop-word-only query raises a NOTICE and matches nothing

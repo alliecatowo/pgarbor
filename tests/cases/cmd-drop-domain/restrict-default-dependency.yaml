@@ -1,0 +1,39 @@
+# RESTRICT is the default: a domain used by a table column cannot be dropped, and nothing changes.
+id: cmd-drop-domain.restrict-default-dependency
+title: Default RESTRICT refuses to drop a domain used by a table column
+family: cmd-drop-domain
+tier: core
+feature_ids: [drop-domain, restrict, table-columns, check-constraint]
+required_capabilities: [create-domain, drop-domain, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_domain.sgml#sql-dropdomain (RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN email_addr AS text CHECK (VALUE LIKE '%@%');
+  CREATE TABLE users (id int4 PRIMARY KEY, email email_addr NOT NULL);
+  INSERT INTO users VALUES (1, 'a@example.org');
+steps:
+  - sql: |
+      DROP DOMAIN email_addr
+    expect: error
+    sqlstate: "2BP01"
+    comment: column users.email depends on the domain
+  - sql: |
+      DROP DOMAIN email_addr RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT behaves the same as the default
+  - sql: |
+      SELECT to_regtype('email_addr') IS NOT NULL AS still_there
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO users VALUES (2, 'no-at-sign')
+    expect: error
+    sqlstate: "23514"
+    comment: the domain constraint still applies after the refused drop
+  - sql: |
+      SELECT id, email FROM users ORDER BY id
+    expect: rows
+    order: ordered

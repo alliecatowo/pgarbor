@@ -1,0 +1,35 @@
+# PRIMARY KEY and UNIQUE constraints automatically create unique btree indexes that enforce them.
+id: doc-indexes-unique.pk-and-unique-constraint-create-indexes
+title: PRIMARY KEY and multicolumn UNIQUE constraints create enforcing unique btree indexes
+family: doc-indexes-unique
+tier: core
+feature_ids: [unique-index, primary-key, unique-constraint, constraints, catalog]
+required_capabilities: [create-table, insert, select, primary-key, unique-constraints, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique ('PostgreSQL automatically creates a unique index when a unique constraint or primary key is defined')"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (order_no int PRIMARY KEY, cust int NOT NULL, line int NOT NULL, sku text, UNIQUE (cust, line))
+steps:
+  - sql: |
+      INSERT INTO orders VALUES (1, 100, 1, 'a'), (2, 100, 2, 'b'), (3, 200, 1, 'c')
+    expect: ok
+  - sql: |
+      INSERT INTO orders VALUES (1, 300, 1, 'dup pk')
+    expect: error
+    sqlstate: "23505"
+    comment: primary key index enforces uniqueness
+  - sql: |
+      INSERT INTO orders VALUES (4, 100, 2, 'dup multicol')
+    expect: error
+    sqlstate: "23505"
+    comment: the multicolumn unique constraint index rejects all-equal (cust, line)
+  - sql: |
+      SELECT i.indexrelid::regclass::text AS idx, x.indisunique, x.indisprimary, x.indkey::text AS keys
+      FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+      WHERE x.indrelid = 'orders'::regclass
+      ORDER BY idx
+    expect: rows
+    order: ordered
+    comment: both constraint indexes exist; keys are attnum lists (order of creation of columns is fixed)

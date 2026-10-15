@@ -1,0 +1,55 @@
+# RENAME TO and SET SCHEMA move a type's name and schema; collisions, missing schemas and missing types are reported.
+id: cmd-alter-type.rename-set-schema-domain
+title: "RENAME TO and SET SCHEMA on a domain, with duplicate, missing schema and missing type errors"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, domain, rename-type, set-schema]
+required_capabilities: [create-domain, alter-type, create-schema, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (RENAME TO; SET SCHEMA; example: ALTER TYPE electronic_mail RENAME TO email; ALTER TYPE email SET SCHEMA customers)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA customers;
+  CREATE DOMAIN electronic_mail AS text;
+steps:
+  - sql: |
+      ALTER TYPE electronic_mail RENAME TO email
+    expect: ok
+    comment: documented example, first half
+  - sql: |
+      SELECT to_regtype('email')::text AS new_name, to_regtype('electronic_mail')::text AS old_name
+    expect: rows
+    comment: the old name is gone
+  - sql: |
+      ALTER TYPE email RENAME TO email
+    expect: error
+    sqlstate: "42710"
+    comment: a rename to the same name collides with the existing type
+  - sql: |
+      ALTER TYPE email SET SCHEMA customers
+    expect: ok
+    comment: documented example, second half
+  - sql: |
+      SELECT to_regtype('customers.email')::text AS moved, to_regtype('email')::text AS public_name
+    expect: rows
+  - sql: |
+      ALTER TYPE email SET SCHEMA customers
+    expect: error
+    sqlstate: "42704"
+    comment: the type is no longer in the search path schema
+  - sql: |
+      ALTER TYPE customers.email SET SCHEMA nosuchschema
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER TYPE nosuchtype RENAME TO z
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER TYPE customers.email RENAME TO mail
+    expect: ok
+    comment: renaming a schema-qualified type keeps it in its schema
+  - sql: |
+      SELECT typname, nspname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.oid = 'customers.mail'::regtype
+    expect: rows

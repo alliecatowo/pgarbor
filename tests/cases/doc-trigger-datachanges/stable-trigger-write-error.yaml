@@ -1,0 +1,28 @@
+# A trigger function declared STABLE cannot write to the database; the attempt aborts the calling statement.
+id: doc-trigger-datachanges.stable-trigger-write-error
+title: STABLE trigger function that performs an INSERT fails with 0A000 and the statement is rolled back
+family: doc-trigger-datachanges
+tier: extended
+feature_ids: [triggers, row-level-triggers, plpgsql, volatility, insert, errors]
+required_capabilities: [create-table, insert, select, triggers, plpgsql, create-function, errors]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (STABLE functions will not see changes; writes are not allowed in non-volatile functions)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  CREATE FUNCTION st_w() RETURNS trigger LANGUAGE plpgsql STABLE AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('st_w', 1);
+    RETURN NULL;
+  END $$;
+  CREATE TRIGGER trg_st_w AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION st_w();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 10)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      SELECT count(*) AS t_rows, (SELECT count(*) FROM lg) AS lg_rows FROM t
+    expect: rows

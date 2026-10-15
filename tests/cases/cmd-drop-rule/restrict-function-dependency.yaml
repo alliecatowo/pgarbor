@@ -1,0 +1,36 @@
+# RESTRICT is the default: a rule whose action calls a function blocks DROP FUNCTION until the rule is dropped.
+id: cmd-drop-rule.restrict-function-dependency
+title: A rule depending on a function blocks DROP FUNCTION by default; dropping the rule unblocks it
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-rule, drop-function, dependencies]
+required_capabilities: [create-table, create-rule, create-function, drop-rule, drop-function, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (RESTRICT: default; refuse if objects depend on it)"
+sessions: [a]
+setup: |
+  CREATE TABLE dep_src (a int4);
+  CREATE TABLE dep_log (a int4);
+  CREATE FUNCTION dep_f(int4) RETURNS int4 LANGUAGE sql AS 'SELECT $1 * 2';
+  CREATE RULE dep_r AS ON INSERT TO dep_src WHERE dep_f(NEW.a) > 0 DO ALSO INSERT INTO dep_log VALUES (dep_f(NEW.a));
+steps:
+  - sql: |
+      DROP FUNCTION dep_f(int4)
+    expect: error
+    sqlstate: "2BP01"
+    comment: the rule depends on the function, so RESTRICT refuses
+  - sql: |
+      DROP RULE dep_r ON dep_src RESTRICT
+    expect: ok
+  - sql: |
+      DROP FUNCTION dep_f(int4)
+    expect: ok
+    comment: no dependents remain
+  - sql: |
+      INSERT INTO dep_src VALUES (5)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM dep_log
+    expect: rows
+    comment: the dropped rule no longer copies rows, so the count is 0

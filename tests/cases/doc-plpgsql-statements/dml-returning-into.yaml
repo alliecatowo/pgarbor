@@ -1,0 +1,67 @@
+# INSERT/UPDATE/DELETE ... RETURNING INTO: one affected row is assigned, zero rows give NULL (or P0002
+# with STRICT), and more than one affected row is an error even without STRICT.
+id: doc-plpgsql-statements.dml-returning-into
+title: RETURNING INTO assigns one affected row, NULL on zero rows, and errors on several rows
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, returning-into, update, found, strict, errors]
+required_capabilities: [plpgsql, create-function, create-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-sql-onerow"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('bo', 20), ('cy', 20);
+  CREATE FUNCTION f_upd_one(who text) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE s int;
+  BEGIN
+    UPDATE emp SET salary = salary + 1 WHERE empname = who RETURNING salary INTO s;
+    RETURN s;
+  END $$;
+  CREATE FUNCTION f_upd_none() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE s int;
+  BEGIN
+    s := 5;
+    UPDATE emp SET salary = 0 WHERE empname = 'zz' RETURNING salary INTO s;
+    RETURN coalesce(s::text, '<null>') || ' ' || FOUND::text;
+  END $$;
+  CREATE FUNCTION f_upd_none_strict() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE s int;
+  BEGIN
+    UPDATE emp SET salary = 0 WHERE empname = 'zz' RETURNING salary INTO STRICT s;
+    RETURN s;
+  END $$;
+  CREATE FUNCTION f_upd_many() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE s int;
+  BEGIN
+    UPDATE emp SET salary = salary + 1 WHERE salary = 20 RETURNING salary INTO s;
+    RETURN s;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_upd_one('ann') AS new_salary
+    expect: rows
+  - sql: |
+      SELECT empname, salary FROM emp ORDER BY empname
+    expect: rows
+    order: ordered
+    comment: only ann changed
+  - sql: |
+      SELECT f_upd_none() AS no_row
+    expect: rows
+    comment: zero affected rows assign NULL and set FOUND false
+  - sql: |
+      SELECT f_upd_none_strict()
+    expect: error
+    sqlstate: "P0002"
+  - sql: |
+      SELECT f_upd_many()
+    expect: error
+    sqlstate: "P0003"
+    comment: two rows affected is an error without STRICT, because no ORDER BY can choose one
+  - sql: |
+      SELECT empname, salary FROM emp ORDER BY empname
+    expect: rows
+    order: ordered
+    comment: the failed statement left no partial update behind

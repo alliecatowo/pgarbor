@@ -1,0 +1,75 @@
+# SET TRANSACTION READ ONLY rejects INSERT, UPDATE and DELETE with 25006 and only applies to its own transaction.
+id: cmd-set-transaction.read-only-blocks-writes
+title: SET TRANSACTION READ ONLY rejects writes with 25006 until rolled back
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, read-only, transaction-modes, errors, insert, update, delete]
+required_capabilities: [create-table, insert, update, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: when a transaction is read-only, INSERT, UPDATE, DELETE, MERGE and COPY FROM are disallowed)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: reads still work
+  - sql: |
+      INSERT INTO t VALUES (2, 20)
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      UPDATE t SET v = v + 1
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET TRANSACTION READ ONLY
+    expect: ok
+  - sql: |
+      DELETE FROM t
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: outside a block the default is read write again
+  - sql: |
+      INSERT INTO t VALUES (3, 30)
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

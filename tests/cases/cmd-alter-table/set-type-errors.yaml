@@ -1,0 +1,49 @@
+# SET DATA TYPE fails on rows that do not convert (22P02), on a default with no cast (42804), and on a column used by a view (0A000).
+id: cmd-alter-table.set-type-errors
+title: "SET DATA TYPE errors: unconvertible rows, uncastable default, and view-dependent column"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, alter-column-type, using-clause, column-default, errors]
+required_capabilities: [create-table, create-view, alter-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable-notes (USING is not applied to the column default; type change of a column used by a view)"
+sessions: [a]
+setup: |
+  CREATE TABLE typed (k int4, x text DEFAULT 'abc', s text);
+  INSERT INTO typed (k, x, s) VALUES (1, 'abcd', '9'), (2, 'ab', 'bad');
+  CREATE TABLE vt (a int4);
+  CREATE VIEW vv AS SELECT a FROM vt;
+steps:
+  - sql: |
+      ALTER TABLE typed ALTER COLUMN s TYPE int4 USING s::int4
+    expect: error
+    sqlstate: "22P02"
+    comment: row 2 holds 'bad'
+  - sql: |
+      ALTER TABLE typed ALTER COLUMN x TYPE int4 USING length(x)
+    expect: error
+    sqlstate: "42804"
+    comment: the default 'abc' cannot be cast automatically; USING does not apply to defaults
+  - sql: |
+      ALTER TABLE typed ALTER COLUMN x DROP DEFAULT, ALTER COLUMN x TYPE int4 USING length(x)
+    expect: ok
+    comment: dropping the default in the same statement makes the change legal
+  - sql: |
+      UPDATE typed SET s = '9' WHERE k = 2
+    expect: ok
+  - sql: |
+      ALTER TABLE typed ALTER COLUMN s TYPE int4 USING s::int4
+    expect: ok
+  - sql: |
+      SELECT k, x, s FROM typed ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT column_default IS NULL AS no_default FROM information_schema.columns WHERE table_name = 'typed' AND column_name = 'x'
+    expect: rows
+  - sql: |
+      ALTER TABLE vt ALTER COLUMN a TYPE text
+    expect: error
+    sqlstate: "0A000"
+    comment: view vv uses column a, so its type cannot change

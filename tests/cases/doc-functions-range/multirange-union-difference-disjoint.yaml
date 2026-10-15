@@ -1,0 +1,44 @@
+# Multirange union and difference accept disjoint inputs; range union and difference do not.
+id: doc-functions-range.multirange-union-difference-disjoint
+title: "Multirange + and - allow disjoint operands; multirange * of disjoint is empty"
+family: doc-functions-range
+tier: core
+feature_ids: [multirange-types, range-operators, union, difference, intersection]
+required_capabilities: [select, range-types, multirange-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-range (Multirange Operators table, and the paragraph on union and difference of disjoint ranges)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '{[5,10)}'::nummultirange + '{[15,20)}'::nummultirange AS union_documented
+    expect: rows
+    order: multiset
+    comment: "documented {[5,10), [15,20)}"
+  - sql: |
+      SELECT '{[1,3)}'::int4multirange + '{[5,7)}'::int4multirange AS union_disjoint
+    expect: rows
+    order: multiset
+    comment: "multirange union of disjoint multiranges does not fail"
+  - sql: |
+      SELECT '{[5,20)}'::int8multirange - '{[10,15)}'::int8multirange AS difference_documented
+    expect: rows
+    order: multiset
+    comment: "documented {[5,10), [15,20)}"
+  - sql: |
+      SELECT '{[5,15)}'::int8multirange * '{[10,20)}'::int8multirange AS intersect_documented,
+             '{[1,3)}'::int4multirange * '{[5,7)}'::int4multirange AS intersect_disjoint
+    expect: rows
+    order: multiset
+    comment: "intersection of overlapping multiranges is [10,15); disjoint intersection is empty"
+  - sql: |
+      SELECT int4range(1,3) * int4range(5,7) AS range_disjoint_intersect,
+             '{[1,3)}'::int4multirange - '{[1,3)}'::int4multirange AS full_subtract
+    expect: rows
+    order: multiset
+    comment: "a range intersection of disjoint ranges is empty; subtracting an identical multirange leaves nothing"
+  - sql: |
+      SELECT int4range(1,3) + int4range(5,7) AS not_allowed
+    expect: error
+    sqlstate: "22000"
+    comment: "range union with disjoint operands is not a single range, so it fails"

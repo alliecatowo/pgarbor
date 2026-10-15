@@ -1,0 +1,32 @@
+# With no kind list all multivariate kinds are enabled; an explicit list is stored as given; expression items add kind e.
+id: cmd-create-statistics.default-and-explicit-kinds
+title: Default statistics kinds, explicit kind lists, and the automatic expression kind
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, statistics-kind, expression-statistics]
+required_capabilities: [create-table, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Parameters: statistics_kind)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_kinds (a int, b int, c timestamp, e int);
+steps:
+  - sql: |
+      CREATE STATISTICS cs_k_default ON a, b FROM cs_kinds
+    expect: ok
+    comment: no kind list enables ndistinct, dependencies and mcv
+  - sql: |
+      CREATE STATISTICS cs_k_mcv (mcv) ON a, e FROM cs_kinds
+    expect: ok
+  - sql: |
+      CREATE STATISTICS cs_k_ndf (ndistinct, dependencies) ON b, e FROM cs_kinds
+    expect: ok
+  - sql: |
+      CREATE STATISTICS cs_k_mixed ON (date_trunc('day', c)), e FROM cs_kinds
+    expect: ok
+    comment: an expression item in the multivariate form adds the expression kind e
+  - sql: |
+      SELECT stxname, stxkind::text, stxkeys::text FROM pg_statistic_ext WHERE stxrelid = 'cs_kinds'::regclass ORDER BY stxname
+    expect: rows
+    order: ordered

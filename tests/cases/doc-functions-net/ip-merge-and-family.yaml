@@ -1,0 +1,37 @@
+# inet_merge computes the smallest enclosing network; inet_same_family checks IP families.
+id: doc-functions-net.ip-merge-and-family
+title: inet_merge smallest enclosing network and inet_same_family, including the mixed-family error
+family: doc-functions-net
+tier: core
+feature_ids: [inet-functions, inet-merge, inet-same-family]
+required_capabilities: [select, inet, cidr, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-net (IP Address Functions table: inet_merge, inet_same_family)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT inet_merge(inet '192.168.1.5/24', inet '192.168.2.5/24') AS merged
+    expect: rows
+    order: multiset
+    comment: documented example 192.168.0.0/22
+  - sql: |
+      SELECT inet_merge(inet '10.1.1.1/8', inet '10.2.2.2/16') AS merged_wider, inet_merge(inet '10.0.0.1/32', inet '10.0.0.1/32') AS same_host
+    expect: rows
+    order: multiset
+    comment: the result takes the shorter netmask; identical hosts merge to their own /32
+  - sql: |
+      SELECT inet_same_family(inet '192.168.1.5/24', inet '::1') AS mixed, inet_same_family(inet '192.168.1.5/24', inet '10.0.0.1') AS both_v4, inet_same_family(cidr '10.0.0.0/8', inet '2001:db8::1') AS cidr_v6
+    expect: rows
+    order: multiset
+    comment: documented example f; the cidr argument is implicitly cast to inet
+  - sql: |
+      SELECT inet_merge(inet '::1', inet '10.0.0.1') AS merged_mixed
+    expect: error
+    sqlstate: "22023"
+    comment: addresses from different families cannot be merged
+  - sql: |
+      SELECT inet_merge(inet '2001:db8::1/64', inet '2001:db8:0:1::1/64') AS merged_v6
+    expect: rows
+    order: multiset
+    comment: the result is the longest common prefix of the two networks (here /63), not the shorter of the two masks

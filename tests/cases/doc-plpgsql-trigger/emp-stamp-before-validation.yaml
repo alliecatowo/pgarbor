@@ -1,0 +1,72 @@
+# BEFORE INSERT/UPDATE trigger from the manual: RAISE EXCEPTION on NULL name, NULL or negative salary; NEW is stamped on success.
+id: doc-plpgsql-trigger.emp-stamp-before-validation
+title: BEFORE trigger validates NEW with RAISE EXCEPTION and stamps last_date and last_user
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, before-triggers, plpgsql, raise-exception, null-handling, update, insert]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (A PL/pgSQL Trigger Function)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (
+      empname           text,
+      salary            integer,
+      last_date         timestamp,
+      last_user         text
+  );
+  CREATE FUNCTION emp_stamp() RETURNS trigger AS $emp_stamp$
+      BEGIN
+          IF NEW.empname IS NULL THEN
+              RAISE EXCEPTION 'empname cannot be null';
+          END IF;
+          IF NEW.salary IS NULL THEN
+              RAISE EXCEPTION '% cannot have null salary', NEW.empname;
+          END IF;
+          IF NEW.salary < 0 THEN
+              RAISE EXCEPTION '% cannot have a negative salary', NEW.empname;
+          END IF;
+          NEW.last_date := current_timestamp;
+          NEW.last_user := current_user;
+          RETURN NEW;
+      END;
+  $emp_stamp$ LANGUAGE plpgsql;
+  CREATE TRIGGER emp_stamp BEFORE INSERT OR UPDATE ON emp
+      FOR EACH ROW EXECUTE FUNCTION emp_stamp();
+steps:
+  - sql: |
+      INSERT INTO emp (empname, salary) VALUES ('alice', 5000)
+    expect: ok
+  - sql: |
+      SELECT empname, salary, last_date IS NOT NULL AS stamped, last_user = current_user AS stamped_by_me FROM emp
+    expect: rows
+    order: ordered
+    comment: the trigger stamped NEW, so both stamp columns are filled in on the stored row
+  - sql: |
+      INSERT INTO emp (empname, salary) VALUES (NULL, 100)
+    expect: error
+    sqlstate: "P0001"
+    comment: RAISE EXCEPTION without an explicit SQLSTATE uses raise_exception (P0001)
+  - sql: |
+      INSERT INTO emp (empname, salary) VALUES ('bob', NULL)
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      INSERT INTO emp (empname, salary) VALUES ('carol', -1)
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      UPDATE emp SET salary = -5 WHERE empname = 'alice'
+    expect: error
+    sqlstate: "P0001"
+    comment: the BEFORE UPDATE trigger also vetoes the change
+  - sql: |
+      SELECT empname, salary FROM emp ORDER BY empname
+    expect: rows
+    order: ordered
+    comment: the failed statements left no rows and did not change alice's salary
+  - sql: |
+      UPDATE emp SET salary = 6000 WHERE empname = 'alice' RETURNING empname, salary, last_user = current_user AS stamped_by_me
+    expect: rows
+    order: ordered

@@ -1,0 +1,48 @@
+# A failed SET CONSTRAINTS ... IMMEDIATE leaves the constraint DEFERRED, so a later violation is still deferred.
+id: cmd-set-constraints.failed-immediate-keeps-deferred-mode
+title: A failed switch to IMMEDIATE does not change the mode; the later orphan is checked at COMMIT
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, foreign-key, savepoints, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: If any such constraint is violated, the SET CONSTRAINTS fails and does not change the constraint mode)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_fk REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (1, 99)
+    expect: ok
+  - sql: |
+      SAVEPOINT s
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk IMMEDIATE
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      ROLLBACK TO SAVEPOINT s
+    expect: ok
+    comment: the savepoint undoes the failed statement only; the earlier DEFERRED mode survives
+  - sql: |
+      INSERT INTO c VALUES (2, 98)
+    expect: ok
+    comment: still deferred, so no error here
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23503"
+    comment: both orphans are caught by the deferred check at commit
+  - sql: |
+      SELECT count(*) AS n FROM c
+    expect: rows
+    order: ordered

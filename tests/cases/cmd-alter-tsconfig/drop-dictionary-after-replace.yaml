@@ -1,0 +1,32 @@
+# A mapping keeps its dictionary in use: DROP TEXT SEARCH DICTIONARY fails until ALTER MAPPING REPLACE removes the reference.
+id: cmd-alter-tsconfig.drop-dictionary-after-replace
+title: "ALTER MAPPING REPLACE releases the old dictionary so it can be dropped"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, alter-mapping-replace, drop-text-search-dictionary, dependencies]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (ALTER MAPPING REPLACE substitutes old_dictionary wherever it appears)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY english (template = snowball, language = english);
+  CREATE TEXT SEARCH DICTIONARY swedish (template = snowball, language = swedish);
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+  ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING FOR asciiword WITH swedish;
+steps:
+  - sql: |
+      DROP TEXT SEARCH DICTIONARY swedish
+    expect: error
+    sqlstate: "2BP01"
+    comment: my_config depends on swedish
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING REPLACE swedish WITH english
+    expect: ok
+  - sql: |
+      DROP TEXT SEARCH DICTIONARY swedish
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_ts_dict WHERE dictname = 'swedish'
+    expect: rows
+    order: multiset

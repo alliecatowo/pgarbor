@@ -1,0 +1,29 @@
+# Only B-tree, GiST, GIN and BRIN support multicolumn indexes; hash rejects them with 0A000.
+id: doc-indexes-multicolumn.hash-rejects-multicolumn
+title: Hash index rejects a second key column with feature_not_supported while single-column hash works
+family: doc-indexes-multicolumn
+tier: extended
+feature_ids: [multicolumn-index, hash-index, create-index]
+required_capabilities: [create-table, select, create-index, hash-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (only the B-tree, GiST, GIN, and BRIN index types support multiple key columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE hx (a int, b int)
+steps:
+  - sql: |
+      CREATE INDEX hx_a ON hx USING hash (a)
+    expect: ok
+  - sql: |
+      CREATE INDEX hx_ab ON hx USING hash (a, b)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      CREATE INDEX hx_ab_btree ON hx (a, b)
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'hx' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: the failed hash index must not exist

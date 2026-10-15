@@ -1,0 +1,56 @@
+# Docs fragment: an error inside a block with EXCEPTION rolls back its UPDATE but keeps earlier writes and local variables.
+id: doc-plpgsql-control-structures.exception-block-rolls-back-writes
+title: "Error inside an EXCEPTION block rolls back that block's UPDATE while local variables keep their values"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, exceptions, subtransactions, update, division-by-zero]
+required_capabilities: [plpgsql, create-function, create-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Trapping Errors)"
+sessions: [a]
+setup: |
+  CREATE TABLE mytab (firstname text, lastname text);
+  INSERT INTO mytab VALUES ('Tom', 'Jones');
+  CREATE FUNCTION frag(x int) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE y int;
+  BEGIN
+    BEGIN
+      UPDATE mytab SET firstname = 'Joe' WHERE lastname = 'Jones';
+      x := x + 1;
+      y := x / 0;
+    EXCEPTION
+      WHEN division_by_zero THEN
+        RAISE NOTICE 'caught division_by_zero';
+        RETURN x;
+    END;
+    RETURN -1;
+  END $$;
+  CREATE FUNCTION keep_update() RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    BEGIN
+      UPDATE mytab SET firstname = 'Ann' WHERE lastname = 'Jones';
+    EXCEPTION
+      WHEN division_by_zero THEN
+        RETURN -1;
+    END;
+    RETURN 1;
+  END $$;
+steps:
+  - sql: |
+      SELECT frag(10) AS returned
+    expect: rows
+    comment: the handler returns the incremented x, which is 11 when the error occurred
+  - sql: |
+      SELECT firstname, lastname FROM mytab ORDER BY lastname
+    expect: rows
+    order: ordered
+    comment: the UPDATE inside the failed block is undone, the earlier insert remains
+  - sql: |
+      SELECT keep_update() AS ok
+    expect: rows
+  - sql: |
+      SELECT firstname, lastname FROM mytab ORDER BY lastname
+    expect: rows
+    order: ordered
+    comment: a block that completes without error keeps its writes

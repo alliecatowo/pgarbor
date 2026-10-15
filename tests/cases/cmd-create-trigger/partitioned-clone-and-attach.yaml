@@ -1,0 +1,57 @@
+# Row-level triggers on a partitioned table are cloned to partitions (including new and attached ones);
+# statement-level triggers stay on the named table; DETACH removes the clone; attach conflicts raise 42710.
+id: cmd-create-trigger.partitioned-clone-and-attach
+title: Row triggers on a partitioned table clone to partitions while statement triggers do not
+family: cmd-create-trigger
+tier: extended
+feature_ids: [create-trigger, partitioning, trigger-cloning, statement-level-trigger, row-level-trigger, detach-partition, attach-partition]
+required_capabilities: [create-table, insert, select, partitioning, plpgsql, triggers, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER notes (partitioned table clone triggers)"
+setup: |
+  CREATE TABLE measurement (id int, v int) PARTITION BY RANGE (id);
+  CREATE TABLE m_low PARTITION OF measurement FOR VALUES FROM (0) TO (100);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  CREATE FUNCTION log_m() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ' on ' || TG_TABLE_NAME || ' ' || TG_LEVEL);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TABLE m_clash (id int, v int);
+steps:
+  - sql: |
+      CREATE TRIGGER m_row AFTER INSERT ON measurement FOR EACH ROW EXECUTE FUNCTION log_m()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER m_stmt AFTER INSERT ON measurement FOR EACH STATEMENT EXECUTE FUNCTION log_m()
+    expect: ok
+  - sql: |
+      CREATE TABLE m_high PARTITION OF measurement FOR VALUES FROM (100) TO (200)
+    expect: ok
+    comment: the new partition gets a clone of m_row
+  - sql: |
+      INSERT INTO measurement VALUES (5, 1), (150, 2)
+    expect: ok
+    comment: row clones fire on m_low and m_high, the statement trigger fires once on measurement
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER TABLE measurement DETACH PARTITION m_high
+    expect: ok
+  - sql: |
+      SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: m_high keeps no clone after DETACH
+  - sql: |
+      CREATE TRIGGER m_row AFTER INSERT ON m_clash FOR EACH ROW EXECUTE FUNCTION log_m()
+    expect: ok
+  - sql: |
+      ALTER TABLE measurement ATTACH PARTITION m_clash FOR VALUES FROM (300) TO (400)
+    expect: error
+    sqlstate: "42710"
+    comment: a same-named trigger already exists on the table being attached

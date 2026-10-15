@@ -1,0 +1,35 @@
+# merge_action() is a merge support function usable only in the RETURNING list of MERGE.
+id: doc-functions-window.merge-action-returning
+title: merge_action in MERGE RETURNING and rejection outside it
+family: doc-functions-window
+tier: extended
+feature_ids: [merge, merge-support-functions, returning]
+required_capabilities: [create-table, insert, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-merge-support"
+setup: |
+  CREATE TABLE tgt (id int4 PRIMARY KEY, v text);
+  CREATE TABLE src (id int4 PRIMARY KEY, v text);
+  INSERT INTO tgt VALUES (1,'old1'), (2,'old2');
+  INSERT INTO src VALUES (2,'new2'), (3,'new3');
+steps:
+  - sql: |
+      MERGE INTO tgt t USING src s ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET v = s.v
+        WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id, s.v)
+        WHEN NOT MATCHED BY SOURCE THEN DELETE
+      RETURNING merge_action(), t.id, t.v
+    expect: rows
+    order: multiset
+    comment: each affected row reports DELETE, UPDATE or INSERT
+  - sql: |
+      SELECT id, v FROM tgt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the merge applied the three actions
+  - sql: |
+      SELECT merge_action() FROM tgt
+    expect: error
+    sqlstate: "42601"
+    comment: merge_action may only appear in the RETURNING list of a MERGE command

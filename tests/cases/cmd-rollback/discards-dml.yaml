@@ -1,0 +1,40 @@
+# ROLLBACK discards all updates made by the transaction: inserts, updates and deletes are all undone.
+id: cmd-rollback.discards-dml
+title: ROLLBACK discards INSERT, UPDATE and DELETE made in the transaction
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, insert, update, delete, transactions]
+required_capabilities: [create-table, insert, update, delete, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback (Description: all the updates made by the transaction are discarded)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text NOT NULL);
+  INSERT INTO t VALUES (1, 'a'), (2, 'b');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3, 'c')
+    expect: ok
+  - sql: |
+      UPDATE t SET v = 'z' WHERE id = 1
+    expect: ok
+  - sql: |
+      DELETE FROM t WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the transaction sees its own changes
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: back to the original two rows

@@ -1,0 +1,58 @@
+# CALL of a procedure with INOUT parameters, including a composite field as the output target and an early bare RETURN.
+id: doc-plpgsql-control-structures.call-procedure-inout
+title: "CALL assigns INOUT results back to caller variables, including composite fields"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, call, procedures, inout-parameters, do-block]
+required_capabilities: [plpgsql, create-procedure, create-function, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Calling a Procedure)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE triple(INOUT x int) LANGUAGE plpgsql AS $$
+  BEGIN
+    x := x * 3;
+  END $$;
+  CREATE TYPE box_t AS (n int, label text);
+  CREATE PROCEDURE cap_at(INOUT x int, IN lim int) LANGUAGE plpgsql AS $$
+  BEGIN
+    IF x > lim THEN
+      x := lim;
+      RETURN;
+    END IF;
+    x := x + 1000;
+  END $$;
+steps:
+  - sql: |
+      DO $$
+      DECLARE myvar int := 5;
+      BEGIN
+        CALL triple(myvar);
+        RAISE NOTICE 'myvar = %', myvar;
+      END;
+      $$
+    expect: ok
+    comment: the docs example, the INOUT result is assigned back to myvar
+  - sql: |
+      DO $$
+      DECLARE r box_t := ROW(2, 'z')::box_t;
+      BEGIN
+        CALL triple(r.n);
+        RAISE NOTICE 'n = %', r.n;
+      END;
+      $$
+    expect: ok
+    comment: an output variable may be a field of a composite variable
+  - sql: |
+      DO $$
+      DECLARE v int := 5;
+      BEGIN
+        CALL cap_at(v, 100);
+        RAISE NOTICE 'after1 = %', v;
+        CALL cap_at(v, 100);
+        RAISE NOTICE 'after2 = %', v;
+      END;
+      $$
+    expect: ok
+    comment: the first call takes the non-early path, the second hits the bare RETURN after clamping

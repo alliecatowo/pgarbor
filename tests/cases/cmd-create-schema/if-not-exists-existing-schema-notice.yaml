@@ -1,0 +1,34 @@
+# IF NOT EXISTS on an existing schema does nothing except issue a notice, including when AUTHORIZATION names
+# a role; the existing schema keeps its owner. A plain CREATE SCHEMA on the same name still fails with 42P06.
+id: cmd-create-schema.if-not-exists-existing-schema-notice
+title: IF NOT EXISTS skips an existing schema with a notice and leaves its owner unchanged
+family: cmd-create-schema
+tier: core
+feature_ids: [create-schema, if-not-exists, authorization, errors]
+required_capabilities: [create-schema, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_schema.sgml#sql-createschema (Parameters: IF NOT EXISTS; Examples: CREATE SCHEMA IF NOT EXISTS test AUTHORIZATION joe)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1
+steps:
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS s1 AUTHORIZATION CURRENT_USER
+    expect: notice
+    comment: notice 42P06 "schema s1 already exists, skipping"
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS s1
+    expect: notice
+  - sql: |
+      CREATE SCHEMA s1
+    expect: error
+    sqlstate: "42P06"
+  - sql: |
+      CREATE SCHEMA IF NOT EXISTS s2 AUTHORIZATION CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT nspname, pg_get_userbyid(nspowner) = current_user AS owned_by_current_user
+      FROM pg_namespace WHERE nspname IN ('s1', 's2') ORDER BY nspname
+    expect: rows
+    order: ordered

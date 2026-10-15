@@ -1,0 +1,51 @@
+# tsvector editing functions: concatenation, setweight (both forms), strip, length, ts_delete, ts_filter, unnest.
+id: doc-functions-textsearch.tsvector-editing
+title: tsvector concatenation, weight assignment, deletion and filtering follow the documented examples
+family: doc-functions-textsearch
+tier: core
+feature_ids: [tsvector-concat, setweight, strip, tsvector-length, ts-delete, ts-filter, unnest-tsvector]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-textsearch (tsvector operators and tsvector manipulation functions)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 'a:1 b:2'::tsvector || 'c:1 d:2 b:3'::tsvector AS concat
+    expect: rows
+    comment: documented example; positions of b from the second input are shifted by the first input's length
+  - sql: |
+      SELECT setweight('fat:2,4 cat:3 rat:5B'::tsvector, 'A') AS all_weight_a,
+             setweight('fat:2,4 cat:3 rat:5,6B'::tsvector, 'A', '{cat,rat}') AS only_cat_rat
+    expect: rows
+    comment: the second form restricts the change to the listed lexemes
+  - sql: |
+      SELECT strip('fat:2,4 cat:3 rat:5A'::tsvector) AS stripped,
+             length('fat:2,4 cat:3 rat:5A'::tsvector) AS lexemes
+    expect: rows
+    comment: strip removes positions and weights; length counts lexemes, not positions
+  - sql: |
+      SELECT ts_delete('fat:2,4 cat:3 rat:5A'::tsvector, 'fat') AS del_one,
+             ts_delete('fat:2,4 cat:3 rat:5A'::tsvector, ARRAY['fat','rat']) AS del_many
+    expect: rows
+  - sql: |
+      SELECT ts_filter('fat:2,4 cat:3b,7c rat:5A'::tsvector, '{a,b}') AS kept
+    expect: rows
+    comment: keeps only positions carrying the weights A or B
+  - sql: |
+      SELECT * FROM unnest('cat:3 fat:2,4 rat:5A'::tsvector)
+    expect: rows
+    order: multiset
+    comment: one row per lexeme with positions and weights as arrays
+  - sql: |
+      SELECT tsvector_to_array('fat:2,4 cat:3 rat:5A'::tsvector) AS lexemes,
+             array_to_tsvector('{fat,cat,rat}'::text[]) AS from_array
+    expect: rows
+  - sql: |
+      SELECT array_to_tsvector(ARRAY[['fat']]::text[]) AS flattened
+    expect: rows
+    comment: a multidimensional array is accepted and its elements are used as lexemes
+  - sql: |
+      SELECT setweight('fat:2 cat:3'::tsvector, 'Z') AS bad
+    expect: error
+    sqlstate: "22023"

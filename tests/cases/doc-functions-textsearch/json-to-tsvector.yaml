@@ -1,0 +1,41 @@
+# to_tsvector over json and jsonb, and json_to_tsvector / jsonb_to_tsvector with value-type filter arrays.
+id: doc-functions-textsearch.json-to-tsvector
+title: JSON documents are indexed by string, numeric, boolean, key or all values under documented filters
+family: doc-functions-textsearch
+tier: core
+feature_ids: [to-tsvector-json, json-to-tsvector, jsonb-to-tsvector, json-filter-flags]
+required_capabilities: [select, json, text-search]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-textsearch (to_tsvector json/jsonb, json_to_tsvector, jsonb_to_tsvector)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_tsvector('english', '{"aa": "The Fat Rats", "b": "dog"}'::json) AS from_json,
+             to_tsvector('english', '{"aa": "The Fat Rats", "b": "dog"}'::jsonb) AS from_jsonb
+    expect: rows
+    comment: the documented examples; to_tsvector over json indexes all string values
+  - sql: |
+      SELECT json_to_tsvector('english', '{"a": "The Fat Rats", "b": 123}'::json, '["string", "numeric"]') AS str_num
+    expect: rows
+    comment: numeric values appear as lexemes when 'numeric' is in the filter
+  - sql: |
+      SELECT json_to_tsvector('english', '{"cat": "The Fat Rats", "dog": 123}'::json, '"all"') AS everything
+    expect: rows
+    comment: the all flag includes keys as well as strings and numbers
+  - sql: |
+      SELECT jsonb_to_tsvector('english', '{"a": "The Fat Rats", "b": 123}'::jsonb, '["string", "numeric"]') AS jsonb_str_num
+    expect: rows
+  - sql: |
+      SELECT jsonb_to_tsvector('english', '{"a": "The Fat Rats", "b": true, "c": null}'::jsonb, '"boolean"') AS only_bool
+    expect: rows
+    comment: booleans are indexed only with the boolean flag, and null is never indexed
+  - sql: |
+      SELECT jsonb_to_tsvector('english', '{"a": {"b": ["fat", "cat"]}}'::jsonb, '"string"') AS nested
+    expect: rows
+    comment: nested arrays and objects are walked recursively
+  - sql: |
+      SELECT jsonb_to_tsvector('english', '{"a": 1}'::jsonb, '["bogus"]') AS bad_flag
+    expect: error
+    sqlstate: "22023"
+    comment: unknown filter flag names are rejected with a hint listing the valid values

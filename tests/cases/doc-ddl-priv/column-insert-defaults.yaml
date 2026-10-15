@@ -1,0 +1,40 @@
+# Column-level INSERT: only granted columns may be assigned, and omitted columns take their defaults.
+id: doc-ddl-priv.column-insert-defaults
+title: Column-level INSERT grant allows only the granted column and the rest default
+family: doc-ddl-priv
+tier: core
+feature_ids: [grant, insert, column-privileges, default-values, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, errors, order-by]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (INSERT on specific columns: other columns receive default values)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_ci_rw;
+  CREATE TABLE ci_t (a int4, b text DEFAULT 'dflt');
+  GRANT INSERT (a) ON ci_t TO ddp_ci_rw;
+steps:
+  - sql: |
+      SET ROLE ddp_ci_rw
+    expect: ok
+  - sql: |
+      INSERT INTO ci_t (a) VALUES (1)
+    expect: ok
+    comment: only column a is assigned; b takes its default
+  - sql: |
+      INSERT INTO ci_t (a, b) VALUES (2, 'x')
+    expect: error
+    sqlstate: "42501"
+    comment: column b is not granted for INSERT
+  - sql: |
+      INSERT INTO ci_t VALUES (3, 'y')
+    expect: error
+    sqlstate: "42501"
+    comment: an INSERT without a column list needs INSERT on every column
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT a, b FROM ci_t ORDER BY a
+    expect: rows
+    order: ordered

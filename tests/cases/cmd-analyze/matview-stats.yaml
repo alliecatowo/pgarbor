@@ -1,0 +1,24 @@
+# ANALYZE collects statistics on a materialized view, which is in scope without a list.
+id: cmd-analyze.matview-stats
+title: "ANALYZE records statistics for a materialized view"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, create-materialized-view, pg-stats]
+required_capabilities: [create-table, insert, select, create-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Description: tables and materialized views)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_mbase (a int4);
+  INSERT INTO an_mbase SELECT g % 5 FROM generate_series(1, 100) g;
+  CREATE MATERIALIZED VIEW an_mv AS SELECT a, count(*) AS n FROM an_mbase GROUP BY a;
+steps:
+  - sql: |
+      ANALYZE an_mv
+    expect: ok
+  - sql: |
+      SELECT attname, n_distinct FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_mv' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: a has 5 distinct values out of 5 rows (-1); n is 20 for every group (one distinct, -0.2 of 5 rows)

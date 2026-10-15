@@ -1,0 +1,38 @@
+# CURRENT_ROLE, CURRENT_USER and SESSION_USER are role_specification keywords. In a session that never calls
+# SET ROLE they all name the same role, so each one collides with the schema the first one created.
+id: cmd-create-schema.authorization-keywords-resolve-to-session-role
+title: CURRENT_ROLE, CURRENT_USER and SESSION_USER name the same owner in an unswitched session
+family: cmd-create-schema
+tier: core
+feature_ids: [create-schema, authorization, errors, create-table]
+required_capabilities: [create-schema, create-table, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_schema.sgml#sql-createschema (Synopsis: role_specification = CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA AUTHORIZATION CURRENT_ROLE
+    expect: ok
+    comment: no schema name, so the schema is named after the role
+  - sql: |
+      CREATE SCHEMA AUTHORIZATION CURRENT_USER
+    expect: error
+    sqlstate: "42P06"
+  - sql: |
+      CREATE SCHEMA AUTHORIZATION SESSION_USER
+    expect: error
+    sqlstate: "42P06"
+  - sql: |
+      CREATE SCHEMA kw_named AUTHORIZATION CURRENT_ROLE CREATE TABLE t (a int)
+    expect: ok
+  - sql: |
+      SELECT n.nspname, pg_get_userbyid(n.nspowner) = session_user AS owned_by_session_user,
+             n.nspname = session_user AS named_after_role
+      FROM pg_namespace n WHERE n.nspname IN ('kw_named', session_user) ORDER BY n.nspname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'kw_named'
+    expect: rows
+    order: ordered

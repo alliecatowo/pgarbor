@@ -1,0 +1,73 @@
+# Trusted languages grant USAGE to PUBLIC by default; untrusted languages are superuser-only for functions and reject GRANT.
+id: cmd-create-language.trusted-usage-privilege
+title: TRUSTED language is usable by non-superusers until USAGE is revoked, and untrusted languages reject non-superuser function creation and GRANT
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, trusted, usage-privilege, grant, revoke]
+required_capabilities: [create-language, create-function-sql, roles, set-role, grant, revoke, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Parameters: TRUSTED; Notes: USAGE granted to PUBLIC for trusted languages)"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS cl_tu;
+  CREATE ROLE cl_tu NOLOGIN;
+  GRANT CREATE ON SCHEMA public TO cl_tu;
+  CREATE TRUSTED LANGUAGE cl_trusted HANDLER plpgsql_call_handler;
+  CREATE LANGUAGE cl_untrusted HANDLER plpgsql_call_handler;
+steps:
+  - sql: |
+      SELECT lanname, lanpltrusted FROM pg_language WHERE lanname IN ('cl_trusted', 'cl_untrusted') ORDER BY lanname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT has_language_privilege('cl_tu', 'cl_trusted', 'USAGE') AS usage_default
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE cl_tu
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cl_tu_trusted_fn() RETURNS int LANGUAGE cl_trusted AS $$ BEGIN RETURN 7; END $$
+    expect: ok
+    comment: PUBLIC holds USAGE on a trusted language by default
+  - sql: |
+      SELECT cl_tu_trusted_fn() AS value
+    expect: rows
+  - sql: |
+      CREATE FUNCTION cl_tu_untrusted_fn() RETURNS int LANGUAGE cl_untrusted AS $$ BEGIN RETURN 8; END $$
+    expect: error
+    sqlstate: "42501"
+    comment: untrusted languages are superuser-only for function creation
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE USAGE ON LANGUAGE cl_trusted FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT has_language_privilege('cl_tu', 'cl_trusted', 'USAGE') AS usage_after_revoke
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE cl_tu
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cl_tu_revoked_fn() RETURNS int LANGUAGE cl_trusted AS $$ BEGIN RETURN 9; END $$
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT USAGE ON LANGUAGE cl_trusted TO cl_tu
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cl_tu_regranted_fn() RETURNS int LANGUAGE cl_trusted AS $$ BEGIN RETURN 10; END $$
+    expect: ok
+    comment: this statement runs as the superuser, so it succeeds regardless of USAGE
+  - sql: |
+      GRANT USAGE ON LANGUAGE cl_untrusted TO cl_tu
+    expect: error
+    sqlstate: "42809"
+    comment: GRANT and REVOKE are not allowed on untrusted languages

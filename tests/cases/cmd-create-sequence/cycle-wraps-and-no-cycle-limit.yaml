@@ -1,0 +1,44 @@
+# CYCLE wraps to MINVALUE going up and to MAXVALUE going down; without CYCLE (the default) nextval past the limit raises 2200H.
+id: cmd-create-sequence.cycle-wraps-and-no-cycle-limit
+title: CYCLE wraps in both directions and the default NO CYCLE raises an error at the limit
+family: cmd-create-sequence
+tier: core
+feature_ids: [create-sequence, cycle, no-cycle, maxvalue, minvalue, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#parameters (CYCLE, NO CYCLE)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SEQUENCE cyc_up MAXVALUE 3 CYCLE
+    expect: ok
+  - sql: |
+      SELECT nextval('cyc_up'), nextval('cyc_up'), nextval('cyc_up'), nextval('cyc_up')
+    expect: rows
+    order: ordered
+    comment: 1, 2, 3, then wraps to MINVALUE 1
+  - sql: |
+      CREATE SEQUENCE cyc_dn INCREMENT BY -1 MINVALUE -3 START WITH -1 CYCLE
+    expect: ok
+  - sql: |
+      SELECT nextval('cyc_dn'), nextval('cyc_dn'), nextval('cyc_dn'), nextval('cyc_dn')
+    expect: rows
+    order: ordered
+    comment: -1, -2, -3, then wraps to MAXVALUE -1
+  - sql: |
+      CREATE SEQUENCE nocyc MAXVALUE 2
+    expect: ok
+    comment: NO CYCLE is the default
+  - sql: |
+      SELECT nextval('nocyc'), nextval('nocyc')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT nextval('nocyc')
+    expect: error
+    sqlstate: "2200H"
+  - sql: |
+      SELECT last_value, is_called FROM nocyc
+    expect: rows
+    comment: the failed call leaves last_value at MAXVALUE

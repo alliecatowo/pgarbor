@@ -1,0 +1,47 @@
+# DROP AGGREGATE is transactional: ROLLBACK restores the aggregate, COMMIT removes it.
+id: cmd-drop-aggregate.transaction-rollback-and-commit
+title: DROP AGGREGATE inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, create-aggregate, transactions, aggregates]
+required_capabilities: [aggregates, create-aggregate, create-function, drop-aggregate, transactions]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (DROP AGGREGATE removes an existing aggregate)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2';
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(integer)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS inside_txn FROM pg_proc WHERE proname = 'myavg' AND prokind = 'a'
+    expect: rows
+    order: multiset
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT myavg(x) AS total FROM (VALUES (4), (5)) AS v(x)
+    expect: rows
+    order: multiset
+    comment: aggregate is back after ROLLBACK
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(integer)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT myavg(x) FROM (VALUES (1)) AS v(x)
+    expect: error
+    sqlstate: "42883"

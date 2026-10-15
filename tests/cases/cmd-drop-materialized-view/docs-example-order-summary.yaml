@@ -1,0 +1,36 @@
+# Documented example: DROP MATERIALIZED VIEW order_summary removes the view; its base table is untouched.
+id: cmd-drop-materialized-view.docs-example-order-summary
+title: DROP MATERIALIZED VIEW removes the documented order_summary example and leaves base data intact
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, create-materialized-view]
+required_capabilities: [create-table, insert, select, create-materialized-view, drop-materialized-view, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (Examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (id int4 PRIMARY KEY, amount numeric(8,2));
+  INSERT INTO orders VALUES (1, 10.00), (2, 2.50), (3, 7.25);
+  CREATE MATERIALIZED VIEW order_summary AS SELECT count(*) AS n, sum(amount) AS total FROM orders;
+steps:
+  - sql: |
+      SELECT n, total FROM order_summary
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP MATERIALIZED VIEW order_summary;
+    expect: ok
+  - sql: |
+      SELECT count(*) AS left_over FROM pg_class WHERE relname = 'order_summary' AND relkind = 'm'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM order_summary
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT id, amount FROM orders ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the base table is not affected by dropping a materialized view on top of it

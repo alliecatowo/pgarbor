@@ -1,0 +1,27 @@
+# A forced checkpoint flushes data files; committed rows must still be there after reconnecting.
+id: cmd-checkpoint.data-survives-reconnect
+title: Committed rows written before CHECKPOINT are readable after reconnect
+family: cmd-checkpoint
+tier: core
+feature_ids: [checkpoint, insert, select, transactions]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/checkpoint.sgml#sql-checkpoint (Description: all data files flushed)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v numeric(6,2));
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1, 1.50), (2, NULL);
+      COMMIT
+    expect: ok
+  - sql: |
+      CHECKPOINT
+    expect: ok
+  - reconnect: true
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

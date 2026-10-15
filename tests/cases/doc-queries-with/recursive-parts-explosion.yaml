@@ -1,0 +1,47 @@
+# Bill-of-materials explosion: recursive term multiplies quantities down the tree.
+id: doc-queries-with.recursive-parts-explosion
+title: Recursive WITH totals all direct and indirect sub-parts with multiplied quantities
+family: doc-queries-with
+tier: core
+feature_ids: [with-clause, recursive-cte, joins, aggregates]
+required_capabilities: [create-table, insert, select, with, recursive-cte, group-by]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-with (Recursive Queries, included_parts)"
+sessions: [a]
+setup: |
+  CREATE TABLE parts (sub_part text, part text, quantity int);
+  INSERT INTO parts VALUES
+    ('p1', 'our_product', 2),
+    ('p2', 'p1', 3),
+    ('p3', 'p1', 4),
+    ('p4', 'p2', 5),
+    ('p4', 'p3', 1);
+steps:
+  - sql: |
+      WITH RECURSIVE included_parts(sub_part, part, quantity) AS (
+          SELECT sub_part, part, quantity FROM parts WHERE part = 'our_product'
+        UNION ALL
+          SELECT p.sub_part, p.part, p.quantity * pr.quantity
+          FROM included_parts pr, parts p
+          WHERE p.part = pr.sub_part
+      )
+      SELECT sub_part, SUM(quantity) as total_quantity
+      FROM included_parts
+      GROUP BY sub_part
+      ORDER BY sub_part
+    expect: rows
+    order: ordered
+    comment: p4 is reached through both p2 and p3, so its quantities are summed (5*3*2 + 1*4*2 = 38)
+  - sql: |
+      WITH RECURSIVE included_parts(sub_part, part, quantity) AS (
+          SELECT sub_part, part, quantity FROM parts WHERE part = 'no_such_product'
+        UNION ALL
+          SELECT p.sub_part, p.part, p.quantity * pr.quantity
+          FROM included_parts pr, parts p
+          WHERE p.part = pr.sub_part
+      )
+      SELECT count(*) FROM included_parts
+    expect: rows
+    order: ordered
+    comment: "boundary: empty non-recursive term means the recursion never starts"

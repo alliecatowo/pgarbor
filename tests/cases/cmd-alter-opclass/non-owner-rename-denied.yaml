@@ -1,0 +1,56 @@
+# Only the owner may alter an operator class: a role that is not the owner gets insufficient_privilege, while the owner succeeds.
+id: cmd-alter-opclass.non-owner-rename-denied
+title: "RENAME TO by a non-owner fails with insufficient_privilege; the owner can rename"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, owner, privileges, roles]
+required_capabilities: [create-operator-class, alter-operator-class, create-schema, roles, set-role, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (Description: You must own the operator class)"
+sessions: [a]
+setup: |
+  CREATE ROLE aoc_cmd_nonown;
+  CREATE ROLE aoc_cmd_owner7;
+  CREATE SCHEMA aoc_cmd_s7 AUTHORIZATION aoc_cmd_owner7;
+  GRANT USAGE ON SCHEMA aoc_cmd_s7 TO PUBLIC;
+  CREATE OPERATOR CLASS aoc_cmd_s7.aoc_cmd_ops7 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  ALTER OPERATOR CLASS aoc_cmd_s7.aoc_cmd_ops7 USING btree OWNER TO aoc_cmd_owner7;
+steps:
+  - sql: |
+      SET ROLE aoc_cmd_nonown
+    expect: ok
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_s7.aoc_cmd_ops7 USING btree RENAME TO aoc_cmd_ops7x
+    expect: error
+    sqlstate: "42501"
+    comment: must be owner of operator class
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE aoc_cmd_owner7
+    expect: ok
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_s7.aoc_cmd_ops7 USING btree RENAME TO aoc_cmd_ops7x
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT opcname FROM pg_opclass WHERE opcname LIKE 'aoc_cmd_ops7%' ORDER BY opcname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_s7.aoc_cmd_ops7x USING btree OWNER TO CURRENT_USER
+    expect: ok
+    comment: cleanup so the roles can be dropped
+  - sql: |
+      ALTER SCHEMA aoc_cmd_s7 OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      DROP ROLE aoc_cmd_owner7
+    expect: ok
+  - sql: |
+      DROP ROLE aoc_cmd_nonown
+    expect: ok

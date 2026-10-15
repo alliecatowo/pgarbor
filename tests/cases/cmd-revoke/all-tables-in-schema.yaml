@@ -1,0 +1,35 @@
+# REVOKE ... ON ALL TABLES IN SCHEMA removes only the named privilege from every table in the schema.
+id: cmd-revoke.all-tables-in-schema
+title: REVOKE SELECT ON ALL TABLES IN SCHEMA removes SELECT on every table and leaves INSERT in place
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, all-tables-in-schema, select-privilege, insert-privilege, schema]
+required_capabilities: [create-table, insert, select, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke (ON { TABLE table_name | ALL TABLES IN SCHEMA schema_name })"
+sessions: [a]
+setup: |
+  CREATE ROLE rvt_u;
+  CREATE SCHEMA rvt_sch;
+  CREATE TABLE rvt_sch.t1 (id int4);
+  CREATE TABLE rvt_sch.t2 (id int4);
+  GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA rvt_sch TO rvt_u;
+steps:
+  - sql: |
+      SELECT c.relname, has_table_privilege('rvt_u', c.oid, 'SELECT') AS sel, has_table_privilege('rvt_u', c.oid, 'INSERT') AS ins
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'rvt_sch' AND c.relkind = 'r'
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      REVOKE SELECT ON ALL TABLES IN SCHEMA rvt_sch FROM rvt_u
+    expect: ok
+  - sql: |
+      SELECT c.relname, has_table_privilege('rvt_u', c.oid, 'SELECT') AS sel, has_table_privilege('rvt_u', c.oid, 'INSERT') AS ins
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'rvt_sch' AND c.relkind = 'r'
+      ORDER BY c.relname
+    expect: rows
+    order: ordered

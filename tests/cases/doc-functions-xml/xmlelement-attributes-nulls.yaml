@@ -1,0 +1,42 @@
+# xmlelement attribute naming rules: column references supply names, NULL attributes and content are dropped, and unnamed non-column attributes are rejected.
+id: doc-functions-xml.xmlelement-attributes-nulls
+title: xmlelement names attributes from columns, drops NULLs and rejects unnamed expressions
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, xmlelement, xmlattributes, null-semantics]
+required_capabilities: [xml, select, create-table, insert, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-producing-xml-xmlelement (attribute names from column references)"
+sessions: [a]
+setup: |
+  CREATE TABLE test (a xml, b xml);
+  INSERT INTO test VALUES ('<p/>', '<q/>'), (NULL, '<r/>');
+steps:
+  - sql: |
+      SELECT xmlelement(name test, xmlattributes(a, b)) FROM test ORDER BY b::text
+    expect: rows
+    order: ordered
+    comment: doc example shape; attribute names come from the column names
+  - sql: |
+      SELECT xmlelement(name foo, xmlattributes(NULL::text AS bar), 'x', NULL::text, 'y')
+    expect: rows
+    comment: a NULL attribute value omits the attribute; NULL content contributes nothing
+  - sql: |
+      SELECT xmlelement(name foo, xmlattributes('x' AS bar), NULL::text) IS NOT NULL AS not_null
+    expect: rows
+    comment: the element itself is not null when only some inputs are null
+  - sql: |
+      SELECT xmlelement(name "1bad") AS escaped_leading_digit
+    expect: rows
+    comment: a name starting with a digit is not a valid XML name and is escaped
+  - sql: |
+      SELECT xmlelement(name foo, xmlattributes('constant'), 'a')
+    expect: error
+    sqlstate: "42601"
+    comment: an unnamed attribute must be a plain column reference
+  - sql: |
+      SELECT xmlelement(name test, xmlattributes(upper('x'))) FROM test
+    expect: error
+    sqlstate: "42601"
+    comment: an unnamed function-call attribute is rejected, as in the docs

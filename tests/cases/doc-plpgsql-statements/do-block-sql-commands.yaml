@@ -1,0 +1,36 @@
+# The documented pattern of ordinary SQL commands inside a PL/pgSQL body: CREATE TABLE and INSERT run
+# as statements, and a duplicate key inside the block fails the whole DO.
+id: doc-plpgsql-statements.do-block-sql-commands
+title: Non-row-returning SQL commands run as PL/pgSQL statements; a failing INSERT aborts the DO block
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, do-block, create-table, insert, errors]
+required_capabilities: [plpgsql, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-general-sql"
+sessions: [a]
+steps:
+  - sql: |
+      DO $$
+      BEGIN
+        CREATE TABLE mytable (id int primary key, data text);
+        INSERT INTO mytable VALUES (1, 'one'), (2, 'two');
+      END $$
+    expect: ok
+  - sql: |
+      SELECT id, data FROM mytable ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DO $$
+      BEGIN
+        INSERT INTO mytable VALUES (3, 'three'), (1, 'dup');
+      END $$
+    expect: error
+    sqlstate: "23505"
+    comment: the unique violation on id 1 rolls back the row for id 3 as well
+  - sql: |
+      SELECT id, data FROM mytable ORDER BY id
+    expect: rows
+    order: ordered

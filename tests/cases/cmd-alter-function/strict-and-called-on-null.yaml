@@ -1,0 +1,52 @@
+# STRICT / RETURNS NULL ON NULL INPUT skips the call on a NULL argument and yields NULL; CALLED ON
+# NULL INPUT restores invocation, where the body raises on NULL.
+id: cmd-alter-function.strict-and-called-on-null
+title: STRICT skips invocation on NULL input; CALLED ON NULL INPUT re-enables it
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, strict, null-handling, plpgsql]
+required_capabilities: [create-function, alter-function, plpgsql, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: CALLED ON NULL INPUT, RETURNS NULL ON NULL INPUT, STRICT)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION chk(a int) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    IF a IS NULL THEN RAISE EXCEPTION 'called with null'; END IF;
+    RETURN a;
+  END $$;
+steps:
+  - sql: |
+      SELECT chk(NULL) IS NULL AS r
+    expect: error
+    sqlstate: "P0001"
+    comment: default is CALLED ON NULL INPUT, so the body runs and raises
+  - sql: |
+      ALTER FUNCTION chk(int) STRICT
+    expect: ok
+  - sql: |
+      SELECT chk(NULL) IS NULL AS r
+    expect: rows
+    comment: strict function is not invoked; result is NULL without error
+  - sql: |
+      SELECT chk(7) AS r
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER FUNCTION chk(int) CALLED ON NULL INPUT
+    expect: ok
+  - sql: |
+      SELECT chk(NULL) AS r
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      ALTER FUNCTION chk(int) RETURNS NULL ON NULL INPUT
+    expect: ok
+  - sql: |
+      SELECT proisstrict FROM pg_proc WHERE proname = 'chk'
+    expect: rows
+    comment: RETURNS NULL ON NULL INPUT is the same as STRICT
+  - sql: |
+      SELECT chk(NULL) IS NULL AS r
+    expect: rows

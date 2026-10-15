@@ -1,0 +1,34 @@
+# Only the owner (or a superuser) may ALTER STATISTICS; a non-owner gets insufficient privilege.
+id: cmd-alter-statistics.owner-non-owner-denied
+title: "ALTER STATISTICS by a non-owner fails with insufficient privilege"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, privileges, owner]
+required_capabilities: [create-table, alter-statistics, extended-statistics, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (Description: must own the statistics object)"
+sessions: [a]
+setup: |
+  CREATE ROLE ast_nd_u;
+  CREATE TABLE ast_nd (a int, b int);
+  CREATE STATISTICS ast_nd_s1 (ndistinct) ON a, b FROM ast_nd;
+steps:
+  - sql: |
+      SET ROLE ast_nd_u
+    expect: ok
+  - sql: |
+      ALTER STATISTICS ast_nd_s1 SET STATISTICS 5
+    expect: error
+    sqlstate: "42501"
+    comment: must be owner of statistics object
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT stxstattarget IS NULL AS unchanged FROM pg_statistic_ext WHERE stxname = 'ast_nd_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ast_nd_u
+    expect: ok

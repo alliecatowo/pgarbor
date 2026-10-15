@@ -1,0 +1,57 @@
+# Creating a conversion also requires EXECUTE on the conversion function. Builtins grant EXECUTE to PUBLIC,
+# so revoking it from PUBLIC makes a non-owner fail with insufficient_privilege (42501). Granting it back
+# lets the same role create the conversion.
+id: cmd-create-conversion.execute-privilege-on-function
+title: CREATE CONVERSION needs EXECUTE on the conversion function
+family: cmd-create-conversion
+tier: extended
+feature_ids: [create-conversion, privileges, execute-privilege, errors]
+required_capabilities: [create-conversion, drop-conversion, create-role, create-schema, set-role, grant, revoke, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_conversion.sgml#sql-createconversion-description (EXECUTE privilege on the function)"
+sessions: [a]
+setup: |
+  CREATE ROLE cc_exec_r;
+  CREATE SCHEMA cc_exec_s;
+  GRANT CREATE ON SCHEMA cc_exec_s TO cc_exec_r;
+steps:
+  - sql: |
+      REVOKE EXECUTE ON FUNCTION utf8_to_iso8859_1(integer, integer, cstring, internal, integer, boolean) FROM PUBLIC
+    expect: ok
+  - sql: |
+      SET ROLE cc_exec_r
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_exec_s.cc_noexec FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: error
+    sqlstate: "42501"
+    comment: schema privilege is present, so the failure is the missing EXECUTE
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT EXECUTE ON FUNCTION utf8_to_iso8859_1(integer, integer, cstring, internal, integer, boolean) TO cc_exec_r
+    expect: ok
+  - sql: |
+      SET ROLE cc_exec_r
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_exec_s.cc_yesexec FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT c.conname, pg_get_userbyid(c.conowner) AS owner
+      FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE n.nspname = 'cc_exec_s'
+      ORDER BY c.conname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP CONVERSION cc_exec_s.cc_yesexec;
+      GRANT EXECUTE ON FUNCTION utf8_to_iso8859_1(integer, integer, cstring, internal, integer, boolean) TO PUBLIC;
+      DROP SCHEMA cc_exec_s;
+      DROP ROLE cc_exec_r
+    expect: ok

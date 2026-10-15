@@ -1,0 +1,33 @@
+# Functions returning record need a column definition list in FROM; a scalar call returns a composite value (datatype.sgml#datatype-pseudotypes-table, "record").
+id: doc-datatype-pseudo.record-column-definition-list
+title: Record-returning functions require a column definition list in FROM
+family: doc-datatype-pseudo
+tier: core
+feature_ids: [pseudo-types, record-return, set-returning-functions, composite-values]
+required_capabilities: [create-function-sql, plpgsql, set-returning-functions, select]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-pseudotypes-table"
+sessions: [a]
+setup: |
+  CREATE FUNCTION recs() RETURNS SETOF record LANGUAGE sql AS $$ SELECT 1, 'a' UNION ALL SELECT 2, 'b' $$;
+  CREATE FUNCTION recp() RETURNS record LANGUAGE plpgsql AS $$ BEGIN RETURN ROW(1, 'a'); END $$
+steps:
+  - sql: |
+      SELECT n, s FROM recs() AS t(n int, s text) ORDER BY n
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM recs()
+    expect: error
+    sqlstate: "42601"
+    comment: no column definition list for a SETOF record function in FROM
+  - sql: |
+      SELECT recp()
+    expect: rows
+    order: ordered
+    comment: scalar use yields the composite text form
+  - sql: |
+      SELECT pg_typeof(recp())::text AS typ, pg_typeof(ROW(1, 'a'))::text AS row_typ
+    expect: rows
+    order: ordered

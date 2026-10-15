@@ -1,0 +1,36 @@
+# Quoted identifiers keep their case and length; unquoted names fold to lower case before lookup.
+id: cmd-alter-trigger.rename-quoted-identifier-case
+title: "RENAME preserves quoted mixed-case trigger names exactly"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, rename, identifiers, quoted-identifiers]
+required_capabilities: [create-table, select, triggers, plpgsql, create-function, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (Parameters: new_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+  CREATE FUNCTION ath_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TRIGGER zz_last BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION ath_noop();
+steps:
+  - sql: |
+      ALTER TRIGGER "zz_last" ON t RENAME TO "Mixed Case"
+    expect: ok
+  - sql: |
+      SELECT tgname, length(tgname) AS n FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal
+    expect: rows
+    order: ordered
+    comment: the name keeps its case and embedded space
+  - sql: |
+      ALTER TRIGGER "MIXED CASE" ON t RENAME TO x
+    expect: error
+    sqlstate: "42704"
+    comment: quoted names are not case-folded
+  - sql: |
+      ALTER TRIGGER "Mixed Case" ON t RENAME TO mixed
+    expect: ok
+  - sql: |
+      ALTER TRIGGER MIXED ON t RENAME TO "Mixed Case"
+    expect: ok
+    comment: unquoted MIXED folds to mixed, which is the current name

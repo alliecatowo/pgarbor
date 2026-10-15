@@ -1,0 +1,44 @@
+# DROP TRIGGER takes a lock on the table, so it waits for an open reader and completes once that reader commits.
+id: cmd-drop-trigger.blocked-by-reader
+title: "DROP TRIGGER waits behind an open reader of the table until that reader commits"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, locks, transactions, multi-session, triggers]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, transactions, multi-session, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Description); same lock behaviour as drop_index.sgml#sql-dropindex"
+sessions: [a, b]
+setup: |
+  CREATE FUNCTION noop_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TABLE jobs (id int4 PRIMARY KEY, state text);
+  CREATE TRIGGER jobs_tg BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION noop_tg();
+  INSERT INTO jobs VALUES (1, 'new'), (2, 'done');
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, state FROM jobs ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      DROP TRIGGER jobs_tg ON jobs
+    async: true
+    expect_blocked: true
+    comment: needs a table lock that conflicts with a's open read
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: the drop completes once the reader releases its lock
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 'jobs'::regclass AND tgname = 'jobs_tg'
+    expect: rows

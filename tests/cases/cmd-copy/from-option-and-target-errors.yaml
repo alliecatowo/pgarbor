@@ -1,0 +1,86 @@
+# COPY FROM rejections that happen before any input is read: WHERE with a subquery, reject-limit and ON_ERROR rules, mode-specific options, FREEZE outside a new table, and invalid targets.
+id: cmd-copy.from-option-and-target-errors
+title: "COPY FROM rejects invalid WHERE, ON_ERROR/REJECT_LIMIT, mode options and targets before reading input"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-from, copy-options, copy-where, copy-on-error, errors]
+required_capabilities: [create-table, create-view, create-materialized-view, copy, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy options ON_ERROR, REJECT_LIMIT, FREEZE, FORCE_NULL, WHERE; Notes"
+sessions: [a]
+setup: |
+  CREATE TABLE fq (id int4, v text);
+  CREATE VIEW fv AS SELECT id FROM fq;
+  CREATE MATERIALIZED VIEW fm AS SELECT id FROM fq;
+  CREATE TABLE fg (a int4, g int4 GENERATED ALWAYS AS (a + 1) STORED);
+steps:
+  - sql: |
+      COPY fq FROM STDIN WHERE id IN (SELECT 1)
+    expect: error
+    sqlstate: "0A000"
+    comment: subqueries are not allowed in COPY FROM WHERE
+  - sql: |
+      COPY fq FROM STDIN (ON_ERROR nope)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      COPY fq FROM STDIN (ON_ERROR ignore, REJECT_LIMIT 0)
+    expect: error
+    sqlstate: "22023"
+    comment: REJECT_LIMIT must be positive
+  - sql: |
+      COPY fq FROM STDIN (REJECT_LIMIT 5)
+    expect: error
+    sqlstate: "22023"
+    comment: REJECT_LIMIT requires ON_ERROR ignore
+  - sql: |
+      COPY fq FROM STDIN (FORMAT binary, ON_ERROR ignore)
+    expect: error
+    sqlstate: "42601"
+    comment: only ON_ERROR STOP is allowed in binary mode
+  - sql: |
+      COPY fq FROM STDIN (FORMAT binary, DEFAULT 'x')
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      COPY fq FROM STDIN (FORMAT text, QUOTE '"')
+    expect: error
+    sqlstate: "0A000"
+    comment: QUOTE requires CSV
+  - sql: |
+      COPY fq FROM STDIN (FORMAT text, FORCE_NULL *)
+    expect: error
+    comment: FORCE_NULL requires CSV
+  - sql: |
+      COPY fq FROM STDIN (FORMAT csv, FORCE_NULL (nosuch))
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      COPY fq FROM STDIN (FORMAT binary, HEADER MATCH)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      COPY fq FROM STDIN (FREEZE on, FORMAT csv)
+    expect: error
+    sqlstate: "55000"
+    comment: FREEZE needs a table created or truncated in the current transaction
+  - sql: |
+      COPY fv FROM STDIN
+    expect: error
+    sqlstate: "42809"
+    comment: no INSTEAD OF INSERT trigger on the view
+  - sql: |
+      COPY fm FROM STDIN
+    expect: error
+    sqlstate: "42809"
+    comment: materialized views are not writable by COPY
+  - sql: |
+      COPY fg (a, g) FROM STDIN
+    expect: error
+    sqlstate: "42P10"
+    comment: generated columns cannot be targets
+  - sql: |
+      COPY fq (id, nosuch) FROM STDIN
+    expect: error
+    sqlstate: "42703"

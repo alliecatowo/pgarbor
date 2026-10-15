@@ -1,0 +1,52 @@
+# GREATEST and LEAST ignore NULL arguments and return NULL only when every argument is NULL.
+id: doc-functions-conditional.greatest-least-null-handling
+title: GREATEST and LEAST skip NULL arguments and return NULL only when all are NULL
+family: doc-functions-conditional
+tier: core
+feature_ids: [greatest, least, null-semantics, type-resolution]
+required_capabilities: [select, create-table, insert, numeric, arrays, int8]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-greatest-least (NULL values are ignored; result is NULL only if all are NULL)"
+sessions: [a]
+setup: |
+  CREATE TABLE m (a int4, b int4);
+  INSERT INTO m VALUES (1, 5), (7, NULL), (NULL, NULL);
+steps:
+  - sql: |
+      SELECT a, b, GREATEST(a, b) AS g, LEAST(a, b) AS l FROM m ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: a single non-null argument is returned; NULL only when every argument is NULL
+  - sql: |
+      SELECT GREATEST(NULL::int4, NULL) AS allnull_g, LEAST(NULL::text) AS allnull_l
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT GREATEST(1, NULL, 3) AS g, LEAST(1, NULL, 3) AS l
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT GREATEST(1, 2.5) AS g, pg_typeof(GREATEST(1, 2.5))::text AS t
+    expect: rows
+    order: multiset
+    comment: common type is numeric
+  - sql: |
+      SELECT GREATEST(1, 2.5, '3') AS g
+    expect: rows
+    order: multiset
+    comment: unknown literal '3' resolves to numeric
+  - sql: |
+      SELECT GREATEST('a', 'b', 'ab') AS gs, LEAST('a', 'b') AS ls
+    expect: rows
+    order: multiset
+    comment: text comparison uses the collation ordering of the database default
+  - sql: |
+      SELECT GREATEST(ARRAY[1, 2], ARRAY[1, 3]) AS ga
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT GREATEST(1::int2, 2::int8) AS g, pg_typeof(GREATEST(1::int2, 2::int8))::text AS t
+    expect: rows
+    order: multiset
+    comment: smallint and bigint resolve to bigint

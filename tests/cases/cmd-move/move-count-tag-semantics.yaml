@@ -1,0 +1,43 @@
+id: cmd-move.move-count-tag-semantics
+title: The MOVE command tag counts the rows a FETCH would return, including zero at the end and for FORWARD 0
+family: cmd-move
+tier: core
+feature_ids: [move, fetch, declare-cursor, command-tag, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/move.sgml#sql-move (Outputs: MOVE count is the number of rows a FETCH would have returned)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four'), (5, 'five'), (6, 'six'), (7, 'seven');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE n CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      MOVE 2 FROM n
+    expect: ok
+    comment: MOVE 2 (no direction keyword means FORWARD)
+  - sql: |
+      MOVE 10 FROM n
+    expect: ok
+    comment: only rows 3 to 7 remain, so MOVE 5
+  - sql: |
+      MOVE NEXT FROM n
+    expect: ok
+    comment: already past the last row, MOVE 0
+  - sql: |
+      MOVE PRIOR FROM n
+    expect: ok
+    comment: PRIOR from past-the-end lands on the last row, MOVE 1
+  - sql: |
+      MOVE FORWARD 0 FROM n
+    expect: ok
+    comment: a zero count is valid and moves nothing, MOVE 0
+  - sql: |
+      COMMIT
+    expect: ok

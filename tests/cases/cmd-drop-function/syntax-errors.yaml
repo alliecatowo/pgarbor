@@ -1,0 +1,43 @@
+# The grammar allows one optional IF EXISTS before the whole list, and exactly one of CASCADE or
+# RESTRICT after it. Repeating IF EXISTS per item, or giving both CASCADE and RESTRICT, is a syntax error
+# (42601). A syntax error runs nothing, so the function still exists afterwards.
+id: cmd-drop-function.syntax-errors
+title: IF EXISTS applies once before the list; CASCADE and RESTRICT are mutually exclusive
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, syntax, if-exists, cascade, restrict]
+required_capabilities: [create-function, drop-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (Synopsis)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION sx(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION IF EXISTS sx(int), IF EXISTS sx(int)
+    expect: error
+    sqlstate: "42601"
+    comment: IF EXISTS may appear only once, before the list
+  - sql: |
+      DROP FUNCTION sx(int), IF EXISTS sx(int)
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      DROP FUNCTION sx(int) CASCADE RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: CASCADE and RESTRICT are alternatives
+  - sql: |
+      DROP FUNCTION IF EXISTS sx(int) CASCADE RESTRICT
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'sx'
+    expect: rows
+    order: multiset
+    comment: 1 row, nothing was dropped by the syntax errors
+  - sql: |
+      DROP FUNCTION sx(int) CASCADE
+    expect: ok

@@ -1,0 +1,39 @@
+# Read Committed: each SELECT sees the data committed as of its own start, so two SELECTs in one transaction can differ.
+id: doc-transaction-iso.rc-snapshot-per-statement
+title: READ COMMITTED sees commits made between two SELECTs of one transaction
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, read-committed, select, update]
+required_capabilities: [create-table, insert, select, update, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#xact-read-committed"
+sessions: [a, b]
+setup: |
+  CREATE TABLE doc_t (id int4 PRIMARY KEY, v text NOT NULL);
+  INSERT INTO doc_t VALUES (1, 'old');
+steps:
+  - session: b
+    sql: |
+      BEGIN ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM doc_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: first snapshot sees the committed value
+  - session: a
+    sql: |
+      UPDATE doc_t SET v = 'new' WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM doc_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a new statement takes a new snapshot and sees the committed change
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok

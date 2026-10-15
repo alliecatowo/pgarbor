@@ -1,0 +1,42 @@
+# Stored generated columns are computed after BEFORE triggers and before AFTER triggers. A BEFORE trigger
+# that changes the generated column has that change overwritten, and an AFTER trigger sees the computed value.
+id: doc-trigger-definition.generated-stored-visible-in-after
+title: Stored generated column is computed between BEFORE and AFTER triggers and overwrites BEFORE changes
+family: doc-trigger-definition
+tier: extended
+feature_ids: [triggers, generated-columns, plpgsql, insert]
+required_capabilities: [create-table, create-function, insert, select, plpgsql, triggers, generated-columns, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (considerations for generated columns: stored generated columns and triggers)"
+sessions: [a]
+setup: |
+  CREATE TABLE g (a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+  CREATE TABLE g_log (seq int GENERATED ALWAYS AS IDENTITY, b int);
+  CREATE FUNCTION g_before() RETURNS trigger AS $$
+  BEGIN
+    NEW.a := NEW.a + 1;
+    NEW.b := 999;
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION g_after() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO g_log (b) VALUES (NEW.b);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER g_bi BEFORE INSERT ON g FOR EACH ROW EXECUTE FUNCTION g_before();
+  CREATE TRIGGER g_ai AFTER INSERT ON g FOR EACH ROW EXECUTE FUNCTION g_after();
+steps:
+  - sql: |
+      INSERT INTO g (a) VALUES (1), (5)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM g ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT b FROM g_log ORDER BY seq
+    expect: rows
+    order: ordered

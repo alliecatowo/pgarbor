@@ -1,0 +1,41 @@
+# COMMIT closes ordinary cursors but a WITH HOLD cursor remains readable in later autocommit statements.
+id: cmd-commit.with-hold-cursor-survives
+title: COMMIT keeps a WITH HOLD cursor open and closes a non-holdable cursor
+family: cmd-commit
+tier: extended
+feature_ids: [commit, cursors, with-hold, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/commit.sgml#sql-commit (Description: commits the current transaction; cursor lifetime per ref/declare.sgml WITH HOLD)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1), (2), (3);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE hold CURSOR WITH HOLD FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      DECLARE nohold CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      FETCH 1 FROM nohold
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      FETCH 2 FROM hold
+    expect: rows
+    order: ordered
+    comment: the holdable cursor keeps its position across COMMIT
+  - sql: |
+      FETCH 1 FROM nohold
+    expect: error
+    sqlstate: "34000"
+    comment: the non-holdable cursor was closed by COMMIT

@@ -1,0 +1,30 @@
+# NULLS NOT DISTINCT makes NULLs compare equal: a second NULL key is a unique violation.
+id: doc-indexes-unique.nulls-not-distinct-single-column
+title: NULLS NOT DISTINCT unique index rejects a second NULL key
+family: doc-indexes-unique
+tier: extended
+feature_ids: [unique-index, create-index, nulls, nulls-not-distinct, errors]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, nulls-not-distinct, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique ('NULLS NOT DISTINCT option ... causes the index to treat nulls as equal')"
+sessions: [a]
+setup: |
+  CREATE TABLE nd (a int, b int);
+  CREATE UNIQUE INDEX nd_a ON nd (a) NULLS NOT DISTINCT;
+steps:
+  - sql: |
+      INSERT INTO nd VALUES (NULL, 1)
+    expect: ok
+  - sql: |
+      INSERT INTO nd VALUES (NULL, 2)
+    expect: error
+    sqlstate: "23505"
+    comment: second NULL key is a duplicate under NULLS NOT DISTINCT
+  - sql: |
+      INSERT INTO nd VALUES (1, 3), (2, 4)
+    expect: ok
+  - sql: |
+      SELECT a, b FROM nd ORDER BY b
+    expect: rows
+    order: ordered

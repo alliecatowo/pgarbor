@@ -1,0 +1,27 @@
+# LATERAL with LEFT JOIN: statistics rows without an MCV list still appear, with zero items.
+id: doc-functions-statistics.mcv-items-lateral-left-join
+title: LEFT JOIN LATERAL over pg_mcv_list_items keeps statistics that have no MCV list
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, ndistinct-statistics, outer-join, lateral]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table, lateral-join]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE ql (a int, d int);
+  ALTER TABLE ql SET (autovacuum_enabled = false);
+  INSERT INTO ql SELECT i % 4, i % 3 FROM generate_series(1, 200) g(i);
+  INSERT INTO ql VALUES (NULL, NULL), (NULL, 1);
+  CREATE STATISTICS ql_mcv (mcv) ON a, d FROM ql;
+  CREATE STATISTICS ql_nd (ndistinct) ON a, d FROM ql;
+steps:
+  - sql: |
+      ANALYZE ql
+    expect: ok
+  - sql: |
+      SELECT s.stxname, count(*) AS result_rows, count(m.index) AS mcv_items FROM pg_statistic_ext s JOIN pg_statistic_ext_data d ON d.stxoid = s.oid LEFT JOIN LATERAL pg_mcv_list_items(d.stxdmcv) m ON true GROUP BY s.stxname ORDER BY s.stxname
+    expect: rows
+    order: ordered
+    comment: ql_nd has a NULL stxdmcv, so it contributes one null-extended row and zero items

@@ -1,0 +1,40 @@
+# SET SCHEMA moves a materialized view between schemas; an unknown target schema is rejected.
+id: cmd-alter-materialized-view.set-schema-and-move-back
+title: "ALTER MATERIALIZED VIEW SET SCHEMA moves the view and rejects a missing schema"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, set-schema, schemas]
+required_capabilities: [create-table, select, create-schema, create-materialized-view, alter-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_ss_base (id int4);
+  INSERT INTO amv_ss_base VALUES (1), (2);
+  CREATE MATERIALIZED VIEW amv_ss_mv AS SELECT id FROM amv_ss_base;
+  CREATE SCHEMA amv_ss_dest;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ss_mv SET SCHEMA amv_ss_dest
+    expect: ok
+  - sql: |
+      SELECT schemaname, matviewname FROM pg_matviews WHERE matviewname = 'amv_ss_mv'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM amv_ss_dest.amv_ss_mv
+    expect: rows
+    order: ordered
+    comment: rows travel with the view
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ss_dest.amv_ss_mv SET SCHEMA amv_ss_nosuch
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ss_dest.amv_ss_mv SET SCHEMA public
+    expect: ok
+    comment: move back so the schema can be dropped
+  - sql: |
+      DROP SCHEMA amv_ss_dest
+    expect: ok

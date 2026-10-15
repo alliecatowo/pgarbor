@@ -1,0 +1,99 @@
+# Each COMMENT form that names a missing or wrong-kind object fails with its documented SQLSTATE, and the session stays usable afterwards.
+id: cmd-comment.error-undefined-objects
+title: COMMENT on a missing or wrong-kind object fails with the matching SQLSTATE for each object form
+family: cmd-comment
+tier: core
+feature_ids: [comment, errors, undefined-object, wrong-object-type, syntax-errors]
+required_capabilities: [comment, create-table, create-view, create-function, catalog-introspection, errors, roles, create-schema, large-objects, foreign-data-wrappers, extensions]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-params-object-name; ref/comment.sgml#sql-comment-params-relation-name; ref/comment.sgml#sql-comment-params-string-literal"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE cmd_t (id int4 PRIMARY KEY)
+    expect: ok
+  - sql: |
+      CREATE VIEW cmd_vw AS SELECT id FROM cmd_t
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE cmd_missing IS 'x'
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      COMMENT ON COLUMN cmd_t.nope IS 'x'
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      COMMENT ON CONSTRAINT nope ON cmd_t IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON CAST (text AS int4) IS 'no pg_cast entry exists for text to int4'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON FUNCTION cmd_nofn(int4) IS 'x'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      COMMENT ON FOREIGN DATA WRAPPER cmd_nofdw IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON SERVER cmd_nosrv IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON FOREIGN TABLE cmd_noft IS 'x'
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      COMMENT ON ROLE cmd_no_role IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON SCHEMA cmd_no_schema IS 'x'
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      COMMENT ON TABLE cmd_no_schema.t IS 'x'
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      COMMENT ON EXTENSION cmd_no_ext IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON EVENT TRIGGER cmd_no_et IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON LARGE OBJECT 999999999 IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON TABLE cmd_vw IS 'a view is not a table'
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      COMMENT ON VIEW cmd_t IS 'a table is not a view'
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      COMMENT ON AGGREGATE sum(*) IS 'x'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      COMMENT ON TABLE cmd_t IS 1
+    expect: error
+    sqlstate: "42601"
+    comment: IS takes a string literal or NULL, not a number
+  - sql: |
+      COMMENT ON COLUMN cmd_t IS 'column name must be qualified'
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT obj_description('cmd_t'::regclass, 'pg_class') IS NULL AS still_usable
+    expect: rows
+    comment: every error above was per-statement; the session continues normally

@@ -1,0 +1,50 @@
+# A custom PL/pgSQL trigger weights title as A and body as D, concatenating the two vectors.
+id: doc-textsearch-features.trigger-custom-plpgsql-weights
+title: Custom plpgsql trigger builds a weighted tsvector from title and body
+family: doc-textsearch-features
+tier: core
+feature_ids: [tsvector-update-trigger, setweight, plpgsql, triggers]
+required_capabilities: [create-table, create-function, create-trigger, plpgsql, insert, select, triggers, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-update-triggers"
+steps:
+  - sql: |
+      CREATE TABLE messages (
+          title       text,
+          body        text,
+          tsv         tsvector
+      )
+    expect: ok
+  - sql: |
+      CREATE FUNCTION messages_trigger() RETURNS trigger AS $$
+      begin
+        new.tsv :=
+           setweight(to_tsvector('pg_catalog.english', coalesce(new.title,'')), 'A') ||
+           setweight(to_tsvector('pg_catalog.english', coalesce(new.body,'')), 'D');
+        return new;
+      end
+      $$ LANGUAGE plpgsql
+    expect: ok
+  - sql: |
+      CREATE TRIGGER tsvectorupdate BEFORE INSERT OR UPDATE
+          ON messages FOR EACH ROW EXECUTE FUNCTION messages_trigger()
+    expect: ok
+  - sql: |
+      INSERT INTO messages VALUES ('title here', 'the body text is here')
+    expect: ok
+  - sql: |
+      SELECT tsv::text AS tsv FROM messages
+    expect: rows
+    order: multiset
+    comment: title lexemes carry label A, body lexemes keep the default D
+  - sql: |
+      SELECT count(*) FROM messages WHERE tsv @@ to_tsquery('english', 'titl:A')
+    expect: rows
+    order: multiset
+    comment: weight-restricted query matches only the A-labelled title lexeme
+  - sql: |
+      SELECT count(*) FROM messages WHERE tsv @@ to_tsquery('english', 'bodi:A')
+    expect: rows
+    order: multiset
+    comment: body lexemes are not labelled A, so this does not match

@@ -1,0 +1,33 @@
+# RAISE EXCEPTION aborts the DO block; statements it already ran are undone. Default SQLSTATE is P0001, USING ERRCODE overrides it, runtime errors keep their own code.
+id: cmd-do.raise-exception-sqlstate
+title: RAISE EXCEPTION in a DO block rolls back the block and uses the default or given SQLSTATE
+family: cmd-do
+tier: core
+feature_ids: [do, plpgsql, raise, errors, error-codes]
+required_capabilities: [create-table, insert, select, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/do.sgml#sql-do (Description: block executed as a function body); PL/pgSQL RAISE (plpgsql-errors-and-messages)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      DO $$ BEGIN INSERT INTO t VALUES (1); RAISE EXCEPTION 'boom'; END $$
+    expect: error
+    sqlstate: P0001
+    comment: default SQLSTATE for RAISE EXCEPTION is raise_exception
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: the INSERT before the RAISE was rolled back with the block
+  - sql: |
+      DO $$ BEGIN RAISE EXCEPTION 'custom' USING ERRCODE = '22012'; END $$
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      DO $$ BEGIN PERFORM 1/0; END $$
+    expect: error
+    sqlstate: "22012"
+    comment: a runtime error raised inside the block keeps its own SQLSTATE

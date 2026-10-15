@@ -1,0 +1,34 @@
+# Default RESTRICT refuses to truncate a referenced table; the error leaves all rows in place.
+id: cmd-truncate.restrict-default-fk-error
+title: "TRUNCATE of a foreign-key referenced table fails without CASCADE and changes nothing"
+family: cmd-truncate
+tier: core
+feature_ids: [truncate, restrict, foreign-key, create-table, insert, select, errors]
+required_capabilities: [create-table, insert, select, foreign-key, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#notes (cannot be used on a table with foreign-key references from other tables)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY);
+  CREATE TABLE child (id int4 PRIMARY KEY, pid int4 REFERENCES parent (id));
+  INSERT INTO parent VALUES (1), (2);
+  INSERT INTO child VALUES (1, 1);
+steps:
+  - sql: |
+      TRUNCATE parent
+    expect: error
+    sqlstate: "0A000"
+    comment: child references parent and is not listed, so RESTRICT (the default) refuses
+  - sql: |
+      TRUNCATE parent RESTRICT
+    expect: error
+    sqlstate: "0A000"
+    comment: explicit RESTRICT behaves the same as the default
+  - sql: |
+      SELECT 'parent' AS t, count(*) AS n FROM parent
+      UNION ALL SELECT 'child', count(*) FROM child
+      ORDER BY t
+    expect: rows
+    order: ordered
+    comment: both tables still hold their rows after the refused truncates

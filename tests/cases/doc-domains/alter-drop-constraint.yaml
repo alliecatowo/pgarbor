@@ -1,0 +1,32 @@
+# ALTER DOMAIN ... DROP CONSTRAINT removes only the named check; the inherited base check still applies.
+id: doc-domains.alter-drop-constraint
+title: Dropping a domain's own CHECK keeps the inherited base-domain CHECK in force
+family: doc-domains
+tier: core
+feature_ids: [domains, alter-domain, check-constraint, nested-domain]
+required_capabilities: [create-domain, alter-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#domains; sql-alterdomain"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS integer CHECK (VALUE > 0);
+  CREATE DOMAIN posint2 AS posint CHECK (VALUE < 100)
+steps:
+  - sql: |
+      SELECT 150::posint2
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      ALTER DOMAIN posint2 DROP CONSTRAINT posint2_check
+    expect: ok
+  - sql: |
+      SELECT 150::posint2 AS v
+    expect: rows
+    order: ordered
+    comment: the upper bound is gone
+  - sql: |
+      SELECT 0::posint2
+    expect: error
+    sqlstate: "23514"
+    comment: the inherited posint_check still applies

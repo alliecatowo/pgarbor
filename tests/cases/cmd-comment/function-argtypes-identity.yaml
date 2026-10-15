@@ -1,0 +1,83 @@
+# COMMENT ON FUNCTION identifies a routine by its input argument types only: argument names, defaults and OUT arguments do not participate, and ambiguity or wrong object kind are rejected.
+id: cmd-comment.function-argtypes-identity
+title: COMMENT ON FUNCTION and ROUTINE identify overloads by input argument types; OUT and argument names are ignored
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-function, comment-routine, comment-procedure, comment-overload]
+required_capabilities: [comment, create-function, create-procedure, plpgsql, sql-functions, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-params-argmode (OUT ignored); ref/comment.sgml#sql-comment-params-argname (argument names ignored); ref/comment.sgml#sql-comment-params-argtype; ref/comment.sgml#sql-comment-examples (FUNCTION, PROCEDURE, ROUTINE examples)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION cmt_fv(a int4, b text DEFAULT 'x') RETURNS int4 LANGUAGE sql AS 'SELECT a'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_fv(int4, text) IS 'defaults are not part of the identity'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_fv(x int, y text) IS 'argument names are ignored'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_fv(IN int4, IN text) IS 'IN is the default mode'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_fv IS 'a bare name is fine when it is unambiguous'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cmt_fo(IN a int4, OUT b int4) LANGUAGE sql AS 'SELECT a'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_fo(int4) IS 'OUT arguments are ignored'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_fo(int4, OUT int4) IS 'OUT still ignored'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cmt_ov(int4) RETURNS int4 LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cmt_ov(text) RETURNS int4 LANGUAGE sql AS 'SELECT 2'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_ov(text) IS 'text overload'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_ov(int4) IS 'int overload'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_ov IS 'ambiguous without an argument list'
+    expect: error
+    sqlstate: "42725"
+  - sql: |
+      COMMENT ON FUNCTION cmt_fv(int4) IS 'no one-argument overload'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      COMMENT ON FUNCTION cmt_fv(int4, text, int4) IS 'no three-argument overload'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE PROCEDURE cmt_pr(x int4) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      COMMENT ON PROCEDURE cmt_pr(int4) IS 'procedure comment'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmt_pr(int4) IS 'a procedure is not a function'
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      COMMENT ON ROUTINE cmt_pr(int4) IS 'routine names a procedure'
+    expect: ok
+  - sql: |
+      COMMENT ON ROUTINE cmt_fv(int4, text) IS 'routine names a function'
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmt_fv(int4,text)'::regprocedure, 'pg_proc') AS fv,
+             obj_description('cmt_fo(int4)'::regprocedure, 'pg_proc') AS fo,
+             obj_description('cmt_ov(int4)'::regprocedure, 'pg_proc') AS ov_int,
+             obj_description('cmt_ov(text)'::regprocedure, 'pg_proc') AS ov_text,
+             obj_description('cmt_pr(int4)'::regprocedure, 'pg_proc') AS pr
+    expect: rows

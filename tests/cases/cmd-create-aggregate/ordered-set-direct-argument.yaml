@@ -1,0 +1,25 @@
+# Ordered-set aggregate with a direct argument: the direct argument is evaluated once and passed to
+# the final function together with the final state.
+id: cmd-create-aggregate.ordered-set-direct-argument
+title: "Ordered-set aggregate with a direct argument passes it to the final function once per group"
+family: cmd-create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, ordered-set-aggregates, direct-arguments]
+required_capabilities: [create-table, insert, select, aggregates, sql-functions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (ordered-set aggregates, direct arguments; FINALFUNC receives direct arguments)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE FUNCTION scale_fin(int4, float8) RETURNS float8 LANGUAGE sql AS $$ SELECT $1 * $2 $$;
+  CREATE AGGREGATE scaled_sum (float8 ORDER BY int4) (SFUNC = int4pl, STYPE = int4, FINALFUNC = scale_fin, INITCOND = '0');
+steps:
+  - sql: |
+      SELECT scaled_sum(2.0) WITHIN GROUP (ORDER BY x) FROM t
+    expect: rows
+    comment: sum of aggregated values 13, scaled by the direct argument 2.0
+  - sql: |
+      SELECT scaled_sum(2.0) WITHIN GROUP (ORDER BY x) FROM t WHERE false
+    expect: rows
+    comment: empty input still runs the final function on the initcond state

@@ -1,0 +1,35 @@
+# SET affects only the session that issued it; other sessions keep their own values.
+id: cmd-set.session-isolation
+title: SET in one session does not change the value seen by another session
+family: cmd-set
+tier: core
+feature_ids: [set, guc, session-scope, multi-session]
+required_capabilities: [select, guc, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/set.sgml#sql-set (Description: only affects the value used by the current session)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SET work_mem = '9MB'
+    expect: ok
+  - session: b
+    sql: |
+      SELECT current_setting('work_mem') AS other_session
+    expect: rows
+    comment: must not be 9MB
+  - session: a
+    sql: |
+      SELECT current_setting('work_mem') AS setter_session
+    expect: rows
+    comment: 9MB
+  - session: b
+    sql: |
+      SET TIME ZONE 'Asia/Tokyo'
+    expect: ok
+  - session: a
+    sql: |
+      SELECT current_setting('TimeZone') = (SELECT reset_val FROM pg_settings WHERE name = 'TimeZone') AS a_tz_is_default
+    expect: rows
+    comment: session a is unaffected by b's time zone change

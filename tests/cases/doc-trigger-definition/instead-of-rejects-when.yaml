@@ -1,0 +1,26 @@
+# INSTEAD OF triggers do not support WHEN conditions; the definition is rejected.
+id: doc-trigger-definition.instead-of-rejects-when
+title: CREATE TRIGGER INSTEAD OF with a WHEN clause is rejected
+family: doc-trigger-definition
+tier: extended
+feature_ids: [triggers, instead-of-triggers, views, errors]
+required_capabilities: [create-table, create-view, create-function, plpgsql, triggers, error-sqlstate]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (INSTEAD OF triggers do not support WHEN conditions)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int);
+  CREATE VIEW v AS SELECT id FROM base;
+  CREATE FUNCTION v_noop() RETURNS trigger AS $$
+  BEGIN RETURN NEW; END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER v_when INSTEAD OF INSERT ON v FOR EACH ROW WHEN (NEW.id > 0) EXECUTE FUNCTION v_noop()
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      CREATE TRIGGER v_plain INSTEAD OF INSERT ON v FOR EACH ROW EXECUTE FUNCTION v_noop()
+    expect: ok
+    comment: the same trigger without WHEN is accepted

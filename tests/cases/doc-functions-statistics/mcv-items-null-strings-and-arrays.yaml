@@ -1,0 +1,26 @@
+# Text values in MCV items: SQL NULL vs the string 'NULL', quoting in text[] output, and the nulls flags.
+id: doc-functions-statistics.mcv-items-null-strings-and-arrays
+title: MCV values distinguish SQL NULL from the text 'NULL' and report nulls flags per column
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, analyze, null-semantics, text-arrays]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE q3 (a int, b text, c boolean);
+  ALTER TABLE q3 SET (autovacuum_enabled = false);
+  INSERT INTO q3 SELECT i % 4, CASE WHEN i % 5 = 0 THEN 'a,b' WHEN i % 5 = 1 THEN 'say "hi"' WHEN i % 5 = 2 THEN ' lead' WHEN i % 5 = 3 THEN 'NULL' ELSE NULL END, i % 2 = 0 FROM generate_series(1, 200) g(i);
+  INSERT INTO q3 VALUES (NULL, NULL, NULL), (NULL, 'NULL', NULL);
+  CREATE STATISTICS q3_mcv (mcv) ON a, b, c FROM q3;
+steps:
+  - sql: |
+      ANALYZE q3
+    expect: ok
+  - sql: |
+      SELECT m.values, m.nulls FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'q3_mcv' ORDER BY m.values::text, m.nulls::text
+    expect: rows
+    order: ordered
+    comment: quoted text elements, a NULL element and the literal 'NULL' string both appear; nulls flags disambiguate

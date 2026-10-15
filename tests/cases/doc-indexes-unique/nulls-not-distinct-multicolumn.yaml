@@ -1,0 +1,35 @@
+# Multicolumn NULLS NOT DISTINCT: rows are duplicates only when every indexed column matches, NULLs included.
+id: doc-indexes-unique.nulls-not-distinct-multicolumn
+title: Multicolumn NULLS NOT DISTINCT rejects only fully equal keys, treating NULL as equal
+family: doc-indexes-unique
+tier: extended
+feature_ids: [unique-index, create-index, nulls, nulls-not-distinct, errors]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, nulls-not-distinct, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique (NULLS NOT DISTINCT; multicolumn unique index rejects only all-equal rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE ndm (a int, b int, c text);
+  CREATE UNIQUE INDEX ndm_ab ON ndm (a, b) NULLS NOT DISTINCT;
+steps:
+  - sql: |
+      INSERT INTO ndm VALUES (NULL, 1, 'x'), (NULL, 2, 'y'), (1, NULL, 'z'), (1, 2, 'w')
+    expect: ok
+  - sql: |
+      INSERT INTO ndm VALUES (NULL, 1, 'dup')
+    expect: error
+    sqlstate: "23505"
+    comment: both key columns equal, one NULL matches NULL
+  - sql: |
+      INSERT INTO ndm VALUES (1, NULL, 'dup2')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO ndm VALUES (1, 2, 'dup3')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT a, b, c FROM ndm ORDER BY c
+    expect: rows
+    order: ordered

@@ -1,0 +1,35 @@
+# SET followed by SET LOCAL in one transaction: LOCAL value visible until end; afterwards (on commit) the SET value takes effect.
+id: cmd-set.local-overrides-set
+title: SET then SET LOCAL in one transaction keeps the SET value after commit and discards LOCAL
+family: cmd-set
+tier: core
+feature_ids: [set, set-local, transactions]
+required_capabilities: [select, guc, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/set.sgml#sql-set (Description: special case SET followed by SET LOCAL)"
+sessions: [a]
+steps:
+  - sql: |
+      SET work_mem = '4MB'
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET work_mem = '16MB'
+    expect: ok
+  - sql: |
+      SET LOCAL work_mem = '32MB'
+    expect: ok
+  - sql: |
+      SELECT current_setting('work_mem') AS local_value
+    expect: rows
+    comment: 32MB, the LOCAL value
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_setting('work_mem') AS after_commit
+    expect: rows
+    comment: 16MB, the SET value, takes effect after COMMIT

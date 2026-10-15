@@ -1,0 +1,28 @@
+# Dropping a partitioned table drops its partitions along with it.
+id: cmd-drop-table.partition-parent-drop
+title: DROP TABLE on a partitioned parent removes all partitions
+family: cmd-drop-table
+tier: extended
+feature_ids: [drop-table, partitioning]
+required_capabilities: [create-table, partitioning, insert, select, drop-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_table.sgml#sql-droptable; doc-ddl-partitioning"
+sessions: [a]
+setup: |
+  CREATE TABLE par (id int4, k int4) PARTITION BY RANGE (k);
+  CREATE TABLE par_1 PARTITION OF par FOR VALUES FROM (0) TO (10);
+  CREATE TABLE par_2 PARTITION OF par FOR VALUES FROM (10) TO (20);
+  INSERT INTO par VALUES (1, 5), (2, 15);
+steps:
+  - sql: |
+      SELECT count(*) FROM par
+    expect: rows
+    comment: two rows routed to the two partitions
+  - sql: |
+      DROP TABLE par
+    expect: ok
+  - sql: |
+      SELECT to_regclass('par') IS NULL AS par_gone, to_regclass('par_1') IS NULL AS p1_gone, to_regclass('par_2') IS NULL AS p2_gone
+    expect: rows
+    order: ordered

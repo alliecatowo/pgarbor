@@ -1,0 +1,49 @@
+# suppress_redundant_updates_trigger as a row-level BEFORE UPDATE trigger: a no-op update performs no
+# physical update (UPDATE 0, AFTER row triggers do not fire); a real change goes through.
+id: doc-functions-trigger.suppress-redundant-updates-basic
+title: suppress_redundant_updates_trigger skips no-op row updates and applies real changes
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, suppress-redundant-updates, update, returning]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, plpgsql, returning]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-trigger (suppress_redundant_updates_trigger; example z_min_update)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int, n text);
+  CREATE TABLE upd_log (k text);
+  CREATE FUNCTION upd_log_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO upd_log VALUES (TG_OP);
+    RETURN NULL;
+  END
+  $$;
+  CREATE TRIGGER z_min_update BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
+  CREATE TRIGGER t_aft AFTER UPDATE ON t FOR EACH ROW EXECUTE FUNCTION upd_log_fn();
+  INSERT INTO t VALUES (1, 10, 'a'), (2, NULL, 'b');
+steps:
+  - sql: |
+      UPDATE t SET v = 10, n = 'a' WHERE id = 1
+    expect: ok
+    comment: no column changes, so the row is skipped (UPDATE 0)
+  - sql: |
+      SELECT count(*) FROM upd_log
+    expect: rows
+    comment: expect 0 AFTER row firings
+  - sql: |
+      UPDATE t SET v = 11 WHERE id = 1
+    expect: ok
+    comment: v changes, so the update goes through (UPDATE 1)
+  - sql: |
+      UPDATE t SET v = 11 WHERE id = 1 RETURNING id
+    expect: rows
+    comment: second identical update is skipped, so RETURNING produces no rows
+  - sql: |
+      SELECT count(*) FROM upd_log
+    expect: rows
+    comment: expect exactly 1 AFTER row firing
+  - sql: |
+      SELECT id, v, n FROM t ORDER BY id
+    expect: rows
+    order: ordered

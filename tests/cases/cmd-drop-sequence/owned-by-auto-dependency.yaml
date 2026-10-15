@@ -1,0 +1,29 @@
+# A sequence attached with OWNED BY has an automatic dependency, so a plain DROP SEQUENCE succeeds without CASCADE.
+id: cmd-drop-sequence.owned-by-auto-dependency
+title: DROP SEQUENCE on an OWNED BY sequence succeeds without CASCADE and leaves the table intact
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, owned-by, dependencies]
+required_capabilities: [sequences, alter-sequence, create-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Description) and ddl-depend"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE o1;
+  CREATE TABLE tt (id int4, v text);
+  ALTER SEQUENCE o1 OWNED BY tt.id;
+  INSERT INTO tt VALUES (1, 'x');
+steps:
+  - sql: |
+      DROP SEQUENCE o1
+    expect: ok
+    comment: OWNED BY is an automatic dependency and does not block RESTRICT
+  - sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relkind = 'S' AND relname = 'o1'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, v FROM tt ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,36 @@
+# SET SCHEMA moves the statistics object; afterwards only a schema-qualified name finds it.
+id: cmd-alter-statistics.set-schema-moves-object
+title: "ALTER STATISTICS SET SCHEMA moves the object and changes name resolution"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, set-schema, extended-statistics, search-path]
+required_capabilities: [create-table, create-schema, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_sm (a int, b int);
+  CREATE STATISTICS ast_sm_s1 (ndistinct) ON a, b FROM ast_sm;
+  CREATE SCHEMA ast_sm_sx;
+steps:
+  - sql: |
+      ALTER STATISTICS ast_sm_s1 SET SCHEMA ast_sm_sx
+    expect: ok
+  - sql: |
+      SELECT stxname, stxnamespace::regnamespace::text AS schema FROM pg_statistic_ext WHERE stxname = 'ast_sm_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_sm_s1 RENAME TO ast_sm_s2
+    expect: error
+    sqlstate: "42704"
+    comment: the unqualified name is resolved through search_path (public), where the object no longer lives
+  - sql: |
+      ALTER STATISTICS ast_sm_sx.ast_sm_s1 RENAME TO ast_sm_s2
+    expect: ok
+    comment: the schema-qualified name finds it
+  - sql: |
+      SELECT stxname, stxnamespace::regnamespace::text AS schema FROM pg_statistic_ext WHERE stxname = 'ast_sm_s2'
+    expect: rows
+    order: ordered

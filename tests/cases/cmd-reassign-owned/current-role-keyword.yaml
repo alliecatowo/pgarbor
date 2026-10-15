@@ -1,0 +1,40 @@
+# CURRENT_ROLE as the old role names the role set with SET ROLE, and the new role must be one the session can act for.
+id: cmd-reassign-owned.current-role-keyword
+title: "REASSIGN OWNED BY CURRENT_ROLE reassigns objects of the role set with SET ROLE"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, current-role, set-role]
+required_capabilities: [roles, set-role, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-synopsis (CURRENT_ROLE)"
+sessions: [a]
+setup: |
+  CREATE ROLE ro11_k;
+  CREATE ROLE ro11_m;
+  GRANT ro11_m TO ro11_k;
+  CREATE TABLE ro11_t (a int4);
+  ALTER TABLE ro11_t OWNER TO ro11_k;
+steps:
+  - sql: |
+      SET ROLE ro11_k
+    expect: ok
+  - sql: |
+      SELECT current_role AS r
+    expect: rows
+    order: ordered
+  - sql: |
+      REASSIGN OWNED BY CURRENT_ROLE TO ro11_m
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro11_t'
+    expect: rows
+    order: ordered
+    comment: the table owned by the set role now belongs to ro11_m
+  - sql: |
+      DROP OWNED BY ro11_m; DROP ROLE ro11_k; DROP ROLE ro11_m
+    expect: ok
+    comment: cleanup

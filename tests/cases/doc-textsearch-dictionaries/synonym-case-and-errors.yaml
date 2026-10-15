@@ -1,0 +1,35 @@
+# Synonym CaseSensitive option, the Synonyms parameter requirement, and a missing synonym file reported at first use.
+id: doc-textsearch-dictionaries.synonym-casesensitive
+title: synonym CaseSensitive compares input as-is, and missing parameters or files fail
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, synonym-template, case-sensitivity, errors]
+required_capabilities: [create-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Synonym Dictionary, CaseSensitive)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY syn_cs (template = synonym, synonyms = 'synonym_sample', casesensitive = true)
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('syn_cs', 'postgres') AS exact_case,
+             ts_lexize('syn_cs', 'Postgres') AS folded_input_not_matched,
+             ts_lexize('syn_cs', 'indices') AS prefix_entry
+    expect: rows
+    comment: with CaseSensitive the input is not lower-cased, so only the exact-case entry matches
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY syn_noparam (template = synonym)
+    expect: error
+    sqlstate: "22023"
+    comment: Synonyms parameter is required; the template is initialized at CREATE time
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY syn_missing (template = synonym, synonyms = 'no_such_syn')
+    expect: error
+    comment: the synonym file is opened when the dictionary is created; the message names the missing file
+  - sql: |
+      SELECT ts_lexize('syn_missing', 'x')
+    expect: error
+    sqlstate: "42704"
+    comment: the failed CREATE left no dictionary behind

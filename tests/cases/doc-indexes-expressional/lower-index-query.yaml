@@ -1,0 +1,45 @@
+# Index on lower(col1) serves case-insensitive equality; plain comparison and NULL semantics are unchanged.
+id: doc-indexes-expressional.lower-index-query
+title: Index on lower(col1) answers WHERE lower(col1) = constant with the same rows as a scan
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, create-index, lower, null-semantics]
+required_capabilities: [create-table, create-index, insert, select]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (lower(col1) example)"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (id int4 PRIMARY KEY, col1 text);
+  INSERT INTO test1 VALUES (1, 'value'), (2, 'Value'), (3, 'VALUE'), (4, 'other'), (5, NULL);
+  CREATE INDEX test1_lower_col1_idx ON test1 (lower(col1));
+steps:
+  - sql: |
+      SELECT id FROM test1 WHERE lower(col1) = 'value' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the documented query shape; matches all three case variants
+  - sql: |
+      SELECT id, lower(col1) AS l FROM test1 WHERE lower(col1) = 'value' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM test1 WHERE col1 = 'value' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the index does not change the meaning of a plain case-sensitive comparison
+  - sql: |
+      SELECT id FROM test1 WHERE lower(col1) = 'VALUE' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the constant is not lowered by the query, so no row matches
+  - sql: |
+      SELECT id FROM test1 WHERE lower(col1) IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: lower(NULL) is NULL, so the NULL row is found by IS NULL
+  - sql: |
+      SELECT id FROM test1 WHERE lower(col1) = NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: equality with NULL is never true

@@ -1,0 +1,40 @@
+# An uncommitted access method definition is invisible to another session until COMMIT; afterwards it is visible and usable.
+id: cmd-create-access-method.multi-session-catalog-visibility
+title: Uncommitted CREATE ACCESS METHOD is invisible to other sessions until commit
+family: cmd-create-access-method
+tier: extended
+feature_ids: [create-access-method, transactions, read-committed, catalog-visibility]
+required_capabilities: [create-access-method, table-access-method, transactions, multi-session, select]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method; READ COMMITTED visibility per transaction-iso, verified against PG18.6 oracle"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      CREATE ACCESS METHOD vis_am TYPE TABLE HANDLER heap_tableam_handler
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_am WHERE amname = 'vis_am'
+    expect: rows
+    order: ordered
+    comment: session b must not see the uncommitted definition
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_am WHERE amname = 'vis_am'
+    expect: rows
+    order: ordered
+    comment: visible after commit
+  - session: b
+    sql: |
+      CREATE TABLE t_vis (id int4) USING vis_am
+    expect: ok

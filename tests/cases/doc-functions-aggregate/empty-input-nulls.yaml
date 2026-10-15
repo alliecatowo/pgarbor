@@ -1,0 +1,34 @@
+# Aggregates over zero rows return NULL (count excepted), and coalesce substitutes zero or an empty array.
+id: doc-functions-aggregate.empty-input-nulls
+title: Aggregates over an empty input return NULL except count, which returns zero
+family: doc-functions-aggregate
+tier: core
+feature_ids: [aggregate-empty-input, count, coalesce, regr-count]
+required_capabilities: [select, aggregates, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (General-Purpose Aggregate Functions: 'except for count, these functions return a null value when no rows are selected')"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT sum(x) AS s, avg(x) AS a, min(x) AS mn, max(x) AS mx, string_agg(t, ',') AS sa,
+             array_agg(x) AS aa, bool_and(b) AS ba, bool_or(b) AS bo, json_agg(x) AS ja,
+             json_arrayagg(x) AS jaa, json_objectagg(t:x) AS joa, any_value(x) AS av
+      FROM (SELECT NULL::int4 AS x, NULL::text AS t, NULL::bool AS b WHERE false) s
+    expect: rows
+    comment: every non-count aggregate is NULL for zero input rows, including array_agg and json_agg
+  - sql: |
+      SELECT count(*) AS c_star, count(x) AS c_x, count(DISTINCT x) AS c_d
+      FROM (SELECT NULL::int4 AS x WHERE false) s
+    expect: rows
+    comment: count returns 0, not NULL
+  - sql: |
+      SELECT coalesce(sum(x), 0) AS s0, coalesce(array_agg(x), '{}') AS a0
+      FROM (SELECT 1 AS x WHERE false) s
+    expect: rows
+    comment: the documented coalesce idiom for substituting zero or an empty array
+  - sql: |
+      SELECT regr_count(y, x) AS n, regr_avgx(y, x) IS NULL AS avgx_null
+      FROM (SELECT 1.0::float8 AS y, 1.0::float8 AS x WHERE false) s
+    expect: rows
+    comment: regr_count returns 0 for zero rows (it is a count), while the average is NULL

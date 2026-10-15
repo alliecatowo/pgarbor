@@ -1,0 +1,39 @@
+# The index name may be schema-qualified; an index always lives in its table's schema, so a wrong schema qualifier does not find it.
+id: cmd-drop-index.schema-qualified-name
+title: DROP INDEX accepts a schema-qualified name and fails when the qualifier names the wrong schema
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, schemas, qualified-names, errors]
+required_capabilities: [create-schema, create-table, create-index, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (Parameters: name, optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA app;
+  CREATE TABLE public.people (id int4 PRIMARY KEY, last_name text);
+  CREATE INDEX people_last_idx ON public.people (last_name);
+  CREATE TABLE app.people (id int4 PRIMARY KEY, last_name text);
+  CREATE INDEX app_people_last_idx ON app.people (last_name);
+steps:
+  - sql: |
+      DROP INDEX app.people_last_idx
+    expect: error
+    sqlstate: "42704"
+    comment: the index is in public, so an app qualifier does not match it
+  - sql: |
+      DROP INDEX IF EXISTS app.people_last_idx
+    expect: notice
+    comment: IF EXISTS applies to the qualified lookup too
+  - sql: |
+      DROP INDEX app.app_people_last_idx
+    expect: ok
+    comment: the schema-qualified name resolves to the index in app
+  - sql: |
+      DROP INDEX public.people_last_idx
+    expect: ok
+  - sql: |
+      SELECT schemaname, indexname FROM pg_indexes WHERE tablename = 'people' ORDER BY schemaname, indexname
+    expect: rows
+    order: ordered
+    comment: only the two primary key indexes remain

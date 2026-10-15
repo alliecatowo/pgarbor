@@ -1,0 +1,54 @@
+# The grammar accepts one policy name and one table name, with ON required and no schema-qualified policy name.
+id: cmd-drop-policy.syntax-errors
+title: "DROP POLICY grammar errors are 42601 and leave the policy in place"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, policies, errors, syntax]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (Synopsis)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p1 ON t USING (v > 0);
+steps:
+  - sql: |
+      DROP POLICY p1 t
+    expect: error
+    sqlstate: "42601"
+    comment: ON is required
+  - sql: |
+      DROP POLICY ON t
+    expect: error
+    sqlstate: "42601"
+    comment: the policy name is required
+  - sql: |
+      DROP POLICY s.p1 ON t
+    expect: error
+    sqlstate: "42601"
+    comment: the policy name cannot be schema-qualified; only the table name can
+  - sql: |
+      DROP POLICY p1 ON t, t
+    expect: error
+    sqlstate: "42601"
+    comment: one table per statement
+  - sql: |
+      DROP POLICY p1, p1 ON t
+    expect: error
+    sqlstate: "42601"
+    comment: one policy name per statement
+  - sql: |
+      DROP POLICY p1 ON t CASCADE RESTRICT
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      DROP POLICY IF p1 ON t
+    expect: error
+    sqlstate: "42601"
+    comment: IF must be followed by EXISTS
+  - sql: |
+      SELECT policyname FROM pg_policies WHERE tablename = 't' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: no statement took effect

@@ -1,0 +1,33 @@
+# CASCADE on a schema holding a partitioned table drops the parent and all of its partitions.
+id: cmd-drop-schema.cascade-partitioned-table
+title: DROP SCHEMA CASCADE removes a partitioned table together with its partitions
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, cascade, partitioning]
+required_capabilities: [create-schema, create-table, partitioning, insert, select, drop-schema, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Examples: DROP SCHEMA mystuff CASCADE; Description: removes schemas and their contained objects)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA pt;
+  CREATE TABLE pt.metrics (k int, v int) PARTITION BY RANGE (k);
+  CREATE TABLE pt.metrics_low PARTITION OF pt.metrics FOR VALUES FROM (0) TO (10);
+  INSERT INTO pt.metrics VALUES (1, 100);
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM pt.metrics
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP SCHEMA pt
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP SCHEMA pt CASCADE
+    expect: notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname IN ('metrics', 'metrics_low')
+    expect: rows
+    order: ordered
+    comment: neither the partitioned parent nor the partition remains

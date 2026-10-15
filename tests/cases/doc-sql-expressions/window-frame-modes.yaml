@@ -1,0 +1,59 @@
+# Window frames in ROWS, RANGE and GROUPS modes, with offsets and the four EXCLUDE options.
+id: doc-sql-expressions.window-frame-modes
+title: Window frame modes ROWS, RANGE and GROUPS with offsets and EXCLUDE clauses
+family: doc-sql-expressions
+tier: core
+feature_ids: [window-functions, window-frames, window-frame-exclusion]
+required_capabilities: [select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-window-calls"
+sessions: [a]
+setup: |
+  CREATE TABLE wf (x int4, y int4);
+  INSERT INTO wf VALUES (1, 5), (1, 6), (2, 7), (3, 8);
+steps:
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x, y ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: ROWS offsets count physical rows; ORDER BY x, y makes the rows unique
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: RANGE offsets are value distances on the single ORDER BY column; peers share a frame
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: GROUPS offsets count peer groups
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x GROUPS BETWEEN CURRENT ROW AND 1 FOLLOWING EXCLUDE GROUP) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: EXCLUDE GROUP drops the current row and all its peers
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE TIES) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: EXCLUDE TIES keeps the current row but drops its other peers
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x, y ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING EXCLUDE CURRENT ROW) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x, y ROWS BETWEEN 7 PRECEDING AND 8 PRECEDING) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: a legal frame that never selects a row, so sum is NULL
+  - sql: |
+      SELECT x, y, sum(y) OVER (ORDER BY x) AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: default frame is RANGE UNBOUNDED PRECEDING to the current row's last peer
+  - sql: |
+      SELECT x, y, sum(y) OVER () AS s FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: no ORDER BY makes every row a peer, so the frame is the whole partition

@@ -1,0 +1,111 @@
+# COPY TO option validation: each misuse of an option value or combination is rejected before any data is sent.
+id: cmd-copy.to-option-value-errors
+title: "COPY TO rejects invalid option values, mode mismatches and unknown columns"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-to, copy-options, errors]
+required_capabilities: [create-table, insert, copy, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy (options FORCE_NOT_NULL, FORCE_QUOTE, ESCAPE, QUOTE, DELIMITER, FREEZE, DEFAULT, ON_ERROR, REJECT_LIMIT, ENCODING, FORMAT)"
+sessions: [a]
+setup: |
+  CREATE TABLE tq (id int4, name text);
+  INSERT INTO tq VALUES (1, 'a');
+steps:
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, FORCE_NOT_NULL (id))
+    expect: error
+    sqlstate: "22023"
+    comment: FORCE_NOT_NULL is COPY FROM only
+  - sql: |
+      COPY tq TO STDOUT (FORMAT text, FORCE_QUOTE (id))
+    expect: error
+    sqlstate: "0A000"
+    comment: FORCE_QUOTE requires CSV
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, FORCE_QUOTE (nosuch))
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, FORCE_QUOTE (id, id))
+    expect: error
+    sqlstate: "42701"
+    comment: column listed twice
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, FORCE_QUOTE *, FORCE_QUOTE *)
+    expect: error
+    sqlstate: "42601"
+    comment: redundant option
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, ESCAPE 'ab')
+    expect: error
+    sqlstate: "0A000"
+    comment: ESCAPE must be one byte
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, QUOTE 'ab')
+    expect: error
+    sqlstate: "0A000"
+    comment: QUOTE must be one byte
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, DELIMITER 'ab')
+    expect: error
+    sqlstate: "0A000"
+    comment: DELIMITER must be a single one-byte character
+  - sql: |
+      COPY tq TO STDOUT (FORMAT binary, DELIMITER '|')
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, HEADER, HEADER)
+    expect: error
+    sqlstate: "42601"
+    comment: conflicting or redundant options
+  - sql: |
+      COPY tq TO STDOUT (FORMAT csv, HEADER match)
+    expect: error
+    sqlstate: "0A000"
+    comment: MATCH is COPY FROM only
+  - sql: |
+      COPY tq TO STDOUT (FREEZE)
+    expect: error
+    sqlstate: "22023"
+    comment: FREEZE is COPY FROM only
+  - sql: |
+      COPY tq TO STDOUT (DEFAULT 'x')
+    expect: error
+    sqlstate: "0A000"
+    comment: DEFAULT is COPY FROM only
+  - sql: |
+      COPY tq TO STDOUT (ON_ERROR ignore)
+    expect: error
+    sqlstate: "22023"
+    comment: ON_ERROR is COPY FROM only
+  - sql: |
+      COPY tq TO STDOUT (REJECT_LIMIT 5)
+    expect: error
+    sqlstate: "22023"
+    comment: REJECT_LIMIT requires ON_ERROR ignore
+  - sql: |
+      COPY tq TO STDOUT (FORMAT xml)
+    expect: error
+    sqlstate: "22023"
+    comment: unknown format name
+  - sql: |
+      COPY tq TO STDOUT (ENCODING 'nosuch')
+    expect: error
+    sqlstate: "22023"
+    comment: unknown encoding name
+  - sql: |
+      COPY tq TO STDOUT (nosuch true)
+    expect: error
+    comment: unknown option
+  - sql: |
+      COPY tq (id, nosuch) TO STDOUT
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column in column list
+  - sql: |
+      SELECT count(*) FROM tq
+    expect: rows
+    comment: failed COPY statements leave the table and session usable

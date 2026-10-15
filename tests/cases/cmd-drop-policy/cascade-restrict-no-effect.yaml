@@ -1,0 +1,47 @@
+# CASCADE and RESTRICT are accepted but have no effect, because policies have no dependents; they cannot be combined.
+id: cmd-drop-policy.cascade-restrict-no-effect
+title: "DROP POLICY accepts CASCADE or RESTRICT with no effect and rejects both together"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, policies, errors]
+required_capabilities: [create-table, insert, select, rls, catalog-introspection, views]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  CREATE POLICY p1 ON t USING (v > 0);
+  CREATE POLICY p2 ON t USING (v < 100);
+  CREATE VIEW vw AS SELECT id, v FROM t;
+steps:
+  - sql: |
+      DROP POLICY p1 ON t CASCADE RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: CASCADE and RESTRICT are mutually exclusive, so this is a syntax error
+  - sql: |
+      SELECT policyname FROM pg_policies WHERE tablename = 't' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: both policies still exist after the syntax error
+  - sql: |
+      DROP POLICY p1 ON t CASCADE
+    expect: ok
+  - sql: |
+      DROP POLICY p2 ON t RESTRICT
+    expect: ok
+    comment: RESTRICT also has no effect; the view is not a policy dependent
+  - sql: |
+      SELECT count(*) AS n FROM pg_policies WHERE tablename = 't'
+    expect: rows
+  - sql: |
+      SELECT count(*) AS n FROM vw
+    expect: rows
+    comment: the view and the table data are untouched
+  - sql: |
+      DROP POLICY p1 ON t CASCADE
+    expect: error
+    sqlstate: "42704"
+    comment: CASCADE does not make a missing policy droppable

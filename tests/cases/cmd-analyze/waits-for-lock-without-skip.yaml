@@ -1,0 +1,41 @@
+# Without SKIP_LOCKED, ANALYZE waits for a conflicting lock held by another session, then completes.
+id: cmd-analyze.waits-for-lock-without-skip
+title: "ANALYZE blocks on an access-exclusive lock until the holder commits"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, lock-table, multi-session, blocking]
+required_capabilities: [create-table, insert, select, lock-table, multi-session, transactions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Parameters: SKIP_LOCKED: should not wait otherwise)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE an_wait (id int4, v text);
+  INSERT INTO an_wait VALUES (1, 'p'), (2, 'q');
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE an_wait IN ACCESS EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      ANALYZE an_wait
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: the waiting ANALYZE completes once the lock is released
+  - session: b
+    sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_wait' ORDER BY attname
+    expect: rows
+    order: ordered

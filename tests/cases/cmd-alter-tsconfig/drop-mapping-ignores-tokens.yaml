@@ -1,0 +1,26 @@
+# Token types without a mapping are ignored by to_tsvector, so dropping the mapping removes those lexemes from the output.
+id: cmd-alter-tsconfig.drop-mapping-ignores-tokens
+title: "Dropped token types are ignored by to_tsvector"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, drop-mapping, to-tsvector, token-type]
+required_capabilities: [create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (DROP MAPPING causes tokens of those types to be ignored)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+steps:
+  - sql: |
+      SELECT to_tsvector('my_config', 'The quick foxes 123 running fox@example.com') AS before_drop
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING FOR asciiword, asciihword
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('my_config', 'The quick foxes 123 running fox@example.com') AS after_drop
+    expect: rows
+    order: ordered
+    comment: plain ascii words vanish; the numeric token and the email token keep their mappings

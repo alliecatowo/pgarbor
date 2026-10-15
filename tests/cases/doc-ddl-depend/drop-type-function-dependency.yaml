@@ -1,0 +1,29 @@
+# A function whose argument is an enum depends on the type: DROP TYPE is refused until CASCADE, which drops the function.
+id: doc-ddl-depend.drop-type-function-dependency
+title: DROP TYPE is refused while a function uses the type as an argument; CASCADE drops the function
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-type, create-function-sql, user-defined-types, drop-cascade, dependency-tracking]
+required_capabilities: [create-type, create-function-sql, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (\"dropping the type would force dropping the function, because its argument type would no longer be defined\")"
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+  CREATE FUNCTION is_warm (rainbow) RETURNS boolean LANGUAGE SQL AS 'SELECT $1 = ''red''';
+steps:
+  - sql: |
+      DROP TYPE rainbow
+    expect: error
+    sqlstate: "2BP01"
+    comment: DETAIL function is_warm(rainbow) depends on type rainbow
+  - sql: |
+      SELECT is_warm('red')
+    expect: rows
+  - sql: |
+      DROP TYPE rainbow CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'is_warm'
+    expect: rows

@@ -1,0 +1,34 @@
+# Documented: DROP TABLE removes triggers on the target table.
+id: cmd-drop-table.drop-removes-trigger
+title: DROP TABLE removes its triggers so a same-named recreated table has none
+family: cmd-drop-table
+tier: core
+feature_ids: [drop-table, triggers, plpgsql]
+required_capabilities: [create-table, create-trigger, create-function, insert, select, drop-table]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_table.sgml#sql-droptable (Description: always removes any indexes, rules, triggers, and constraints)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dt_block_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by trigger'; END $$;
+  CREATE TABLE t (id int4);
+  CREATE TRIGGER t_block BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION dt_block_fn();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "P0001"
+    comment: the trigger rejects inserts before the drop
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      CREATE TABLE t (id int4)
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+    comment: the old trigger is gone with the dropped table
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows

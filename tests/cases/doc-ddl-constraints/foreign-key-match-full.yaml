@@ -1,0 +1,45 @@
+# MATCH SIMPLE (default) skips the check when any column is NULL; MATCH FULL allows only all-NULL to escape.
+id: doc-ddl-constraints.foreign-key-match-full
+title: MATCH FULL rejects a mix of NULL and non-NULL referencing columns while MATCH SIMPLE allows it
+family: doc-ddl-constraints
+tier: core
+feature_ids: [foreign-keys, match-full, match-simple, null-semantics, insert, select]
+required_capabilities: [create-table, constraints, foreign-keys, primary-key, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Foreign Keys, MATCH FULL)"
+sessions: [a]
+setup: |
+  CREATE TABLE mf_pk (a integer, b integer, PRIMARY KEY (a, b));
+  CREATE TABLE simple_fk (id integer PRIMARY KEY, a integer, b integer, FOREIGN KEY (a, b) REFERENCES mf_pk);
+  CREATE TABLE full_fk (id integer PRIMARY KEY, a integer, b integer, FOREIGN KEY (a, b) REFERENCES mf_pk MATCH FULL);
+  INSERT INTO mf_pk VALUES (1, 1)
+steps:
+  - sql: |
+      INSERT INTO simple_fk VALUES (1, 1, NULL), (2, NULL, NULL)
+    expect: ok
+    comment: MATCH SIMPLE lets any NULL column escape the check
+  - sql: |
+      INSERT INTO simple_fk VALUES (3, 2, 2)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      INSERT INTO full_fk VALUES (1, NULL, NULL)
+    expect: ok
+    comment: all referencing columns NULL escapes under MATCH FULL
+  - sql: |
+      INSERT INTO full_fk VALUES (2, 1, NULL)
+    expect: error
+    sqlstate: "23503"
+    comment: mixing NULL and non-NULL always fails under MATCH FULL
+  - sql: |
+      INSERT INTO full_fk VALUES (3, 1, 1)
+    expect: ok
+  - sql: |
+      INSERT INTO full_fk VALUES (4, 2, 2)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      SELECT id, a, b FROM full_fk ORDER BY id
+    expect: rows
+    order: ordered

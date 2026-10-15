@@ -1,0 +1,49 @@
+# Restrictions on RAISE options: no duplicates across syntax variants, no NULL option values, and no ERRCODE with a condition name.
+id: doc-plpgsql-errors-and-messages.raise-option-misuse-errors
+title: RAISE rejects MESSAGE or ERRCODE where the syntax variant already supplies them, and rejects NULL option values
+family: doc-plpgsql-errors-and-messages
+tier: core
+feature_ids: [plpgsql, raise, option-validation, errors]
+required_capabilities: [plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-errors-and-messages"
+sessions: [a]
+steps:
+  - sql: |
+      DO $$ BEGIN RAISE NOTICE 'x' USING MESSAGE = 'y'; END $$
+    expect: error
+    sqlstate: "42601"
+    comment: MESSAGE cannot be used with the format-string form, which already supplies the message
+  - sql: |
+      DO $$ BEGIN RAISE EXCEPTION 'x' USING ERRCODE = '22012', MESSAGE = 'y'; END $$
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      DO $$ BEGIN RAISE division_by_zero USING ERRCODE = '22012'; END $$
+    expect: error
+    sqlstate: "42601"
+    comment: ERRCODE cannot be used with the condition-name form
+  - sql: |
+      DO $$ BEGIN RAISE division_by_zero USING MESSAGE = 'custom text'; END $$
+    expect: error
+    sqlstate: "22012"
+    comment: MESSAGE is allowed with the condition-name form and replaces the default text
+  - sql: |
+      DO $$ BEGIN RAISE 'x' USING MESSAGE = NULL; END $$
+    expect: error
+    sqlstate: "22004"
+    comment: a NULL option value is rejected
+  - sql: |
+      DO $$ BEGIN RAISE EXCEPTION 'x' USING DETAIL = NULL; END $$
+    expect: error
+    sqlstate: "22004"
+  - sql: |
+      DO $$ BEGIN RAISE EXCEPTION 'x' USING ERRCODE = NULL; END $$
+    expect: error
+    sqlstate: "22004"
+  - sql: |
+      DO $$ BEGIN RAISE EXCEPTION USING; END $$
+    expect: error
+    sqlstate: "42601"
+    comment: USING with no option list is a syntax error

@@ -1,0 +1,42 @@
+# Documented composite constants: an empty field is NULL, a double-quoted empty string is a
+# non-NULL empty string, and a composite whose fields are all NULL is not itself IS NULL
+# unless every field is NULL.
+id: doc-rowtypes.composite-literal-null-fields
+title: Empty composite fields are NULL while quoted empty fields are empty strings
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, composite-literals, null-semantics]
+required_capabilities: [create-type, composite-types, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-constructing"
+sessions: [a]
+setup: |
+  CREATE TYPE inventory_item AS (name text, supplier_id integer, price numeric);
+steps:
+  - sql: |
+      SELECT '("fuzzy dice",42,1.99)'::inventory_item AS full_row,
+             '("fuzzy dice",42,)'::inventory_item AS null_price,
+             '("",42,)'::inventory_item AS empty_name
+    expect: rows
+    comment: the three documented constants from the section
+  - sql: |
+      SELECT
+        ('("",42,)'::inventory_item).name = '' AS name_is_empty_string,
+        ('("",42,)'::inventory_item).name IS NULL AS name_is_null,
+        ('("",42,)'::inventory_item).price IS NULL AS price_is_null,
+        ('("fuzzy dice",42,)'::inventory_item).price IS NULL AS price_null_2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT
+        '("fuzzy dice",42,)'::inventory_item IS NULL AS whole_is_null,
+        '(,,)'::inventory_item IS NULL AS all_empty_is_null,
+        '(,,)'::inventory_item AS all_empty_text
+    expect: rows
+    order: ordered
+    comment: IS NULL on a composite is true only when every field is NULL
+  - sql: |
+      SELECT '(,42,)'::inventory_item IS NULL AS name_and_price_null, '(,,)'::inventory_item IS NOT NULL AS all_empty_is_not_null
+    expect: rows
+    order: ordered

@@ -1,0 +1,48 @@
+# Subqueries in FROM, with and without an alias, and VALUES lists as derived tables.
+id: doc-queries-table-expressions.derived-tables-values
+title: Derived tables from subqueries and VALUES lists, with optional aliases and column names
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [subquery-in-from, values-list, table-alias, column-alias]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-subqueries"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (num int4, name text);
+  INSERT INTO t1 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+steps:
+  - sql: |
+      SELECT * FROM (SELECT * FROM t1) AS alias_name ORDER BY num
+    expect: rows
+    order: ordered
+    comment: equivalent to FROM t1 AS alias_name
+  - sql: |
+      SELECT * FROM (SELECT * FROM t1) ORDER BY num
+    expect: rows
+    order: ordered
+    comment: PostgreSQL allows omitting the alias
+  - sql: |
+      SELECT s.n FROM (SELECT count(*) AS n FROM t1) AS s
+    expect: rows
+    order: multiset
+    comment: aggregated subquery returns 3
+  - sql: |
+      SELECT first, last FROM (VALUES ('anne', 'smith'), ('bob', 'jones'), ('joe', 'blow')) AS names(first, last) ORDER BY last
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM (VALUES (1, 'x'), (2, NULL)) ORDER BY column1
+    expect: rows
+    order: ordered
+    comment: unnamed VALUES columns are column1 and column2; NULL is kept
+  - sql: |
+      SELECT v.n FROM (VALUES (1), (2), (3)) AS v(n) WHERE v.n > 1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM (SELECT 1 AS a, 2 AS b) AS s (x, y, z)
+    expect: error
+    sqlstate: "42P10"
+    comment: three column aliases for a two-column subquery

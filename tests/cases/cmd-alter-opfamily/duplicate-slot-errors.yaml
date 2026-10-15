@@ -1,0 +1,47 @@
+# A strategy or support slot can hold only one entry per operand type pair; a failing statement adds nothing.
+id: cmd-alter-opfamily.duplicate-slot-errors
+title: Adding an occupied operator or function slot fails with duplicate_object, and the statement is atomic
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, add-members, duplicate-slot, atomicity, errors]
+required_capabilities: [alter-operator-family, create-operator-family, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Parameters: strategy_number, support_number)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_dup USING btree;
+  ALTER OPERATOR FAMILY cmd_aof_dup USING btree ADD OPERATOR 1 < (int4, int4), FUNCTION 1 btint4cmp(int4, int4);
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_dup USING btree ADD OPERATOR 1 < (int4, int4)
+    expect: error
+    sqlstate: "42710"
+    comment: strategy 1 for (int4, int4) is already occupied
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_dup USING btree ADD FUNCTION 1 btint4cmp(int4, int4)
+    expect: error
+    sqlstate: "42710"
+    comment: support 1 for (int4, int4) is already occupied
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_dup USING btree ADD OPERATOR 3 = (int8, int8), OPERATOR 1 < (int4, int4)
+    expect: error
+    sqlstate: "42710"
+    comment: the second entry fails, so the first must not be added either
+  - sql: |
+      SELECT o.amopstrategy, o.amoplefttype::regtype AS lefttype, o.amopopr::regoperator AS operator
+      FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily
+      WHERE f.opfname = 'cmd_aof_dup'
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: only the original strategy 1 entry remains
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_dup USING btree ADD OPERATOR 1 < (int8, int8)
+    expect: ok
+    comment: same strategy number with different operand types is a different slot
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_dup USING btree ADD OPERATOR 2 < (int4, int4)
+    expect: error
+    sqlstate: "23505"
+    comment: "undocumented catalog constraint; the same operator and purpose cannot occupy two slots"

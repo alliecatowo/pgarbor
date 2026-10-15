@@ -1,0 +1,34 @@
+# An enum type is an ordered set of labels: comparisons follow declaration order, not alphabetical order.
+id: doc-ddl-others.enum-type-ordering
+title: Enum labels compare in declaration order and reject undeclared labels
+family: doc-ddl-others
+tier: core
+feature_ids: [enum-type, create-type, order-by, errors]
+required_capabilities: [create-table, create-type, enum-type, insert, select, order-by, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-others (Data types and domains); ref: datatype-enum.html"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE TABLE feelings (id int4 PRIMARY KEY, m mood);
+  INSERT INTO feelings VALUES (1, 'happy'), (2, 'sad'), (3, 'ok');
+steps:
+  - sql: |
+      SELECT 'ok'::mood < 'happy'::mood AS ok_before_happy, 'happy'::mood > 'sad'::mood AS happy_after_sad
+    expect: rows
+  - sql: |
+      SELECT id, m FROM feelings ORDER BY m, id
+    expect: rows
+    order: ordered
+    comment: ordering follows declaration order sad < ok < happy
+  - sql: |
+      SELECT enum_range(NULL::mood)::text AS labels
+    expect: rows
+  - sql: |
+      INSERT INTO feelings VALUES (4, 'meh')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT count(*) FROM feelings
+    expect: rows

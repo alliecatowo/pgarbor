@@ -1,0 +1,32 @@
+# HASHES and MERGES record optimizer capability flags independently; the operator still evaluates its procedure.
+id: cmd-create-operator.hashes-merges-flags
+title: "HASHES and MERGES set oprcanhash and oprcanmerge independently and do not change results"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, hashes, merges]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#parameters (HASHES, MERGES)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_eq8(int8, int8) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT $1 = $2 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR #?# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_eq8, HASHES)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #!# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_eq8, MERGES)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #!?# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_eq8, HASHES, MERGES)
+    expect: ok
+  - sql: |
+      SELECT oprname, oprcanhash, oprcanmerge FROM pg_operator
+      WHERE oprname IN ('#?#', '#!#', '#!?#') AND oprleft = 'int8'::regtype
+      ORDER BY oprname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 2 #?# 2 AS hash_flag_result, 2 #!# 3 AS merge_flag_result, 4 #!?# 4 AS both_flags_result
+    expect: rows

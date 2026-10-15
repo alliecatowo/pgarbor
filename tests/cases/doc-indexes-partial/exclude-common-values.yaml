@@ -1,0 +1,50 @@
+# Partial index that excludes a common value range (the organisation's own subnet). Results only; plan choice is not compared.
+id: doc-indexes-partial.exclude-common-values
+title: Partial index with a NOT (range) predicate answers queries for covered and excluded values identically
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, create-index, inet-type, boolean-not, predicate-definition]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex1 (Setting up a Partial Index to Exclude Common Values)"
+sessions: [a]
+setup: |
+  CREATE TABLE access_log (url varchar, client_ip inet);
+steps:
+  - sql: |
+      CREATE INDEX access_log_client_ip_ix ON access_log (client_ip)
+      WHERE NOT (client_ip > inet '192.168.100.0' AND client_ip < inet '192.168.100.255')
+    expect: ok
+  - sql: |
+      SELECT pg_get_indexdef('access_log_client_ip_ix'::regclass)
+    expect: rows
+    comment: the predicate is stored exactly as written, with the bounds excluded
+  - sql: |
+      INSERT INTO access_log VALUES
+        ('/index.html', '212.78.10.32'),
+        ('/a', '192.168.100.23'),
+        ('/b', '192.168.100.0'),
+        ('/c', '192.168.100.255'),
+        ('/d', '192.168.100.128'),
+        ('/e', '10.0.0.1')
+    expect: ok
+  - sql: |
+      SELECT url, client_ip FROM access_log WHERE url = '/index.html' AND client_ip = inet '212.78.10.32'
+    expect: rows
+    order: ordered
+    comment: the query IP is outside the excluded range, so the index covers it
+  - sql: |
+      SELECT url, client_ip FROM access_log WHERE url = '/a' AND client_ip = inet '192.168.100.23' ORDER BY url
+    expect: rows
+    order: ordered
+    comment: the query IP is inside the excluded range; the index cannot be used but the result must be the same
+  - sql: |
+      SELECT url, client_ip FROM access_log WHERE client_ip >= inet '192.168.100.0' AND client_ip <= inet '192.168.100.255' ORDER BY url
+    expect: rows
+    order: ordered
+    comment: the bounds themselves are not strictly inside the excluded range, so these rows are indexed and returned
+  - sql: |
+      SELECT count(*) FROM access_log WHERE NOT (client_ip > inet '192.168.100.0' AND client_ip < inet '192.168.100.255')
+    expect: rows
+    comment: rows excluded by the predicate are still stored in the table and found by plain filters

@@ -1,0 +1,44 @@
+# pg_column_size on stored values, pg_relation_size for the main fork, and pg_indexes_size.
+id: doc-functions-admin.size-relation-and-column
+title: pg_column_size, pg_relation_size and pg_indexes_size on a small table
+family: doc-functions-admin
+tier: core
+feature_ids: [pg-column-size, pg-relation-size, pg-indexes-size]
+required_capabilities: [create-table, insert, create-index, select, admin-functions]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-admin-dbsize (pg_column_size, pg_relation_size, pg_indexes_size)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE sz (id int4, v varchar(10), w int8)
+    expect: ok
+  - sql: |
+      INSERT INTO sz VALUES (1, 'abc', NULL), (2, NULL, 5)
+    expect: ok
+  - sql: |
+      SELECT id, pg_column_size(id) AS id_bytes, pg_column_size(v) AS v_bytes, pg_column_size(w) AS w_bytes
+      FROM sz ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL values report NULL sizes, fixed-width int4 and int8 report 4 and 8
+  - sql: |
+      SELECT pg_relation_size('sz') AS main_fork, pg_relation_size('sz', 'main') AS explicit_main
+    expect: rows
+  - sql: |
+      SELECT pg_relation_size('sz', 'nofork')
+    expect: error
+    comment: fork names are main, fsm, vm or init
+  - sql: |
+      SELECT pg_indexes_size('sz') AS no_index_bytes
+    expect: rows
+  - sql: |
+      CREATE INDEX sz_id ON sz (id)
+    expect: ok
+  - sql: |
+      SELECT pg_indexes_size('sz') > 0 AS has_index_bytes
+    expect: rows
+  - sql: |
+      SELECT pg_relation_size('nosuch_rel')
+    expect: error
+    sqlstate: "42P01"

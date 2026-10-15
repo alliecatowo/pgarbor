@@ -1,0 +1,35 @@
+# RAISE NOTICE inside a PL/pgSQL function runs once per call, and a function's RAISE EXCEPTION aborts the calling statement.
+id: doc-plpgsql-errors-and-messages.raise-in-function-notices
+title: RAISE NOTICE in a function fires per call, and RAISE EXCEPTION inside a function aborts the calling query
+family: doc-plpgsql-errors-and-messages
+tier: core
+feature_ids: [plpgsql, raise, functions, notices, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-errors-and-messages"
+sessions: [a]
+setup: |
+  CREATE FUNCTION pl_notify(v int) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    RAISE NOTICE 'Calling pl_notify(%)', v;
+    IF v < 0 THEN
+      RAISE EXCEPTION 'negative input: %', v USING HINT = 'use a non-negative value', ERRCODE = 'invalid_parameter_value';
+    END IF;
+    RETURN v + 1;
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_notify(3) AS result
+    expect: rows
+    comment: the notice is emitted before the row is returned
+  - sql: |
+      SELECT x, pl_notify(x) AS result FROM (VALUES (1), (2)) AS t(x) ORDER BY x
+    expect: rows
+    order: ordered
+    comment: the notice fires once per row
+  - sql: |
+      SELECT pl_notify(-1)
+    expect: error
+    sqlstate: "22023"
+    comment: the function's exception carries its own HINT and SQLSTATE

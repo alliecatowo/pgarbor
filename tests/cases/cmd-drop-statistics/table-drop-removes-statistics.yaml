@@ -1,0 +1,29 @@
+# Statistics objects depend on their table, so DROP TABLE removes them and a later DROP STATISTICS finds nothing.
+id: cmd-drop-statistics.table-drop-removes-statistics
+title: Dropping the table removes its statistics object, so DROP STATISTICS afterwards is missing
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, drop-table, extended-statistics]
+required_capabilities: [create-table, extended-statistics, drop-statistics, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics; create_statistics.sgml (statistics belong to a table)"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_tdrop (a int, b int);
+  CREATE STATISTICS ds_tdrop_s ON a, b FROM ds_tdrop;
+steps:
+  - sql: |
+      DROP TABLE ds_tdrop
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxname = 'ds_tdrop_s'
+    expect: rows
+    comment: removed together with the table
+  - sql: |
+      DROP STATISTICS ds_tdrop_s
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_tdrop_s
+    expect: notice

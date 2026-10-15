@@ -1,0 +1,62 @@
+id: cmd-move.move-scroll-absolute-first-last
+title: SCROLL cursor MOVE with LAST, PRIOR, ABSOLUTE negative and zero positions, and BACKWARD ALL
+family: cmd-move
+tier: core
+feature_ids: [move, fetch, scroll, declare-cursor, absolute, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/move.sgml#sql-move (direction: LAST, PRIOR, ABSOLUTE count, BACKWARD ALL); ref/fetch.sgml#sql-fetch (ABSOLUTE count semantics)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four'), (5, 'five'), (6, 'six'), (7, 'seven');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE s SCROLL CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      MOVE LAST FROM s
+    expect: ok
+    comment: positions on row 7
+  - sql: |
+      MOVE PRIOR FROM s
+    expect: ok
+    comment: positions on row 6
+  - sql: |
+      FETCH 1 FROM s
+    expect: rows
+    order: ordered
+    comment: returns row 7, the row after the cursor position
+  - sql: |
+      MOVE ABSOLUTE -1 FROM s
+    expect: ok
+    comment: negative ABSOLUTE counts from the end, so row 7 again
+  - sql: |
+      FETCH PRIOR FROM s
+    expect: rows
+    order: ordered
+    comment: returns row 6
+  - sql: |
+      MOVE ABSOLUTE 0 FROM s
+    expect: ok
+    comment: ABSOLUTE 0 positions before the first row
+  - sql: |
+      FETCH 1 FROM s
+    expect: rows
+    order: ordered
+    comment: returns row 1
+  - sql: |
+      MOVE ABSOLUTE 99 FROM s
+    expect: ok
+    comment: beyond the end, MOVE 0
+  - sql: |
+      MOVE BACKWARD ALL FROM s
+    expect: ok
+    comment: walks back over all seven rows
+  - sql: |
+      COMMIT
+    expect: ok

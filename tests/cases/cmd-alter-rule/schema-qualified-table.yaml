@@ -1,0 +1,39 @@
+# ALTER RULE accepts a schema-qualified table name; an unqualified name resolves through search_path and misses a rule in another schema.
+id: cmd-alter-rule.schema-qualified-table
+title: ALTER RULE resolves schema-qualified table names and fails for unqualified names outside search_path
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, schemas, search-path, errors]
+required_capabilities: [create-table, create-schema, create-rule, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_rule.sgml#parameters (table_name: optionally schema-qualified)"
+sessions: [a]
+setup: |
+  DROP SCHEMA IF EXISTS ar_s1 CASCADE;
+  CREATE SCHEMA ar_s1;
+  CREATE TABLE ar_s1.t (id int4);
+  CREATE RULE r_t AS ON INSERT TO ar_s1.t DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      ALTER RULE r_t ON ar_s1.t RENAME TO r_t2
+    expect: ok
+  - sql: |
+      ALTER RULE r_t2 ON t RENAME TO r_t3
+    expect: error
+    sqlstate: "42P01"
+    comment: with search_path at its default, the unqualified t is not in ar_s1, so the table is missing
+  - sql: |
+      SET search_path = ar_s1, public
+    expect: ok
+  - sql: |
+      ALTER RULE r_t2 ON t RENAME TO r_t3
+    expect: ok
+    comment: once ar_s1 is on the search path, the unqualified name resolves
+  - sql: |
+      SELECT schemaname, tablename, rulename FROM pg_rules WHERE schemaname = 'ar_s1' ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET search_path
+    expect: ok

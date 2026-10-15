@@ -1,0 +1,53 @@
+# A FOR INSERT policy applies only to inserts; RETURNING also needs the new row to pass the SELECT rules.
+id: doc-ddl-rowsecurity.insert-check-returning-needs-select
+title: "INSERT WITH CHECK works alone, but RETURNING also requires SELECT visibility"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, insert, returning, with-check, select]
+required_capabilities: [create-table, insert, select, rls, roles, returning]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: command-specific policies; policies restrict rows returned by normal queries"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr17_u;
+  CREATE TABLE t (id int4, owner text);
+  GRANT SELECT, INSERT ON t TO pgarbor_case_role_dr17_u;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY ins_ok ON t FOR INSERT WITH CHECK (owner = 'x');
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr17_u
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: there is no SELECT policy, so nothing is visible
+  - sql: |
+      INSERT INTO t VALUES (1, 'x')
+    expect: ok
+    comment: INSERT 0 1 - the FOR INSERT WITH CHECK passes
+  - sql: |
+      INSERT INTO t VALUES (2, 'x') RETURNING id
+    expect: error
+    sqlstate: "42501"
+    comment: RETURNING reads the new row back, which the missing SELECT policy hides
+  - sql: |
+      INSERT INTO t VALUES (3, 'y')
+    expect: error
+    sqlstate: "42501"
+    comment: the WITH CHECK rejects owner 'y'
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, owner FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only row 1 was stored
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr17_u
+    expect: ok

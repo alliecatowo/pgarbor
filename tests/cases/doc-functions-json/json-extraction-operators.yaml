@@ -1,0 +1,45 @@
+# Documented json/jsonb extraction operators: -> ->> #> #>> with object keys, array indexes (incl. negative), NULL on structural mismatch.
+id: doc-functions-json.json-extraction-operators
+title: json and jsonb extraction operators (-> ->> #> #>>) including negative indexes and NULL on mismatch
+family: doc-functions-json
+tier: core
+feature_ids: [json-operators, jsonb-operators, json-extraction, json-path-extraction]
+required_capabilities: [select, json, jsonb]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-processing (json and jsonb Operators table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '[{"a":"foo"},{"b":"bar"},{"c":"baz"}]'::json -> 2 AS e2,
+             '[{"a":"foo"},{"b":"bar"},{"c":"baz"}]'::json -> -3 AS e_minus3
+    expect: rows
+    comment: "documented examples; negative integers count from the end"
+  - sql: |
+      SELECT '{"a": {"b":"foo"}}'::json -> 'a' AS obj_field,
+             '{"a":1,"b":2}'::json ->> 'b' AS field_text,
+             '[1,2,3]'::json ->> 2 AS elem_text
+    expect: rows
+  - sql: |
+      SELECT '{"a": {"b": ["foo","bar"]}}'::json #> '{a,b,1}' AS path_json,
+             '{"a": {"b": ["foo","bar"]}}'::json #>> '{a,b,1}' AS path_text
+    expect: rows
+  - sql: |
+      SELECT '{"a": {"b": ["foo","bar"]}}'::jsonb #> '{a,b,-1}' AS neg_path,
+             '{"a":[10,20]}'::jsonb #>> '{a,0}' AS first_text
+    expect: rows
+    comment: "negative subscripts inside a path also count from the end"
+  - sql: |
+      SELECT '{"a":1}'::json -> 'zz' AS missing_key,
+             '[1]'::json -> 5 AS out_of_range,
+             '{"a":1}'::jsonb -> 0 AS index_on_object,
+             '[1]'::jsonb ->> 'x' AS key_on_array,
+             '1'::jsonb #> '{a}' AS path_on_scalar,
+             '[1,2,3]'::jsonb -> -4 AS neg_out_of_range
+    expect: rows
+    comment: "documented: mismatched structure yields NULL rather than an error"
+  - sql: |
+      SELECT '{"a":null}'::jsonb -> 'a' AS json_null_is_json,
+             '{"a":null}'::jsonb ->> 'a' AS json_null_as_text
+    expect: rows
+    comment: "a JSON null is returned as the JSON value null by ->, but as SQL NULL by ->>"

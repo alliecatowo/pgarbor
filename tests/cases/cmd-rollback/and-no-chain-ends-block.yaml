@@ -1,0 +1,37 @@
+# ROLLBACK AND NO CHAIN is the same as plain ROLLBACK: the block ends and no new one is started.
+id: cmd-rollback.and-no-chain-ends-block
+title: ROLLBACK AND NO CHAIN ends the block and starts no new transaction
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, and-chain, transactions, isolation-level]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback-chain (Otherwise, no new transaction is started)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      ROLLBACK AND NO CHAIN
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: notice
+    comment: no block is open, so this only warns
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: the insert was discarded
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: autocommit default isolation, not the one from the ended block

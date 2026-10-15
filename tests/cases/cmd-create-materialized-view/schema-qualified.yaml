@@ -1,0 +1,39 @@
+id: cmd-create-materialized-view.schema-qualified
+title: Schema-qualified names place the view in that schema and missing schemas are rejected
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, schemas, name-conflicts]
+required_capabilities: [create-table, insert, select, create-schema, create-materialized-view, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (table_name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA reports;
+  CREATE TABLE reports_src (id int4);
+  INSERT INTO reports_src VALUES (1), (2), (3);
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW reports.daily_count AS SELECT count(*) AS n FROM reports_src
+    expect: ok
+  - session: a
+    sql: |
+      SELECT n FROM reports.daily_count
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      SELECT schemaname, matviewname FROM pg_matviews WHERE matviewname = 'daily_count'
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW no_such_schema.v AS SELECT 1 AS one
+    expect: error
+    sqlstate: "3F000"
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW reports.daily_count AS SELECT 2 AS n
+    expect: error
+    sqlstate: "42P07"

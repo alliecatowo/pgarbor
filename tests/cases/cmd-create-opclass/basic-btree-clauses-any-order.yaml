@@ -1,0 +1,47 @@
+# CREATE OPERATOR CLASS registers strategy operators and support functions; the OPERATOR, FUNCTION and STORAGE clauses may appear in any order, and a hash class needs no support function.
+id: cmd-create-opclass.basic-btree-clauses-any-order
+title: "Operator class clauses may appear in any order; catalog rows record strategies and support functions"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, btree, hash, catalog-introspection, create-type-composite, create-function-sql]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Parameters; clauses can appear in any order)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_eq(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a = ($2).a';
+  CREATE FUNCTION cr_pt_gt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a > ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE OPERATOR = (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_eq);
+  CREATE OPERATOR > (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_gt);
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_ops_any FOR TYPE cr_pt USING btree AS FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt), OPERATOR 5 >, OPERATOR 3 =, OPERATOR 1 <
+    expect: ok
+    comment: FUNCTION first, strategies after it; accepted
+  - sql: |
+      SELECT o.opcname, o.opcintype::regtype::text AS intype, am.amname, o.opcdefault FROM pg_opclass o JOIN pg_am am ON am.oid = o.opcmethod WHERE o.opcname = 'cr_ops_any' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a.amopstrategy, a.amopopr::regoperator::text AS op FROM pg_amop a JOIN pg_opclass o ON o.opcfamily = a.amopfamily WHERE o.opcname = 'cr_ops_any' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: strategies 1, 3 and 5 are recorded regardless of clause order
+  - sql: |
+      SELECT p.amprocnum, p.amproc::regprocedure::text AS fn FROM pg_amproc p JOIN pg_opclass o ON o.opcfamily = p.amprocfamily WHERE o.opcname = 'cr_ops_any' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OPERATOR CLASS cr_ops_hash FOR TYPE cr_pt USING hash AS OPERATOR 1 =
+    expect: ok
+    comment: the docs say the definition is not checked for a complete set of functions
+  - sql: |
+      SELECT count(*) FROM pg_amproc p JOIN pg_opclass o ON o.opcfamily = p.amprocfamily WHERE o.opcname = 'cr_ops_hash'
+    expect: rows
+    order: ordered
+    comment: no support function was declared, so zero rows

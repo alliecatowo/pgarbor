@@ -1,0 +1,62 @@
+# Unknown names, wrong relation kinds and unknown tablespaces or databases are rejected before any rebuild.
+id: cmd-reindex.missing-target-errors
+title: REINDEX rejects unknown names, wrong relation kinds, other databases and unknown tablespaces
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-index, reindex-table, reindex-schema, reindex-database, reindex-tablespace, errors]
+required_capabilities: [create-table, create-index, create-view, insert, select, reindex, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: name, DATABASE, SYSTEM, TABLESPACE)"
+sessions: [a]
+setup: |
+  CREATE TABLE mt (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX mt_v ON mt (v);
+  CREATE VIEW mvw AS SELECT 1 AS x;
+  INSERT INTO mt VALUES (1, 1);
+steps:
+  - sql: |
+      REINDEX INDEX nosuch_index
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      REINDEX TABLE nosuch_table
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      REINDEX SCHEMA nosuch_schema
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      REINDEX DATABASE pgarbor_no_such_database
+    expect: error
+    sqlstate: "0A000"
+    comment: only the current database can be named
+  - sql: |
+      REINDEX SYSTEM pgarbor_no_such_database
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      REINDEX (TABLESPACE pgarbor_no_such_tablespace) TABLE mt
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      REINDEX TABLE mvw
+    expect: error
+    sqlstate: "42809"
+    comment: a view is not a table or materialized view
+  - sql: |
+      REINDEX TABLE mt_v
+    expect: error
+    sqlstate: "42809"
+    comment: an index name given to TABLE
+  - sql: |
+      REINDEX INDEX mt
+    expect: error
+    sqlstate: "42809"
+    comment: a table name given to INDEX
+  - sql: |
+      SELECT id, v FROM mt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no failed statement changed the data

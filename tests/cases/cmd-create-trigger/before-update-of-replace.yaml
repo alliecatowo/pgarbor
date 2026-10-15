@@ -1,0 +1,47 @@
+# Docs example: CREATE TRIGGER with BEFORE UPDATE, then CREATE OR REPLACE narrowing it to UPDATE OF balance.
+id: cmd-create-trigger.before-update-of-replace
+title: CREATE TRIGGER then CREATE OR REPLACE TRIGGER narrowing to UPDATE OF balance
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, or-replace, update-of-column-list, before-trigger, plpgsql-trigger-function, catalog-introspection]
+required_capabilities: [create-table, insert, update, select, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER examples (check_update, OR REPLACE with UPDATE OF balance)"
+setup: |
+  CREATE TABLE accounts (id int PRIMARY KEY, balance int NOT NULL, note text);
+  CREATE TABLE trig_log (msg text);
+  INSERT INTO accounts VALUES (1, 100, 'a'), (2, 50, 'b');
+  CREATE FUNCTION check_account_update() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_OP || ' ' || TG_WHEN || ' ' || TG_LEVEL);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER check_update BEFORE UPDATE ON accounts FOR EACH ROW EXECUTE FUNCTION check_account_update()
+    expect: ok
+  - sql: |
+      UPDATE accounts SET note = 'x' WHERE id = 1
+    expect: ok
+    comment: fires for any update of the table
+  - sql: |
+      CREATE OR REPLACE TRIGGER check_update BEFORE UPDATE OF balance ON accounts FOR EACH ROW EXECUTE FUNCTION check_account_update()
+    expect: ok
+    comment: replaces all properties including the column list
+  - sql: |
+      UPDATE accounts SET note = 'y' WHERE id = 1
+    expect: ok
+    comment: balance is not a target of this UPDATE so the trigger does not fire
+  - sql: |
+      UPDATE accounts SET balance = balance + 1 WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT tgname, tgtype & 2 = 2 AS is_before, tgtype & 16 = 16 AS on_update, tgtype & 1 = 1 AS row_level, tgattr::text AS column_list, tgenabled FROM pg_trigger WHERE tgrelid = 'accounts'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY msg
+    expect: rows
+    order: ordered

@@ -1,0 +1,35 @@
+# Documented: without an argument list the function name must be unique in its schema; with an argument list it is resolved exactly.
+id: cmd-create-transform.overload-and-schema-qualified
+title: "Transform function names resolve by argument list and schema qualification, and ambiguous names are rejected"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, transform-from-sql, function-argument-list, schema-qualified-names]
+required_capabilities: [create-transform, create-function, create-schema, create-type, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-parameters"
+sessions: [a]
+setup: |
+  CREATE TYPE ct_t AS (a int);
+  CREATE SCHEMA ct_s;
+  CREATE FUNCTION ct_s.ct_from(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+  CREATE FUNCTION ct_over(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+  CREATE FUNCTION ct_over(val internal, extra int4) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (FROM SQL WITH FUNCTION ct_over)
+    expect: error
+    sqlstate: "42725"
+    comment: two ct_over overloads exist, so the name without an argument list is ambiguous
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (FROM SQL WITH FUNCTION ct_over(internal))
+    expect: ok
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_s.ct_from(internal))
+    expect: ok
+    comment: schema-qualified function name, the schema is not on the search path
+  - sql: |
+      SELECT trftype::regtype::text AS type_name, trffromsql::regprocedure::text AS from_fn
+        FROM pg_transform ORDER BY 1
+    expect: rows
+    order: ordered

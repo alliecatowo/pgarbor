@@ -1,0 +1,38 @@
+# SET SCHEMA moves the view; the old unqualified name stops resolving, and a missing target schema is 3F000.
+id: cmd-alter-view.set-schema-qualified
+title: "ALTER VIEW SET SCHEMA moves the view and rejects a missing target schema"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, set-schema, schemas]
+required_capabilities: [create-table, insert, select, create-view, create-schema, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA av_sch2;
+  CREATE TABLE av_ss (id int4);
+  INSERT INTO av_ss VALUES (1), (2);
+  CREATE VIEW av_ssv AS SELECT id FROM av_ss;
+steps:
+  - sql: |
+      ALTER VIEW av_ssv SET SCHEMA av_sch2
+    expect: ok
+  - sql: |
+      SELECT id FROM av_sch2.av_ssv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM av_ssv
+    expect: error
+    sqlstate: "42P01"
+    comment: the view is no longer in search_path
+  - sql: |
+      ALTER VIEW av_sch2.av_ssv SET SCHEMA av_nosuchschema
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      SELECT id FROM av_sch2.av_ssv ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the failed move leaves the view where it was

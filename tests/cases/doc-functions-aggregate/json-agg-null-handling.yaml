@@ -1,0 +1,57 @@
+# json_agg vs json_agg_strict, json_object_agg value/key NULL handling, and json_arrayagg/json_objectagg ON NULL clauses.
+id: doc-functions-aggregate.json-agg-null-handling
+title: JSON aggregates keep or skip NULL values as documented, and reject NULL object keys
+family: doc-functions-aggregate
+tier: core
+feature_ids: [json-agg, json-agg-strict, json-object-agg, json-arrayagg, json-objectagg, json-null-handling]
+required_capabilities: [select, aggregates, json, errors, order-by]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (json_agg, json_object_agg, json_arrayagg, json_objectagg, ABSENT/NULL ON NULL)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT json_agg(v) AS all_vals, json_agg_strict(v) AS strict_vals
+      FROM (VALUES (1), (NULL)) t(v)
+    expect: rows
+    comment: json_agg keeps nulls, json_agg_strict drops them
+  - sql: |
+      SELECT jsonb_agg(v ORDER BY v) AS sorted FROM (VALUES (2), (1)) t(v)
+    expect: rows
+    comment: ORDER BY inside jsonb_agg
+  - sql: |
+      SELECT json_agg_strict(v) AS all_null_strict FROM (VALUES (NULL::int), (NULL)) t(v)
+    expect: rows
+    comment: when every input is NULL, the strict variant yields an empty array rather than NULL
+  - sql: |
+      SELECT json_object_agg(k, v) AS with_null_value FROM (VALUES ('a', 1), ('b', NULL)) t(k, v)
+    expect: rows
+    comment: NULL values are allowed in json_object_agg and become JSON null
+  - sql: |
+      SELECT json_object_agg_strict(k, v) AS strict_obj FROM (VALUES ('a', 1), ('b', NULL)) t(k, v)
+    expect: rows
+    comment: the strict variant skips entries whose value is NULL
+  - sql: |
+      SELECT json_object_agg(k, v) FROM (VALUES (NULL::text, 1)) t(k, v)
+    expect: error
+    sqlstate: "22004"
+    comment: object keys cannot be NULL
+  - sql: |
+      SELECT json_arrayagg(v NULL ON NULL) AS keep_null, json_arrayagg(v ABSENT ON NULL) AS drop_null
+      FROM (VALUES (1), (NULL)) t(v)
+    expect: rows
+    comment: NULL ON NULL keeps the JSON null element, ABSENT ON NULL omits it
+  - sql: |
+      SELECT json_arrayagg(v) AS ordered FROM (VALUES (2), (1)) t(v)
+    expect: rows
+    comment: without ORDER BY the input order is preserved
+  - sql: |
+      SELECT json_objectagg(k : v ABSENT ON NULL) AS drop_null, json_objectagg(k : v NULL ON NULL) AS keep_null
+      FROM (VALUES ('a'::text, 1), ('b', NULL)) t(k, v)
+    expect: rows
+    comment: json_objectagg applies the same ON NULL choice to values
+  - sql: |
+      SELECT json_arrayagg(v NULL ON NULL) AS e1, json_objectagg(k : v NULL ON NULL) AS e2
+      FROM (SELECT 1 AS v WHERE false) t1, (SELECT 'a'::text AS k, 1 AS v WHERE false) t2
+    expect: rows
+    comment: zero input rows give NULL for both array and object aggregates

@@ -1,0 +1,53 @@
+# Documented rejections of malformed or unsupported index definitions, each with its SQLSTATE.
+id: cmd-create-index.errors-definition-sqlstates
+title: Invalid index definitions fail with the expected SQLSTATE codes
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, errors, access-methods, include-columns]
+required_capabilities: [create-table, create-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Parameters: method, column_name, INCLUDE; Notes: hash supports neither multicolumn nor unique indexes)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, rating int4);
+steps:
+  - sql: |
+      CREATE INDEX f1 ON films USING foo (id)
+    expect: error
+    sqlstate: "42704"
+    comment: unknown access method
+  - sql: |
+      CREATE INDEX f2 ON films (nosuch)
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column
+  - sql: |
+      CREATE INDEX f3 ON nosuch (id)
+    expect: error
+    sqlstate: "42P01"
+    comment: unknown table
+  - sql: |
+      CREATE INDEX f4 ON films USING hash (id, rating)
+    expect: error
+    sqlstate: "0A000"
+    comment: hash indexes are single-column only
+  - sql: |
+      CREATE UNIQUE INDEX f5 ON films USING hash (id)
+    expect: error
+    sqlstate: "0A000"
+    comment: only B-tree supports unique indexes
+  - sql: |
+      CREATE INDEX f6 ON films (id) INCLUDE (lower(title))
+    expect: error
+    sqlstate: "0A000"
+    comment: expressions cannot be included columns
+  - sql: |
+      CREATE INDEX f7 ON films (title) WITH (fillfactor = 5)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname ~ '^f[0-9]$' AND relkind = 'i'
+    expect: rows
+    order: ordered
+    comment: no failed definition leaves an index behind

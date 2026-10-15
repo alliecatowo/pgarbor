@@ -1,0 +1,63 @@
+# GIN index on a tsvector column: @@ matches, stop-word-only queries, and NULL vector semantics.
+id: doc-textsearch-indexes.gin-tsvector-match-null
+title: GIN index on tsvector column answers @@ with NULL and stop-word semantics
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gin-index, tsvector-match, tsquery-boolean, null-semantics]
+required_capabilities: [create-table, insert, select, create-index, gin-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (CREATE INDEX ... USING GIN (column))"
+steps:
+  - sql: |
+      CREATE TABLE docs (id int4 PRIMARY KEY, body text, tsv tsvector)
+    expect: ok
+  - sql: |
+      INSERT INTO docs VALUES
+        (1, 'The quick brown fox', to_tsvector('english', 'The quick brown fox')),
+        (2, 'Lazy dogs jump', to_tsvector('english', 'Lazy dogs jump')),
+        (3, 'Foxes and dogs', to_tsvector('english', 'Foxes and dogs')),
+        (4, 'no vector', NULL),
+        (5, 'only stop words', to_tsvector('english', 'the and of'))
+    expect: ok
+  - sql: |
+      CREATE INDEX docs_tsv_gin ON docs USING GIN (tsv)
+    expect: ok
+    comment: documented form, column must be tsvector
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: stemming means foxes also matches fox
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'fox & dog') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'fox | jump') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', '!fox') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NOT query, row 4 has NULL vector and must not appear
+  - sql: |
+      SELECT id, tsv @@ to_tsquery('english', 'fox') AS hit FROM docs ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL tsvector yields NULL match, not false
+  - sql: |
+      SELECT id FROM docs WHERE (tsv @@ to_tsquery('english', 'fox')) IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE NOT (tsv @@ to_tsquery('english', 'fox')) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL row excluded by NOT as well
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'the') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: stop-word-only query raises a NOTICE and matches nothing

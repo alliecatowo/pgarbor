@@ -1,0 +1,44 @@
+# Only the table owner may create policies; a policy name must be unique per table but may be reused on another table.
+id: cmd-create-policy.owner-only-and-duplicate-names
+title: "Non-owner CREATE POLICY is refused; policy names are unique per table only"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, ownership, errors]
+required_capabilities: [create-table, rls, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy (Notes; Parameters: name)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_nonowner;
+  CREATE TABLE t (id int4, v int4);
+  CREATE TABLE u (id int4, v int4);
+  CREATE POLICY p ON t USING (v > 0);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_nonowner
+    expect: ok
+  - sql: |
+      CREATE POLICY q ON t USING (true)
+    expect: error
+    sqlstate: "42501"
+    comment: you must be the owner of the table to create policies
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      CREATE POLICY p ON t USING (true)
+    expect: error
+    sqlstate: "42710"
+    comment: the name must be distinct from other policies on the same table
+  - sql: |
+      CREATE POLICY p ON u USING (true)
+    expect: ok
+    comment: the same name is allowed on a different table
+  - sql: |
+      SELECT tablename, policyname FROM pg_policies ORDER BY tablename, policyname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t, u; DROP ROLE pgarbor_case_cp_nonowner
+    expect: ok

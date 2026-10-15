@@ -1,0 +1,46 @@
+# SET SCHEMA moves the opclass; an unqualified name then fails, a schema-qualified name works, and an index keeps working.
+id: cmd-alter-opclass.set-schema-moves-opclass
+title: "SET SCHEMA moves the opclass; unqualified lookup then fails until the name is schema-qualified"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, set-schema, schema-qualified-name, btree-index]
+required_capabilities: [create-operator-class, alter-operator-class, create-schema, create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA aoc_cmd_s9;
+  CREATE OPERATOR CLASS aoc_cmd_o9 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  CREATE TABLE aoc_cmd_t9 (a int4);
+  CREATE INDEX aoc_cmd_t9_a ON aoc_cmd_t9 (a aoc_cmd_o9);
+  INSERT INTO aoc_cmd_t9 VALUES (2), (1);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o9 USING btree SET SCHEMA aoc_cmd_s9
+    expect: ok
+  - sql: |
+      SELECT n.nspname FROM pg_opclass o JOIN pg_namespace n ON n.oid = o.opcnamespace WHERE o.opcname = 'aoc_cmd_o9'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_get_indexdef('aoc_cmd_t9_a'::regclass)
+    expect: rows
+    order: ordered
+    comment: the index definition now schema-qualifies the opclass
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o9 USING btree SET SCHEMA public
+    expect: error
+    sqlstate: "42704"
+    comment: unqualified name is looked up on search_path, where the opclass no longer is
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_s9.aoc_cmd_o9 USING btree SET SCHEMA public
+    expect: ok
+  - sql: |
+      SELECT n.nspname FROM pg_opclass o JOIN pg_namespace n ON n.oid = o.opcnamespace WHERE o.opcname = 'aoc_cmd_o9'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM aoc_cmd_t9 ORDER BY a
+    expect: rows
+    order: ordered

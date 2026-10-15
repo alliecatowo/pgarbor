@@ -1,0 +1,30 @@
+# Without IF EXISTS, one missing name in a DROP ROLE list is an error and none of the listed roles are dropped.
+id: cmd-drop-role.missing-role-atomic-error
+title: "DROP ROLE with a missing name in the list fails with 42704 and drops nothing"
+family: cmd-drop-role
+tier: core
+feature_ids: [drop-role, errors, multiple-roles]
+required_capabilities: [roles, create-role, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_role.sgml#sql-droprole-parameters (name)"
+sessions: [a]
+setup: |
+  CREATE ROLE drr_at_a;
+  CREATE ROLE drr_at_b;
+steps:
+  - sql: |
+      DROP ROLE drr_at_a, drr_at_nosuch, drr_at_b
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT rolname FROM pg_roles WHERE rolname IN ('drr_at_a', 'drr_at_b') ORDER BY rolname
+    expect: rows
+    order: ordered
+    comment: both existing roles survive the failed statement
+  - sql: |
+      DROP ROLE drr_at_a, drr_at_b
+    expect: ok
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_roles WHERE rolname IN ('drr_at_a', 'drr_at_b')
+    expect: rows

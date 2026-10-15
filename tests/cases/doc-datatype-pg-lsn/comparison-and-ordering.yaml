@@ -1,0 +1,38 @@
+# Documented: pg_lsn supports the standard comparison operators.
+id: doc-datatype-pg-lsn.comparison-and-ordering
+title: pg_lsn supports =, <>, <, >, and orders by numeric LSN value, not text
+family: doc-datatype-pg-lsn
+tier: core
+feature_ids: [pg-lsn, comparison, ordering, aggregates]
+required_capabilities: [select, create-table, insert, order-by]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-pg-lsn"
+sessions: [a]
+setup: |
+  CREATE TABLE lsn_cmp (id int4, pos pg_lsn);
+  INSERT INTO lsn_cmp VALUES (1, '1/0'), (2, '0/FFFFFFFF'), (3, '0/10'), (4, 'A/0'), (5, '0/9');
+steps:
+  - sql: |
+      SELECT '0/1'::pg_lsn < '0/2'::pg_lsn AS lt, '0/2'::pg_lsn > '0/1'::pg_lsn AS gt, '0/1'::pg_lsn = '0/1'::pg_lsn AS eq, '0/1'::pg_lsn <> '0/2'::pg_lsn AS ne
+    expect: rows
+  - sql: |
+      SELECT '0/FFFFFFFF'::pg_lsn < '1/0'::pg_lsn AS high_low_segment, '1/0'::pg_lsn > '0/FFFFFFFF'::pg_lsn AS cross_segment
+    expect: rows
+    comment: comparison is on the 64-bit value, so 0/FFFFFFFF < 1/0
+  - sql: |
+      SELECT id FROM lsn_cmp ORDER BY pos
+    expect: rows
+    order: ordered
+    comment: numeric ordering; text ordering would put A/0 before 0/9
+  - sql: |
+      SELECT id FROM lsn_cmp WHERE pos >= '0/10'::pg_lsn AND pos < 'A/0'::pg_lsn ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT max(pos)::text AS hi, min(pos)::text AS lo FROM lsn_cmp
+    expect: rows
+  - sql: |
+      SELECT pos, pos::text FROM lsn_cmp ORDER BY pos DESC LIMIT 2
+    expect: rows
+    order: ordered

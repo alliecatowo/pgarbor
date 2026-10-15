@@ -1,0 +1,38 @@
+# Contrast case: a plain BEGIN defaults to READ COMMITTED, so each statement sees rows committed by another session.
+id: cmd-begin.snapshot-read-committed
+title: A plain BEGIN defaults to READ COMMITTED and sees another session's committed insert
+family: cmd-begin
+tier: core
+feature_ids: [begin, read-committed, transactions, insert, snapshots]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/begin.sgml#sql-begin; transaction-iso.sgml#XACT-READ-COMMITTED"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a sees row 2 because READ COMMITTED takes a new snapshot per statement
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

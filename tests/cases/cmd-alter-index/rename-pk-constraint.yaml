@@ -1,0 +1,38 @@
+# Renaming the index behind a PRIMARY KEY also renames the constraint; the constraint keeps its type.
+id: cmd-alter-index.rename-pk-constraint
+title: ALTER INDEX RENAME on a primary key index renames the constraint too
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, rename, primary-key, constraints]
+required_capabilities: [create-table, alter-index, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (RENAME: constraint is renamed as well)"
+sessions: [a]
+setup: |
+  CREATE TABLE accounts (id int4 PRIMARY KEY, email text UNIQUE);
+steps:
+  - sql: |
+      SELECT conname, contype FROM pg_constraint WHERE conrelid = 'accounts'::regclass ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX accounts_pkey RENAME TO accounts_id_pk
+    expect: ok
+  - sql: |
+      SELECT conname, contype FROM pg_constraint WHERE conrelid = 'accounts'::regclass ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: the primary key constraint now carries the index's new name, contype stays p
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'accounts' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO accounts VALUES (1, 'a@example.com')
+    expect: ok
+  - sql: |
+      INSERT INTO accounts VALUES (1, 'b@example.com')
+    expect: error
+    sqlstate: "23505"
+    comment: uniqueness is still enforced by the renamed index

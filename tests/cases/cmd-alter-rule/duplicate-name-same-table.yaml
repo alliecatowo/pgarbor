@@ -1,0 +1,30 @@
+# Renaming a rule to a name another rule on the same table already has fails with duplicate_object, including renaming to its own name.
+id: cmd-alter-rule.duplicate-name-same-table
+title: ALTER RULE to a name already used on the same table fails with duplicate_object
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, rules, errors]
+required_capabilities: [create-table, create-rule, insert, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 42710 (duplicate_object); alter_rule.sgml#description"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4);
+  CREATE RULE r1 AS ON INSERT TO emp DO INSTEAD NOTHING;
+  CREATE RULE r2 AS ON UPDATE TO emp DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      ALTER RULE r1 ON emp RENAME TO r2
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      ALTER RULE r1 ON emp RENAME TO r1
+    expect: error
+    sqlstate: "42710"
+    comment: renaming a rule to its own current name is still a duplicate
+  - sql: |
+      SELECT rulename FROM pg_rules WHERE tablename = 'emp' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: both rules are unchanged, with their original events

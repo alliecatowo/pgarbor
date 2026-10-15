@@ -1,0 +1,28 @@
+# A manual unique index on a column that already has a UNIQUE constraint is allowed but duplicates the constraint's index.
+id: doc-indexes-unique.redundant-index-on-unique-column
+title: Manual unique index on a UNIQUE column is accepted alongside the constraint index
+family: doc-indexes-unique
+tier: core
+feature_ids: [unique-index, unique-constraint, create-index, catalog]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique (note: no need to manually create indexes on unique columns; doing so would duplicate the automatic index)"
+sessions: [a]
+setup: |
+  CREATE TABLE dupidx (code text UNIQUE, v int);
+  CREATE UNIQUE INDEX dupidx_code2 ON dupidx (code);
+steps:
+  - sql: |
+      INSERT INTO dupidx VALUES ('k1', 1)
+    expect: ok
+  - sql: |
+      INSERT INTO dupidx VALUES ('k1', 2)
+    expect: error
+    sqlstate: "23505"
+    comment: both unique indexes enforce the same rule
+  - sql: |
+      SELECT x.indexrelid::regclass::text AS idx, x.indisunique FROM pg_index x WHERE x.indrelid = 'dupidx'::regclass ORDER BY idx
+    expect: rows
+    order: ordered
+    comment: two unique indexes on the same column exist; the constraint one is system-named

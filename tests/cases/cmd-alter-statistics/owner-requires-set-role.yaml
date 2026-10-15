@@ -1,0 +1,43 @@
+# A non-superuser owner may transfer ownership only to a role it can SET ROLE to (membership).
+id: cmd-alter-statistics.owner-requires-set-role
+title: "ALTER STATISTICS OWNER TO requires the current role to be able to SET ROLE to the new owner"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, owner, role-membership, privileges]
+required_capabilities: [create-table, alter-statistics, extended-statistics, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (Description: must be able to SET ROLE to the new owning role)"
+sessions: [a]
+setup: |
+  CREATE ROLE ast_rs_a;
+  CREATE ROLE ast_rs_b;
+  CREATE TABLE ast_rs (a int, b int);
+  CREATE STATISTICS ast_rs_s1 (ndistinct) ON a, b FROM ast_rs;
+  ALTER STATISTICS ast_rs_s1 OWNER TO ast_rs_a;
+steps:
+  - sql: |
+      SET ROLE ast_rs_a
+    expect: ok
+  - sql: |
+      ALTER STATISTICS ast_rs_s1 OWNER TO ast_rs_b
+    expect: error
+    sqlstate: "42501"
+    comment: must be able to SET ROLE to the new owner
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(stxowner) = 'ast_rs_a' FROM pg_statistic_ext WHERE stxname = 'ast_rs_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_rs_s1 OWNER TO CURRENT_USER
+    expect: ok
+    comment: cleanup so the roles can be dropped
+  - sql: |
+      DROP ROLE ast_rs_a
+    expect: ok
+  - sql: |
+      DROP ROLE ast_rs_b
+    expect: ok

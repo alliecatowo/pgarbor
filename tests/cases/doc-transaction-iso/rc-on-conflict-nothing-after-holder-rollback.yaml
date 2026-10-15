@@ -1,0 +1,40 @@
+# Read Committed: ON CONFLICT DO NOTHING waits on an uncommitted conflicting insert; if that insert rolls back, the row is inserted.
+id: doc-transaction-iso.rc-on-conflict-nothing-after-holder-rollback
+title: INSERT ON CONFLICT DO NOTHING inserts after a concurrent conflicting insert rolls back
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, read-committed, insert, on-conflict]
+required_capabilities: [create-table, insert, select, transactions, multi-session, constraints]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#xact-read-committed"
+sessions: [a, b]
+setup: |
+  CREATE TABLE doc_dn (k int4 PRIMARY KEY, n int4 NOT NULL);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO doc_dn VALUES (1, 1)
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO doc_dn VALUES (1, 100) ON CONFLICT DO NOTHING
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: INSERT 0 1 - the holder's row is gone, so b's row is inserted
+  - session: b
+    sql: |
+      SELECT k, n FROM doc_dn ORDER BY k
+    expect: rows
+    order: ordered

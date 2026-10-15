@@ -1,0 +1,59 @@
+# xpath and xpath_exists with namespace mappings, default-namespace prefixes, scalar results, and the documented error conditions.
+id: doc-functions-xml.xpath-namespaces
+title: xpath and xpath_exists evaluate XPath 1.0 with namespace mappings and report documented errors
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, xpath, xpath-exists, xml-namespaces]
+required_capabilities: [xml, select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-xml-processing (xpath, xpath_exists)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT xpath('/my:a/text()', '<my:a xmlns:my="http://example.com">test</my:a>', ARRAY[ARRAY['my', 'http://example.com']])
+    expect: rows
+    comment: doc example, returns {test}
+  - sql: |
+      SELECT xpath('//mydefns:b/text()', '<a xmlns="http://example.com"><b>test</b></a>', ARRAY[ARRAY['mydefns', 'http://example.com']])
+    expect: rows
+    comment: doc example, default namespace reached through a prefix mapping
+  - sql: |
+      SELECT xpath('/my:a/text()', '<a>test</a>', ARRAY[ARRAY['my', 'http://example.com']])
+    expect: rows
+    comment: no node matches the namespace, so the array is empty
+  - sql: |
+      SELECT xpath('1 + 1', '<a/>') AS scalar, xpath('count(//b)', '<a><b/><b/></a>') AS count_scalar
+    expect: rows
+    comment: a scalar XPath result comes back as a single-element array
+  - sql: |
+      SELECT xpath('//b', '<a><b/><b/></a>') AS two_nodes
+    expect: rows
+    comment: a node-set comes back as one array element per node
+  - sql: |
+      SELECT xpath('//b', NULL::xml) IS NULL AS null_doc, xpath('//b', '<a><b/></a>', NULL::text[]) IS NULL AS null_ns
+    expect: rows
+    comment: null document or null namespace array gives null
+  - sql: |
+      SELECT xpath_exists('/my:a/text()', '<my:a xmlns:my="http://example.com">test</my:a>', ARRAY[ARRAY['my', 'http://example.com']]) AS doc_example
+    expect: rows
+    comment: doc example, true
+  - sql: |
+      SELECT xpath_exists('//b', '<a/>') AS no_b, xpath_exists('//b', NULL::xml) IS NULL AS null_doc
+    expect: rows
+    comment: empty node-set is false; null input is null
+  - sql: |
+      SELECT xpath('/a', 'abc')
+    expect: error
+    sqlstate: 2200M
+    comment: the second argument must be a well-formed document
+  - sql: |
+      SELECT xpath('/a', '<a/><b/>')
+    expect: error
+    sqlstate: 2200M
+    comment: a document with two root elements is not well-formed
+  - sql: |
+      SELECT xpath('//x:b/text()', '<a/>', ARRAY[ARRAY['x']])
+    expect: error
+    sqlstate: "22000"
+    comment: each namespace mapping must have exactly two elements

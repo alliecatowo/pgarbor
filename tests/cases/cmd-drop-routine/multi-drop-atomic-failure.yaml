@@ -1,0 +1,31 @@
+# A comma-separated DROP ROUTINE is all-or-nothing: one missing routine rolls back the whole command.
+id: cmd-drop-routine.multi-drop-atomic-failure
+title: "Multi-routine DROP ROUTINE removes nothing when one listed routine is missing"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, multiple-objects, transactions]
+required_capabilities: [create-function, errors, transactions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_routine.sgml#sql-droproutine (name [, ...])"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ma_1(integer) RETURNS int LANGUAGE sql AS 'SELECT 1';
+  CREATE FUNCTION ma_2(text) RETURNS int LANGUAGE sql AS 'SELECT 2';
+steps:
+  - sql: |
+      DROP ROUTINE ma_1(integer), ma_nosuch(integer), ma_2(text)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('ma_1', 'ma_2') ORDER BY proname
+    expect: rows
+    order: ordered
+    comment: both routines survive the failed command
+  - sql: |
+      DROP ROUTINE ma_1(integer), ma_2(text)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname IN ('ma_1', 'ma_2')
+    expect: rows
+    order: multiset

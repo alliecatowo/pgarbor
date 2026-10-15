@@ -1,0 +1,43 @@
+# A schema-qualified name is created in that schema. An unqualified name is created in the first existing
+# schema of search_path (the creation schema), not necessarily in public.
+id: cmd-create-conversion.schema-placement-and-search-path
+title: Schema-qualified names place the conversion; unqualified names follow search_path
+family: cmd-create-conversion
+tier: core
+feature_ids: [create-conversion, schema-qualification, search-path]
+required_capabilities: [create-conversion, drop-conversion, create-schema, search-path, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_conversion.sgml#sql-createconversion (name: schema-qualified; else current schema)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA cc_sp1;
+      CREATE SCHEMA cc_sp2
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_sp1.cc_q FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - sql: |
+      SET search_path TO cc_sp2, public
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_unq FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8
+    expect: ok
+    comment: unqualified, so it goes into cc_sp2, the first schema on search_path
+  - sql: |
+      RESET search_path
+    expect: ok
+  - sql: |
+      SELECT c.conname, n.nspname
+      FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE c.conname IN ('cc_q', 'cc_unq')
+      ORDER BY c.conname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP CONVERSION cc_sp1.cc_q;
+      DROP CONVERSION cc_sp2.cc_unq;
+      DROP SCHEMA cc_sp1;
+      DROP SCHEMA cc_sp2
+    expect: ok

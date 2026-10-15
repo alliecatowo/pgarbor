@@ -1,0 +1,74 @@
+# CASCADE drops the dependent trigger, constraint, operator and views, plus objects that depend on
+# those in turn (view over view). Each drop reports a notice naming what was dropped.
+id: cmd-drop-function.cascade-drops-dependents
+title: CASCADE drops triggers, constraints, operators and dependent views transitively
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, cascade, dependencies, triggers, check-constraints, operators, views, transitive-dependencies]
+required_capabilities: [create-function, create-table, create-view, create-operator, triggers, drop-function, sql-functions, plpgsql, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (CASCADE); ddl-depend"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION cf() RETURNS trigger LANGUAGE plpgsql AS 'begin return new; end'
+    expect: ok
+  - sql: |
+      CREATE TABLE ct (id int)
+    expect: ok
+  - sql: |
+      CREATE TRIGGER ct_b BEFORE INSERT ON ct FOR EACH ROW EXECUTE FUNCTION cf()
+    expect: ok
+  - sql: |
+      DROP FUNCTION cf() CASCADE
+    expect: notice
+    comment: notice names drop cascades to trigger ct_b on table ct
+  - sql: |
+      CREATE FUNCTION cc(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      CREATE TABLE ct2 (a int CHECK (cc(a) > 0))
+    expect: ok
+  - sql: |
+      DROP FUNCTION cc(int) CASCADE
+    expect: notice
+    comment: the CHECK constraint is dropped; the table remains
+  - sql: |
+      CREATE FUNCTION co(int, int) RETURNS bool LANGUAGE sql AS 'select $1 = $2'
+    expect: ok
+  - sql: |
+      CREATE OPERATOR === (leftarg = int, rightarg = int, procedure = co)
+    expect: ok
+  - sql: |
+      DROP FUNCTION co(int, int) CASCADE
+    expect: notice
+    comment: the operator is dropped
+  - sql: |
+      CREATE FUNCTION cv() RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      CREATE VIEW cv1 AS SELECT cv() AS x
+    expect: ok
+  - sql: |
+      CREATE VIEW cv2 AS SELECT x FROM cv1
+    expect: ok
+  - sql: |
+      DROP FUNCTION cv() CASCADE
+    expect: notice
+    comment: both views are dropped; cv2 depends on cv1 transitively
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('cv1', 'cv2')
+    expect: rows
+    order: multiset
+    comment: 0 rows remain
+  - sql: |
+      SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal
+    expect: rows
+    order: multiset
+    comment: 0 rows remain; ct_b is gone
+  - sql: |
+      SELECT count(*) FROM pg_operator WHERE oprname = '==='
+    expect: rows
+    order: multiset
+    comment: 0 rows remain

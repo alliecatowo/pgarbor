@@ -1,0 +1,37 @@
+# The pre-9.0 VACUUM syntax keeps its fixed option order; the parenthesized form accepts the same options in any order.
+id: cmd-vacuum.compat-syntax-order
+title: "VACUUM legacy option syntax requires the documented order"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, compatibility, options]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Compatibility)"
+sessions: [a]
+setup: |
+  CREATE TABLE vco (id int4, v int4);
+  INSERT INTO vco SELECT g, g FROM generate_series(1, 10) g;
+steps:
+  - sql: |
+      VACUUM FULL FREEZE VERBOSE ANALYZE vco
+    expect: ok
+    compare_message: false
+    comment: the legacy order FULL FREEZE VERBOSE ANALYZE is accepted
+  - sql: |
+      VACUUM ANALYZE FULL vco
+    expect: error
+    sqlstate: "42601"
+    comment: ANALYZE before FULL is a syntax error without parentheses
+  - sql: |
+      VACUUM (ANALYZE, FULL) vco
+    expect: ok
+    comment: parenthesized options may appear in any order
+  - sql: |
+      VACUUM FULL ANALYZE vco (v)
+    expect: ok
+    comment: legacy form with a column list still needs ANALYZE, which is present
+  - sql: |
+      SELECT count(*), sum(v) FROM vco
+    expect: rows
+    order: ordered

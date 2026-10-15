@@ -1,0 +1,36 @@
+# ALTER RULE is transactional: a rename inside a transaction that rolls back leaves the old name, and a committed one sticks.
+id: cmd-alter-rule.rename-rolled-back
+title: ALTER RULE inside a rolled-back transaction leaves the old name; a committed rename persists
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, transactions, rules]
+required_capabilities: [create-table, create-rule, select, transactions, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 alter_rule.sgml#sql-alterrule; transactional DDL (sql-begin.html)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4);
+  CREATE RULE r_old AS ON INSERT TO emp DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      BEGIN;
+      ALTER RULE r_old ON emp RENAME TO r_new;
+      SELECT rulename FROM pg_rules WHERE tablename = 'emp' ORDER BY 1;
+      ROLLBACK
+    expect: ok
+    comment: inside the transaction the new name is visible
+  - sql: |
+      SELECT rulename FROM pg_rules WHERE tablename = 'emp' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: after the rollback only the old name remains
+  - sql: |
+      BEGIN;
+      ALTER RULE r_old ON emp RENAME TO r_kept;
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT rulename FROM pg_rules WHERE tablename = 'emp' ORDER BY 1
+    expect: rows
+    order: ordered

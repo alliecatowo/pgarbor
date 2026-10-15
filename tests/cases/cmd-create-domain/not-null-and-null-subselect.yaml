@@ -1,0 +1,39 @@
+# NOT NULL on a domain rejects NULL on conversion; the documented empty-subselect case slips a NULL through.
+id: cmd-create-domain.not-null-and-null-subselect
+title: Domain NOT NULL rejects NULL values but a scalar subselect yielding NULL inserts successfully
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, not-null-constraint, domain-constraint]
+required_capabilities: [create-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain-notes"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dnn AS int NOT NULL;
+  CREATE TABLE tnn (x dnn);
+  CREATE DOMAIN dnn_def AS int NOT NULL DEFAULT NULL;
+  CREATE TABLE tnd (v dnn_def);
+steps:
+  - sql: |
+      INSERT INTO tnn VALUES (NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      INSERT INTO tnn VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO tnn (x) VALUES ((SELECT x FROM tnn WHERE false))
+    expect: ok
+    comment: "notes example: the empty scalar subselect is typed as the domain and is not re-checked"
+  - sql: |
+      SELECT count(*) AS total, count(x) AS non_null FROM tnn
+    expect: rows
+  - sql: |
+      INSERT INTO tnd VALUES (DEFAULT)
+    expect: error
+    sqlstate: "23502"
+    comment: a NULL default violates the domain NOT NULL
+  - sql: |
+      SELECT count(*) FROM tnd
+    expect: rows

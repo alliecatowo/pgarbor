@@ -1,0 +1,38 @@
+# ALTER INDEX refuses non-index relations (even under IF EXISTS for subforms that resolve the name), and any change to a system catalog index.
+id: cmd-alter-index.not-index-and-system-catalog
+title: ALTER INDEX rejects tables and system catalog indexes
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, errors, system-catalogs, if-exists]
+required_capabilities: [create-table, create-index, alter-index, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (Notes: changing any part of a system catalog index is not permitted)"
+sessions: [a]
+setup: |
+  CREATE TABLE plain_t (id int4 PRIMARY KEY, v int4);
+steps:
+  - sql: |
+      ALTER INDEX plain_t SET (fillfactor = 80)
+    expect: error
+    sqlstate: "42809"
+    comment: a table name is not an index
+  - sql: |
+      ALTER INDEX IF EXISTS plain_t SET (fillfactor = 80)
+    expect: error
+    sqlstate: "42809"
+    comment: IF EXISTS does not hide the wrong relation kind, only a missing name
+  - sql: |
+      ALTER INDEX pg_class_oid_index SET (fillfactor = 80)
+    expect: error
+    sqlstate: "42501"
+    comment: system catalog indexes cannot be altered
+  - sql: |
+      ALTER INDEX pg_class_oid_index RENAME TO pg_class_oid_index2
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname IN ('pg_class_oid_index', 'pg_class_oid_index2') ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: the catalog index keeps its name

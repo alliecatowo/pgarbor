@@ -1,0 +1,30 @@
+# Unquoted names fold to lower case, quoted names keep their case, and event names are matched case-insensitively.
+id: cmd-create-event-trigger.names-and-event-keywords
+title: Quoted trigger names keep their case, unquoted names fold, and event names are case-insensitive
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, identifiers, table-rewrite, sql-drop]
+required_capabilities: [event-triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE FUNCTION f_noop() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;
+steps:
+  - sql: |
+      CREATE EVENT TRIGGER "MixedCase" ON ddl_command_start EXECUTE FUNCTION f_noop()
+    expect: ok
+  - sql: |
+      CREATE EVENT TRIGGER Plain_Name ON DDL_COMMAND_END EXECUTE FUNCTION f_noop()
+    expect: ok
+  - sql: |
+      CREATE EVENT TRIGGER sd_trig ON SQL_DROP EXECUTE FUNCTION f_noop()
+    expect: ok
+  - sql: |
+      CREATE EVENT TRIGGER rw_trig ON table_rewrite EXECUTE FUNCTION f_noop()
+    expect: ok
+  - sql: |
+      SELECT evtname, evtevent FROM pg_event_trigger
+    expect: rows
+    order: multiset
+    comment: quoted name keeps MixedCase; unquoted Plain_Name is stored as plain_name

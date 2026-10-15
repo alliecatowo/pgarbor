@@ -1,0 +1,50 @@
+# Membership alone is not enough: the session user needs the SET option, granted with GRANT ... WITH SET TRUE.
+id: cmd-set-role.set-option-required
+title: SET ROLE requires the SET option on the membership; WITH SET FALSE is refused with 42501 and WITH SET TRUE allows it
+family: cmd-set-role
+tier: core
+feature_ids: [set-role, role-membership, set-option, grant, errors]
+required_capabilities: [roles, set-role, grant, session-authorization, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#description (current session user must have the SET option)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_so_mem LOGIN;
+  CREATE ROLE sr_so_target;
+  GRANT sr_so_target TO sr_so_mem WITH INHERIT TRUE, SET FALSE
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION sr_so_mem
+    expect: ok
+  - sql: |
+      SET ROLE sr_so_target
+    expect: error
+    sqlstate: "42501"
+    comment: membership exists but without the SET option
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      GRANT sr_so_target TO sr_so_mem WITH INHERIT TRUE, SET TRUE
+    expect: ok
+    comment: re-granting the existing membership updates its SET option
+  - sql: |
+      SET SESSION AUTHORIZATION sr_so_mem
+    expect: ok
+  - sql: |
+      SET ROLE sr_so_target
+    expect: ok
+  - sql: |
+      SELECT current_user = 'sr_so_target' AS now_target
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      DROP ROLE sr_so_mem, sr_so_target
+    expect: ok

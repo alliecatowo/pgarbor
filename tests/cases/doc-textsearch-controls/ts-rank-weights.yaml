@@ -1,0 +1,34 @@
+# Weight arrays scale rank per weight class; the default array is {0.1,0.2,0.4,1.0} for D,C,B,A, and all zeros give zero rank.
+id: doc-textsearch-controls.ts-rank-weights
+title: ts_rank weight array scales matches by label and defaults to D C B A
+family: doc-textsearch-controls
+tier: core
+feature_ids: [ts-rank, weights, setweight, default-weights, ranking]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "textsearch.sgml#textsearch-ranking (weights array order {D, C, B, A}, defaults {0.1, 0.2, 0.4, 1.0})"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT
+        ts_rank(setweight(to_tsvector('english', 'cat'), 'D'), to_tsquery('english', 'cat')) AS d_label,
+        ts_rank(setweight(to_tsvector('english', 'cat'), 'A'), to_tsquery('english', 'cat')) AS a_label
+    expect: rows
+    comment: A-labelled matches rank ten times higher than D-labelled ones under default weights
+  - sql: |
+      SELECT
+        ts_rank(setweight(to_tsvector('english', 'cat'), 'A'), to_tsquery('english', 'cat'))
+          = ts_rank('{0.1,0.2,0.4,1.0}', setweight(to_tsvector('english', 'cat'), 'A'), to_tsquery('english', 'cat')) AS default_equals_explicit,
+        ts_rank(setweight(to_tsvector('english', 'cat'), 'A'), to_tsquery('english', 'cat'))
+          = ts_rank(array[0.1,0.2,0.4,1.0]::float4[], setweight(to_tsvector('english', 'cat'), 'A'), to_tsquery('english', 'cat')) AS array_equals_default
+    expect: rows
+    comment: passing the documented default explicitly gives the same rank as omitting the weights
+  - sql: |
+      SELECT ts_rank('{0,0,0,0}', to_tsvector('english', 'cat'), to_tsquery('english', 'cat')) AS zero_weights
+    expect: rows
+    comment: all-zero weights give a rank of zero for a match
+  - sql: |
+      SELECT ts_rank('{0,0,0,1}', setweight(to_tsvector('english', 'cat'), 'D'), to_tsquery('english', 'cat')) AS only_a_weighted
+    expect: rows
+    comment: a weight of zero for D removes the contribution of D-labelled matches

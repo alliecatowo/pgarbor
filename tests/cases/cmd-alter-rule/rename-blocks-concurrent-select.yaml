@@ -1,0 +1,43 @@
+# ALTER RULE takes AccessExclusiveLock on the table, so a concurrent reader waits until the renaming transaction commits.
+id: cmd-alter-rule.rename-blocks-concurrent-select
+title: ALTER RULE blocks a concurrent SELECT on the table until the renaming transaction commits
+family: cmd-alter-rule
+tier: extended
+feature_ids: [alter-rule, rename, locking, transactions, rules]
+required_capabilities: [create-table, create-rule, select, transactions, multi-session, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 alter_rule.sgml#sql-alterrule; RenameRewriteRule takes AccessExclusiveLock on the relation (explicit-locking.html#LOCKING-TABLES)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE emp (id int4);
+  INSERT INTO emp VALUES (1), (2);
+  CREATE RULE r_lock AS ON INSERT TO emp DO INSTEAD NOTHING;
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      ALTER RULE r_lock ON emp RENAME TO r_locked
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM emp
+    async: true
+    expect_blocked: true
+    comment: the reader needs AccessShareLock, which conflicts with the rename's AccessExclusiveLock
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    comment: the blocked reader now sees 2 rows
+  - session: b
+    sql: |
+      SELECT rulename FROM pg_rules WHERE tablename = 'emp' ORDER BY 1
+    expect: rows
+    order: ordered

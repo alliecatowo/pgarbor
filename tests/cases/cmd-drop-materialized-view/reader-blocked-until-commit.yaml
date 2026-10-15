@@ -1,0 +1,39 @@
+# An uncommitted DROP holds an access-exclusive lock: a concurrent reader blocks, then fails with 42P01 after commit.
+id: cmd-drop-materialized-view.reader-blocked-until-commit
+title: A reader of a materialized view blocks behind an uncommitted DROP, then gets 42P01 after commit
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, locks, transactions]
+required_capabilities: [create-table, insert, select, create-materialized-view, drop-materialized-view, transactions, multi-session, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (Description); doc/src/sgml/mvcc.sgml (table-level locks)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE rb_base (id int4);
+  INSERT INTO rb_base VALUES (1), (2);
+  CREATE MATERIALIZED VIEW rb_mv AS SELECT id FROM rb_base;
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      DROP MATERIALIZED VIEW rb_mv
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id FROM rb_mv ORDER BY id
+    async: true
+    expect_blocked: true
+    comment: b waits on a's access-exclusive lock and does not see the uncommitted drop
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: error
+    sqlstate: "42P01"
+    comment: after commit the name no longer resolves

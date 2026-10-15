@@ -1,0 +1,35 @@
+# ALTER AGGREGATE matches only on argument data types: argument names and the IN argmode are not
+# compared, so the same aggregate is addressed by any of these spellings.
+id: cmd-alter-aggregate.argname-argmode-ignored
+title: "ALTER AGGREGATE ignores argument names and the IN mode, and matches on types only"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, rename, aggregates, argmodes]
+required_capabilities: [aggregates, create-aggregate, create-function, alter-aggregate, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#parameters (argmode, argname)"
+setup: |
+  CREATE FUNCTION an_sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE AGGREGATE an_agg(integer) (sfunc = an_sf, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      ALTER AGGREGATE an_agg(x integer) RENAME TO an_agg2
+    expect: ok
+    comment: a named argument matches the unnamed signature
+  - sql: |
+      ALTER AGGREGATE an_agg2(IN integer) RENAME TO an_agg3
+    expect: ok
+    comment: explicit IN is the default mode
+  - sql: |
+      ALTER AGGREGATE an_agg3(integer) RENAME TO an_agg4
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE an_agg4(text) RENAME TO an_agg5
+    expect: error
+    sqlstate: "42883"
+    comment: argument types do matter
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname IN ('an_agg', 'an_agg2', 'an_agg3', 'an_agg4', 'an_agg5') ORDER BY 1, 2
+    expect: rows
+    order: ordered

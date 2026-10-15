@@ -1,0 +1,49 @@
+# Once a table has an alias, the original name is not visible; an alias applied to a join hides
+# the names of the joined tables from the outer query.
+id: doc-queries-table-expressions.alias-hides-table-name
+title: Table aliases replace the original name; join aliases hide their inner names
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [table-alias, from-clause, errors]
+required_capabilities: [create-table, insert, select, join]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-tablefunctions (Table and Column Aliases)"
+sessions: [a]
+setup: |
+  CREATE TABLE my_table (a int4);
+  CREATE TABLE your_table (a int4);
+  CREATE TABLE people (id int4 PRIMARY KEY, mother_id int4);
+  INSERT INTO my_table VALUES (1), (7);
+  INSERT INTO your_table VALUES (1), (9);
+  INSERT INTO people VALUES (1, NULL), (2, 1), (3, 1);
+steps:
+  - sql: |
+      SELECT m.a FROM my_table AS m WHERE m.a > 5
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM my_table AS m WHERE my_table.a > 5
+    expect: error
+    sqlstate: "42P01"
+    comment: the original name is hidden by the alias
+  - sql: |
+      SELECT a.* FROM (my_table AS a JOIN your_table AS b ON a.a = b.a) AS c
+    expect: error
+    sqlstate: "42P01"
+    comment: alias a is not visible outside the join alias c
+  - sql: |
+      SELECT count(*) FROM (my_table AS a JOIN your_table AS b ON a.a = b.a) AS c
+    expect: rows
+    order: multiset
+    comment: the join alias c itself is visible; one matching pair (a = 1)
+  - sql: |
+      SELECT a.a FROM my_table AS a JOIN your_table AS b ON a.a = b.a
+    expect: rows
+    order: multiset
+    comment: without an outer alias, a is visible
+  - sql: |
+      SELECT mother.id AS mid, child.id AS cid FROM people AS mother JOIN people AS child ON mother.id = child.mother_id ORDER BY cid
+    expect: rows
+    order: ordered
+    comment: self-join requires aliases; two children of person 1

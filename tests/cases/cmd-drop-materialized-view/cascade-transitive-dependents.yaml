@@ -1,0 +1,34 @@
+# CASCADE drops the materialized view, then transitively every dependent object (a matview and a view on it).
+id: cmd-drop-materialized-view.cascade-transitive-dependents
+title: DROP MATERIALIZED VIEW CASCADE removes transitive dependent materialized views and views
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, cascade, dependencies]
+required_capabilities: [create-table, insert, select, create-view, create-materialized-view, drop-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (CASCADE)"
+sessions: [a]
+setup: |
+  CREATE TABLE cc_base (id int4);
+  INSERT INTO cc_base VALUES (1), (2), (3);
+  CREATE MATERIALIZED VIEW cc_m1 AS SELECT id FROM cc_base;
+  CREATE MATERIALIZED VIEW cc_m2 AS SELECT id FROM cc_m1 WHERE id > 1;
+  CREATE VIEW cc_v AS SELECT count(*) AS n FROM cc_m2;
+steps:
+  - sql: |
+      SELECT n FROM cc_v
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP MATERIALIZED VIEW cc_m1 CASCADE
+    expect: notice
+    comment: NOTICE drop cascades to materialized view cc_m2 and view cc_v
+  - sql: |
+      SELECT to_regclass('cc_m1') IS NULL AS m1, to_regclass('cc_m2') IS NULL AS m2, to_regclass('cc_v') IS NULL AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM cc_base ORDER BY id
+    expect: rows
+    order: ordered

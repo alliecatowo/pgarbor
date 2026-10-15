@@ -1,0 +1,32 @@
+# datatype.sgml datatype-money: NULL propagates through money arithmetic; aggregates skip NULL inputs.
+id: doc-datatype-money.null-and-sum-table
+title: NULL propagates through money arithmetic and sum skips NULL money values
+family: doc-datatype-money
+tier: core
+feature_ids: [money, null-semantics, aggregates, arithmetic]
+required_capabilities: [create-table, insert, select, money, guc]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/datatype.sgml#datatype-money (money column storage and arithmetic)"
+sessions: [a]
+setup: |
+  CREATE TABLE ledger (id int4 PRIMARY KEY, amt money);
+  INSERT INTO ledger VALUES (1, '1.10'), (2, NULL), (3, '2.20');
+steps:
+  - sql: |
+      SET lc_monetary TO 'C'
+    expect: ok
+  - sql: |
+      SELECT '1.00'::money + NULL AS n
+    expect: rows
+  - sql: |
+      SELECT sum(amt) AS total, count(amt) AS nn, count(*) AS rows_all FROM ledger
+    expect: rows
+  - sql: |
+      SELECT id, amt + '1.00'::money AS plus FROM ledger ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, coalesce(amt, '0'::money) AS filled FROM ledger ORDER BY id
+    expect: rows
+    order: ordered

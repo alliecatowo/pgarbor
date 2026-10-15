@@ -1,0 +1,58 @@
+# MOVE repositions a cursor without returning a row. FOUND reports whether a row was reached.
+id: doc-plpgsql-cursors.move-repositions-without-fetch
+title: MOVE repositions a cursor and sets FOUND without returning data
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, move, found, relative, forward, backward]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION move_variants() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c SCROLL CURSOR FOR SELECT name FROM items ORDER BY id;
+    r text;
+    n int := 2;
+    out text := '';
+  BEGIN
+    OPEN c;
+    MOVE LAST FROM c;
+    FETCH PRIOR FROM c INTO r;
+    out := out || r;
+    MOVE RELATIVE -n FROM c;
+    FETCH c INTO r;
+    out := out || r;
+    MOVE FORWARD 2 FROM c;
+    FETCH c INTO r;
+    out := out || coalesce(r, 'NULL');
+    RETURN out;
+  END $$;
+  CREATE FUNCTION move_found_flags() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c SCROLL CURSOR FOR SELECT name FROM items ORDER BY id;
+    r text;
+    f1 boolean;
+    f2 boolean;
+  BEGIN
+    OPEN c;
+    MOVE FORWARD 2 FROM c;
+    FETCH c INTO r;
+    MOVE FORWARD 100 FROM c;
+    f1 := FOUND;
+    MOVE BACKWARD 100 FROM c;
+    f2 := FOUND;
+    FETCH c INTO r;
+    RETURN coalesce(r, 'NULL') || ' ' || f1 || ' ' || f2;
+  END $$;
+steps:
+  - sql: |
+      SELECT move_variants()
+    expect: rows
+  - sql: |
+      SELECT move_found_flags()
+    expect: rows
+    comment: a MOVE past the end leaves FOUND false

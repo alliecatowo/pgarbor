@@ -1,0 +1,42 @@
+# SELECT FOR UPDATE takes ROW SHARE on the table, which conflicts with EXCLUSIVE; plain SELECT does not.
+id: doc-explicit-locking.for-update-conflicts-with-exclusive-table-lock
+title: SELECT FOR UPDATE waits for an EXCLUSIVE table lock while plain SELECT proceeds
+family: doc-explicit-locking
+tier: core
+feature_ids: [select-for-update, lock-modes, transactions, multi-session]
+required_capabilities: [create-table, insert, select, lock-table, row-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-tables (ROW SHARE acquired by SELECT FOR UPDATE; EXCLUSIVE conflicts with ROW SHARE)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE t IN EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      SELECT id FROM t WHERE id = 1 FOR UPDATE
+    async: true
+    expect_blocked: true
+    comment: FOR UPDATE needs ROW SHARE on the table
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    order: ordered

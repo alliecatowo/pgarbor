@@ -1,0 +1,22 @@
+# The grammar offers only ENABLE, ENABLE REPLICA and ENABLE ALWAYS; ENABLE ORIGIN is a syntax error and changes nothing.
+id: cmd-alter-event-trigger.enable-origin-keyword-syntax-error
+title: ENABLE ORIGIN is rejected as a syntax error and leaves the mode unchanged
+family: cmd-alter-event-trigger
+tier: extended
+feature_ids: [alter-event-trigger, event-triggers]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger (synopsis)"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard ENABLE ORIGIN
+    expect: error
+    sqlstate: '42601'
+  - sql: |
+      SELECT evtname, CASE evtenabled WHEN 'O' THEN 'origin' WHEN 'D' THEN 'disabled' WHEN 'R' THEN 'replica' WHEN 'A' THEN 'always' END AS mode FROM pg_event_trigger ORDER BY evtname
+    expect: rows
+    order: ordered

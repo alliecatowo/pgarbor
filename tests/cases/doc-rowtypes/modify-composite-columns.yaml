@@ -1,0 +1,42 @@
+# Documented INSERT/UPDATE syntax for composite columns: whole-column values with or without ROW,
+# updating one subfield from its own value, and inserting subfields directly (omitted subfields
+# become NULL).
+id: doc-rowtypes.modify-composite-columns
+title: INSERT and UPDATE of composite columns, including subfield targets and NULL-filled omitted subfields
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, insert, update, subfield-assignment]
+required_capabilities: [create-type, create-table, insert, update, select, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-modifying"
+sessions: [a]
+setup: |
+  CREATE TYPE complex AS (r double precision, i double precision);
+  CREATE TABLE mytab (id integer, complex_col complex);
+steps:
+  - sql: |
+      INSERT INTO mytab (id, complex_col) VALUES (1, (1.1, 2.2))
+    expect: ok
+    comment: the ROW keyword may be omitted
+  - sql: |
+      INSERT INTO mytab (id, complex_col) VALUES (2, ROW(3.3, 4.4))
+    expect: ok
+  - sql: |
+      UPDATE mytab SET complex_col = ROW(5.5, 6.6) WHERE id = 2
+    expect: ok
+  - sql: |
+      UPDATE mytab SET complex_col.r = (complex_col).r + 1 WHERE id = 1
+    expect: ok
+    comment: no parentheses after SET, parentheses required on the right-hand side
+  - sql: |
+      INSERT INTO mytab (complex_col.r, complex_col.i, id) VALUES (7.7, 8.8, 3)
+    expect: ok
+  - sql: |
+      INSERT INTO mytab (complex_col.r, id) VALUES (9.9, 4)
+    expect: ok
+    comment: the omitted subfield i is filled with NULL
+  - sql: |
+      SELECT id, (complex_col).r AS r, (complex_col).i AS i, complex_col IS NULL AS whole_null FROM mytab ORDER BY id
+    expect: rows
+    order: ordered

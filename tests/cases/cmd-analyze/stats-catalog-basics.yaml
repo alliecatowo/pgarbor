@@ -1,0 +1,28 @@
+# ANALYZE records per-column statistics in pg_stats: null fraction and distinct-value estimate.
+# With a small table every row is sampled, so the estimates are exact (-1 means all values distinct).
+id: cmd-analyze.stats-catalog-basics
+title: "ANALYZE stores null_frac and n_distinct per column in pg_stats"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, pg-stats, null-fraction, n-distinct]
+required_capabilities: [create-table, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Description; Notes: statistics collected)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_t (id int4 PRIMARY KEY, a int, b text);
+  INSERT INTO an_t SELECT g, g % 5, CASE WHEN g % 3 = 0 THEN NULL ELSE 'x' || (g % 4) END FROM generate_series(1, 100) g;
+steps:
+  - sql: |
+      SELECT count(*) FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_t'
+    expect: rows
+    comment: no statistics before the first ANALYZE
+  - sql: |
+      ANALYZE an_t
+    expect: ok
+  - sql: |
+      SELECT attname, null_frac, n_distinct FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_t' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: b has 33 NULLs out of 100 rows and 4 distinct non-null values; a has 5 distinct values

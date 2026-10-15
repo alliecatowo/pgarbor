@@ -1,0 +1,45 @@
+# LATERAL: a set-returning function per outer row, inner versus LEFT JOIN ... ON true, a correlated subquery, and the non-LATERAL error.
+id: cmd-select.lateral-set-returning
+title: LATERAL function calls per outer row with inner and left join semantics
+family: cmd-select
+tier: core
+feature_ids: [select, from, lateral, join, set-returning-functions]
+required_capabilities: [create-table, insert, select, create-function, lateral, join]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-from (LATERAL get_product_names examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE manufacturers (id int4 PRIMARY KEY, name text);
+  CREATE TABLE products (id int4 PRIMARY KEY, manufacturer_id int4, pname text);
+  INSERT INTO manufacturers VALUES (1, 'Acme'), (2, 'Globex'), (3, 'Initech');
+  INSERT INTO products VALUES (10, 1, 'anvil'), (11, 1, 'rocket'), (12, 2, 'spring');
+  CREATE FUNCTION get_product_names(int) RETURNS SETOF text AS $$
+      SELECT pname FROM products WHERE manufacturer_id = $1 ORDER BY pname
+  $$ LANGUAGE SQL;
+steps:
+  - sql: |
+      SELECT m.name AS mname, pname
+      FROM manufacturers m, LATERAL get_product_names(m.id) pname
+      ORDER BY mname, pname
+    expect: rows
+    order: ordered
+    comment: Initech has no products and so does not appear (inner join)
+  - sql: |
+      SELECT m.name AS mname, pname
+      FROM manufacturers m LEFT JOIN LATERAL get_product_names(m.id) pname ON true
+      ORDER BY mname, pname
+    expect: rows
+    order: ordered
+    comment: Initech is kept with a NULL product name
+  - sql: |
+      SELECT m.name, (SELECT count(*) FROM products p WHERE p.manufacturer_id = m.id) AS n
+      FROM manufacturers m
+      ORDER BY m.id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT m.name, pname FROM manufacturers m, get_product_names(m.id) pname
+    expect: error
+    sqlstate: "42703"
+    comment: without LATERAL the function argument cannot reference m

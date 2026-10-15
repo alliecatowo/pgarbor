@@ -1,0 +1,42 @@
+# RENAME TO renames the type in place: existing columns keep working, the old name disappears, and name collisions fail.
+id: cmd-alter-domain.rename-domain-keeps-usage
+title: "ALTER DOMAIN RENAME TO keeps table columns and checks intact, and refuses a taken name"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, rename, check-constraint]
+required_capabilities: [create-domain, alter-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN zipcode AS text CHECK (char_length(VALUE) = 5);
+  CREATE TABLE addr (id int, z zipcode);
+  INSERT INTO addr VALUES (1, '12345');
+  CREATE DOMAIN zip_other AS text;
+steps:
+  - sql: |
+      ALTER DOMAIN zipcode RENAME TO zip5
+    expect: ok
+  - sql: |
+      SELECT id, z FROM addr ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the column still stores the same values
+  - sql: |
+      SELECT '12345'::zip5 AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '12345'::zipcode
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      INSERT INTO addr VALUES (2, '1234')
+    expect: error
+    sqlstate: "23514"
+    comment: the CHECK still applies under the new name
+  - sql: |
+      ALTER DOMAIN zip5 RENAME TO zip_other
+    expect: error
+    sqlstate: "42710"

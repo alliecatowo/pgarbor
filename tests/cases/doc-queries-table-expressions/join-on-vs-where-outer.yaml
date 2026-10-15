@@ -1,0 +1,38 @@
+# A restriction in the ON clause of an outer join is applied before the join (rows are kept
+# NULL-extended); the same restriction in WHERE is applied after and removes rows.
+id: doc-queries-table-expressions.join-on-vs-where-outer
+title: ON-clause versus WHERE-clause restrictions on a LEFT JOIN give different rows
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [joins, outer-join, where-clause, from-clause]
+required_capabilities: [create-table, insert, select, join]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-from (ON with extra conditions)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (num int4, name text);
+  CREATE TABLE t2 (num int4, value text);
+  INSERT INTO t1 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+  INSERT INTO t2 VALUES (1, 'xxx'), (3, 'yyy'), (5, 'zzz');
+steps:
+  - sql: |
+      SELECT * FROM t1 LEFT JOIN t2 ON t1.num = t2.num AND t2.value = 'xxx'
+    expect: rows
+    order: multiset
+    comment: all three t1 rows survive; only num 1 matches
+  - sql: |
+      SELECT * FROM t1 LEFT JOIN t2 ON t1.num = t2.num WHERE t2.value = 'xxx'
+    expect: rows
+    order: multiset
+    comment: WHERE removes the NULL-extended rows, leaving one row
+  - sql: |
+      SELECT * FROM t1 INNER JOIN t2 ON t1.num = t2.num AND t2.value = 'xxx'
+    expect: rows
+    order: multiset
+    comment: for an inner join the two placements are equivalent (one row)
+  - sql: |
+      SELECT t1.name FROM t1 LEFT JOIN t2 ON t1.num = t2.num WHERE t2.num IS NULL
+    expect: rows
+    order: multiset
+    comment: anti-join idiom; returns name b

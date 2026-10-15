@@ -1,0 +1,45 @@
+# ALTER POLICY needs table ownership: a non-owner role gets 42501 for USING, RENAME TO and TO changes,
+# and the policy keeps its definition.
+id: cmd-alter-policy.owner-required
+title: "ALTER POLICY by a non-owner role fails with 42501 and changes nothing"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, rls, policies, privileges, errors]
+required_capabilities: [create-table, select, rls, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (Description: you must own the table)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_ap_nown;
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p ON t USING (v > 0) WITH CHECK (v < 9);
+  GRANT SELECT ON t TO pgarbor_case_ap_nown;
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_ap_nown
+    expect: ok
+  - sql: |
+      ALTER POLICY p ON t USING (true)
+    expect: error
+    sqlstate: "42501"
+    comment: the role is not the table owner
+  - sql: |
+      ALTER POLICY p ON t RENAME TO q
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      ALTER POLICY p ON t TO pgarbor_case_ap_nown
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT policyname, roles::text, qual, with_check FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: the policy is unchanged
+  - sql: |
+      DROP OWNED BY pgarbor_case_ap_nown; DROP ROLE pgarbor_case_ap_nown
+    expect: ok
+    comment: drop the cluster-global case role so a retry can recreate it

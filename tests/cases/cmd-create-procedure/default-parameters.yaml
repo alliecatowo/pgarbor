@@ -1,0 +1,45 @@
+# Parameter defaults: DEFAULT and = are equivalent; once one parameter has a default every following
+# input parameter needs one; the default must coerce to the argument type.
+id: cmd-create-procedure.default-parameters
+title: "Procedure parameter defaults: DEFAULT and =, trailing-default rule, default coercion"
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, default-arguments, named-arguments, call]
+required_capabilities: [create-table, insert, select, create-procedure, call]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (default_expr)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE t (id int4, label text)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE pd1(a int, b int DEFAULT 1, c int) LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: "42P13"
+    comment: a parameter after one with a default must also have a default
+  - sql: |
+      CREATE PROCEDURE dflt_bad(a int DEFAULT 'abc'::text) LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: "42804"
+    comment: default must be coercible to the argument type
+  - sql: |
+      CREATE PROCEDURE pdef_eq(a int = 5, b text DEFAULT 'z') LANGUAGE sql AS 'INSERT INTO t VALUES (a, b)'
+    expect: ok
+  - sql: |
+      CALL pdef_eq()
+    expect: ok
+  - sql: |
+      CALL pdef_eq(b => 'q')
+    expect: ok
+  - sql: |
+      CALL pdef_eq(7)
+    expect: ok
+  - sql: |
+      SELECT id, label FROM t ORDER BY id, label
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pronargs, pronargdefaults FROM pg_proc WHERE proname = 'pdef_eq'
+    expect: rows

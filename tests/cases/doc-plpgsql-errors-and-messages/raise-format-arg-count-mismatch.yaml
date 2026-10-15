@@ -1,0 +1,39 @@
+# A RAISE format string whose % count differs from the argument count is an error at compile time, not at run time.
+id: doc-plpgsql-errors-and-messages.raise-format-arg-count-mismatch
+title: RAISE with too many or too few format arguments fails with SQLSTATE 42601 during compilation
+family: doc-plpgsql-errors-and-messages
+tier: core
+feature_ids: [plpgsql, raise, format-string, compile-errors]
+required_capabilities: [plpgsql, create-function, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-errors-and-messages"
+sessions: [a]
+steps:
+  - sql: |
+      DO $$ BEGIN RAISE NOTICE 'a %', 1, 2; END $$
+    expect: error
+    sqlstate: "42601"
+    comment: two arguments for one placeholder
+  - sql: |
+      DO $$ BEGIN RAISE NOTICE '%, %', 1; END $$
+    expect: error
+    sqlstate: "42601"
+    comment: one argument for two placeholders
+  - sql: |
+      DO $$ BEGIN RAISE NOTICE 'a %'; END $$
+    expect: error
+    sqlstate: "42601"
+    comment: a placeholder with no argument
+  - sql: |
+      CREATE FUNCTION pl_bad_format() RETURNS void LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE NOTICE '%', 1, 2;
+      END $$
+    expect: error
+    sqlstate: "42601"
+    comment: the mismatch is rejected when CREATE FUNCTION compiles the body, so the function is never created
+  - sql: |
+      SELECT count(*) AS created FROM pg_proc WHERE proname = 'pl_bad_format'
+    expect: rows
+    order: ordered

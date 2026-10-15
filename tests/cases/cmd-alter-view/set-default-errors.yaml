@@ -1,0 +1,40 @@
+# SET DEFAULT validates the expression against the column type; an unknown column is 42703.
+id: cmd-alter-view.set-default-errors
+title: "ALTER VIEW SET DEFAULT rejects bad literals, wrong types and unknown columns"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, default-values, error-handling]
+required_capabilities: [create-table, insert, select, create-view, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (SET DEFAULT expression)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_se (id int4, c int4);
+  CREATE VIEW av_sev AS SELECT id, c FROM av_se;
+steps:
+  - sql: |
+      ALTER VIEW av_sev ALTER COLUMN c SET DEFAULT 'abc'
+    expect: error
+    sqlstate: "22P02"
+    comment: the unknown-type literal is coerced to integer and fails to parse
+  - sql: |
+      ALTER VIEW av_sev ALTER COLUMN c SET DEFAULT 'abc'::text
+    expect: error
+    sqlstate: "42804"
+    comment: an explicit text expression does not match the integer column
+  - sql: |
+      ALTER VIEW av_sev ALTER COLUMN nosuch SET DEFAULT 1
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER VIEW av_sev ALTER COLUMN c SET DEFAULT 7
+    expect: ok
+  - sql: |
+      INSERT INTO av_sev (id) VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT id, c FROM av_se ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the successful default is applied

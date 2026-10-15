@@ -1,0 +1,48 @@
+# Invalid values and unsupported membership changes are refused and leave the role unchanged.
+id: cmd-alter-role.error-invalid-values
+title: ALTER ROLE refuses invalid values and membership changes without side effects
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, connection-limit, valid-until, guc, memberships, syntax-errors, errors]
+required_capabilities: [roles, catalog-introspection, select, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-notes (ALTER ROLE cannot change a role's memberships); ref/alter_role.sgml#sql-alterrole-params-configuration-parameter"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE alr_v;
+      CREATE ROLE alr_member
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_v ADD MEMBER alr_member
+    expect: error
+    sqlstate: "42601"
+    comment: memberships are changed with GRANT and REVOKE
+  - sql: |
+      ALTER ROLE alr_v CONNECTION LIMIT -2
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER ROLE alr_v SET no_such_alr_param = 1
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER ROLE alr_v SET maintenance_work_mem = 'abc'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER ROLE alr_v VALID UNTIL 'not a date'
+    expect: error
+    sqlstate: "22007"
+  - sql: |
+      ALTER ROLE alr_v CONNECTION LIMIT 5
+    expect: ok
+  - sql: |
+      SELECT rolconnlimit, rolvaliduntil IS NULL AS no_expiry, (SELECT count(*) FROM pg_db_role_setting s WHERE s.setrole = r.oid) AS settings FROM pg_roles r WHERE rolname = 'alr_v'
+    expect: rows
+    comment: only the valid change took effect
+  - sql: |
+      DROP ROLE alr_v;
+      DROP ROLE alr_member
+    expect: ok

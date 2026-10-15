@@ -1,0 +1,39 @@
+# Evaluation order: CASE guards a division, but constant subexpressions can be folded at plan time, and aggregates are computed before CASE.
+id: doc-sql-expressions.case-evaluation-guards
+title: CASE as a guard for division, constant folding of 1/0, and aggregates escaping CASE
+family: doc-sql-expressions
+tier: core
+feature_ids: [case-expression, evaluation-order, aggregates, errors]
+required_capabilities: [select, insert, create-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-evaluation"
+sessions: [a]
+setup: |
+  CREATE TABLE guard (x int4, y int4);
+  INSERT INTO guard VALUES (0, 3), (2, 7);
+  CREATE TABLE pos (x int4);
+  INSERT INTO pos VALUES (1), (2), (3);
+  CREATE TABLE zero (x int4);
+  INSERT INTO zero VALUES (0), (2);
+steps:
+  - sql: |
+      SELECT x FROM guard WHERE CASE WHEN x > 0 THEN y/x > 1.5 ELSE false END
+    expect: rows
+    order: ordered
+    comment: the documented safe form; the row with x = 0 is never divided
+  - sql: |
+      SELECT CASE WHEN x > 0 THEN x ELSE 1/0 END AS v FROM pos ORDER BY x
+    expect: error
+    sqlstate: "22012"
+    comment: the constant 1/0 is folded at plan time, so the guard does not prevent the error
+  - sql: |
+      SELECT CASE WHEN min(x) > 0 THEN avg(10/x) END FROM zero
+    expect: error
+    sqlstate: "22012"
+    comment: aggregates are computed before the CASE is tested
+  - sql: |
+      SELECT avg(10/x) FILTER (WHERE x > 0) AS a FROM zero
+    expect: rows
+    order: ordered
+    comment: FILTER keeps the problematic row away from the aggregate

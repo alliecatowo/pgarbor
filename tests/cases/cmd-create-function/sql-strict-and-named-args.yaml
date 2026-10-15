@@ -1,0 +1,45 @@
+# CREATE FUNCTION doc example: SQL-language add() in both the string-body and the
+# SQL-standard RETURN forms; RETURNS NULL ON NULL INPUT; named-argument notation.
+id: cmd-create-function.sql-strict-and-named-args
+title: SQL add() example (string body and RETURN form) with RETURNS NULL ON NULL INPUT and named arguments
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, sql-language, strict, named-arguments, returns-null-on-null-input]
+required_capabilities: [create-function, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-examples (add examples)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION add(integer, integer) RETURNS integer
+          AS 'select $1 + $2;'
+          LANGUAGE SQL
+          IMMUTABLE
+          RETURNS NULL ON NULL INPUT
+    expect: ok
+  - sql: |
+      SELECT add(1, 2) AS sum, add(NULL, 2) IS NULL AS null_in_is_null
+    expect: rows
+    comment: sum 3; a NULL argument returns NULL without executing the body
+  - sql: |
+      CREATE FUNCTION add2(a integer, b integer) RETURNS integer
+          LANGUAGE SQL
+          IMMUTABLE
+          RETURNS NULL ON NULL INPUT
+          RETURN a + b
+    expect: ok
+  - sql: |
+      SELECT add2(1, 2) AS positional, add2(a => 1, b => 5) AS named_ab, add2(b => 1, a => 5) AS named_ba, add2(NULL, 2) AS null_arg
+    expect: rows
+    comment: positional 3, named 6 and 6, null_arg NULL
+  - sql: |
+      CREATE FUNCTION add(a integer, b integer) RETURNS integer LANGUAGE SQL RETURN a + b
+    expect: error
+    sqlstate: "42723"
+    comment: same input argument types as add(integer, integer), so the name is already taken regardless of argument names
+  - sql: |
+      SELECT add(a => 1, b => 2)
+    expect: error
+    sqlstate: "42883"
+    comment: the string-body add() has unnamed parameters, so named notation does not resolve to it

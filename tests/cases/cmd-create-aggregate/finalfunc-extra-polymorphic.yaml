@@ -1,0 +1,25 @@
+# FINALFUNC_EXTRA passes extra NULL arguments matching the aggregated inputs to the final function,
+# and pg_aggregate records it as aggfinalextra.
+id: cmd-create-aggregate.finalfunc-extra-polymorphic
+title: "FINALFUNC_EXTRA adds NULL arguments to the final function and sets aggfinalextra"
+family: cmd-create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, finalfunc, polymorphism]
+required_capabilities: [create-table, insert, select, aggregates, arrays, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (FINALFUNC_EXTRA)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE FUNCTION arr_app(anyarray, anyelement) RETURNS anyarray LANGUAGE sql IMMUTABLE AS $$ SELECT $1 || $2 $$;
+  CREATE FUNCTION fin_ext(st anyarray, x anyelement) RETURNS anyarray LANGUAGE sql IMMUTABLE AS $$ SELECT $1 $$;
+  CREATE AGGREGATE my_arr_fe (anyelement) (sfunc = arr_app, stype = anyarray, initcond = '{}', finalfunc = fin_ext, finalfunc_extra);
+steps:
+  - sql: |
+      SELECT my_arr_fe(x ORDER BY x NULLS LAST) FROM t
+    expect: rows
+    comment: the final function has two parameters, so the signature must resolve with the extra NULL
+  - sql: |
+      SELECT aggfinalextra FROM pg_aggregate WHERE aggfnoid = 'my_arr_fe'::regproc
+    expect: rows

@@ -1,0 +1,38 @@
+# Documented shape on a custom && operator for int[]: RESTRICT and JOIN set in one statement, then the
+# operator is marked as its own commutator (the second documented example).
+id: cmd-alter-operator.doc-example-custom-array-overlap
+title: "Documented RESTRICT/JOIN and self-COMMUTATOR examples work on a custom && operator for integer arrays"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, restrict-selectivity, join-selectivity, commutator, internal-functions, doc-example]
+required_capabilities: [alter-operator, create-operator, create-function-sql, internal-functions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#examples (SET RESTRICT/JOIN; SET COMMUTATOR = &&)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_arr_eq(integer[], integer[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 = $2 $$;
+  CREATE OPERATOR && (LEFTARG = integer[], RIGHTARG = integer[], PROCEDURE = cmd_ao_arr_eq);
+  CREATE FUNCTION cmd_ao_arr_contsel(internal, oid, internal, integer)
+  RETURNS float8 AS 'contsel' LANGUAGE internal STABLE STRICT;
+  CREATE FUNCTION cmd_ao_arr_contjoinsel(internal, oid, internal, smallint, internal)
+  RETURNS float8 AS 'contjoinsel' LANGUAGE internal STABLE STRICT;
+steps:
+  - sql: |
+      ALTER OPERATOR && (int[], int[]) SET (RESTRICT = cmd_ao_arr_contsel, JOIN = cmd_ao_arr_contjoinsel)
+    expect: ok
+  - sql: |
+      SELECT oprrest::regproc::text AS restrict_fn, oprjoin::regproc::text AS join_fn
+      FROM pg_operator
+      WHERE oprname = '&&' AND oprleft = 'integer[]'::regtype AND oprright = 'integer[]'::regtype
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR && (int[], int[]) SET (COMMUTATOR = &&)
+    expect: ok
+  - sql: |
+      SELECT oprcom = oid AS is_own_commutator
+      FROM pg_operator
+      WHERE oprname = '&&' AND oprleft = 'integer[]'::regtype AND oprright = 'integer[]'::regtype
+    expect: rows
+    order: ordered

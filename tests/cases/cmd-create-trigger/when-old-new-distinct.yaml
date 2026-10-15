@@ -1,0 +1,61 @@
+# WHEN conditions on OLD/NEW columns and whole-row OLD.* IS DISTINCT FROM NEW.* (docs check_update / log_update).
+id: cmd-create-trigger.when-old-new-distinct
+title: WHEN clauses comparing OLD and NEW fire only on real value changes
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, when-condition, old-new-row-values, null-semantics, row-comparison]
+required_capabilities: [create-table, insert, update, select, plpgsql, triggers]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER examples (check_update WHEN, log_update WHEN OLD.* IS DISTINCT FROM NEW.*)"
+setup: |
+  CREATE TABLE accounts (id int PRIMARY KEY, balance int, note text);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  INSERT INTO accounts VALUES (1, 100, 'a'), (2, NULL, NULL);
+  CREATE FUNCTION check_account_update() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES ('check ' || NEW.id);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION log_account_update() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES ('log ' || NEW.id);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER check_update BEFORE UPDATE ON accounts FOR EACH ROW WHEN (OLD.balance IS DISTINCT FROM NEW.balance) EXECUTE FUNCTION check_account_update()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER log_update AFTER UPDATE ON accounts FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*) EXECUTE FUNCTION log_account_update()
+    expect: ok
+  - sql: |
+      UPDATE accounts SET balance = balance WHERE id = 1
+    expect: ok
+    comment: no value change, neither trigger fires
+  - sql: |
+      UPDATE accounts SET balance = NULL WHERE id = 2
+    expect: ok
+    comment: NULL to NULL is not distinct, neither trigger fires
+  - sql: |
+      UPDATE accounts SET note = note WHERE id = 1
+    expect: ok
+    comment: no whole-row change so log_update does not fire
+  - sql: |
+      UPDATE accounts SET balance = 100 WHERE id = 2
+    expect: ok
+    comment: NULL to 100 is a change, both fire
+  - sql: |
+      UPDATE accounts SET note = 'z' WHERE id = 1
+    expect: ok
+    comment: only log_update fires because balance is unchanged
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, balance, note FROM accounts ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# A waiting UPDATE in READ COMMITTED re-checks its WHERE clause against the committed row after the blocker commits.
+id: doc-applevel-consistency.read-committed-update-reevaluates-where
+title: Waiting UPDATE re-evaluates its WHERE after the row lock holder commits and skips the row
+family: doc-applevel-consistency
+tier: core
+feature_ids: [read-committed, update, row-locks, write-conflict]
+required_capabilities: [create-table, insert, select, update, transactions, isolation-levels, row-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: b
+    sql: |
+      BEGIN ISOLATION LEVEL READ COMMITTED; UPDATE acct SET balance = 100 WHERE id = 2
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE acct SET balance = 0 WHERE balance > 150
+    async: true
+    expect_blocked: true
+    comment: a's snapshot sees 200 for row 2, but the row is locked by b
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    wait: true
+    expect: ok
+    comment: UPDATE 0; the committed row 2 (balance 100) no longer satisfies the WHERE clause
+  - session: a
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered

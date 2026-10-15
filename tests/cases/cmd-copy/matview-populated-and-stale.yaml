@@ -1,0 +1,36 @@
+# COPY TO accepts a populated materialized view; its output reflects the last REFRESH, not the current base table.
+id: cmd-copy.matview-populated-and-stale
+title: "COPY TO of a populated materialized view shows data as of the last refresh"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-to, materialized-views, copy-csv-format]
+required_capabilities: [create-table, create-materialized-view, insert, select, copy]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy Notes (populated materialized views)"
+sessions: [a]
+setup: |
+  CREATE TABLE ms (id int4, v text);
+  INSERT INTO ms VALUES (2, 'b'), (1, 'a');
+  CREATE MATERIALIZED VIEW mv AS SELECT id, v FROM ms ORDER BY id;
+steps:
+  - sql: |
+      COPY mv TO STDOUT (FORMAT csv, HEADER)
+    expect: ok
+    order: ordered
+  - sql: |
+      INSERT INTO ms VALUES (0, 'z')
+    expect: ok
+  - sql: |
+      COPY mv TO STDOUT
+    expect: ok
+    order: ordered
+    comment: stale; the new row is not visible until REFRESH
+  - sql: |
+      REFRESH MATERIALIZED VIEW mv
+    expect: ok
+  - sql: |
+      COPY mv TO STDOUT
+    expect: ok
+    order: multiset
+    comment: after refresh the new row is present

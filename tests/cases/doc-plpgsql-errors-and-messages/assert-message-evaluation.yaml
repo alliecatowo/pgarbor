@@ -1,0 +1,40 @@
+# ASSERT evaluates its message expression only when the condition fails, and a NULL message falls back to the default text.
+id: doc-plpgsql-errors-and-messages.assert-message-evaluation
+title: ASSERT skips its message expression on success, and uses the message or the default text on failure
+family: doc-plpgsql-errors-and-messages
+tier: core
+feature_ids: [plpgsql, assert, error-messages, null-handling]
+required_capabilities: [plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-errors-and-messages"
+sessions: [a]
+steps:
+  - sql: |
+      DO $$ BEGIN ASSERT true, (1 / 0)::text; RAISE NOTICE 'passed without evaluating message'; END $$
+    expect: notice
+    comment: the message would divide by zero, but it is not evaluated when the assertion succeeds
+  - sql: |
+      DO $$ BEGIN ASSERT false, 'bad ' || (1 / 0)::text; END $$
+    expect: error
+    sqlstate: "22012"
+    comment: on failure the message expression is evaluated, so its own error surfaces
+  - sql: |
+      DO $$ BEGIN ASSERT false, 'custom message'; END $$
+    expect: error
+    sqlstate: "P0004"
+  - sql: |
+      DO $$ BEGIN ASSERT false, NULL; END $$
+    expect: error
+    sqlstate: "P0004"
+    comment: a NULL message result leaves the default text assertion failed
+  - sql: |
+      DO $$ BEGIN ASSERT false, 'x' || NULL; END $$
+    expect: error
+    sqlstate: "P0004"
+    comment: a message that evaluates to NULL also falls back to the default text
+  - sql: |
+      DO $$ BEGIN ASSERT NULL::boolean, 'null condition'; END $$
+    expect: error
+    sqlstate: "P0004"
+    comment: a NULL condition counts as a failed assertion

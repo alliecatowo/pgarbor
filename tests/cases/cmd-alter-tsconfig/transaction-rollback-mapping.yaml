@@ -1,0 +1,42 @@
+# ALTER TEXT SEARCH CONFIGURATION is transactional: DROP and re-ADD MAPPING inside a rolled-back block leave the mappings unchanged.
+id: cmd-alter-tsconfig.transaction-rollback-mapping
+title: "ALTER MAPPING changes made inside a rolled-back transaction are undone"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, drop-mapping, add-mapping, transactions]
+required_capabilities: [create-text-search-configuration, alter-text-search-configuration, text-search, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (DROP MAPPING, ADD MAPPING)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+steps:
+  - sql: |
+      SELECT count(*) AS before_count, to_tsvector('my_config', 'Fox 42') AS before_vec
+        FROM pg_ts_config_map WHERE mapcfg = 'my_config'::regconfig
+    expect: rows
+    order: multiset
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING FOR asciiword, word
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ADD MAPPING FOR asciiword WITH simple
+    expect: ok
+    comment: re-adding a token type dropped earlier in the same block is allowed
+  - sql: |
+      SELECT count(*) AS inside_count FROM pg_ts_config_map WHERE mapcfg = 'my_config'::regconfig
+    expect: rows
+    order: multiset
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS after_count, to_tsvector('my_config', 'Fox 42') AS after_vec
+        FROM pg_ts_config_map WHERE mapcfg = 'my_config'::regconfig
+    expect: rows
+    order: multiset
+    comment: count and output match the pre-transaction values

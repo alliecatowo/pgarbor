@@ -1,0 +1,67 @@
+# Weight labels are not stored in GIN, so weighted queries recheck the heap; GiST gives the same weighted answers.
+id: doc-textsearch-indexes.weights-with-indexes
+title: Weighted tsquery answers are identical with GIN and GiST indexes
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gin-index, gist-index, tsvector-weights, setweight, recheck]
+required_capabilities: [create-table, insert, select, create-index, gin-index, gist-index, text-search, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (GIN does not store weight labels, row recheck)"
+steps:
+  - sql: |
+      CREATE TABLE w (id int4 PRIMARY KEY, tsv tsvector)
+    expect: ok
+  - sql: |
+      INSERT INTO w VALUES
+        (1, setweight(to_tsvector('english', 'fox'), 'A') || setweight(to_tsvector('english', 'dog'), 'D')),
+        (2, to_tsvector('english', 'fox dog')),
+        (3, setweight(to_tsvector('english', 'dog'), 'B')),
+        (4, setweight(to_tsvector('english', 'fox'), 'C'))
+    expect: ok
+  - sql: |
+      CREATE INDEX w_gin ON w USING GIN (tsv)
+    expect: ok
+  - sql: |
+      CREATE INDEX w_gist ON w USING GIST (tsv)
+    expect: ok
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'fox:A'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: unweighted rows (default D) do not match an A-only term
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'fox:D'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'fox:AC'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'dog:AB'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'fox:A & dog:D'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'fox & dog'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SET enable_seqscan = off
+    expect: ok
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'fox:AC'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: same answer with index scans forced
+  - sql: |
+      SELECT id FROM w WHERE tsv @@ 'dog:AB'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET enable_seqscan
+    expect: ok

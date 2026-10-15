@@ -1,0 +1,27 @@
+# SET SCHEMA is refused while a member object lives outside the extension's current schema, and the extension does not move.
+id: cmd-alter-extension.set-schema-refused-with-foreign-member
+title: SET SCHEMA is refused when a member table is outside the extension schema
+family: cmd-alter-extension
+tier: extended
+feature_ids: [alter-extension, set-schema, relocatable-extensions, add-member, errors]
+required_capabilities: [create-extension, create-schema, create-table, alter-extension, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (SET SCHEMA)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA utils;
+  CREATE SCHEMA s2;
+  CREATE TABLE s2.t2 (id int4);
+  CREATE EXTENSION hstore;
+  ALTER EXTENSION hstore ADD TABLE s2.t2;
+steps:
+  - sql: |
+      ALTER EXTENSION hstore SET SCHEMA utils
+    expect: error
+    sqlstate: "0A000"
+    comment: member table s2.t2 is not in the extension's schema public
+  - sql: |
+      SELECT e.extname, n.nspname AS extschema FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'hstore'
+    expect: rows
+    order: ordered

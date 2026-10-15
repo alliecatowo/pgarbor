@@ -1,0 +1,80 @@
+# GRANT role TO role with WITH ADMIN, INHERIT and SET options records them, and omitted options keep their current values on change.
+id: cmd-grant.role-membership-options
+title: GRANT role membership options set ADMIN, INHERIT and SET flags and omitted options are retained when altered
+family: cmd-grant
+tier: core
+feature_ids: [grant, role-membership, admin-option, inherit-option, set-option, set-role]
+required_capabilities: [roles, role-membership, catalog-introspection, session-authorization, set-role]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-roles (ADMIN, INHERIT and SET options)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_rm_a;
+  CREATE ROLE cgg_rm_b;
+  CREATE ROLE cgg_rm_c;
+steps:
+  - sql: |
+      GRANT cgg_rm_a TO cgg_rm_b
+    expect: ok
+  - sql: |
+      SELECT r.rolname AS role, m.rolname AS member, am.admin_option, am.inherit_option, am.set_option
+        FROM pg_auth_members am
+        JOIN pg_roles r ON r.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+       WHERE r.rolname = 'cgg_rm_a'
+       ORDER BY m.rolname
+    expect: rows
+    order: ordered
+    comment: defaults are ADMIN false, INHERIT from the member, SET true
+  - sql: |
+      GRANT cgg_rm_a TO cgg_rm_c WITH ADMIN OPTION, INHERIT FALSE, SET FALSE
+    expect: ok
+  - sql: |
+      SELECT r.rolname AS role, m.rolname AS member, am.admin_option, am.inherit_option, am.set_option
+        FROM pg_auth_members am
+        JOIN pg_roles r ON r.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+       WHERE r.rolname = 'cgg_rm_a'
+       ORDER BY m.rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT cgg_rm_a TO cgg_rm_c WITH INHERIT TRUE
+    expect: ok
+    comment: omitted ADMIN and SET keep their current values
+  - sql: |
+      GRANT cgg_rm_a TO cgg_rm_c WITH ADMIN FALSE
+    expect: ok
+  - sql: |
+      SELECT r.rolname AS role, m.rolname AS member, am.admin_option, am.inherit_option, am.set_option
+        FROM pg_auth_members am
+        JOIN pg_roles r ON r.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+       WHERE r.rolname = 'cgg_rm_a'
+       ORDER BY m.rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      SET SESSION AUTHORIZATION cgg_rm_c
+    expect: ok
+  - sql: |
+      SET ROLE cgg_rm_a
+    expect: error
+    sqlstate: "42501"
+    comment: SET FALSE forbids changing to the granted role
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION cgg_rm_b
+    expect: ok
+  - sql: |
+      SET ROLE cgg_rm_a
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok

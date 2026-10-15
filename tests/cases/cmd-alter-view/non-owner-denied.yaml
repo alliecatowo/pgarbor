@@ -1,0 +1,35 @@
+# Only the owner may ALTER a view: a non-owner role gets insufficient_privilege and the view is unchanged.
+id: cmd-alter-view.non-owner-denied
+title: "ALTER VIEW by a non-owner role fails with insufficient privilege"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, privileges, owner, roles]
+required_capabilities: [create-table, select, create-role, create-view, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (You must own the view to use ALTER VIEW)"
+sessions: [a]
+setup: |
+  CREATE ROLE av_intruder;
+  CREATE TABLE av_nd (id int4);
+  CREATE VIEW av_ndv AS SELECT id FROM av_nd;
+steps:
+  - sql: |
+      SET ROLE av_intruder
+    expect: ok
+  - sql: |
+      ALTER VIEW av_ndv RENAME TO av_ndv2
+    expect: error
+    sqlstate: "42501"
+    comment: must own the view
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT viewname FROM pg_views WHERE viewname LIKE 'av_ndv%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: name unchanged
+  - sql: |
+      DROP ROLE av_intruder
+    expect: ok

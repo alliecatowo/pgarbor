@@ -1,0 +1,38 @@
+# Dropping a materialized view also drops its indexes; the base table and its rows are unaffected.
+id: cmd-drop-materialized-view.indexes-removed-data-kept
+title: Dropping a materialized view removes its indexes and leaves the base table intact
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, create-index, indexes]
+required_capabilities: [create-table, insert, select, create-index, create-materialized-view, drop-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE ik_base (id int4 PRIMARY KEY, v text);
+  INSERT INTO ik_base VALUES (1, 'a'), (2, 'b'), (3, NULL);
+  CREATE MATERIALIZED VIEW ik_mv AS SELECT id, v FROM ik_base;
+  CREATE INDEX ik_mv_id ON ik_mv (id);
+steps:
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname IN ('ik_mv', 'ik_mv_id') ORDER BY relname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP MATERIALIZED VIEW ik_mv
+    expect: ok
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname IN ('ik_mv', 'ik_mv_id') ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: "no rows: both the view and its index are gone"
+  - sql: |
+      SELECT id, v FROM ik_base ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL in v is preserved
+  - sql: |
+      CREATE MATERIALIZED VIEW ik_mv AS SELECT id, v FROM ik_base
+    expect: ok
+    comment: the name can be reused after the drop

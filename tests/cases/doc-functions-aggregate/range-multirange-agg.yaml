@@ -1,0 +1,52 @@
+# range_agg unions and range_intersect_agg intersects range and multirange inputs, with NULL and empty-input behavior.
+id: doc-functions-aggregate.range-multirange-agg
+title: range_agg and range_intersect_agg over range and multirange inputs, including NULL and empty input
+family: doc-functions-aggregate
+tier: extended
+feature_ids: [range-agg, range-intersect-agg, multirange, aggregate-null-skipping]
+required_capabilities: [select, aggregates, range-types, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (range_agg, range_intersect_agg: 'Computes the union/intersection of the non-null input values')"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT range_agg(r) AS u FROM (VALUES (int4range(1, 5)), (int4range(4, 8)), (int4range(10, 12))) v(r)
+    expect: rows
+    comment: overlapping ranges merge; disjoint ranges remain separate in the multirange result
+  - sql: |
+      SELECT range_agg(r) AS u FROM (VALUES (int4range(1, 3)), (int4range(3, 5))) v(r)
+    expect: rows
+    comment: adjacent ranges also merge
+  - sql: |
+      SELECT range_agg(r) AS u FROM (VALUES (int4range(1, 3)), (NULL)) v(r)
+    expect: rows
+    comment: NULL inputs are skipped
+  - sql: |
+      SELECT range_agg(r) AS u FROM (VALUES (NULL::int4range)) v(r)
+    expect: rows
+    comment: only NULL inputs gives NULL
+  - sql: |
+      SELECT range_intersect_agg(r) AS i FROM (VALUES (int4range(1, 5)), (int4range(3, 8))) v(r)
+    expect: rows
+    comment: intersection of overlapping ranges
+  - sql: |
+      SELECT range_intersect_agg(r) AS i FROM (VALUES (int4range(1, 3)), (int4range(5, 8))) v(r)
+    expect: rows
+    comment: disjoint ranges intersect to the empty range
+  - sql: |
+      SELECT range_intersect_agg(r) AS i FROM (VALUES (int4range(1, 3)), (NULL)) v(r)
+    expect: rows
+    comment: NULL inputs are skipped
+  - sql: |
+      SELECT range_agg(r) AS u, range_intersect_agg(r) AS i FROM (SELECT int4range(1, 2) AS r WHERE false) v
+    expect: rows
+    comment: empty input gives NULL for both
+  - sql: |
+      SELECT range_agg(m) AS u FROM (VALUES (int4multirange(int4range(1, 3), int4range(5, 7))), (int4multirange(int4range(2, 6)))) v(m)
+    expect: rows
+    comment: range_agg also accepts multirange inputs
+  - sql: |
+      SELECT range_intersect_agg(m) AS i FROM (VALUES (int4multirange(int4range(1, 3), int4range(5, 7))), (int4multirange(int4range(2, 6)))) v(m)
+    expect: rows
+    comment: intersecting multiranges keeps the parts covered by both

@@ -1,0 +1,43 @@
+# pg_trigger_depth documented as the current nesting level of triggers (0 at top level, 1 in a trigger, 2 in a trigger fired by a trigger).
+id: doc-functions-info.session-trigger-depth-nested
+title: pg_trigger_depth reports trigger nesting level, including nested trigger firing
+family: doc-functions-info
+tier: core
+feature_ids: [session-info, triggers, trigger-depth]
+required_capabilities: [select, insert, plpgsql, triggers]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (pg_trigger_depth)"
+sessions: [a]
+setup: |
+  CREATE TABLE trig_a (a int);
+  CREATE TABLE trig_b (a int);
+  CREATE TABLE trig_log (lvl int, depth int);
+  CREATE FUNCTION trg_a_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trig_log VALUES (1, pg_trigger_depth());
+    INSERT INTO trig_b VALUES (NEW.a);
+    RETURN NEW;
+  END $$;
+  CREATE FUNCTION trg_b_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trig_log VALUES (2, pg_trigger_depth());
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER trig_a_ins AFTER INSERT ON trig_a FOR EACH ROW EXECUTE FUNCTION trg_a_fn();
+  CREATE TRIGGER trig_b_ins AFTER INSERT ON trig_b FOR EACH ROW EXECUTE FUNCTION trg_b_fn();
+steps:
+  - sql: |
+      SELECT pg_trigger_depth() AS top_level
+    expect: rows
+  - sql: |
+      INSERT INTO trig_a VALUES (7)
+    expect: ok
+  - sql: |
+      SELECT lvl, depth, pg_trigger_depth() AS after_depth FROM trig_log ORDER BY lvl
+    expect: rows
+    order: ordered
+    comment: expect (1,1,0) and (2,2,0); the depth is 0 again once the statement finishes
+  - sql: |
+      SELECT count(*) AS b_rows FROM trig_b
+    expect: rows

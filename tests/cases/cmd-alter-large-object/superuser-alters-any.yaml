@@ -1,0 +1,40 @@
+# A superuser may alter any large object, and needs no membership in the new owning role.
+id: cmd-alter-large-object.superuser-alters-any
+title: Superuser alters a large object owned by another role without SET ROLE or membership
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, superuser]
+required_capabilities: [large-objects, roles, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_su_owner
+    expect: ok
+  - sql: |
+      CREATE ROLE cmd_alo_su_target
+    expect: ok
+  - sql: |
+      SELECT lo_create(930501)
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 930501 OWNER TO cmd_alo_su_owner
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930501 OWNER TO cmd_alo_su_target
+    expect: ok
+    comment: no ownership and no membership needed; the superuser bypasses both checks
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930501
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(930501)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_su_owner
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_alo_su_target
+    expect: ok

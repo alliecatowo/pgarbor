@@ -1,0 +1,42 @@
+# DROP CAST is transactional: inside a transaction the cast is gone until ROLLBACK restores it.
+id: cmd-drop-cast.rollback-restores-cast
+title: "DROP CAST inside a rolled-back transaction leaves the cast in place"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, create-cast, transactions, rollback]
+required_capabilities: [create-type, create-cast, create-function-sql, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+setup: |
+  CREATE TYPE rb_m AS (v int);
+  CREATE FUNCTION rb_f(int4) RETURNS rb_m LANGUAGE sql AS $$ SELECT ROW($1)::rb_m $$;
+  CREATE CAST (int4 AS rb_m) WITH FUNCTION rb_f(int4);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP CAST (int4 AS rb_m)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'int4'::regtype AND casttarget = 'rb_m'::regtype
+    expect: rows
+    order: multiset
+    comment: visible inside the transaction as dropped
+  - sql: |
+      SELECT CAST(7 AS rb_m)
+    expect: error
+    sqlstate: "42846"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT (CAST(7 AS rb_m)).v AS v
+    expect: rows
+    comment: after rollback the cast works again
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'int4'::regtype AND casttarget = 'rb_m'::regtype
+    expect: rows
+    order: multiset

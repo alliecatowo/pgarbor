@@ -1,0 +1,40 @@
+# DDL is transactional in PostgreSQL, so ROLLBACK undoes CREATE TABLE and ALTER TABLE ADD COLUMN.
+id: cmd-rollback.discards-ddl
+title: ROLLBACK discards CREATE TABLE and ALTER TABLE ADD COLUMN made in the transaction
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, create-table, alter-table, transactions, catalog]
+required_capabilities: [create-table, alter-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback (Description: all the updates made by the transaction are discarded)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE TABLE t2 (id int4 PRIMARY KEY)
+    expect: ok
+  - sql: |
+      ALTER TABLE t ADD COLUMN extra int4
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'extra'
+    expect: rows
+    order: ordered
+    comment: the new column is visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT to_regclass('public.t2') IS NULL AS t2_absent
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 't' AND column_name = 'extra'
+    expect: rows
+    order: ordered
+    comment: the added column is gone

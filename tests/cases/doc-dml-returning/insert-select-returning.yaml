@@ -1,0 +1,31 @@
+# RETURNING with INSERT ... SELECT returns one row per inserted row, with expressions over the source.
+id: doc-dml-returning.insert-select-returning
+title: INSERT SELECT with RETURNING returns computed values for every inserted row
+family: doc-dml-returning
+tier: core
+feature_ids: [returning, insert, insert-select, generate-series, aliases]
+required_capabilities: [create-table, insert, select, returning, generate-series]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (RETURNING is also very useful with INSERT ... SELECT)"
+sessions: [a]
+setup: |
+  CREATE TABLE sq (n int4 PRIMARY KEY, sq int8 NOT NULL, label text);
+steps:
+  - sql: |
+      INSERT INTO sq (n, sq, label)
+        SELECT g, g::int8 * g, 'n' || g FROM generate_series(1, 4) AS g
+        RETURNING n, sq, label
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO sq (n, sq, label)
+        SELECT g + 10, (g + 10)::int8, NULL FROM generate_series(1, 2) AS g
+        RETURNING label IS NULL AS label_is_null, sq + n AS total
+    expect: rows
+    order: multiset
+    comment: label is NULL for the new rows, and the RETURNING expression sees the inserted values
+  - sql: |
+      SELECT n, sq, label FROM sq ORDER BY n
+    expect: rows
+    order: ordered

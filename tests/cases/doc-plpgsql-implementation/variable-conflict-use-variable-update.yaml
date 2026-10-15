@@ -1,0 +1,33 @@
+# Documented stamp_user example: #variable_conflict use_variable makes unqualified names in UPDATE refer to
+# parameters, while qualified users.id still refers to the table column.
+id: doc-plpgsql-implementation.variable-conflict-use-variable-update
+title: "#variable_conflict use_variable resolves UPDATE names to parameters and locals"
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, variable-conflict, update, variable-substitution]
+required_capabilities: [create-table, insert, select, update, create-function, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Variable Substitution)"
+sessions: [a]
+setup: |
+  CREATE TABLE users (id int4 PRIMARY KEY, last_modified timestamp, comment text);
+  INSERT INTO users VALUES (1, NULL, 'old'), (2, NULL, 'keep');
+  CREATE FUNCTION stamp_user(id int, comment text) RETURNS void AS $$
+      #variable_conflict use_variable
+      DECLARE
+          curtime timestamp := '2020-01-01 00:00:00';
+      BEGIN
+          UPDATE users SET last_modified = curtime, comment = comment
+            WHERE users.id = id;
+      END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT stamp_user(1, 'new')
+    expect: rows
+  - sql: |
+      SELECT id, last_modified, comment FROM users ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 1 gets the local timestamp and the parameter text; row 2 is untouched

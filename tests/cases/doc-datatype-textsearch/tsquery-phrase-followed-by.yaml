@@ -1,0 +1,44 @@
+# FOLLOWED BY (<->) is <1>; <N> matches lexemes exactly N positions apart; <0> means the same position.
+id: doc-datatype-textsearch.tsquery-phrase-followed-by
+title: Phrase operators <-> and <N> match on position distance
+family: doc-datatype-textsearch
+tier: core
+feature_ids: [tsquery, phrase-search, followed-by, phrase-distance]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-textsearch (<-> FOLLOWED BY is equivalent to <1>; variant <N> specifies the distance)"
+sessions: [a]
+setup: |
+  CREATE TABLE ph (id int4 PRIMARY KEY, v tsvector);
+  INSERT INTO ph VALUES
+    (1, 'fat:1 rat:2'::tsvector),
+    (2, 'fat:1 rat:3'::tsvector),
+    (3, 'rat:1 fat:2'::tsvector),
+    (4, 'fat:1 rat:1'::tsvector),
+    (5, 'fat:1 cat:2 rat:4'::tsvector);
+steps:
+  - sql: |
+      SELECT 'fat <-> rat'::tsquery = 'fat <1> rat'::tsquery AS arrow_is_one
+    expect: rows
+  - sql: |
+      SELECT id FROM ph WHERE v @@ 'fat <-> rat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only ordered adjacent fat then rat matches
+  - sql: |
+      SELECT id FROM ph WHERE v @@ 'fat <2> rat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM ph WHERE v @@ 'fat <0> rat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: <0> requires the two lexemes at the same position
+  - sql: |
+      SELECT id FROM ph WHERE v @@ 'fat <4> rat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'fat <-> rat'::tsquery
+    expect: rows

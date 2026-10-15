@@ -1,0 +1,36 @@
+# A parameterized statement is removed by DEALLOCATE; the name can then be reused with other parameter types.
+id: cmd-deallocate.parameterized-statement-dealloc
+title: DEALLOCATE removes a statement with parameter types, and the name is reusable afterwards
+family: cmd-deallocate
+tier: core
+feature_ids: [deallocate, prepare, execute, prepared-statements, parameters]
+required_capabilities: [select, prepared-statements, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/deallocate.sgml#sql-deallocate (Description); ref/prepare.sgml"
+sessions: [a]
+steps:
+  - sql: |
+      PREPARE q(int, text) AS SELECT $1 + 1 AS n, $2 || '!' AS s
+    expect: ok
+  - sql: |
+      EXECUTE q(2, 'x')
+    expect: rows
+  - sql: |
+      SELECT name, parameter_types FROM pg_prepared_statements
+    expect: rows
+    comment: one statement with parameter types int4 and text
+  - sql: |
+      DEALLOCATE q
+    expect: ok
+  - sql: |
+      EXECUTE q(3, 'y')
+    expect: error
+    sqlstate: "26000"
+  - sql: |
+      PREPARE q(text) AS SELECT upper($1) AS u
+    expect: ok
+    comment: the same name is free again and may take a different signature
+  - sql: |
+      EXECUTE q('abc')
+    expect: rows

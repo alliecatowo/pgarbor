@@ -1,0 +1,32 @@
+# An UPDATE that makes a unique key equal to another row's key fails with 23505 and leaves the row unchanged.
+id: doc-indexes-unique.update-violating-unique-index
+title: UPDATE to a duplicate unique key fails with 23505 and leaves data unchanged
+family: doc-indexes-unique
+tier: core
+feature_ids: [unique-index, update, errors]
+required_capabilities: [create-table, insert, select, update, create-index, unique-constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique (multiple table rows with equal indexed values are not allowed)"
+sessions: [a]
+setup: |
+  CREATE TABLE slots (id int PRIMARY KEY, label text UNIQUE);
+  INSERT INTO slots VALUES (1, 'alpha'), (2, 'beta'), (3, NULL), (4, NULL)
+steps:
+  - sql: |
+      UPDATE slots SET label = 'alpha' WHERE id = 2
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      UPDATE slots SET label = 'gamma' WHERE id IN (3, 4)
+    expect: error
+    sqlstate: "23505"
+    comment: both rows set to the same non-null value; the second row conflicts with the first
+  - sql: |
+      UPDATE slots SET label = NULL WHERE id = 1
+    expect: ok
+    comment: NULL keys do not conflict under default NULLS DISTINCT
+  - sql: |
+      SELECT id, label FROM slots ORDER BY id
+    expect: rows
+    order: ordered

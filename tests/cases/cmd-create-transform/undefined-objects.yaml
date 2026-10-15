@@ -1,0 +1,34 @@
+# Documented: type, language and functions must exist; a missing argument list signature is not found.
+id: cmd-create-transform.undefined-objects
+title: "CREATE TRANSFORM fails for an unknown type, unknown language, or unknown or mismatched function, and leaves no row"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, undefined-object-errors, transform-from-sql]
+required_capabilities: [create-transform, create-function, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-description"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ct_from(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR no_such_type LANGUAGE sql (FROM SQL WITH FUNCTION ct_from(internal))
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE no_such_lang (FROM SQL WITH FUNCTION ct_from(internal))
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION no_such_fn(internal))
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_from(text))
+    expect: error
+    sqlstate: "42883"
+    comment: ct_from exists but not with the argument list (text)
+  - sql: |
+      SELECT count(*) AS transform_rows FROM pg_transform
+    expect: rows

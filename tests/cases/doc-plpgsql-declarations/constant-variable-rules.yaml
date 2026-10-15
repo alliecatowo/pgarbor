@@ -1,0 +1,36 @@
+# CONSTANT variables cannot be assigned after initialization; a CONSTANT may take a volatile default such as now().
+id: doc-plpgsql-declarations.constant-variable-rules
+title: CONSTANT variables reject assignment at CREATE; a CONSTANT initialized from now() is stable within a call
+family: doc-plpgsql-declarations
+tier: core
+feature_ids: [plpgsql, constant, variable-declaration, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-declarations-variables (CONSTANT; transaction_time CONSTANT timestamp with time zone := now())"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION const_assign() RETURNS int LANGUAGE plpgsql AS $$
+      DECLARE c CONSTANT int := 5;
+      BEGIN c := 6; RETURN c; END $$
+    expect: error
+    sqlstate: "22005"
+    comment: the assignment is rejected when the function is created
+  - sql: |
+      CREATE FUNCTION const_read() RETURNS int LANGUAGE plpgsql AS $$
+      DECLARE c CONSTANT int := 5;
+      BEGIN RETURN c * 2; END $$
+    expect: ok
+  - sql: |
+      SELECT const_read() AS doubled
+    expect: rows
+  - sql: |
+      CREATE FUNCTION const_now() RETURNS boolean LANGUAGE plpgsql AS $$
+      DECLARE t CONSTANT timestamptz := now();
+      BEGIN RETURN t = now(); END $$
+    expect: ok
+  - sql: |
+      SELECT const_now() AS same_instant
+    expect: rows
+    comment: now() is the transaction start time, so both reads are equal

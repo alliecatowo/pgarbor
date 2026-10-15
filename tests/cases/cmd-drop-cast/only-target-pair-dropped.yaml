@@ -1,0 +1,42 @@
+# DROP CAST affects only the named source and target pair: a cast from the same source to another target, and the reverse direction, are untouched.
+id: cmd-drop-cast.only-target-pair-dropped
+title: "DROP CAST removes only the named source-target pair"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, create-cast, explicit-cast]
+required_capabilities: [create-cast, create-function-sql, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+setup: |
+  CREATE FUNCTION op_text_int4(text) RETURNS int4 LANGUAGE sql IMMUTABLE AS $$ SELECT 4 $$;
+  CREATE FUNCTION op_text_int8(text) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT 800::int8 $$;
+  CREATE FUNCTION op_int8_text(int8) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT 'x' $$;
+  CREATE CAST (text AS int4) WITH FUNCTION op_text_int4(text) AS ASSIGNMENT;
+  CREATE CAST (text AS int8) WITH FUNCTION op_text_int8(text) AS ASSIGNMENT;
+  CREATE CAST (int8 AS text) WITH FUNCTION op_int8_text(int8) AS ASSIGNMENT;
+steps:
+  - sql: |
+      SELECT CAST('1' AS int4) AS i4, CAST('1' AS int8) AS i8
+    expect: rows
+  - sql: |
+      DROP CAST (text AS int4)
+    expect: ok
+  - sql: |
+      SELECT CAST('1' AS int4) AS i4_after, CAST('1' AS int8) AS i8_after
+    expect: rows
+    comment: the int4 cast reverts to I/O conversion (1) while the int8 cast still returns 800
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'text'::regtype
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT CAST(9::int8 AS text) AS reverse_cast
+    expect: rows
+    comment: the reverse direction is a separate pair and is still defined
+  - sql: |
+      DROP CAST (int4 AS text)
+    expect: error
+    sqlstate: "42704"
+    comment: no user cast was defined from integer to text, so there is nothing to drop

@@ -1,0 +1,51 @@
+# RENAME needs a unique target signature; an unqualified name must be unambiguous; missing names
+# and missing schemas map to 42883 and 3F000.
+id: cmd-alter-procedure.rename-conflicts-and-lookup
+title: ALTER PROCEDURE RENAME rejects same-signature targets and ambiguous or missing names
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, rename, procedures, function-identity, overloading]
+required_capabilities: [create-procedure, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Parameters: name, argtype, new_name; Description)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE rc_a(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+  CREATE PROCEDURE rc_a(text) LANGUAGE SQL AS $$ SELECT 1 $$;
+  CREATE PROCEDURE rc_b(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE rc_a(integer) RENAME TO rc_b
+    expect: error
+    sqlstate: "42723"
+    comment: rc_b(integer) already exists with the same argument types
+  - sql: |
+      ALTER PROCEDURE rc_a RENAME TO rc_c
+    expect: error
+    sqlstate: "42725"
+    comment: no argument list and two rc_a overloads, so the name is not unique
+  - sql: |
+      ALTER PROCEDURE rc_a(text) RENAME TO rc_t
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE rc_a RENAME TO rc_c
+    expect: ok
+    comment: with one rc_a left, the unqualified name is unique
+  - sql: |
+      ALTER PROCEDURE rc_c(text) RENAME TO rc_x
+    expect: error
+    sqlstate: "42883"
+    comment: the surviving overload takes integer, not text
+  - sql: |
+      ALTER PROCEDURE rc_nope(integer) RENAME TO rc_y
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER PROCEDURE nosch_rc.rc_c(integer) RENAME TO rc_y
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname IN ('rc_b', 'rc_c', 'rc_t') ORDER BY 1, 2
+    expect: rows
+    order: ordered

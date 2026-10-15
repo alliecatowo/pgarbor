@@ -1,0 +1,52 @@
+# Table owners bypass row security by default; FORCE ROW LEVEL SECURITY makes the owner subject to it.
+id: doc-ddl-rowsecurity.owner-bypass-force
+title: "Owner bypasses RLS until FORCE ROW LEVEL SECURITY is set"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, force-rls, owner-bypass, default-deny, select, insert]
+required_capabilities: [create-table, insert, select, rls, alter-table, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: Table owners normally bypass row security ... ALTER TABLE ... FORCE ROW LEVEL SECURITY"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr09_o;
+  CREATE TABLE t (id int4, v int4);
+  INSERT INTO t VALUES (1, 1), (2, 2);
+  ALTER TABLE t OWNER TO pgarbor_case_role_dr09_o;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr09_o
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: the owner bypasses RLS, and there is no policy anyway
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER TABLE t FORCE ROW LEVEL SECURITY
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr09_o
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: with FORCE, the owner is subject to default deny and sees 0 rows
+  - sql: |
+      INSERT INTO t VALUES (3, 3)
+    expect: error
+    sqlstate: "42501"
+    comment: the forced owner is also refused by default-deny INSERT
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr09_o
+    expect: ok

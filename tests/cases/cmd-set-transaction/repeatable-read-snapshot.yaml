@@ -1,0 +1,49 @@
+# Under REPEATABLE READ set by SET TRANSACTION, every statement sees the snapshot taken by the first query, not later commits.
+id: cmd-set-transaction.repeatable-read-snapshot
+title: SET TRANSACTION REPEATABLE READ keeps the first query's snapshot until commit
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, isolation-level, repeatable-read, multi-session, insert]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: REPEATABLE READ: all statements can only see rows committed before the first query)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: first query takes the snapshot, sees 1 row
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: the later commit of b is invisible
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: a new transaction sees 2 rows

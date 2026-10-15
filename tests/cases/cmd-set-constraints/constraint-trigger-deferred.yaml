@@ -1,0 +1,76 @@
+# A constraint trigger declared DEFERRABLE INITIALLY DEFERRED fires at COMMIT, or at SET CONSTRAINTS ... IMMEDIATE when switched.
+id: cmd-set-constraints.constraint-trigger-deferred
+title: Deferred constraint trigger fires at COMMIT by default and at the SET CONSTRAINTS switch when IMMEDIATE
+family: cmd-set-constraints
+tier: extended
+feature_ids: [set-constraints, deferrable, constraint-trigger, triggers, plpgsql, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, triggers, plpgsql, create-function, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: the firing of constraint triggers is also controlled by this setting)"
+sessions: [a]
+setup: |
+  CREATE TABLE ct (id int4 PRIMARY KEY, v int4);
+  CREATE FUNCTION ct_nonneg() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF NEW.v < 0 THEN
+      RAISE EXCEPTION 'negative value %', NEW.v USING ERRCODE = '23514';
+    END IF;
+    RETURN NULL;
+  END
+  $$;
+  CREATE CONSTRAINT TRIGGER ct_trg AFTER INSERT OR UPDATE ON ct DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ct_nonneg();
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO ct VALUES (1, -1)
+    expect: ok
+    comment: the trigger is deferred, so the insert itself succeeds
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23514"
+    comment: the trigger fires at commit and raises
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO ct VALUES (2, -2)
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ct_trg IMMEDIATE
+    expect: error
+    sqlstate: "23514"
+    comment: the pending trigger event fires at the SET statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ct_trg IMMEDIATE
+    expect: ok
+  - sql: |
+      INSERT INTO ct VALUES (3, -3)
+    expect: error
+    sqlstate: "23514"
+    comment: an IMMEDIATE trigger fires on the INSERT itself
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO ct VALUES (4, 4)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, v FROM ct ORDER BY id
+    expect: rows
+    order: ordered

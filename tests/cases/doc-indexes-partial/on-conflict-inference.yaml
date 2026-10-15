@@ -1,0 +1,34 @@
+# ON CONFLICT can infer a partial unique index only when the inference clause repeats its predicate.
+id: doc-indexes-partial.on-conflict-inference
+title: ON CONFLICT infers a partial unique index only when the WHERE predicate is repeated
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, unique-index, on-conflict, boolean-type, errors]
+required_capabilities: [create-table, create-index, unique-index, insert, select, on-conflict, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex3 with insert.sgml ON CONFLICT arbiter index inference"
+sessions: [a]
+setup: |
+  CREATE TABLE tests (subject text, target text, success boolean, note text);
+  CREATE UNIQUE INDEX tests_success_constraint ON tests (subject, target) WHERE success;
+  INSERT INTO tests VALUES ('s1', 't1', true, 'first');
+steps:
+  - sql: |
+      INSERT INTO tests VALUES ('s1', 't1', true, 'x') ON CONFLICT (subject, target) WHERE success DO NOTHING
+    expect: ok
+    comment: the repeated predicate matches the index, so the conflict is absorbed
+  - sql: |
+      INSERT INTO tests VALUES ('s1', 't1', false, 'y') ON CONFLICT (subject, target) WHERE success DO NOTHING
+    expect: ok
+    comment: the row is outside the predicate, so it is inserted without conflict
+  - sql: |
+      INSERT INTO tests VALUES ('s1', 't1', false, 'z') ON CONFLICT (subject, target) DO NOTHING
+    expect: error
+    sqlstate: "42P10"
+    comment: without the predicate no unique index matches the arbiter specification
+  - sql: |
+      SELECT note, success FROM tests ORDER BY note
+    expect: rows
+    order: ordered
+    comment: row x was absorbed, row y was inserted, row z was never inserted

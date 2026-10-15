@@ -1,0 +1,51 @@
+# Creating a conversion requires CREATE on the destination schema. Without it a non-owner gets
+# insufficient_privilege (42501) and nothing is created. After GRANT CREATE the role may create it and
+# owns the result.
+id: cmd-create-conversion.create-privilege-on-schema
+title: CREATE CONVERSION needs CREATE on the destination schema and the creator owns the result
+family: cmd-create-conversion
+tier: core
+feature_ids: [create-conversion, privileges, schema-create, ownership, errors]
+required_capabilities: [create-conversion, drop-conversion, create-role, create-schema, set-role, grant, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_conversion.sgml#sql-createconversion-description (CREATE privilege on destination schema)"
+sessions: [a]
+setup: |
+  CREATE ROLE cc_priv_r;
+  CREATE SCHEMA cc_priv_s;
+steps:
+  - sql: |
+      SET ROLE cc_priv_r
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_priv_s.cc_nope FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT CREATE ON SCHEMA cc_priv_s TO cc_priv_r
+    expect: ok
+  - sql: |
+      SET ROLE cc_priv_r
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_priv_s.cc_yes FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT c.conname, pg_get_userbyid(c.conowner) AS owner
+      FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE n.nspname = 'cc_priv_s'
+      ORDER BY c.conname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP CONVERSION cc_priv_s.cc_yes;
+      DROP SCHEMA cc_priv_s;
+      DROP ROLE cc_priv_r
+    expect: ok

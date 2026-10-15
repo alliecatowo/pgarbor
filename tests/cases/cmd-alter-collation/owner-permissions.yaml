@@ -1,0 +1,74 @@
+# Owner rules for a non-superuser: must own to rename; target role must be settable and must have CREATE on the schema.
+id: cmd-alter-collation.owner-permissions
+title: "ALTER COLLATION ownership changes need ownership, SET ROLE membership and CREATE on the schema"
+family: cmd-alter-collation
+tier: core
+feature_ids: [alter-collation, owner, privileges, set-role, schema-create]
+required_capabilities: [create-role, create-schema, create-collation, alter-collation, set-role, grant, icu-provider, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_collation.sgml#sql-altercollation (Description: must own the collation; SET ROLE; CREATE privilege on the schema)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_pa;
+  CREATE ROLE cmd_pb;
+  CREATE SCHEMA cmd_ps;
+  CREATE COLLATION cmd_ps.cmd_pc (provider = icu, locale = 'und-x-icu');
+  GRANT USAGE ON SCHEMA cmd_ps TO cmd_pa, cmd_pb;
+  GRANT CREATE ON SCHEMA cmd_ps TO cmd_pa;
+  ALTER COLLATION cmd_ps.cmd_pc OWNER TO cmd_pa;
+  GRANT cmd_pb TO cmd_pa;
+steps:
+  - sql: |
+      SET ROLE cmd_pb
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_ps.cmd_pc RENAME TO cmd_pd
+    expect: error
+    sqlstate: "42501"
+    comment: cmd_pb does not own the collation
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE cmd_pa
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_ps.cmd_pc OWNER TO cmd_pb
+    expect: error
+    sqlstate: "42501"
+    comment: cmd_pb has no CREATE privilege on cmd_ps
+  - sql: |
+      ALTER COLLATION cmd_ps.cmd_pc RENAME TO cmd_pd
+    expect: ok
+    comment: the owner may rename; RENAME needs CREATE on the schema, which cmd_pa has from setup
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT CREATE ON SCHEMA cmd_ps TO cmd_pb
+    expect: ok
+  - sql: |
+      SET ROLE cmd_pa
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_ps.cmd_pd OWNER TO cmd_pb
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT c.collname, pg_get_userbyid(c.collowner) AS owner FROM pg_collation c JOIN pg_namespace n ON n.oid = c.collnamespace
+        WHERE n.nspname = 'cmd_ps' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER COLLATION cmd_ps.cmd_pd OWNER TO CURRENT_USER
+    expect: ok
+    comment: cleanup, so the roles own nothing
+  - sql: |
+      DROP OWNED BY cmd_pa, cmd_pb
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_pa, cmd_pb
+    expect: ok

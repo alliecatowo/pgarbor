@@ -1,0 +1,32 @@
+# NULL semantics: rows with NULL in a statistics column are counted as their own distinct combinations in ndistinct and appear in the MCV list.
+id: cmd-create-statistics.null-handling-ndistinct-mcv
+title: NULL values count as distinct combinations for ndistinct and appear in the MCV list
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, ndistinct-kind, mcv-kind, null-semantics]
+required_capabilities: [create-table, insert, extended-statistics, catalog-introspection, analyze, select, null-semantics]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Parameters: statistics_kind; column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_nn (a int, b int);
+  INSERT INTO cs_nn VALUES (1, NULL), (1, NULL), (2, NULL), (NULL, 3), (NULL, 3), (NULL, NULL);
+steps:
+  - sql: |
+      CREATE STATISTICS cs_nn_s (ndistinct, mcv) ON a, b FROM cs_nn
+    expect: ok
+  - sql: |
+      ANALYZE cs_nn
+    expect: ok
+  - sql: |
+      SELECT statistics_name, n_distinct::text FROM pg_stats_ext WHERE statistics_name = 'cs_nn_s'
+    expect: rows
+    comment: the four distinct (a, b) combinations including NULL groups
+  - sql: |
+      SELECT statistics_name, most_common_vals::text FROM pg_stats_ext WHERE statistics_name = 'cs_nn_s'
+    expect: rows
+    comment: NULL entries are represented in the MCV list
+  - sql: |
+      SELECT count(*) FROM cs_nn WHERE a IS NULL AND b IS NULL
+    expect: rows

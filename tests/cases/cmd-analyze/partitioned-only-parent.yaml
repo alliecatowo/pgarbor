@@ -1,0 +1,33 @@
+# On a partitioned table, ANALYZE ONLY skips the partitions; the default samples and records each partition.
+id: cmd-analyze.partitioned-only-parent
+title: "ANALYZE ONLY on a partitioned table leaves partitions unanalyzed"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, partitioning, only-keyword, pg-stats]
+required_capabilities: [create-table, insert, select, partitioning, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Parameters: ONLY; Notes: partitioned tables)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_p (id int4, k int4) PARTITION BY RANGE (k);
+  CREATE TABLE an_p1 PARTITION OF an_p FOR VALUES FROM (0) TO (50);
+  CREATE TABLE an_p2 PARTITION OF an_p FOR VALUES FROM (50) TO (200);
+  INSERT INTO an_p SELECT g, g FROM generate_series(0, 99) g;
+steps:
+  - sql: |
+      ANALYZE ONLY an_p
+    expect: ok
+  - sql: |
+      SELECT tablename, attname, inherited FROM pg_stats WHERE schemaname = 'public' AND tablename IN ('an_p', 'an_p1', 'an_p2') ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+    comment: only the parent has statistics
+  - sql: |
+      ANALYZE an_p
+    expect: ok
+  - sql: |
+      SELECT tablename, attname, inherited FROM pg_stats WHERE schemaname = 'public' AND tablename IN ('an_p', 'an_p1', 'an_p2') ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+    comment: each partition now has its own statistics

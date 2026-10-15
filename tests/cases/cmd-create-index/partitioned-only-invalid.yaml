@@ -1,0 +1,34 @@
+# On a partitioned table, ONLY creates an invalid parent index and no partition indexes; the default recurses into partitions.
+id: cmd-create-index.partitioned-only-invalid
+title: CREATE INDEX ON ONLY on a partitioned table leaves the parent index invalid
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, partitioning, only-clause, index-validity]
+required_capabilities: [create-table, create-index, partitioning, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Parameters: ONLY; Notes: CREATE INDEX on a partitioned table recurses to all partitions)"
+sessions: [a]
+setup: |
+  CREATE TABLE pt (id int4, ts int4) PARTITION BY RANGE (ts);
+  CREATE TABLE pt1 PARTITION OF pt FOR VALUES FROM (0) TO (10);
+steps:
+  - sql: |
+      CREATE INDEX pt_idx ON ONLY pt (ts)
+    expect: ok
+  - sql: |
+      SELECT indisvalid FROM pg_index WHERE indexrelid = 'pt_idx'::regclass
+    expect: rows
+    order: ordered
+    comment: the index is marked invalid because partitions do not have it
+  - sql: |
+      CREATE TABLE pt2 PARTITION OF pt FOR VALUES FROM (10) TO (20)
+    expect: ok
+    comment: a partition created later gets a matching index automatically
+  - sql: |
+      CREATE INDEX pt_idx2 ON pt (id)
+    expect: ok
+  - sql: |
+      SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid IN ('pt'::regclass, 'pt1'::regclass, 'pt2'::regclass) ORDER BY c.relname
+    expect: rows
+    order: ordered

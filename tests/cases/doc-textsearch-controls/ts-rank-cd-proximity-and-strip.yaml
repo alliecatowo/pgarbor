@@ -1,0 +1,33 @@
+# ts_rank_cd rewards adjacent matches and ignores stripped vectors, which carry no positions.
+id: doc-textsearch-controls.ts-rank-cd-proximity-and-strip
+title: ts_rank_cd prefers adjacent terms and returns zero for stripped vectors
+family: doc-textsearch-controls
+tier: core
+feature_ids: [ts-rank-cd, cover-density, proximity, strip, positions]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "textsearch.sgml#textsearch-ranking (ts_rank_cd cover density; stripped lexemes ignored; zero when no unstripped lexemes)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT
+        ts_rank_cd(to_tsvector('english', 'cat dog'), to_tsquery('english', 'cat & dog')) AS adjacent,
+        ts_rank_cd(to_tsvector('english', 'cat x x dog'), to_tsquery('english', 'cat & dog')) AS spread,
+        ts_rank_cd(to_tsvector('english', 'cat dog x x'), to_tsquery('english', 'cat & dog'), 32) AS adjacent_normalized
+    expect: rows
+    comment: adjacent terms cover more densely than spread terms
+  - sql: |
+      SELECT
+        ts_rank_cd(to_tsvector('english', 'cat x x dog'), to_tsquery('english', 'cat & dog'), 4) AS harmonic_distance_norm,
+        ts_rank_cd(to_tsvector('english', 'cat x x dog'), to_tsquery('english', 'cat & dog')) AS plain
+    expect: rows
+    comment: normalization 4 divides by the mean harmonic distance between extents
+  - sql: |
+      SELECT ts_rank_cd(strip(to_tsvector('english', 'cat dog')), to_tsquery('english', 'cat & dog')) AS stripped_rank
+    expect: rows
+    comment: stripped lexemes have no positions, so the result is zero
+  - sql: |
+      SELECT ts_rank_cd(to_tsvector('english', 'cat dog'), to_tsquery('english', 'bird')) AS no_match
+    expect: rows
+    comment: no matching lexeme gives zero

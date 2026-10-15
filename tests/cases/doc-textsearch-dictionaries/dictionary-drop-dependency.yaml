@@ -1,0 +1,37 @@
+# A dictionary used by a configuration cannot be dropped without CASCADE; CASCADE drops the dependent configuration.
+id: doc-textsearch-dictionaries.drop-dependency
+title: dropping a dictionary used by a configuration needs CASCADE
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, text-search-configuration, drop, dependencies]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Simple Dictionary, Synonym Dictionary)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY dep_simple (TEMPLATE = simple)
+    expect: ok
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION dep_cfg (COPY = simple)
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION dep_cfg ALTER MAPPING FOR asciiword WITH dep_simple
+    expect: ok
+  - sql: |
+      DROP TEXT SEARCH DICTIONARY dep_simple
+    expect: error
+    sqlstate: "2BP01"
+    comment: the configuration depends on the dictionary
+  - sql: |
+      SELECT ts_lexize('dep_simple', 'a') AS still_there
+    expect: rows
+  - sql: |
+      DROP TEXT SEARCH DICTIONARY dep_simple CASCADE
+    expect: ok
+    comment: CASCADE drops the dependent configuration as well
+  - sql: |
+      SELECT ts_lexize('dep_simple', 'a')
+    expect: error
+    sqlstate: "42704"

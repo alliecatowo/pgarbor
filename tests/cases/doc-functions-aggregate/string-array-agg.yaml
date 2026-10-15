@@ -1,0 +1,52 @@
+# string_agg with delimiters and ORDER BY, bytea string_agg, array_agg with NULLs, nested arrays and their documented errors.
+id: doc-functions-aggregate.string-array-agg
+title: string_agg and array_agg - delimiters, ORDER BY, NULL handling, nested arrays and accumulation errors
+family: doc-functions-aggregate
+tier: core
+feature_ids: [string-agg, array-agg, aggregate-order-by, aggregate-null-skipping, array-accumulation]
+required_capabilities: [select, aggregates, arrays, errors, order-by]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (string_agg, array_agg, ORDER BY within aggregate calls)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT string_agg(x, NULL) AS no_delim, string_agg(x, '-') AS dash
+      FROM (VALUES ('a'), (NULL), ('b')) v(x)
+    expect: rows
+    comment: NULL values are skipped; a NULL delimiter yields no separator
+  - sql: |
+      SELECT string_agg(x, ',' ORDER BY x DESC) AS desc_list FROM (VALUES ('a'), ('c'), ('b')) v(x)
+    expect: rows
+    comment: the ORDER BY inside the aggregate call controls concatenation order
+  - sql: |
+      SELECT string_agg(x::bytea, '\x2c'::bytea ORDER BY x) AS b FROM (VALUES ('ab'), ('cd')) v(x)
+    expect: rows
+    comment: the bytea overload with a bytea delimiter
+  - sql: |
+      SELECT string_agg(x, ',') AS none FROM (SELECT 'a' AS x WHERE false) v
+    expect: rows
+    comment: no input rows gives NULL
+  - sql: |
+      SELECT array_agg(x ORDER BY x DESC) AS desc_arr, array_agg(x ORDER BY x) AS asc_arr
+      FROM (VALUES (1), (NULL), (3)) v(x)
+    expect: rows
+    comment: array_agg keeps NULL elements; NULLS sort first under DESC
+  - sql: |
+      SELECT array_agg(x) AS a FROM (VALUES (1), (NULL)) v(x)
+    expect: rows
+    comment: array_agg includes NULL inputs
+  - sql: |
+      SELECT array_agg(a) AS nested FROM (VALUES (ARRAY[1, 2]), (ARRAY[3, 4])) v(a)
+    expect: rows
+    comment: array inputs of equal dimension produce an array one dimension higher
+  - sql: |
+      SELECT array_agg(a) FROM (VALUES (ARRAY[1, 2]), (NULL)) v(a)
+    expect: error
+    sqlstate: "22004"
+    comment: a NULL array cannot be accumulated
+  - sql: |
+      SELECT array_agg(a) FROM (VALUES (ARRAY[1, 2]), (ARRAY[3])) v(a)
+    expect: error
+    sqlstate: "2202E"
+    comment: arrays of different dimensionality cannot be accumulated

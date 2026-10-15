@@ -1,0 +1,35 @@
+# tsquery &&, ||, !! combine queries; NULL operands propagate NULL; matching follows boolean logic.
+id: doc-textsearch-features.tsquery-and-or-not
+title: tsquery AND, OR and NOT operators combine and match as boolean logic
+family: doc-textsearch-features
+tier: core
+feature_ids: [tsquery-and, tsquery-or, tsquery-not, match-operator]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-manipulate-tsquery"
+steps:
+  - sql: |
+      SELECT ('a & b'::tsquery && 'c'::tsquery)::text AS and_op,
+             ('a'::tsquery || 'b'::tsquery)::text AS or_op,
+             (!! 'a'::tsquery)::text AS not_op
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT (!! ('a | b'::tsquery))::text AS not_or,
+             ('a & b'::tsquery || 'c'::tsquery)::text AS and_then_or
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT (NULL::tsquery && 'a'::tsquery) IS NULL AS null_and,
+             ('a'::tsquery || NULL::tsquery) IS NULL AS null_or,
+             (!! NULL::tsquery) IS NULL AS null_not
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_tsvector('simple', 'apple banana') @@ ('apple'::tsquery || 'cherry'::tsquery) AS or_hit,
+             to_tsvector('simple', 'apple banana') @@ ('apple'::tsquery && 'cherry'::tsquery) AS and_miss,
+             to_tsvector('simple', 'apple banana') @@ (!! 'cherry'::tsquery) AS not_hit,
+             to_tsvector('simple', 'apple banana') @@ (!! 'apple'::tsquery) AS not_miss
+    expect: rows
+    order: ordered

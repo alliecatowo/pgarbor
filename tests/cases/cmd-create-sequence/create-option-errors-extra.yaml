@@ -1,0 +1,36 @@
+# Further CREATE SEQUENCE rejections: MINVALUE above START, MAXVALUE above the smallint type limit, MINVALUE above MAXVALUE, unknown option, duplicate clause; none leaves a relation.
+id: cmd-create-sequence.create-option-errors-extra
+title: CREATE SEQUENCE rejects START below MINVALUE, out-of-type MAXVALUE, inverted bounds, unknown options, and leaves no relation
+family: cmd-create-sequence
+tier: core
+feature_ids: [create-sequence, start-with, minvalue, maxvalue, as-data-type, errors]
+required_capabilities: [sequences, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#parameters (START, MINVALUE, MAXVALUE, AS data_type)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SEQUENCE x_start MINVALUE 10 START 5
+    expect: error
+    sqlstate: "22023"
+    comment: start is below minvalue
+  - sql: |
+      CREATE SEQUENCE x_max AS smallint MAXVALUE 40000
+    expect: error
+    sqlstate: "22023"
+    comment: maxvalue does not fit smallint
+  - sql: |
+      CREATE SEQUENCE x_inv MINVALUE 5 MAXVALUE 4
+    expect: error
+    sqlstate: "22023"
+    comment: minvalue must be below maxvalue
+  - sql: |
+      CREATE SEQUENCE x_opt BOGUS 1
+    expect: error
+    sqlstate: "42601"
+    comment: unknown option
+  - sql: |
+      SELECT count(*) AS leftover FROM pg_class WHERE relname IN ('x_start', 'x_max', 'x_inv', 'x_opt')
+    expect: rows
+    comment: 0, no failed CREATE leaves a relation behind

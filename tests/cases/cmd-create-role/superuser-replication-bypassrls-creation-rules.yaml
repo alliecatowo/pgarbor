@@ -1,0 +1,47 @@
+# A CREATEROLE role may create only roles without SUPERUSER, CREATEDB, REPLICATION or BYPASSRLS, since it lacks those attributes.
+id: cmd-create-role.superuser-replication-bypassrls-creation-rules
+title: A CREATEROLE-only role cannot create roles with SUPERUSER, CREATEDB, REPLICATION or BYPASSRLS (SQLSTATE 42501)
+family: cmd-create-role
+tier: core
+feature_ids: [create-role, superuser, createdb, replication, bypassrls, errors, session-authorization]
+required_capabilities: [roles, catalog-introspection, select, session-authorization]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_role.sgml#parameters (SUPERUSER, CREATEDB, REPLICATION, BYPASSRLS: only roles with the attribute may specify it)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE ccr_cr CREATEROLE
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION ccr_cr
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_s1 SUPERUSER
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE ccr_s2 CREATEDB
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE ccr_s3 REPLICATION
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE ccr_s4 BYPASSRLS
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      CREATE ROLE ccr_s5 NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT rolname FROM pg_roles WHERE rolname IN ('ccr_s1', 'ccr_s2', 'ccr_s3', 'ccr_s4', 'ccr_s5') ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ccr_s5, ccr_cr
+    expect: ok

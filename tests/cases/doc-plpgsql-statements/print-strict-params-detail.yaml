@@ -1,0 +1,33 @@
+# The #print_strict_params compiler option adds the parameter values to the DETAIL of a STRICT failure.
+id: doc-plpgsql-statements.print-strict-params-detail
+title: print_strict_params option adds parameter values to the DETAIL of a failed STRICT query
+family: doc-plpgsql-statements
+tier: extended
+feature_ids: [plpgsql, strict, print-strict-params, errors, compiler-options]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-sql-onerow"
+sessions: [a]
+setup: |
+  CREATE TABLE users (userid int, username text);
+  INSERT INTO users VALUES (1, 'alice'), (2, 'bob');
+  CREATE FUNCTION get_userid(username text) RETURNS int AS $$
+  #print_strict_params on
+  DECLARE
+  userid int;
+  BEGIN
+      SELECT users.userid INTO STRICT userid
+          FROM users WHERE users.username = get_userid.username;
+      RETURN userid;
+  END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT get_userid('alice') AS found_id
+    expect: rows
+  - sql: |
+      SELECT get_userid('nosuchuser')
+    expect: error
+    sqlstate: "P0002"
+    comment: the DETAIL line names the parameter username with value nosuchuser

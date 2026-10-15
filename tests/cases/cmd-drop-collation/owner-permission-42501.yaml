@@ -1,0 +1,47 @@
+# To drop a collation you must own it: a non-owner gets insufficient_privilege, the owner succeeds.
+id: cmd-drop-collation.owner-permission-42501
+title: "DROP COLLATION requires ownership of the collation"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, ownership, roles]
+required_capabilities: [create-role, create-collation, drop-collation, icu-provider, alter-collation, set-role, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_collation.sgml#sql-dropcollation (Description: you must own the collation)"
+sessions: [a]
+setup: |
+  CREATE ROLE dc_cmd_owner;
+  CREATE ROLE dc_cmd_other;
+  CREATE COLLATION dc_cmd_own (provider = icu, locale = 'de-DE');
+  ALTER COLLATION dc_cmd_own OWNER TO dc_cmd_owner;
+steps:
+  - sql: |
+      SET ROLE dc_cmd_other
+    expect: ok
+  - sql: |
+      DROP COLLATION dc_cmd_own
+    expect: error
+    sqlstate: "42501"
+    comment: dc_cmd_other does not own the collation
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE dc_cmd_owner
+    expect: ok
+  - sql: |
+      DROP COLLATION dc_cmd_own
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_collation WHERE collname = 'dc_cmd_own'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE dc_cmd_owner
+    expect: ok
+  - sql: |
+      DROP ROLE dc_cmd_other
+    expect: ok

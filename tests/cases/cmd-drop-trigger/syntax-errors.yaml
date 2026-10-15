@@ -1,0 +1,41 @@
+# DROP TRIGGER takes exactly one name and a required ON table; CASCADE and RESTRICT are mutually exclusive. All are syntax errors and change nothing.
+id: cmd-drop-trigger.syntax-errors
+title: "DROP TRIGGER rejects several names, a missing ON clause, and CASCADE together with RESTRICT as syntax errors"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, errors, syntax]
+required_capabilities: [create-table, create-function, plpgsql, triggers, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Synopsis)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION noop_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TABLE films (id int4, title text);
+  CREATE TRIGGER tg1 BEFORE INSERT ON films FOR EACH ROW EXECUTE FUNCTION noop_tg();
+  CREATE TRIGGER tg2 BEFORE INSERT ON films FOR EACH ROW EXECUTE FUNCTION noop_tg();
+steps:
+  - sql: |
+      DROP TRIGGER tg1, tg2 ON films
+    expect: error
+    sqlstate: "42601"
+    comment: the synopsis allows exactly one trigger name
+  - sql: |
+      DROP TRIGGER tg1
+    expect: error
+    sqlstate: "42601"
+    comment: ON table_name is required
+  - sql: |
+      DROP TRIGGER tg1 ON films CASCADE RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: CASCADE and RESTRICT are alternatives, not a combination
+  - sql: |
+      SELECT tgname FROM pg_trigger WHERE tgrelid = 'films'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered
+    comment: both triggers survived every syntax error
+  - sql: |
+      DROP TRIGGER tg1 ON films RESTRICT
+    expect: ok
+    comment: each keyword is accepted on its own

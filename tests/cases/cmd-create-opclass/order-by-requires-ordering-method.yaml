@@ -1,0 +1,37 @@
+# FOR ORDER BY registers an ordering operator and only works for an index method with ordering operators (GiST), not btree; FOR SEARCH is the default purpose.
+id: cmd-create-opclass.order-by-requires-ordering-method
+title: "FOR ORDER BY is refused for btree but accepted for GiST; FOR SEARCH is the default purpose"
+family: cmd-create-opclass
+tier: extended
+feature_ids: [create-operator-class, order-by-operators, gist, btree, catalog-introspection, errors]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, gist, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Parameters: sort_family_name)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_ob_bt FOR TYPE cr_pt USING btree AS OPERATOR 1 < FOR ORDER BY integer_ops
+    expect: error
+    sqlstate: "42P17"
+    comment: btree has no ordering operators
+  - sql: |
+      CREATE OPERATOR CLASS cr_ob_nofam FOR TYPE cr_pt USING gist AS OPERATOR 1 < FOR ORDER BY cr_nosuch_fam
+    expect: error
+    sqlstate: "42704"
+    comment: sort family must exist for btree
+  - sql: |
+      CREATE OPERATOR CLASS cr_ob_gist FOR TYPE cr_pt USING gist AS OPERATOR 1 < FOR ORDER BY integer_ops
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_ob_search FOR TYPE cr_pt USING gist AS OPERATOR 1 < FOR SEARCH
+    expect: ok
+  - sql: |
+      SELECT o.opcname, a.amopstrategy, a.amoppurpose, (SELECT f.opfname FROM pg_opfamily f WHERE f.oid = a.amopsortfamily) AS sort_family FROM pg_amop a JOIN pg_opclass o ON o.opcfamily = a.amopfamily WHERE o.opcname IN ('cr_ob_gist', 'cr_ob_search') ORDER BY 1, 2
+    expect: rows
+    order: ordered

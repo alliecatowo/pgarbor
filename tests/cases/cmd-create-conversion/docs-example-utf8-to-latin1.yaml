@@ -1,0 +1,31 @@
+# Documented example: CREATE CONVERSION myconv FOR 'UTF8' TO 'LATIN1' FROM <function>.
+# The doc's myfunc does not exist; the builtin utf8_to_iso8859_1 has the required 6-argument
+# conv_proc signature and is the same kind of function. Its catalog row is checked, then dropped.
+id: cmd-create-conversion.docs-example-utf8-to-latin1
+title: CREATE CONVERSION with the documented UTF8 to LATIN1 form records the encoding pair and function
+family: cmd-create-conversion
+tier: core
+feature_ids: [create-conversion, encoding-conversion, catalog-introspection]
+required_capabilities: [create-conversion, drop-conversion, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_conversion.sgml#sql-createconversion (Examples)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE CONVERSION myconv FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - sql: |
+      SELECT c.conname, pg_encoding_to_char(c.conforencoding) AS src, pg_encoding_to_char(c.contoencoding) AS dst,
+             c.condefault, n.nspname, pg_get_userbyid(c.conowner) AS owner, c.conproc::regproc AS proc
+      FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE c.conname = 'myconv'
+    expect: rows
+    order: ordered
+    comment: non-default conversion in the current schema, owned by the session user
+  - sql: |
+      DROP CONVERSION myconv
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_conversion WHERE conname = 'myconv'
+    expect: rows

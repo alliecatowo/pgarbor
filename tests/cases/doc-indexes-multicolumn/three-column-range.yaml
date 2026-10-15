@@ -1,0 +1,30 @@
+# Index (a, b, c) with a = 5 AND b >= 42 AND c < 77: the doc example. Only results are checked.
+id: doc-indexes-multicolumn.three-column-range
+title: Equality, range and filter conditions across a three-column index return exact rows
+family: doc-indexes-multicolumn
+tier: core
+feature_ids: [multicolumn-index, btree-index, range-predicates, skip-scan]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (index on (a, b, c) with WHERE a = 5 AND b >= 42 AND c < 77)"
+sessions: [a]
+setup: |
+  CREATE TABLE t3 (a int, b int, c int);
+  CREATE INDEX t3_abc ON t3 (a, b, c);
+  INSERT INTO t3 SELECT 5, gb.b, gc.c FROM generate_series(40, 44) AS gb(b) CROSS JOIN generate_series(74, 79) AS gc(c);
+  INSERT INTO t3 VALUES (4, 42, 70), (6, 42, 70), (5, 41, 70), (5, 42, 80)
+steps:
+  - sql: |
+      SELECT b, c FROM t3 WHERE a = 5 AND b >= 42 AND c < 77 ORDER BY b, c
+    expect: rows
+    order: ordered
+    comment: nine rows, b in 42..44 and c in 74..76
+  - sql: |
+      SELECT count(*) FROM t3 WHERE a = 5 AND c < 77
+    expect: rows
+    comment: skips the b column, so the b constraint is absent
+  - sql: |
+      SELECT b, c FROM t3 WHERE a = 5 AND b = 43 AND c >= 77 ORDER BY c
+    expect: rows
+    order: ordered

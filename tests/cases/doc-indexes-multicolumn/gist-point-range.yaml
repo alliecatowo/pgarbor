@@ -1,0 +1,30 @@
+# Multicolumn GiST index on (point, int4range) with conditions on the first column, the second, and both.
+id: doc-indexes-multicolumn.gist-point-range
+title: Multicolumn GiST index on point and range returns exact results for each column and both
+family: doc-indexes-multicolumn
+tier: extended
+feature_ids: [multicolumn-index, gist-index, geometric-operators, range-operators]
+required_capabilities: [create-table, insert, select, create-index, gist-index, range-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (multicolumn GiST index with any subset of columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE places (id int, p point, r int4range);
+  CREATE INDEX places_pr ON places USING gist (p, r);
+  INSERT INTO places VALUES (1, point(1, 1), int4range(1, 5)), (2, point(20, 20), int4range(1, 5)), (3, point(2, 9), int4range(6, 10)), (4, NULL, int4range(3, 4)), (5, point(5, 5), NULL)
+steps:
+  - sql: |
+      SELECT id FROM places WHERE p <@ box '((0,0),(10,10))' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: first column only, NULL point excluded
+  - sql: |
+      SELECT id FROM places WHERE r && int4range(4, 7) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: second column only
+  - sql: |
+      SELECT id FROM places WHERE p <@ box '((0,0),(10,10))' AND r @> 2 ORDER BY id
+    expect: rows
+    order: ordered

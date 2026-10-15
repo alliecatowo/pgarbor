@@ -1,0 +1,42 @@
+# TRUNCATE applies to the whole table and is not subject to row security.
+id: doc-ddl-rowsecurity.truncate-not-subject
+title: "TRUNCATE ignores RLS default-deny"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, truncate, default-deny]
+required_capabilities: [create-table, insert, select, truncate, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: Operations that apply to the whole table, such as TRUNCATE and REFERENCES, are not subject to row security"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr02_u;
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (1), (2);
+  GRANT SELECT, TRUNCATE ON t TO pgarbor_case_role_dr02_u;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr02_u
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: default deny hides both rows from the non-owner
+  - sql: |
+      TRUNCATE t
+    expect: ok
+    comment: TRUNCATE is not filtered by row security
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: the table is empty after TRUNCATE
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr02_u
+    expect: ok

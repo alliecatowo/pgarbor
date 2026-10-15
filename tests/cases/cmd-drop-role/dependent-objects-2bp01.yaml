@@ -1,0 +1,55 @@
+# Ownership of a schema, a type or a function, and granted privileges, each block DROP ROLE until removed.
+id: cmd-drop-role.dependent-objects-2bp01
+title: "DROP ROLE is blocked by owned schemas, types, functions and schema privileges (2BP01)"
+family: cmd-drop-role
+tier: core
+feature_ids: [drop-role, grant, revoke, owner, errors]
+required_capabilities: [roles, create-schema, create-type, create-function-sql, grant, revoke, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_role.sgml#sql-droprole-description (must drop owned objects and revoke privileges)"
+sessions: [a]
+setup: |
+  CREATE ROLE drr_dep_s;
+  CREATE ROLE drr_dep_t;
+  CREATE ROLE drr_dep_f;
+  CREATE ROLE drr_dep_g;
+  CREATE SCHEMA drr_dep_schema AUTHORIZATION drr_dep_s;
+  CREATE TYPE drr_dep_enum AS ENUM ('x');
+  ALTER TYPE drr_dep_enum OWNER TO drr_dep_t;
+  CREATE FUNCTION drr_dep_fn() RETURNS int4 LANGUAGE sql AS $$ SELECT 1 $$;
+  ALTER FUNCTION drr_dep_fn() OWNER TO drr_dep_f;
+  GRANT USAGE ON SCHEMA public TO drr_dep_g;
+steps:
+  - sql: |
+      DROP ROLE drr_dep_s
+    expect: error
+    sqlstate: "2BP01"
+    comment: owner of schema drr_dep_schema
+  - sql: |
+      DROP ROLE drr_dep_t
+    expect: error
+    sqlstate: "2BP01"
+    comment: owner of type drr_dep_enum
+  - sql: |
+      DROP ROLE drr_dep_f
+    expect: error
+    sqlstate: "2BP01"
+    comment: owner of function drr_dep_fn
+  - sql: |
+      DROP ROLE drr_dep_g
+    expect: error
+    sqlstate: "2BP01"
+    comment: holds a privilege on schema public
+  - sql: |
+      DROP SCHEMA drr_dep_schema;
+      DROP TYPE drr_dep_enum;
+      DROP FUNCTION drr_dep_fn();
+      REVOKE USAGE ON SCHEMA public FROM drr_dep_g
+    expect: ok
+  - sql: |
+      DROP ROLE drr_dep_s, drr_dep_t, drr_dep_f, drr_dep_g
+    expect: ok
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_roles WHERE rolname LIKE 'drr\_dep\_%'
+    expect: rows

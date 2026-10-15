@@ -1,0 +1,56 @@
+# ALTER ROUTINE SET/RESET forms: TO and =, DEFAULT, FROM CURRENT (copies the session value), RESET name,
+# RESET ALL, and an unknown configuration parameter (42704). Procedures accept SET too.
+id: cmd-alter-routine.set-config-variants
+title: ALTER ROUTINE SET and RESET variants update proconfig; unknown parameters fail with 42704
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, configuration-parameters, set-from-current]
+required_capabilities: [create-function, create-procedure, alter-function, sql-functions, guc, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: SET ... TO|=, FROM CURRENT, RESET, RESET ALL)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE PROCEDURE pr1(int) LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      SET work_mem = '2MB';
+      ALTER ROUTINE foo(integer) SET work_mem FROM CURRENT
+    expect: ok
+    comment: FROM CURRENT stores the session value of work_mem set just above
+  - sql: |
+      SELECT proconfig FROM pg_proc WHERE proname = 'foo'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE foo(integer) SET search_path TO pg_catalog, public
+    expect: ok
+  - sql: |
+      ALTER ROUTINE foo(integer) SET statement_timeout = DEFAULT
+    expect: ok
+  - sql: |
+      ALTER ROUTINE foo(integer) RESET search_path
+    expect: ok
+  - sql: |
+      SELECT proconfig FROM pg_proc WHERE proname = 'foo'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE foo(integer) RESET ALL
+    expect: ok
+  - sql: |
+      SELECT proconfig IS NULL AS no_settings FROM pg_proc WHERE proname = 'foo'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE foo(integer) SET no_such_guc_xyz = 1
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER ROUTINE pr1(int) SET search_path = pg_catalog
+    expect: ok
+    comment: procedures accept SET
+  - sql: |
+      ALTER ROUTINE pr1(int) RESET ALL
+    expect: ok

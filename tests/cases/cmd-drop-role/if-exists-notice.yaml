@@ -1,0 +1,30 @@
+# DROP ROLE IF EXISTS does not fail on missing names; it issues a notice and still drops the roles that exist.
+id: cmd-drop-role.if-exists-notice
+title: "DROP ROLE IF EXISTS skips missing and repeated names with notices and drops the rest"
+family: cmd-drop-role
+tier: core
+feature_ids: [drop-role, if-exists, notices]
+required_capabilities: [roles, create-role, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_role.sgml#sql-droprole-parameters (IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE ROLE drr_ie_a;
+  CREATE ROLE drr_ie_b;
+steps:
+  - sql: |
+      DROP ROLE IF EXISTS drr_ie_nosuch
+    expect: notice
+    comment: a single missing role is not an error under IF EXISTS
+  - sql: |
+      DROP ROLE IF EXISTS drr_ie_a, drr_ie_nosuch, drr_ie_b
+    expect: notice
+    comment: the missing name becomes a notice and both existing roles are dropped
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_roles WHERE rolname IN ('drr_ie_a', 'drr_ie_b')
+    expect: rows
+  - sql: |
+      DROP ROLE IF EXISTS drr_ie_a
+    expect: notice
+    comment: dropping an already dropped role is also just a notice

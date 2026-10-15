@@ -1,0 +1,35 @@
+# CASCADE drops dependent objects and, in turn, their dependents: a column using the collation, an index on it and a view.
+id: cmd-drop-collation.cascade-drops-dependents
+title: "DROP COLLATION CASCADE drops dependent columns, indexes and views"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, cascade, dependencies, create-index, create-view]
+required_capabilities: [create-collation, drop-collation, icu-provider, create-table, create-index, create-view, collate-clause, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_collation.sgml#sql-dropcollation (CASCADE); xref ddl-depend"
+sessions: [a]
+setup: |
+  CREATE COLLATION dc_cs (provider = icu, locale = 'de-DE');
+  CREATE TABLE dc_ct (id int4 PRIMARY KEY, s text COLLATE dc_cs, n int4);
+  CREATE INDEX dc_ci ON dc_ct (s COLLATE dc_cs);
+  CREATE VIEW dc_cv AS SELECT 'a' COLLATE dc_cs AS x;
+steps:
+  - sql: |
+      DROP COLLATION dc_cs CASCADE
+    expect: ok
+    compare_message: false
+    comment: NOTICE lines list the dropped column, index and view
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'dc_ct'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: the column using the collation is gone; the table and its other column remain
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('dc_ci', 'dc_cv')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, n FROM dc_ct ORDER BY id
+    expect: rows
+    order: ordered

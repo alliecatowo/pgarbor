@@ -1,0 +1,52 @@
+# The definition is not checked for consistency: unknown operators or functions fail with 42883, an operator with unrelated argument types is accepted, and a prefix operator (NONE) is rejected as not binary (42P17).
+id: cmd-create-opclass.operator-and-function-validity
+title: "Unknown operators and functions fail with 42883; mismatched operator types pass without a consistency check; prefix operators fail with 42P17"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, operator-strategies, support-functions, prefix-operator, errors]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Parameters: op_type; Description: does not check whether the definition is self-consistent)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_eq(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a = ($2).a';
+  CREATE FUNCTION cr_pt_gt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a > ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE FUNCTION cr_pt_neg(cr_pt) RETURNS cr_pt LANGUAGE sql IMMUTABLE AS 'SELECT ROW(-($1).a)::cr_pt';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE OPERATOR = (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_eq);
+  CREATE OPERATOR > (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_gt);
+  CREATE OPERATOR ~ (rightarg = cr_pt, procedure = cr_pt_neg);
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_val_a FOR TYPE cr_pt USING btree AS OPERATOR 1 +(cr_pt, cr_pt), FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: error
+    sqlstate: "42883"
+    comment: no + operator on cr_pt
+  - sql: |
+      CREATE OPERATOR CLASS cr_val_b FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_nosuch_fn(cr_pt, cr_pt)
+    expect: error
+    sqlstate: "42883"
+    comment: support function does not exist
+  - sql: |
+      CREATE OPERATOR CLASS cr_val_c FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt)
+    expect: error
+    sqlstate: "42883"
+    comment: wrong argument count for the function signature
+  - sql: |
+      CREATE OPERATOR CLASS cr_val_d FOR TYPE cr_pt USING btree AS OPERATOR 1 <(int4, int4), OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+    comment: operator 1 takes int4 arguments, not cr_pt; the definition is not checked
+  - sql: |
+      CREATE OPERATOR CLASS cr_val_e FOR TYPE cr_pt USING btree AS OPERATOR 1 ~(NONE, cr_pt), FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: error
+    sqlstate: "42P17"
+    comment: NONE selects a prefix operator, which an index operator class may not use (index operators must be binary)
+  - sql: |
+      SELECT o.opcname, a.amopstrategy, a.amopopr::regoperator::text AS op FROM pg_amop a JOIN pg_opclass o ON o.opcfamily = a.amopfamily WHERE o.opcname LIKE 'cr_val_%' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: only cr_val_d exists; the rejected cr_val_e left nothing behind

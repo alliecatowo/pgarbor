@@ -1,0 +1,43 @@
+# SET SCHEMA moves a table between schemas; IF EXISTS skips a name that no longer resolves with a notice; a repeat move fails with 42P01.
+id: cmd-alter-table.schema-moves-if-exists
+title: "ALTER TABLE SET SCHEMA and RENAME across schemas, with IF EXISTS skip and missing-table errors"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, set-schema, rename-table, if-exists, errors]
+required_capabilities: [create-table, create-schema, alter-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: move a table to a different schema; Description: IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA archive;
+  CREATE TABLE archive.tbl_moving (a int4);
+  INSERT INTO archive.tbl_moving VALUES (1), (2);
+steps:
+  - sql: |
+      ALTER TABLE archive.tbl_moving SET SCHEMA public
+    expect: ok
+  - sql: |
+      SELECT table_schema, table_name FROM information_schema.tables WHERE table_name = 'tbl_moving'
+    expect: rows
+  - sql: |
+      ALTER TABLE IF EXISTS archive.tbl_moving RENAME TO tbl_renamed
+    expect: notice
+    comment: the table is no longer in archive, so the statement is skipped
+  - sql: |
+      ALTER TABLE public.tbl_moving RENAME TO tbl_renamed
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM tbl_renamed
+    expect: rows
+  - sql: |
+      ALTER TABLE public.tbl_renamed SET SCHEMA archive
+    expect: ok
+  - sql: |
+      ALTER TABLE public.tbl_renamed SET SCHEMA archive
+    expect: error
+    sqlstate: "42P01"
+    comment: the table has already left public
+  - sql: |
+      SELECT count(*) AS n FROM archive.tbl_renamed
+    expect: rows

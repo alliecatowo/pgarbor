@@ -1,0 +1,41 @@
+# Self-referential foreign key: a tree whose top-level nodes have NULL parent_id.
+id: doc-ddl-constraints.self-referential-tree-fk
+title: Self-referential foreign key enforces parent existence and blocks deleting a parent with children
+family: doc-ddl-constraints
+tier: core
+feature_ids: [foreign-keys, self-referential, primary-keys, null-semantics, insert, delete, select]
+required_capabilities: [create-table, constraints, foreign-keys, primary-key, insert, delete, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Foreign Keys, self-referential)"
+sessions: [a]
+setup: |
+  CREATE TABLE tree (
+      node_id integer PRIMARY KEY,
+      parent_id integer REFERENCES tree,
+      name text
+  )
+steps:
+  - sql: |
+      INSERT INTO tree VALUES (1, NULL, 'root'), (2, 1, 'child')
+    expect: ok
+    comment: top-level node has NULL parent_id
+  - sql: |
+      INSERT INTO tree VALUES (3, 9, 'orphan')
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM tree WHERE node_id = 1
+    expect: error
+    sqlstate: "23503"
+    comment: node 2 still references node 1
+  - sql: |
+      DELETE FROM tree WHERE node_id = 2
+    expect: ok
+  - sql: |
+      DELETE FROM tree WHERE node_id = 1
+    expect: ok
+  - sql: |
+      SELECT node_id, parent_id, name FROM tree ORDER BY node_id
+    expect: rows
+    order: ordered

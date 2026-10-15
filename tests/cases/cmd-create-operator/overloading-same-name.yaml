@@ -1,0 +1,36 @@
+# Operators may share a name when their argument types differ; an exact repeat of the same signature is refused.
+id: cmd-create-operator.overloading-same-name
+title: "Operators overload by argument types and an identical signature is refused with 42723"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, overloading, operator-resolution]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#parameters (name, overloading)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_mul8(int8, int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * $2 $$;
+  CREATE FUNCTION cco_mul4(int4, int4) RETURNS int4 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * $2 + 1000 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR #*# (LEFTARG = int8, RIGHTARG = int8, FUNCTION = cco_mul8)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #*# (LEFTARG = int4, RIGHTARG = int4, FUNCTION = cco_mul4)
+    expect: ok
+    comment: same name, different argument types, so this is an overload
+  - sql: |
+      CREATE OPERATOR #*# (LEFTARG = int8, RIGHTARG = int8, FUNCTION = cco_mul8)
+    expect: error
+    sqlstate: "42723"
+    comment: identical signature already exists
+  - sql: |
+      SELECT 3::int4 #*# 4::int4 AS int4_call, 3::int8 #*# 4::int8 AS int8_call, 3 #*# 4 AS literal_call
+    expect: rows
+  - sql: |
+      SELECT oprleft::regtype AS left_t, oprright::regtype AS right_t, oprcode::regproc AS fn
+      FROM pg_operator WHERE oprname = '#*#' AND oprnamespace = 'public'::regnamespace
+      ORDER BY 1
+    expect: rows
+    order: ordered

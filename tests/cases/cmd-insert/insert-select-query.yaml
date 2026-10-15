@@ -1,0 +1,42 @@
+# INSERT ... query: the query supplies the rows; its columns map left-to-right onto the target list.
+id: cmd-insert.insert-select-query
+title: INSERT from a SELECT query, including filtering, column lists, and empty result sets
+family: cmd-insert
+tier: core
+feature_ids: [insert, insert-select, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-insert (Examples: INSERT INTO films SELECT * FROM tmp_films WHERE ...)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (code text PRIMARY KEY, title text, did int, date_prod date, kind text);
+  CREATE TABLE tmp_films (code text, title text, did int, date_prod date, kind text);
+  INSERT INTO tmp_films VALUES
+    ('A1', 'Old one', 1, '2001-01-01', 'Drama'),
+    ('A2', 'Newer', 2, '2010-06-15', 'Comedy'),
+    ('A3', 'Cutoff', 3, '2004-05-07', 'Drama'),
+    ('A4', 'Also old', 4, '2003-12-31', 'Comedy');
+steps:
+  - sql: |
+      INSERT INTO films SELECT * FROM tmp_films WHERE date_prod < '2004-05-07'
+    expect: ok
+    comment: inserts A1 and A4 only; A3 is not strictly before the cutoff
+  - sql: |
+      INSERT INTO films (kind, code, title, did, date_prod)
+        SELECT kind, code, upper(title), did, date_prod FROM tmp_films WHERE did = 2
+    expect: ok
+    comment: the query's columns are associated with the target list left to right
+  - sql: |
+      INSERT INTO films (code, title) SELECT code, title FROM tmp_films WHERE false
+    expect: ok
+    comment: a query returning zero rows inserts nothing and is not an error
+  - sql: |
+      INSERT INTO films (code, title) SELECT code FROM tmp_films
+    expect: error
+    sqlstate: "42601"
+    comment: a query with one column cannot fill a two-column target list
+  - sql: |
+      SELECT code, title, did, date_prod, kind FROM films ORDER BY code
+    expect: rows
+    order: ordered

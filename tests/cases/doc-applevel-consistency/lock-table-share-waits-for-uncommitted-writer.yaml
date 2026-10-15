@@ -1,0 +1,49 @@
+# SHARE lock waits for an uncommitted writer, so the locked table has no uncommitted changes from others.
+id: doc-applevel-consistency.lock-table-share-waits-for-uncommitted-writer
+title: LOCK TABLE IN SHARE MODE waits for another transaction's uncommitted INSERT to finish
+family: doc-applevel-consistency
+tier: core
+feature_ids: [lock-table, share-lock, global-consistency-check]
+required_capabilities: [create-table, insert, select, transactions, lock-table, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO acct VALUES (3, 300)
+    expect: ok
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE acct IN SHARE MODE
+    async: true
+    expect_blocked: true
+    comment: conflicts with the ROW EXCLUSIVE lock held by b's uncommitted INSERT
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    wait: true
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n, sum(balance) AS total FROM acct
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

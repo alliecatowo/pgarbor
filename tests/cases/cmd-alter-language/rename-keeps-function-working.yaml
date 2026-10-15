@@ -1,0 +1,27 @@
+# Functions created before a rename keep referring to the language by OID, so they still run after it.
+id: cmd-alter-language.rename-keeps-function-working
+title: Functions created before a language rename still execute and report the new language name
+family: cmd-alter-language
+tier: core
+feature_ids: [alter-language, rename, plpgsql, create-function, catalog-introspection]
+required_capabilities: [alter-language, plpgsql, create-function, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_language.sgml#sql-alterlanguage (Description: changes the definition of a procedural language)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION sq(int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN $1 * $1; END $$
+    expect: ok
+  - sql: |
+      ALTER LANGUAGE plpgsql RENAME TO pl_later
+    expect: ok
+  - sql: |
+      SELECT sq(7) AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT p.proname, l.lanname FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.proname = 'sq'
+    expect: rows
+    order: ordered
+    comment: the function now reports the renamed language

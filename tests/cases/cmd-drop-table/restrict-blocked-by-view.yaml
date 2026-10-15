@@ -1,0 +1,31 @@
+# Documented: a table referenced by a view cannot be dropped unless CASCADE is given. RESTRICT is the default.
+id: cmd-drop-table.restrict-blocked-by-view
+title: DROP TABLE is refused while a view depends on it, with default and explicit RESTRICT
+family: cmd-drop-table
+tier: core
+feature_ids: [drop-table, restrict, view-dependency]
+required_capabilities: [create-table, create-view, insert, select, drop-table]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_table.sgml#sql-droptable (Description; Parameters: RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4, v text);
+  INSERT INTO p VALUES (1, 'x');
+  CREATE VIEW vw AS SELECT id, v FROM p;
+steps:
+  - sql: |
+      DROP TABLE p
+    expect: error
+    sqlstate: "2BP01"
+    comment: default behavior refuses the drop and names the dependent view
+  - sql: |
+      DROP TABLE p RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT behaves identically
+  - sql: |
+      SELECT id, v FROM vw
+    expect: rows
+    order: ordered
+    comment: the table and view are both untouched after the refused drops

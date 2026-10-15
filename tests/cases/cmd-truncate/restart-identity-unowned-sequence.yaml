@@ -1,0 +1,24 @@
+# RESTART IDENTITY restarts only sequences owned by the truncated columns, not free-standing sequences used as defaults.
+id: cmd-truncate.restart-identity-unowned-sequence
+title: "RESTART IDENTITY leaves a free-standing sequence used as a column default alone"
+family: cmd-truncate
+tier: extended
+feature_ids: [truncate, restart-identity, sequence, column-default, insert, select]
+required_capabilities: [create-table, insert, select, sequences, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#parameters (RESTART IDENTITY: sequences owned by columns)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE free_seq;
+  CREATE TABLE uses_free (id int4 DEFAULT nextval('free_seq') PRIMARY KEY);
+  INSERT INTO uses_free VALUES (nextval('free_seq')), (nextval('free_seq'));
+steps:
+  - sql: |
+      TRUNCATE uses_free RESTART IDENTITY
+    expect: ok
+  - sql: |
+      INSERT INTO uses_free VALUES (nextval('free_seq')) RETURNING id
+    expect: rows
+    order: ordered
+    comment: free_seq is not owned by a column, so it continues at 3

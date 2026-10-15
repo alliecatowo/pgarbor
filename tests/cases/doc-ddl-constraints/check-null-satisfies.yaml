@@ -1,0 +1,34 @@
+# A CHECK constraint is satisfied when its expression is true OR null.
+id: doc-ddl-constraints.check-null-satisfies
+title: CHECK constraints accept rows whose expression evaluates to NULL
+family: doc-ddl-constraints
+tier: core
+feature_ids: [check-constraints, null-semantics, insert, select]
+required_capabilities: [create-table, constraints, check-constraint, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Check Constraints, null value with check constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a integer CHECK (a > 0), b integer, CHECK (a > b))
+steps:
+  - sql: |
+      INSERT INTO t VALUES (NULL, 5)
+    expect: ok
+    comment: a > 0 and a > b both evaluate to NULL, which passes
+  - sql: |
+      INSERT INTO t VALUES (NULL, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, NULL)
+    expect: ok
+    comment: a > b is NULL because b is NULL
+  - sql: |
+      INSERT INTO t VALUES (0, NULL)
+    expect: error
+    sqlstate: "23514"
+    comment: a > 0 is false, so the check fails even though b is NULL
+  - sql: |
+      SELECT a, b FROM t
+    expect: rows
+    order: multiset

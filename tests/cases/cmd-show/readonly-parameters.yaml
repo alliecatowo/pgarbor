@@ -1,0 +1,40 @@
+# Parameters that SHOW can display but SET cannot change: server_encoding, is_superuser, and postmaster-context settings.
+id: cmd-show.read-only-parameters
+title: Read-only and restart-only parameters can be read but SET fails with 55P02
+family: cmd-show
+tier: core
+feature_ids: [show, set, read-only-guc, server-version, server-encoding, is-superuser]
+required_capabilities: [select, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/show.sgml#sql-show (Parameters: SERVER_VERSION, SERVER_ENCODING, IS_SUPERUSER)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT current_setting('server_version') LIKE '18.%' AS v18, current_setting('server_version_num')::int / 10000 AS major
+    expect: rows
+    order: ordered
+    comment: SERVER_VERSION can be shown; the exact build string is not compared
+  - sql: |
+      SELECT current_setting('server_encoding') = getdatabaseencoding() AS same_encoding
+    expect: rows
+    order: ordered
+    comment: SERVER_ENCODING matches the database encoding and cannot be set
+  - sql: |
+      SELECT current_setting('is_superuser') IN ('on', 'off') AS is_bool
+    expect: rows
+    order: ordered
+    comment: IS_SUPERUSER is a boolean that depends on the role, so only its shape is compared
+  - sql: |
+      SET server_encoding TO 'UTF8'
+    expect: error
+    sqlstate: "55P02"
+  - sql: |
+      SET is_superuser TO off
+    expect: error
+    sqlstate: "55P02"
+  - sql: |
+      SET max_connections TO 10
+    expect: error
+    sqlstate: "55P02"
+    comment: postmaster-context parameters need a server restart

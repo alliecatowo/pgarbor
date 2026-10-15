@@ -1,0 +1,33 @@
+# Doc example: DROP AGGREGATE myavg(integer) removes the aggregate; a second drop is undefined_function.
+id: cmd-drop-aggregate.doc-example-myavg-integer
+title: DROP AGGREGATE myavg(integer) doc example, then dropping it again
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, create-aggregate, aggregates]
+required_capabilities: [aggregates, create-aggregate, create-function, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (Examples: myavg(integer))"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2'
+    expect: ok
+  - sql: |
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      SELECT myavg(x) AS total FROM (VALUES (1), (2), (3)) AS v(x)
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP AGGREGATE myavg(integer)
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(integer)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT myavg(x) FROM (VALUES (1)) AS v(x)
+    expect: error
+    sqlstate: "42883"

@@ -1,0 +1,38 @@
+# Snowball requires a usable language: missing, empty, unknown, and non-identifier values all fail.
+id: cmd-create-tsdictionary.snowball-language-errors
+title: "Snowball template rejects a missing, empty, unknown, or numeric language"
+family: cmd-create-tsdictionary
+tier: core
+feature_ids: [create-text-search-dictionary, snowball-template, language-option]
+required_capabilities: [create-text-search-dictionary, text-search, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsdictionary.sgml#sql-createtsdictionary (Parameters: template, option, value)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY no_lang (TEMPLATE = snowball)
+    expect: error
+    sqlstate: "22023"
+    comment: no default language; a stopword list alone is not enough
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY no_lang (TEMPLATE = snowball, stopwords = english)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY empty_lang (TEMPLATE = snowball, language = '')
+    expect: error
+    sqlstate: "42704"
+    comment: an empty language name is looked up as a stemmer and not found
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY nosuch_lang (TEMPLATE = snowball, language = nosuchlang)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY num_lang (TEMPLATE = snowball, language = 42)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT count(*) FROM pg_ts_dict WHERE dictname IN ('no_lang', 'empty_lang', 'nosuch_lang', 'num_lang')
+    expect: rows
+    comment: none of the failed definitions was stored

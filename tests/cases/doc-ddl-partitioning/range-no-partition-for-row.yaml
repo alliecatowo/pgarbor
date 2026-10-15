@@ -1,0 +1,31 @@
+# Rows that map to no partition (and no DEFAULT partition) are rejected. A multi-row INSERT is atomic,
+# so the in-range row in the same statement is not stored either.
+id: doc-ddl-partitioning.range-no-partition-for-row
+title: Inserting a row outside every range partition raises check_violation
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, range-partitioning, partition-routing]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Declarative Partitioning: 'Inserting data into the parent table that does not map to one of the existing partitions will cause an error')"
+sessions: [a]
+setup: |
+  CREATE TABLE evt (id int, ts date) PARTITION BY RANGE (ts);
+  CREATE TABLE evt_2024 PARTITION OF evt FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+steps:
+  - sql: |
+      INSERT INTO evt VALUES (1, '2024-06-01'), (2, '2025-06-01')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT count(*) FROM evt
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO evt VALUES (3, '2024-06-01')
+    expect: ok
+  - sql: |
+      SELECT id, ts FROM evt ORDER BY id
+    expect: rows
+    order: ordered

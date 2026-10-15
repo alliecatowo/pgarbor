@@ -1,0 +1,72 @@
+# Range and multirange containment and overlap operators, with the documented examples.
+id: doc-functions-range.containment-operators
+title: "Range containment (@>, <@) and overlap (&&) operators, documented examples"
+family: doc-functions-range
+tier: core
+feature_ids: [range-types, range-operators, containment, overlap]
+required_capabilities: [select, range-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-range (Range Operators table: @>, <@, &&)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT int4range(2,4) @> int4range(2,3) AS range_contains_range,
+             int4range(2,4) <@ int4range(1,7) AS range_contained_by_range,
+             int8range(3,7) && int8range(4,12) AS overlaps
+    expect: rows
+    order: multiset
+    comment: "documented examples, all true"
+  - sql: |
+      SELECT 42 <@ int4range(1,7) AS element_inside,
+             '[2011-01-01,2011-03-01)'::tsrange @> '2011-01-10'::timestamp AS ts_contains_element,
+             1 <@ int4range(1,7) AS lower_bound_inclusive
+    expect: rows
+    order: multiset
+    comment: "documented 42 <@ int4range(1,7) is false because 42 is outside [1,7); element containment from both sides"
+  - sql: |
+      SELECT int4range(1,5) @> 3 AS has3,
+             int4range(1,5) @> 5 AS has5,
+             int4range(1,5) @> 0 AS has0
+    expect: rows
+    order: multiset
+    comment: "lower bound inclusive and upper bound exclusive"
+  - sql: |
+      SELECT int4range(1,5) @> int4range(2,3) AS inner_true,
+             int4range(1,5) @> int4range(3,8) AS overhang_false,
+             int4range(1,3) && int4range(3,5) AS touching_only_false,
+             int4range(1,3) && int4range(2,5) AS real_overlap
+    expect: rows
+    order: multiset
+    comment: "ranges that only touch at an exclusive bound do not overlap"
+  - sql: |
+      SELECT '[1,3]'::int4range && '[3,5)'::int4range AS closed_touch_overlap
+    expect: rows
+    order: multiset
+    comment: "an inclusive upper bound at 3 shares the element 3"
+  - sql: |
+      SELECT int8range(3,7) && int8range(4,12) AS range_overlap,
+             '{[3,7)}'::int8multirange && '{[4,12)}'::int8multirange AS multirange_overlap,
+             '{[3,7)}'::int8multirange && int8range(4,12) AS multi_range_overlap,
+             int8range(3,7) && '{[4,12)}'::int8multirange AS range_multi_overlap
+    expect: rows
+    order: multiset
+    comment: "documented multirange overlap examples, all true"
+  - sql: |
+      SELECT '{[2,4)}'::int4multirange @> '{[2,3)}'::int4multirange AS mr_contains_mr,
+             '{[2,4)}'::int4multirange @> int4range(2,3) AS mr_contains_r,
+             '[2,4)'::int4range @> '{[2,3)}'::int4multirange AS r_contains_mr,
+             '{[2,4)}'::int4multirange <@ '{[1,7)}'::int4multirange AS mr_in_mr,
+             '{[2,4)}'::int4multirange <@ int4range(1,7) AS mr_in_r,
+             int4range(2,4) <@ '{[1,7)}'::int4multirange AS r_in_mr,
+             4 <@ '{[1,7)}'::int4multirange AS e_in_mr
+    expect: rows
+    order: multiset
+    comment: "documented multirange containment examples; 4 is excluded by [2,4) but included in [1,7)"
+  - sql: |
+      SELECT NULL::int4range @> 3 AS null_range_contains,
+             int4range(1,5) @> NULL::int4 AS null_element,
+             int4range(1,5) && NULL::int4range AS null_overlap
+    expect: rows
+    order: multiset
+    comment: "operators are strict and yield NULL for a NULL operand"

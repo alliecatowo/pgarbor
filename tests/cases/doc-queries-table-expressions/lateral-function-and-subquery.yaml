@@ -1,0 +1,52 @@
+# LATERAL lets a subquery or table function refer to earlier FROM items; LEFT JOIN LATERAL keeps
+# source rows with no output, which is the documented way to find unmatched rows.
+id: doc-queries-table-expressions.lateral-function-and-subquery
+title: LATERAL subqueries and table functions, including LEFT JOIN LATERAL ... ON true
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [lateral, table-functions, left-join, subquery-in-from]
+required_capabilities: [create-table, insert, select, create-function, join]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-lateral"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (id int4, bar_id int4);
+  CREATE TABLE bar (id int4, v text);
+  CREATE TABLE polys (id int4, n int4);
+  CREATE TABLE manufacturers (id int4 PRIMARY KEY, name text);
+  CREATE TABLE products (id int4 PRIMARY KEY, mfr_id int4, name text);
+  INSERT INTO foo VALUES (1, 10), (2, 30);
+  INSERT INTO bar VALUES (10, 'x'), (30, 'y');
+  INSERT INTO polys VALUES (1, 2), (2, 0), (3, 3);
+  INSERT INTO manufacturers VALUES (1, 'Acme'), (2, 'Globex'), (3, 'Initech');
+  INSERT INTO products VALUES (1, 1, 'anvil'), (2, 1, 'rocket'), (3, 2, 'spring');
+  CREATE FUNCTION get_product_names(int4) RETURNS SETOF text LANGUAGE sql STABLE AS $$
+      SELECT name FROM products WHERE mfr_id = $1;
+  $$;
+steps:
+  - sql: |
+      SELECT * FROM foo, LATERAL (SELECT * FROM bar WHERE bar.id = foo.bar_id) ss ORDER BY foo.id
+    expect: rows
+    order: ordered
+    comment: same result as the plain join WHERE bar.id = foo.bar_id
+  - sql: |
+      SELECT p.id, s.v FROM polys p, LATERAL generate_series(1, p.n) AS s (v) ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: explicit LATERAL on a table function; polys 2 has n = 0 and contributes no rows
+  - sql: |
+      SELECT p.id, s.v FROM polys p, generate_series(1, p.n) AS s (v) ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: LATERAL is optional for functions in FROM
+  - sql: |
+      SELECT m.name FROM manufacturers m LEFT JOIN LATERAL get_product_names(m.id) AS pname (pn) ON true WHERE pn IS NULL
+    expect: rows
+    order: multiset
+    comment: Initech has no products
+  - sql: |
+      SELECT m.name, pn FROM manufacturers m LEFT JOIN LATERAL get_product_names(m.id) AS pname (pn) ON true ORDER BY m.id, pn
+    expect: rows
+    order: ordered
+    comment: Initech appears once with NULL pname

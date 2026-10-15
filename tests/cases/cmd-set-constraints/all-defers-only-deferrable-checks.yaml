@@ -1,0 +1,77 @@
+# SET CONSTRAINTS ALL DEFERRED defers only deferrable constraints; NOT NULL, CHECK and non-deferrable UNIQUE/FK fail at once.
+id: cmd-set-constraints.all-defers-only-deferrable-checks
+title: Under SET CONSTRAINTS ALL DEFERRED, CHECK, NOT NULL, non-deferrable UNIQUE and FK still fail at the statement
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, not-null, check-constraint, unique, foreign-key, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, unique-index, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: NOT NULL and CHECK constraints are always checked immediately; uniqueness and exclusion constraints not declared DEFERRABLE are also checked immediately)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_nd REFERENCES p (id) NOT DEFERRABLE);
+  CREATE TABLE u (id int4 CONSTRAINT u_nd UNIQUE NOT DEFERRABLE, v int4 CONSTRAINT u_ck CHECK (v > 0), n int4 NOT NULL);
+  INSERT INTO u VALUES (1, 1, 1);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ALL DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES (2, -5, 1)
+    expect: error
+    sqlstate: "23514"
+    comment: CHECK is never deferred
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ALL DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES (3, 1, NULL)
+    expect: error
+    sqlstate: "23502"
+    comment: NOT NULL is never deferred
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ALL DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES (1, 2, 2)
+    expect: error
+    sqlstate: "23505"
+    comment: a NOT DEFERRABLE unique constraint is checked at the statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ALL DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (1, 404)
+    expect: error
+    sqlstate: "23503"
+    comment: a NOT DEFERRABLE foreign key is checked at the statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id, v, n FROM u ORDER BY id
+    expect: rows
+    order: ordered

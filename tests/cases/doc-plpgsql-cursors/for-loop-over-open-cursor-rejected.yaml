@@ -1,0 +1,48 @@
+# FOR over a bound cursor requires the cursor to be closed; an already open bound cursor is rejected.
+id: doc-plpgsql-cursors.for-loop-over-open-cursor-rejected
+title: FOR loop over a bound cursor that is already open is rejected
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, for-cursor-loop, bound-cursor, open]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION for_over_open_bound() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c CURSOR FOR SELECT name FROM items ORDER BY id;
+    r record;
+    out text := '';
+  BEGIN
+    OPEN c;
+    FOR r IN c LOOP
+      out := out || r.name;
+    END LOOP;
+    RETURN out;
+  END $$;
+  CREATE FUNCTION for_over_empty_bound() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c CURSOR FOR SELECT name FROM items WHERE grp = 99;
+    r record;
+    n int := 0;
+  BEGIN
+    FOR r IN c LOOP
+      n := n + 1;
+    END LOOP;
+    RETURN n::text;
+  END $$;
+steps:
+  - sql: |
+      SELECT for_over_open_bound()
+    expect: error
+    sqlstate: "42P03"
+    compare_message: false
+    comment: the portal name is generated, so the message text is not compared
+  - sql: |
+      SELECT for_over_empty_bound()
+    expect: rows
+    comment: a FOR loop over an empty cursor runs zero iterations

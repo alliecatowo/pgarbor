@@ -1,0 +1,36 @@
+# Boundary cases: a single row, all rows as peers, and empty input for the ranking and distribution functions.
+id: doc-functions-window.boundaries-empty-single-row
+title: Ranking functions on a single row, all-peer input and empty input
+family: doc-functions-window
+tier: core
+feature_ids: [window-functions, percent-rank, cume-dist, rank, ntile, dense-rank]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (percent_rank, cume_dist, ntile)"
+setup: |
+  CREATE TABLE b (id int4, k int4);
+  INSERT INTO b VALUES (1, 7), (2, 7), (3, 7);
+steps:
+  - sql: |
+      SELECT percent_rank() OVER () AS pr, cume_dist() OVER () AS cd, rank() OVER () AS rk, dense_rank() OVER () AS dr
+      FROM generate_series(1, 1) AS g
+    expect: rows
+    order: multiset
+    comment: percent_rank is 0 and cume_dist is 1 for a single row, per (rank - 1)/(N - 1) and count/N
+  - sql: |
+      SELECT id, percent_rank() OVER (ORDER BY k) AS pr, cume_dist() OVER (ORDER BY k) AS cd, rank() OVER (ORDER BY k) AS rk
+      FROM b ORDER BY id
+    expect: rows
+    order: ordered
+    comment: all rows are peers, so every row gets rank 1, percent_rank 0 and cume_dist 1
+  - sql: |
+      SELECT percent_rank() OVER () FROM generate_series(1, 0) AS g
+    expect: rows
+    order: multiset
+    comment: empty input yields no rows
+  - sql: |
+      SELECT id, ntile(1) OVER (ORDER BY id) AS n FROM b ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a single bucket puts every row in bucket 1

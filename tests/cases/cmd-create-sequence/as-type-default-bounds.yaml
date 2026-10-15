@@ -1,0 +1,47 @@
+# CREATE SEQUENCE AS smallint/integer sets the default bounds of the type; a smallint sequence raises 2200H at its maximum.
+id: cmd-create-sequence.as-type-default-bounds
+title: CREATE SEQUENCE AS smallint and integer derive default bounds and start from the data type
+family: cmd-create-sequence
+tier: core
+feature_ids: [create-sequence, as-data-type, smallint, integer, maxvalue, minvalue]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#parameters (data_type)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SEQUENCE s_sm AS smallint
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE s_sm_d AS smallint INCREMENT BY -1
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE s_int AS integer
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE s_int_d AS integer INCREMENT BY -1
+    expect: ok
+  - sql: |
+      SELECT sequencename, data_type, start_value, min_value, max_value
+      FROM pg_sequences WHERE sequencename IN ('s_sm', 's_sm_d', 's_int', 's_int_d') ORDER BY sequencename
+    expect: rows
+    order: ordered
+    comment: smallint bounds are -32768..32767, integer bounds are -2147483648..2147483647
+  - sql: |
+      SELECT nextval('s_sm_d')
+    expect: rows
+    comment: descending smallint starts at -1
+  - sql: |
+      CREATE SEQUENCE s_sm_top AS smallint START WITH 32766
+    expect: ok
+  - sql: |
+      SELECT nextval('s_sm_top'), nextval('s_sm_top')
+    expect: rows
+    order: ordered
+    comment: 32766 and 32767 are both returned
+  - sql: |
+      SELECT nextval('s_sm_top')
+    expect: error
+    sqlstate: "2200H"
+    comment: past the smallint maximum with NO CYCLE

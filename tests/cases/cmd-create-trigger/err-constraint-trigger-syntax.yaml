@@ -1,0 +1,47 @@
+# CONSTRAINT trigger grammar: AFTER and FOR EACH ROW only, DEFERRABLE options only with CONSTRAINT,
+# and CREATE OR REPLACE is not supported for constraint triggers.
+id: cmd-create-trigger.err-constraint-trigger-syntax
+title: CONSTRAINT trigger timing, granularity and deferral rules are enforced at parse time
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, constraint-trigger, deferrable, errors, catalog-introspection]
+required_capabilities: [create-table, insert, select, plpgsql, triggers, constraints, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER parameters (CONSTRAINT, DEFERRABLE, INITIALLY) and Notes (OR REPLACE not supported for constraint triggers)"
+setup: |
+  CREATE TABLE t (id int);
+  CREATE FUNCTION trg_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE CONSTRAINT TRIGGER c1 BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42601"
+    comment: a constraint trigger can only be AFTER
+  - sql: |
+      CREATE CONSTRAINT TRIGGER c2 AFTER INSERT ON t FOR EACH STATEMENT EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42601"
+    comment: a constraint trigger must be FOR EACH ROW
+  - sql: |
+      CREATE CONSTRAINT TRIGGER c3 AFTER INSERT ON t NOT DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42601"
+    comment: INITIALLY DEFERRED requires DEFERRABLE
+  - sql: |
+      CREATE TRIGGER c4 AFTER INSERT ON t DEFERRABLE FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42601"
+    comment: DEFERRABLE is only accepted for CONSTRAINT triggers
+  - sql: |
+      CREATE OR REPLACE CONSTRAINT TRIGGER c5 AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "0A000"
+    comment: OR REPLACE is not supported for constraint triggers
+  - sql: |
+      CREATE CONSTRAINT TRIGGER c6 AFTER INSERT ON t NOT DEFERRABLE FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: ok
+  - sql: |
+      SELECT tgname, tgdeferrable, tginitdeferred, tgconstraint <> 0 AS is_constraint FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

@@ -1,0 +1,35 @@
+# A user-defined IMMUTABLE function can be used as an index expression, and its results drive uniqueness.
+id: doc-indexes-expressional.expression-index-user-immutable-function
+title: UNIQUE index over a user IMMUTABLE function enforces uniqueness on the function's result
+family: doc-indexes-expressional
+tier: extended
+feature_ids: [expression-index, unique-index, user-function, volatility]
+required_capabilities: [create-table, create-index, create-function-sql, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (index expressions are stored, not recomputed on search)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION norm_key(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT lower(btrim($1)) $$;
+  CREATE TABLE keys (id int4 PRIMARY KEY, k text);
+  CREATE UNIQUE INDEX keys_norm_idx ON keys (norm_key(k));
+  INSERT INTO keys VALUES (1, '  Abc '), (2, 'xyz');
+steps:
+  - sql: |
+      INSERT INTO keys VALUES (3, 'ABC')
+    expect: error
+    sqlstate: "23505"
+    comment: the stored key norm_key('  Abc ') is 'abc', which 'ABC' also maps to
+  - sql: |
+      INSERT INTO keys VALUES (3, '  xYz')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT id FROM keys WHERE norm_key(k) = 'abc' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM keys WHERE k = 'abc' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a plain comparison does not apply the function, so it finds nothing

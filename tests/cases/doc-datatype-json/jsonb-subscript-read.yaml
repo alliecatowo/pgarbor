@@ -1,0 +1,48 @@
+# jsonb subscripting for reads: keys, nested paths, array indexes (negative too), slices rejected, WHERE filters.
+id: doc-datatype-json.jsonb-subscript-read
+title: jsonb subscript reads by key, path and index, negative indexes, slice rejection and WHERE filters
+family: doc-datatype-json
+tier: core
+feature_ids: [jsonb, jsonb-subscripting]
+required_capabilities: [create-table, insert, select, jsonb, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#jsonb-subscripting"
+sessions: [a]
+setup: |
+  CREATE TABLE sub_t (id int4 PRIMARY KEY, jsonb_field jsonb);
+  INSERT INTO sub_t VALUES
+    (1, '{"key": "value"}'),
+    (2, '{"key": "other"}'),
+    (3, '{"key": 1}'),
+    (4, NULL);
+steps:
+  - sql: |
+      SELECT ('{"a": 1}'::jsonb)['a'] AS by_key, pg_typeof(('{"a": 1}'::jsonb)['a']) AS t
+    expect: rows
+    comment: doc example; result type is always jsonb
+  - sql: |
+      SELECT ('{"a": {"b": {"c": 1}}}'::jsonb)['a']['b']['c'] AS nested
+    expect: rows
+  - sql: |
+      SELECT ('[1, "2", null]'::jsonb)[1] AS idx1, ('[1, "2", null]'::jsonb)[-1] AS idx_neg1, ('[1, "2", null]'::jsonb)[5] AS idx_past_end
+    expect: rows
+    comment: zero-based; negative counts from the end; out of range yields NULL
+  - sql: |
+      SELECT ('{"a": 1}'::jsonb)['missing'] IS NULL AS missing_key, ('{"a": 1}'::jsonb)[0] IS NULL AS int_on_object
+    expect: rows
+  - sql: |
+      SELECT ('[1,2]'::jsonb)[0:1]
+    expect: error
+    sqlstate: "42804"
+    comment: jsonb subscripting does not support slices
+  - sql: |
+      SELECT id FROM sub_t WHERE jsonb_field['key'] = '"value"' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: subscript result is jsonb, so compare against a jsonb string literal
+  - sql: |
+      SELECT id FROM sub_t WHERE jsonb_field['key'] = 'value' ORDER BY id
+    expect: error
+    sqlstate: "22P02"
+    comment: the unquoted text is not valid jsonb input

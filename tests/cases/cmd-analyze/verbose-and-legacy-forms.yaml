@@ -1,0 +1,45 @@
+# VERBOSE in the option list and in the legacy syntax both run; ANALYZE is also allowed inside a transaction block.
+id: cmd-analyze.verbose-and-legacy-forms
+title: "ANALYZE VERBOSE in option and legacy forms, and inside a transaction block"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, verbose, legacy-syntax, transactions]
+required_capabilities: [create-table, insert, select, transactions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Parameters: VERBOSE; Compatibility: legacy syntax)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_vb (id int4, v text);
+  INSERT INTO an_vb SELECT g, 'v' || g FROM generate_series(1, 10) g;
+steps:
+  - sql: |
+      ANALYZE (VERBOSE) an_vb
+    expect: ok
+    compare_message: false
+    comment: progress messages at INFO level; their timings are not deterministic
+  - sql: |
+      ANALYZE (VERBOSE OFF, SKIP_LOCKED 0) an_vb
+    expect: ok
+  - sql: |
+      ANALYZE (VERBOSE ON, SKIP_LOCKED TRUE) an_vb
+    expect: ok
+    compare_message: false
+  - sql: |
+      ANALYZE VERBOSE an_vb
+    expect: ok
+    compare_message: false
+    comment: pre-PostgreSQL 11 syntax still accepted
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ANALYZE an_vb
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_vb' ORDER BY attname
+    expect: rows
+    order: ordered

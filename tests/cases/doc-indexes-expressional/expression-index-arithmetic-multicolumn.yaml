@@ -1,0 +1,44 @@
+# Expression indexes on arithmetic and mixed column/expression keys, with NULL propagation.
+id: doc-indexes-expressional.expression-index-arithmetic-multicolumn
+title: Expression indexes on arithmetic and a mixed column/expression key return correct rows with NULL propagation
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, multicolumn-index, arithmetic, null-semantics]
+required_capabilities: [create-table, create-index, insert, select]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (index column may be any scalar expression of the table)"
+sessions: [a]
+setup: |
+  CREATE TABLE m (id int4 PRIMARY KEY, a int4, b int4, c text);
+  INSERT INTO m VALUES (1, 2, 3, 'x'), (2, 1, 1, 'X'), (3, NULL, 5, 'x'), (4, 0, 5, NULL);
+  CREATE INDEX m_sum_idx ON m ((a + b));
+  CREATE INDEX m_id_lower_idx ON m (id, lower(c));
+steps:
+  - sql: |
+      SELECT id FROM m WHERE a + b = 5 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM m WHERE a + b IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL in either operand makes the sum NULL
+  - sql: |
+      SELECT id, a + b AS s FROM m ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM m WHERE a + b > 0 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM m WHERE id = 2 AND lower(c) = 'x'
+    expect: rows
+    order: multiset
+    comment: a mixed key (column, expression) serves a conjunctive predicate
+  - sql: |
+      SELECT id FROM m WHERE id IN (3, 4) AND lower(c) = 'x' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 4 has a NULL c, so its lowered key is NULL and it is excluded

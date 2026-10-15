@@ -1,0 +1,29 @@
+# The ON clause accepts a schema-qualified table; an unqualified name resolves through search_path and can miss it.
+id: cmd-alter-trigger.schema-qualified-table
+title: "ALTER TRIGGER resolves the table name through the schema qualifier"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, rename, schemas, search-path]
+required_capabilities: [create-schema, create-table, select, triggers, plpgsql, create-function, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (Parameters: table_name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE TABLE s1.st (id int4);
+  CREATE FUNCTION ath_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TRIGGER st_trg AFTER INSERT ON s1.st FOR EACH ROW EXECUTE FUNCTION ath_noop();
+steps:
+  - sql: |
+      ALTER TRIGGER st_trg ON s1.st RENAME TO st_renamed
+    expect: ok
+  - sql: |
+      ALTER TRIGGER st_renamed ON st RENAME TO st_bad
+    expect: error
+    sqlstate: "42P01"
+    comment: unqualified st is looked up in search_path (public), where it does not exist
+  - sql: |
+      SELECT n.nspname, c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE NOT t.tgisinternal ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered

@@ -1,0 +1,33 @@
+# Index expressions and predicates must use immutable functions and may not contain subqueries.
+id: cmd-create-index.errors-immutable-and-predicate
+title: Volatile or stable functions and subqueries are rejected in index expressions and predicates
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, expression-index, partial-index, immutability, errors]
+required_capabilities: [create-table, create-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Description: All functions and operators used in an index definition must be immutable; WHERE may not contain subqueries)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, rating int4);
+steps:
+  - sql: |
+      CREATE INDEX f_now ON films ((now()::text))
+    expect: error
+    sqlstate: "42P17"
+    comment: now() is stable, not immutable
+  - sql: |
+      CREATE INDEX f_rand ON films (rating) WHERE random() > 2
+    expect: error
+    sqlstate: "42P17"
+    comment: volatile functions are not allowed in predicates
+  - sql: |
+      CREATE INDEX f_sub ON films (id) WHERE (SELECT 1) = 1
+    expect: error
+    sqlstate: "0A000"
+    comment: subqueries are not allowed in the predicate
+  - sql: |
+      CREATE INDEX ON films ((lower(title)))
+    expect: ok
+    comment: lower() is immutable and is accepted

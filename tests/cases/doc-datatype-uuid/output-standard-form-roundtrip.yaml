@@ -1,0 +1,33 @@
+# Stored values are printed in standard form regardless of how they were typed; text round-trips back to uuid.
+id: doc-datatype-uuid.output-standard-form-roundtrip
+title: Stored uuid values print as lower-case 36-character standard form
+family: doc-datatype-uuid
+tier: core
+feature_ids: [uuid, uuid-output, insert, select]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-uuid (output is always in the standard form)"
+setup: |
+  CREATE TABLE u_out (ord int4 PRIMARY KEY, id uuid NOT NULL);
+  INSERT INTO u_out VALUES
+    (1, 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11'),
+    (2, '{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12}'),
+    (3, 'a0eebc999c0b4ef8bb6d6bb9bd380a13'),
+    (4, 'a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a14');
+steps:
+  - sql: |
+      SELECT ord, id::text AS canon, length(id::text) AS len, id::text = lower(id::text) AS is_lower
+      FROM u_out ORDER BY ord
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ord FROM u_out WHERE id::text = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13'
+    expect: rows
+    order: ordered
+    comment: text comparison uses the canonical form only
+  - sql: |
+      SELECT ord FROM u_out WHERE id = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13'::text::uuid
+    expect: rows
+    order: ordered
+    comment: text -> uuid -> compare round-trips

@@ -1,0 +1,23 @@
+# SORTOP declares a MIN-like aggregate: the sort operator is recorded in pg_aggregate.aggsortop and
+# the aggregate result equals the first element under that operator's ordering.
+id: cmd-create-aggregate.sortop-min-like
+title: "SORTOP is recorded in pg_aggregate and a MIN-like aggregate returns the smallest non-null value"
+family: cmd-create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, sort-operator, min-max]
+required_capabilities: [create-table, insert, select, aggregates, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (sort_operator)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE AGGREGATE mymin (int4) (sfunc = int4smaller, stype = int4, sortop = <);
+steps:
+  - sql: |
+      SELECT mymin(x) FROM t
+    expect: rows
+    comment: NULL ignored; smallest of 1, 5, 7
+  - sql: |
+      SELECT aggsortop::regoperator::text FROM pg_aggregate WHERE aggfnoid = 'mymin'::regproc
+    expect: rows

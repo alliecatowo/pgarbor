@@ -1,0 +1,35 @@
+# Documented: it is not necessary to provide both functions; a transform may have only FROM SQL or only TO SQL.
+id: cmd-create-transform.one-direction-only
+title: "A transform may define only the FROM SQL direction, and OR REPLACE with only TO SQL drops the other direction"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, transform-from-sql, transform-to-sql, create-or-replace]
+required_capabilities: [create-transform, create-function, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-description"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ct_from_int(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+  CREATE FUNCTION ct_to_int(val internal) RETURNS int4 LANGUAGE internal IMMUTABLE STRICT AS 'int4recv';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_from_int(internal))
+    expect: ok
+  - sql: |
+      SELECT trffromsql IS NOT NULL AS has_from, trftosql IS NULL AS no_to
+        FROM pg_transform WHERE trftype = 'int4'::regtype
+    expect: rows
+  - sql: |
+      CREATE OR REPLACE TRANSFORM FOR int4 LANGUAGE sql (TO SQL WITH FUNCTION ct_to_int(internal))
+    expect: ok
+    comment: OR REPLACE replaces the whole definition, so the FROM SQL direction is gone
+  - sql: |
+      SELECT trffromsql IS NULL AS no_from, trftosql IS NOT NULL AS has_to
+        FROM pg_transform WHERE trftype = 'int4'::regtype
+    expect: rows
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_from_int(internal))
+    expect: error
+    sqlstate: "42710"
+    comment: plain CREATE does not replace an existing transform

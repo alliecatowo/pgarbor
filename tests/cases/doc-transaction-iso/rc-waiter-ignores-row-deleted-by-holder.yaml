@@ -1,0 +1,41 @@
+# Read Committed: if the first updater deletes the row and commits, the waiting UPDATE ignores that row.
+id: doc-transaction-iso.rc-waiter-ignores-row-deleted-by-holder
+title: READ COMMITTED waiting UPDATE affects zero rows when the holder deleted the row
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, read-committed, row-locks, update, delete]
+required_capabilities: [create-table, insert, select, update, delete, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#xact-read-committed"
+sessions: [a, b]
+setup: |
+  CREATE TABLE doc_del (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO doc_del VALUES (1, 1), (2, 2);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      DELETE FROM doc_del WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE doc_del SET v = 50 WHERE id = 1
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: UPDATE 0 because the deleted row is skipped
+  - session: b
+    sql: |
+      SELECT id, v FROM doc_del ORDER BY id
+    expect: rows
+    order: ordered

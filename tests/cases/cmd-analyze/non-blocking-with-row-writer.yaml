@@ -1,0 +1,38 @@
+# ANALYZE needs only a read lock, so it runs while another transaction holds uncommitted row writes; it samples committed rows only.
+id: cmd-analyze.non-blocking-with-row-writer
+title: "ANALYZE does not wait for an open transaction that has inserted rows"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, row-exclusive-lock, multi-session, transactions]
+required_capabilities: [create-table, insert, select, transactions, multi-session, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Notes: requires only a read lock)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE an_live (id int4);
+  INSERT INTO an_live VALUES (1), (2), (3);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO an_live VALUES (4)
+    expect: ok
+  - session: b
+    sql: |
+      ANALYZE an_live
+    expect: ok
+    comment: completes immediately, no expect_blocked
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM an_live
+    expect: rows
+    order: ordered
+    comment: the rolled back row is not visible

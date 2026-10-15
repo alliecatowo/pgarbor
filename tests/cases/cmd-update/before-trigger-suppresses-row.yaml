@@ -1,0 +1,30 @@
+# A BEFORE UPDATE trigger that returns NULL suppresses that row, so the command count is lower than matches.
+id: cmd-update.before-trigger-suppresses-row
+title: BEFORE UPDATE trigger returning NULL skips rows and lowers the UPDATE count
+family: cmd-update
+tier: core
+feature_ids: [update, triggers, before-trigger, command-tag]
+required_capabilities: [create-table, insert, select, update, triggers, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (Outputs: count may be less than matched rows when a BEFORE UPDATE trigger suppresses updates)"
+sessions: [a]
+setup: |
+  CREATE TABLE ttrig (id int, v text);
+  INSERT INTO ttrig VALUES (1, 'keep'), (2, 'change'), (3, 'keep');
+  CREATE FUNCTION skip_some() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF OLD.v = 'keep' THEN RETURN NULL; END IF;
+    NEW.v := upper(NEW.v);
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER tb BEFORE UPDATE ON ttrig FOR EACH ROW EXECUTE FUNCTION skip_some()
+steps:
+  - sql: |
+      UPDATE ttrig SET v = v || '!'
+    expect: ok
+    comment: three rows match, but the trigger suppresses two, so count 1
+  - sql: |
+      SELECT id, v FROM ttrig ORDER BY id
+    expect: rows
+    order: ordered

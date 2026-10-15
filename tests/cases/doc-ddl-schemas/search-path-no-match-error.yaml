@@ -1,0 +1,43 @@
+# A name that exists only in a schema missing from search_path is an undefined_table error, even
+# though the object exists elsewhere in the database.
+id: doc-ddl-schemas.search-path-no-match-error
+title: Unqualified name outside search_path is an undefined_table error
+family: doc-ddl-schemas
+tier: core
+feature_ids: [search-path, qualified-names, errors, create-schema]
+required_capabilities: [create-schema, create-table, insert, select, errors, guc]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-path (If there is no match in the search path, an error is reported, even if matching table names exist in other schemas)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE TABLE s1.only_here (x int4);
+  INSERT INTO s1.only_here VALUES (7);
+steps:
+  - sql: |
+      SET search_path TO public
+    expect: ok
+  - sql: |
+      SELECT x FROM only_here
+    expect: error
+    sqlstate: "42P01"
+    comment: the table exists in s1, which is not on the path
+  - sql: |
+      SET search_path TO s2, public
+    expect: ok
+  - sql: |
+      SELECT x FROM only_here
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT x FROM s1.only_here
+    expect: rows
+    comment: the qualified name finds it
+  - sql: |
+      SET search_path TO s1
+    expect: ok
+  - sql: |
+      SELECT x FROM only_here
+    expect: rows
+    comment: adding s1 to the path makes the unqualified name resolve

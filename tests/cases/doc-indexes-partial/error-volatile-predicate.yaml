@@ -1,0 +1,30 @@
+# A partial index predicate must be immutable; now() (stable) and random() (volatile) are rejected, and the failed CREATE INDEX leaves no index.
+id: doc-indexes-partial.error-volatile-predicate
+title: Partial index predicates reject stable and volatile functions with SQLSTATE 42P17
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, create-index, predicate-definition, volatility, errors]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial (predicates must match query WHERE; immutable requirement from create_index)"
+sessions: [a]
+setup: |
+  CREATE TABLE ts (id int, created timestamptz);
+  CREATE TABLE vol (id int);
+steps:
+  - sql: |
+      CREATE INDEX ts_bad ON ts (id) WHERE created < now()
+    expect: error
+    sqlstate: "42P17"
+    comment: now() is STABLE, not IMMUTABLE
+  - sql: |
+      CREATE INDEX vol_bad ON vol (id) WHERE id > random()::int
+    expect: error
+    sqlstate: "42P17"
+    comment: random() is VOLATILE
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename IN ('ts', 'vol') ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: neither failed CREATE INDEX left an index behind

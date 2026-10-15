@@ -1,0 +1,37 @@
+# Strategy numbers must be within the index method's range; sort-support functions must take internal.
+id: cmd-alter-opfamily.strategy-and-support-number-range
+title: Out-of-range btree strategy numbers and a bad sort-support function are rejected
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, add-members, strategy-number, support-number, errors]
+required_capabilities: [alter-operator-family, create-operator-family, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Parameters: strategy_number, support_number, op_type)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_range USING btree;
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_range USING btree ADD OPERATOR 0 < (int4, int4)
+    expect: error
+    sqlstate: "42P17"
+    comment: btree strategies are 1..5
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_range USING btree ADD OPERATOR 6 < (int4, int4)
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_range USING btree ADD FUNCTION 2 btint4cmp(int4, int4)
+    expect: error
+    sqlstate: "42P17"
+    comment: btree support function 2 is the sort-support slot, which must accept internal
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_range USING btree ADD FUNCTION 1 btint4cmp(int8, text)
+    expect: error
+    sqlstate: "42883"
+    comment: the named function must exist with the given argument types
+  - sql: |
+      SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_range'
+    expect: rows
+    comment: none of the rejected statements left a member behind

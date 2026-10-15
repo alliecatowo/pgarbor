@@ -1,0 +1,38 @@
+# CALL invokes a procedure; an INOUT parameter returns its final value to the caller, and calling
+# with the wrong number of arguments fails to resolve the procedure.
+id: doc-ddl-others.procedure-call-inout
+title: CALL returns INOUT parameters and rejects an argument count with no matching procedure
+family: doc-ddl-others
+tier: core
+feature_ids: [procedures, create-procedure, call, inout-parameters, errors]
+required_capabilities: [create-table, create-procedure, plpgsql, call, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-others (Functions, procedures, and operators); ref: sql-call.html"
+sessions: [a]
+setup: |
+  CREATE TABLE sink (id int4, label text);
+  CREATE PROCEDURE add_item(IN p_id int4, INOUT p_name text) LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO sink VALUES (p_id, p_name);
+    p_name := upper(p_name);
+  END
+  $$;
+steps:
+  - sql: |
+      CALL add_item(50, 'proc')
+    expect: rows
+    comment: the INOUT value is returned as a one-row result
+  - sql: |
+      CALL add_item(51, NULL)
+    expect: rows
+    comment: a NULL INOUT argument stays NULL after upper()
+  - sql: |
+      SELECT id, label FROM sink ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      CALL add_item(1)
+    expect: error
+    sqlstate: "42883"
+    comment: no procedure matches one argument

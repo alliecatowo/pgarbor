@@ -1,0 +1,39 @@
+# Candidate switches only when the candidate converts implicitly one way and not back. Two-way
+# implicit pairs (varchar/text) keep the candidate, which is the leftmost non-unknown input.
+id: doc-typeconv-union-case.preferred-type-widening
+title: UNION widening between integer, float8, int8, numeric and varchar/text
+family: doc-typeconv-union-case
+tier: core
+feature_ids: [union, type-resolution, numeric, float, string]
+required_capabilities: [select, union, numeric, float8, text]
+provenance:
+  source: pg-docs
+  ref: "typeconv.sgml#typeconv-union-case (Select the first non-unknown input type as the candidate; convert if one-way implicit)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_typeof(x) FROM (SELECT 1::int4 UNION SELECT 2::float8) s(x) LIMIT 1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT pg_typeof(x) FROM (SELECT 1::float8 UNION SELECT 1::int4) s(x) LIMIT 1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT pg_typeof(x) FROM (SELECT 1::int8 UNION SELECT 1.5::numeric) s(x) LIMIT 1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT pg_typeof(x) FROM (SELECT 1::int4 UNION SELECT 1) s(x) LIMIT 1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT pg_typeof(x) FROM (SELECT 'x'::varchar UNION SELECT 'y'::text) s(x) LIMIT 1
+    expect: rows
+    order: multiset
+    comment: varchar and text convert to each other implicitly, so the leftmost candidate stays varchar
+  - sql: |
+      SELECT pg_typeof(x) FROM (SELECT 'x'::text UNION SELECT 'y'::varchar) s(x) LIMIT 1
+    expect: rows
+    order: multiset
+    comment: the mirror order keeps text

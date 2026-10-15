@@ -1,0 +1,38 @@
+# Renaming onto an existing name in the same schema fails (including renaming to itself); other schemas do not conflict.
+id: cmd-alter-collation.rename-conflict
+title: "ALTER COLLATION RENAME conflicts only within the collation's own schema"
+family: cmd-alter-collation
+tier: core
+feature_ids: [alter-collation, rename-collation, name-conflicts, errors]
+required_capabilities: [create-collation, create-schema, alter-collation, icu-provider, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_collation.sgml#sql-altercollation (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cmd_rc_other;
+  CREATE COLLATION cmd_rc_a (provider = icu, locale = 'und-x-icu');
+  CREATE COLLATION cmd_rc_b (provider = icu, locale = 'und-x-icu');
+  CREATE COLLATION cmd_rc_other.cmd_rc_a (provider = icu, locale = 'und-x-icu');
+steps:
+  - sql: |
+      ALTER COLLATION cmd_rc_a RENAME TO cmd_rc_b
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      ALTER COLLATION cmd_rc_a RENAME TO cmd_rc_a
+    expect: error
+    sqlstate: "42710"
+    comment: renaming a collation to its own name also conflicts
+  - sql: |
+      ALTER COLLATION cmd_rc_other.cmd_rc_a RENAME TO cmd_rc_b
+    expect: ok
+    comment: the target name is free in cmd_rc_other, so this succeeds even though public has cmd_rc_b
+  - sql: |
+      ALTER COLLATION cmd_rc_a RENAME TO cmd_rc_c
+    expect: ok
+  - sql: |
+      SELECT n.nspname, c.collname FROM pg_collation c JOIN pg_namespace n ON n.oid = c.collnamespace
+        WHERE c.collname LIKE 'cmd\_rc\_%' ORDER BY 1, 2
+    expect: rows
+    order: ordered

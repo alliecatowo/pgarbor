@@ -1,0 +1,38 @@
+# A rename keeps the schema's ACL and the views that reference its objects (stored by OID); the old name no longer allows creation.
+id: cmd-alter-schema.grants-and-views-survive-rename
+title: Schema grants and dependent views keep working after RENAME TO
+family: cmd-alter-schema
+tier: core
+feature_ids: [alter-schema, rename, privileges, views]
+required_capabilities: [create-schema, create-role, create-table, create-view, insert, alter-schema, grant, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_schema.sgml#sql-alterschema (Synopsis: RENAME TO)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_as_g NOLOGIN;
+  CREATE SCHEMA cmd_as_gv;
+  CREATE TABLE cmd_as_gv.base (id int4);
+  INSERT INTO cmd_as_gv.base VALUES (2), (1);
+  CREATE VIEW cmd_as_gv.v AS SELECT id FROM cmd_as_gv.base;
+  GRANT USAGE ON SCHEMA cmd_as_gv TO cmd_as_g;
+steps:
+  - sql: |
+      ALTER SCHEMA cmd_as_gv RENAME TO cmd_as_gv2
+    expect: ok
+  - sql: |
+      SELECT id FROM cmd_as_gv2.v ORDER BY id
+    expect: rows
+    order: ordered
+    comment: view resolves its base table by OID
+  - sql: |
+      SELECT has_schema_privilege('cmd_as_g', 'cmd_as_gv2', 'USAGE') AS usage_kept
+    expect: rows
+  - sql: |
+      CREATE TABLE cmd_as_gv.more (id int4)
+    expect: error
+    sqlstate: "3F000"
+    comment: the old name no longer resolves for creation
+  - sql: |
+      DROP VIEW cmd_as_gv2.v; DROP TABLE cmd_as_gv2.base; DROP SCHEMA cmd_as_gv2; DROP ROLE cmd_as_g
+    expect: ok

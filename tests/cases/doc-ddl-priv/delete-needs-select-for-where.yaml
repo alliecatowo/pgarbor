@@ -1,0 +1,49 @@
+# DELETE without a WHERE clause needs only DELETE; a WHERE clause reads columns and needs SELECT too. TRUNCATE is separate.
+id: doc-ddl-priv.delete-needs-select-for-where
+title: DELETE privilege alone suffices without WHERE, while WHERE and TRUNCATE need more grants
+family: doc-ddl-priv
+tier: core
+feature_ids: [delete, truncate, select, grant, privileges, errors]
+required_capabilities: [create-table, insert, select, delete, truncate, roles, errors, order-by]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (DELETE: any nontrivial DELETE command will require SELECT; TRUNCATE: allows TRUNCATE on a table)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_dl_rw;
+  CREATE TABLE dl_t (a int4);
+  INSERT INTO dl_t VALUES (1), (2), (3);
+  GRANT DELETE ON dl_t TO ddp_dl_rw;
+steps:
+  - sql: |
+      SET ROLE ddp_dl_rw
+    expect: ok
+  - sql: |
+      DELETE FROM dl_t WHERE a = 1
+    expect: error
+    sqlstate: "42501"
+    comment: the WHERE clause reads column a, so SELECT is needed
+  - sql: |
+      TRUNCATE dl_t
+    expect: error
+    sqlstate: "42501"
+    comment: DELETE does not imply TRUNCATE
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT SELECT ON dl_t TO ddp_dl_rw
+    expect: ok
+  - sql: |
+      SET ROLE ddp_dl_rw
+    expect: ok
+  - sql: |
+      DELETE FROM dl_t WHERE a = 1
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT a FROM dl_t ORDER BY a
+    expect: rows
+    order: ordered

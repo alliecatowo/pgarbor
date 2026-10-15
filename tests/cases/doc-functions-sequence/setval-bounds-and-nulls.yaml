@@ -1,0 +1,40 @@
+# setval rejects values outside MINVALUE..MAXVALUE (22003) and bigint overflow; strict NULL handling for nextval and setval; setval to the maximum makes the next nextval fail.
+id: doc-functions-sequence.setval-bounds-and-nulls
+title: setval range errors, bigint overflow, NULL inputs, and nextval after setval to MAXVALUE
+family: doc-functions-sequence
+tier: core
+feature_ids: [setval, nextval, null-semantics, errors, bounds]
+required_capabilities: [sequences, select, errors, null-semantics]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (setval, nextval; sequence parameters MINVALUE/MAXVALUE)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_b;
+steps:
+  - sql: |
+      SELECT setval('s_b', 0)
+    expect: error
+    sqlstate: "22003"
+    comment: default minimum is 1
+  - sql: |
+      SELECT setval('s_b', '99999999999999999999'::bigint)
+    expect: error
+    sqlstate: "22003"
+    comment: the literal does not fit in bigint
+  - sql: |
+      SELECT nextval(NULL::regclass) IS NULL AS n, setval(NULL::regclass, 5) IS NULL AS s, setval('s_b', NULL) IS NULL AS sn
+    expect: rows
+    comment: nextval and setval are strict, so a NULL argument yields NULL
+  - sql: |
+      SELECT nextval('s_b') AS v
+    expect: rows
+    comment: the failed and NULL setval calls had no effect
+  - sql: |
+      SELECT setval('s_b', 9223372036854775807) AS v
+    expect: rows
+  - sql: |
+      SELECT nextval('s_b') AS v
+    expect: error
+    sqlstate: "2200H"
+    comment: setval to MAXVALUE with is_called true means the next nextval reaches the maximum

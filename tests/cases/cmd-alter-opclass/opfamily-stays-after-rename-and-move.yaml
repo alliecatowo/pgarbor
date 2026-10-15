@@ -1,0 +1,42 @@
+# CREATE OPERATOR CLASS without FAMILY also creates a same-named operator family; RENAME TO and SET SCHEMA change only the opclass, so the family keeps its name and schema.
+id: cmd-alter-opclass.opfamily-stays-after-rename-and-move
+title: "RENAME TO and SET SCHEMA leave the operator family behind, so a same-named new opclass collides with it"
+family: cmd-alter-opclass
+tier: extended
+feature_ids: [alter-operator-class, operator-family, rename, set-schema]
+required_capabilities: [create-operator-class, alter-operator-class, create-schema, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (RENAME TO new_name; SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR CLASS aoc_cmd_f15 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  CREATE SCHEMA aoc_cmd_s15;
+steps:
+  - sql: |
+      SELECT f.opfname, n.nspname FROM pg_opclass c JOIN pg_opfamily f ON f.oid = c.opcfamily JOIN pg_namespace n ON n.oid = f.opfnamespace WHERE c.opcname = 'aoc_cmd_f15'
+    expect: rows
+    order: ordered
+    comment: the implicit family has the opclass name, in public
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_f15 USING btree RENAME TO aoc_cmd_f15b
+    expect: ok
+  - sql: |
+      SELECT f.opfname, n.nspname FROM pg_opclass c JOIN pg_opfamily f ON f.oid = c.opcfamily JOIN pg_namespace n ON n.oid = f.opfnamespace WHERE c.opcname = 'aoc_cmd_f15b'
+    expect: rows
+    order: ordered
+    comment: the family did not follow the rename
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_f15b USING btree SET SCHEMA aoc_cmd_s15
+    expect: ok
+  - sql: |
+      SELECT f.opfname, n.nspname, c.opcname, nc.nspname FROM pg_opclass c JOIN pg_namespace nc ON nc.oid = c.opcnamespace JOIN pg_opfamily f ON f.oid = c.opcfamily JOIN pg_namespace n ON n.oid = f.opfnamespace WHERE c.opcname LIKE 'aoc_cmd_f15%' ORDER BY 1, 2, 3, 4
+    expect: rows
+    order: ordered
+    comment: family still in public under its old name; opclass now in aoc_cmd_s15
+  - sql: |
+      CREATE OPERATOR CLASS aoc_cmd_f15 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4)
+    expect: error
+    sqlstate: "23505"
+    compare_message: false
+    comment: the new opclass reuses the surviving family, whose btree strategy-1 entry already exists

@@ -1,0 +1,41 @@
+# Documented privilege-type restrictions and object lookup failures in the has_*_privilege family.
+id: doc-functions-info.privilege-inquiry-errors
+title: Privilege inquiry functions reject privilege types not allowed for the object kind
+family: doc-functions-info
+tier: core
+feature_ids: [privilege-inquiry, sequences, types]
+required_capabilities: [create-table, select, privileges, sequences]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (Access Privilege Inquiry Functions: allowable privilege types)"
+sessions: [a]
+setup: |
+  CREATE TABLE priv_e (id int);
+  CREATE SEQUENCE seq_e;
+steps:
+  - sql: |
+      SELECT has_sequence_privilege('seq_e', 'SELECT, USAGE, UPDATE') AS seq_ok
+    expect: rows
+    comment: documented sequence privileges are USAGE, SELECT and UPDATE
+  - sql: |
+      SELECT has_table_privilege('priv_e', 'USAGE')
+    expect: error
+    sqlstate: "22023"
+    comment: USAGE is not a table privilege
+  - sql: |
+      SELECT has_table_privilege('priv_e', 'SELECT, bogus')
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT has_table_privilege('no_such_table_fi', 'SELECT')
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT has_sequence_privilege('no_such_seq_fi', 'USAGE')
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT has_type_privilege('int4', 'SELECT')
+    expect: error
+    sqlstate: "22023"
+    comment: the only allowable type privilege is USAGE

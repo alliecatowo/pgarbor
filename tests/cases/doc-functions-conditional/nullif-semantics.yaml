@@ -1,0 +1,43 @@
+# NULLIF returns NULL when its arguments are equal, otherwise its first argument; documented inverse of COALESCE.
+id: doc-functions-conditional.nullif-semantics
+title: NULLIF returns NULL on equality, the first argument otherwise, and resolves to the promoted type
+family: doc-functions-conditional
+tier: core
+feature_ids: [nullif, null-semantics, type-resolution, errors]
+required_capabilities: [select, create-table, insert, arrays, numeric, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-nullif (documented SELECT NULLIF(value, '(none)') example and NULLIF(1, 2.2) type note)"
+sessions: [a]
+setup: |
+  CREATE TABLE notes (id int4, value text);
+  INSERT INTO notes VALUES (1, '(none)'), (2, 'x'), (3, NULL);
+steps:
+  - sql: |
+      SELECT id, NULLIF(value, '(none)') AS v FROM notes ORDER BY id
+    expect: rows
+    order: ordered
+    comment: documented example; the sentinel becomes NULL, other values pass through
+  - sql: |
+      SELECT NULLIF('x', 'x') IS NULL AS equal_is_null, NULLIF('x', 'y') AS not_equal, NULLIF(NULL::text, 'x') IS NULL AS null_first, NULLIF('x', NULL::text) AS null_second
+    expect: rows
+    order: multiset
+    comment: when the comparison is NULL, the first argument is returned
+  - sql: |
+      SELECT NULLIF(0, 0) IS NULL AS zero_equal, NULLIF(1, NULL) AS one
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT NULLIF(ARRAY[1, 2], ARRAY[1, 2]) IS NULL AS arr_equal
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT NULLIF(1, 2.2) AS v, pg_typeof(NULLIF(1, 2.2))::text AS t
+    expect: rows
+    order: multiset
+    comment: documented note; result is numeric because only numeric = numeric exists
+  - sql: |
+      SELECT NULLIF(1, 'abc') AS bad
+    expect: error
+    sqlstate: "22P02"
+    comment: the unknown literal must be coerced to integer for the comparison

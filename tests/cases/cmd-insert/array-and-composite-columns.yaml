@@ -1,0 +1,39 @@
+# Array subscripts in the column list and array literal values, and qualifying a composite column's subfield.
+# Inserting into only some fields of a composite leaves the other fields NULL.
+id: cmd-insert.array-and-composite-columns
+title: Array column with subscripted target and literal values, and composite subfield insert
+family: cmd-insert
+tier: extended
+feature_ids: [insert, arrays, composite-types]
+required_capabilities: [create-table, insert, select, arrays, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-insert (column_name subfield/array subscript; Examples: inserts into array columns)"
+sessions: [a]
+setup: |
+  CREATE TYPE pt AS (x int, y text);
+  CREATE TABLE tictactoe (game int PRIMARY KEY, board text[][]);
+  CREATE TABLE ct (k int, c pt);
+steps:
+  - sql: |
+      INSERT INTO tictactoe (game, board[1:3][1:3]) VALUES (1, '{{" "," "," "},{" "," "," "},{" "," "," "}}')
+    expect: ok
+    comment: the subscripts in the target column are accepted
+  - sql: |
+      INSERT INTO tictactoe (game, board) VALUES (2, '{{X," "," "},{" ",O," "},{" ",X," "}}')
+    expect: ok
+  - sql: |
+      SELECT game, board[2][2] AS center, array_length(board, 1) AS rows, board[1:1][1:3] AS first_row FROM tictactoe ORDER BY game
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO ct (k, c.x) VALUES (1, 5) RETURNING k, c
+    expect: rows
+    comment: the unnamed subfield y is left NULL
+  - sql: |
+      INSERT INTO ct (k, c.x, c.y) VALUES (2, 6, 'six') RETURNING k, c
+    expect: rows
+  - sql: |
+      SELECT k, (c).x AS x, (c).y IS NULL AS y_null FROM ct ORDER BY k
+    expect: rows
+    order: ordered

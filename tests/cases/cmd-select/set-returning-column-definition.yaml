@@ -1,0 +1,36 @@
+# Functions in FROM: a SETOF composite function, and a SETOF record function that needs a column definition list.
+id: cmd-select.set-returning-column-definition
+title: FROM-clause functions with composite return type and with column definition list
+family: cmd-select
+tier: extended
+feature_ids: [select, from, functions, set-returning-functions, record-type]
+required_capabilities: [create-table, insert, select, create-function, set-returning-functions]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-from (distributors and distributors_2 function examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did int4 PRIMARY KEY, name text);
+  INSERT INTO distributors VALUES (111, 'Walt Disney'), (112, 'Warner Bros.');
+  CREATE FUNCTION distributors(int) RETURNS SETOF distributors AS $$
+      SELECT * FROM distributors WHERE did = $1;
+  $$ LANGUAGE SQL;
+  CREATE FUNCTION distributors_2(int) RETURNS SETOF record AS $$
+      SELECT * FROM distributors WHERE did = $1;
+  $$ LANGUAGE SQL;
+steps:
+  - sql: |
+      SELECT * FROM distributors(111)
+    expect: rows
+    order: multiset
+    comment: composite return type supplies the column list
+  - sql: |
+      SELECT * FROM distributors_2(111) AS (f1 int, f2 text)
+    expect: rows
+    order: multiset
+    comment: record return type needs the column definition list
+  - sql: |
+      SELECT * FROM distributors_2(111)
+    expect: error
+    sqlstate: "42601"
+    comment: no column definition list for a record-returning function 

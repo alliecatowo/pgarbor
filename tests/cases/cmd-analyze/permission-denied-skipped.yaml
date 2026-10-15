@@ -1,0 +1,34 @@
+# A role without MAINTAIN on the table is skipped with a WARNING, not an error.
+id: cmd-analyze.permission-denied-skipped
+title: "ANALYZE by a role without MAINTAIN skips the table with a warning"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, privileges, maintain, roles]
+required_capabilities: [create-table, insert, select, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Notes: MAINTAIN privilege; will skip over tables)"
+sessions: [a]
+setup: |
+  CREATE ROLE an_outsider;
+  CREATE TABLE an_perm (id int4);
+  INSERT INTO an_perm VALUES (1), (2);
+steps:
+  - sql: |
+      SET ROLE an_outsider
+    expect: ok
+  - sql: |
+      ANALYZE an_perm
+    expect: ok
+    comment: WARNING permission denied to analyze, skipping it
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_perm'
+    expect: rows
+    order: ordered
+    comment: nothing was analyzed
+  - sql: |
+      DROP ROLE an_outsider
+    expect: ok

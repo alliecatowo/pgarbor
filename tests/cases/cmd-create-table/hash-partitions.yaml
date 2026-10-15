@@ -1,0 +1,43 @@
+# Hash partitioning: MODULUS/REMAINDER children together hold every row exactly once.
+id: cmd-create-table.hash-partitions
+title: Hash partitions with MODULUS and REMAINDER split rows across children with no loss or duplication
+family: cmd-create-table
+tier: core
+feature_ids: [create-table, partitioning, hash-partitioning, partition-of]
+required_capabilities: [create-table, insert, select, partitioning, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_table.sgml#sql-createtable-examples (Create a hash partitioned table; Create partitions of a hash partitioned table)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE orders (
+          order_id     bigint not null,
+          cust_id      bigint not null,
+          status       text
+      ) PARTITION BY HASH (order_id)
+    expect: ok
+  - sql: |
+      CREATE TABLE orders_p1 PARTITION OF orders FOR VALUES WITH (MODULUS 4, REMAINDER 0);
+      CREATE TABLE orders_p2 PARTITION OF orders FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+      CREATE TABLE orders_p3 PARTITION OF orders FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+      CREATE TABLE orders_p4 PARTITION OF orders FOR VALUES WITH (MODULUS 4, REMAINDER 3)
+    expect: ok
+  - sql: |
+      INSERT INTO orders SELECT g, g % 5, 'new' FROM generate_series(1, 20) AS g
+    expect: ok
+  - sql: |
+      SELECT count(*) AS total FROM orders
+    expect: rows
+  - sql: |
+      SELECT (SELECT count(*) FROM orders_p1) + (SELECT count(*) FROM orders_p2) + (SELECT count(*) FROM orders_p3) + (SELECT count(*) FROM orders_p4) AS across_partitions
+    expect: rows
+    comment: the four children together hold the same 20 rows
+  - sql: |
+      SELECT count(*) FROM orders WHERE order_id IS NULL
+    expect: rows
+  - sql: |
+      INSERT INTO orders (order_id, cust_id) VALUES (NULL, 1)
+    expect: error
+    sqlstate: "23502"
+    comment: partition key column is declared NOT NULL

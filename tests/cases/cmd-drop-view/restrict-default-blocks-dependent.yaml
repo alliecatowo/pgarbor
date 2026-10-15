@@ -1,0 +1,32 @@
+# Default (RESTRICT) refuses to drop a view that another view depends on; explicit RESTRICT behaves identically.
+id: cmd-drop-view.restrict-default-blocks-dependent
+title: DROP VIEW without CASCADE refuses when a dependent view exists, with and without explicit RESTRICT
+family: cmd-drop-view
+tier: core
+feature_ids: [drop-view, restrict, dependencies]
+required_capabilities: [create-table, insert, create-view, drop-view, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_view.sgml#sql-dropview (RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE rd_base (id int4);
+  INSERT INTO rd_base VALUES (1), (2);
+  CREATE VIEW rd_v1 AS SELECT id FROM rd_base;
+  CREATE VIEW rd_v2 AS SELECT id FROM rd_v1;
+steps:
+  - sql: |
+      DROP VIEW rd_v1
+    expect: error
+    sqlstate: "2BP01"
+    comment: default is RESTRICT; DETAIL view rd_v2 depends on view rd_v1
+  - sql: |
+      DROP VIEW rd_v1 RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT is the same as the default
+  - sql: |
+      SELECT id FROM rd_v2 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both views survive the refused drops

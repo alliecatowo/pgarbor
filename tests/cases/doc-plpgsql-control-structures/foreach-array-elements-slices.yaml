@@ -1,0 +1,99 @@
+# FOREACH over array elements in storage order, SLICE iteration, composite element targets, and array error cases.
+id: doc-plpgsql-control-structures.foreach-array-elements-slices
+title: "FOREACH walks elements or SLICEs in storage order; empty arrays run zero times; bad SLICE and NULL raise errors"
+family: doc-plpgsql-control-structures
+tier: extended
+feature_ids: [plpgsql, foreach, arrays, slices, composite-types, errors]
+required_capabilities: [plpgsql, create-function, create-type, arrays, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Looping through Arrays)"
+sessions: [a]
+setup: |
+  CREATE TYPE pt AS (a int, b text);
+  CREATE FUNCTION pl_sum_arr(int[]) RETURNS int8 LANGUAGE plpgsql AS $$
+  DECLARE s int8 := 0; x int;
+  BEGIN
+    FOREACH x IN ARRAY $1 LOOP
+      s := s + x;
+    END LOOP;
+    RETURN s;
+  END $$;
+  CREATE FUNCTION arr_walk(int[]) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE x int; s text := '';
+  BEGIN
+    FOREACH x IN ARRAY $1 LOOP
+      s := s || x || ' ';
+    END LOOP;
+    RETURN s;
+  END $$;
+  CREATE FUNCTION slices1(int[]) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE x int[]; s text := '';
+  BEGIN
+    FOREACH x SLICE 1 IN ARRAY $1 LOOP
+      s := s || x::text || ';';
+    END LOOP;
+    RETURN s;
+  END $$;
+  CREATE FUNCTION slice2_count(int[]) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE x int[]; n int := 0;
+  BEGIN
+    FOREACH x SLICE 2 IN ARRAY $1 LOOP
+      n := n + 1;
+    END LOOP;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION slice3_count(int[]) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE x int[]; n int := 0;
+  BEGIN
+    FOREACH x SLICE 3 IN ARRAY $1 LOOP
+      n := n + 1;
+    END LOOP;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION pt_pairs(pt[]) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE p int; q text; s text := '';
+  BEGIN
+    FOREACH p, q IN ARRAY $1 LOOP
+      s := s || p || q || ';';
+    END LOOP;
+    RETURN s;
+  END $$;
+steps:
+  - sql: |
+      SELECT pl_sum_arr(ARRAY[1, 2, 3]) AS total
+    expect: rows
+  - sql: |
+      SELECT arr_walk(ARRAY[[1, 2], [3, 4]]) AS walk
+    expect: rows
+    comment: elements are visited in storage order regardless of the number of dimensions
+  - sql: |
+      SELECT slices1(ARRAY[[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]) AS rows_seen
+    expect: rows
+    comment: SLICE 1 over a 2-D array yields one row slice per iteration
+  - sql: |
+      SELECT slice2_count(ARRAY[[1, 2, 3], [4, 5, 6]]) AS n
+    expect: rows
+    comment: SLICE equal to the number of dimensions yields the whole array once
+  - sql: |
+      SELECT slice2_count(ARRAY[1, 2, 3])
+    expect: error
+    sqlstate: "2202E"
+    comment: SLICE larger than the array dimensionality is out of range
+  - sql: |
+      SELECT slice3_count(ARRAY[[1, 2], [3, 4]])
+    expect: error
+    sqlstate: "2202E"
+  - sql: |
+      SELECT pl_sum_arr('{}'::int[]) AS empty_sum
+    expect: rows
+    comment: an empty array runs the loop body zero times
+  - sql: |
+      SELECT pl_sum_arr(NULL::int[])
+    expect: error
+    sqlstate: "22004"
+    comment: a NULL array expression is an error for FOREACH
+  - sql: |
+      SELECT pt_pairs(ARRAY[ROW(1, 'a'), ROW(2, 'b')]::pt[]) AS pairs
+    expect: rows
+    comment: a list of targets receives successive columns of each composite element

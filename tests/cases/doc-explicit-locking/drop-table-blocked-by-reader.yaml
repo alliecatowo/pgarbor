@@ -1,0 +1,40 @@
+# DROP TABLE takes ACCESS EXCLUSIVE, so it waits for a transaction that has read the table.
+id: doc-explicit-locking.drop-table-blocked-by-reader
+title: DROP TABLE waits for a reader's ACCESS SHARE lock to be released
+family: doc-explicit-locking
+tier: core
+feature_ids: [drop-table, lock-modes, transactions, multi-session]
+required_capabilities: [create-table, insert, select, drop-table, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-tables (ACCESS EXCLUSIVE acquired by DROP TABLE)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: holds ACCESS SHARE until end of transaction
+  - session: b
+    sql: |
+      DROP TABLE t
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT to_regclass('t') IS NULL AS dropped
+    expect: rows

@@ -1,0 +1,39 @@
+# REFRESH VERSION when the recorded version already matches: succeeds with a notice, catalog unchanged.
+id: cmd-alter-collation.refresh-version-noop
+title: "ALTER COLLATION REFRESH VERSION is a successful no-op when versions match"
+family: cmd-alter-collation
+tier: core
+feature_ids: [alter-collation, refresh-version, collation-version, icu-collation, libc-collation]
+required_capabilities: [create-collation, alter-collation, icu-provider, libc-provider, catalog-introspection, pg-describe-object]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_collation.sgml#sql-altercollation-notes (REFRESH VERSION; collation version notes)"
+sessions: [a]
+setup: |
+  CREATE COLLATION cmd_rv_icu (provider = icu, locale = 'und-x-icu');
+  CREATE COLLATION cmd_rv_libc (provider = libc, locale = 'C');
+steps:
+  - sql: |
+      ALTER COLLATION cmd_rv_icu REFRESH VERSION
+    expect: ok
+    comment: emits NOTICE "version has not changed"
+  - sql: |
+      ALTER COLLATION cmd_rv_libc REFRESH VERSION
+    expect: ok
+  - sql: |
+      SELECT collname, collversion IS NOT NULL AS has_version,
+             collversion IS NOT DISTINCT FROM pg_collation_actual_version(oid) AS matches_actual
+        FROM pg_collation WHERE collname IN ('cmd_rv_icu', 'cmd_rv_libc') ORDER BY collname
+    expect: rows
+    order: ordered
+    comment: ICU records a version; the C collation records none on Linux/glibc, and NULL matches NULL
+  - sql: |
+      SELECT pg_describe_object(refclassid, refobjid, refobjsubid) AS "Collation",
+             pg_describe_object(classid, objid, objsubid) AS "Object"
+        FROM pg_depend d JOIN pg_collation c
+             ON refclassid = 'pg_collation'::regclass AND refobjid = c.oid
+        WHERE c.collversion <> pg_collation_actual_version(c.oid)
+        ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: the documented "collations that need refreshing" query returns no rows on a fresh database

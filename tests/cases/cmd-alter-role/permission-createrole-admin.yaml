@@ -1,0 +1,65 @@
+# A CREATEROLE role may alter a role it holds ADMIN OPTION on, but not grant SUPERUSER, CREATEDB or REPLICATION it lacks, nor touch superusers or unrelated roles.
+id: cmd-alter-role.permission-createrole-admin
+title: CREATEROLE with ADMIN OPTION limits ALTER ROLE to managed non-superuser roles
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, createrole, admin-option, superuser, replication, permissions, errors]
+required_capabilities: [roles, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-desc (CREATEROLE with ADMIN OPTION; non-superusers cannot change SUPERUSER or CREATEDB/REPLICATION/BYPASSRLS they lack)"
+sessions: [a]
+notes: "The superuser target is created by the connected superuser. The case changes session authorization to a CREATEROLE role and returns before dropping."
+steps:
+  - sql: |
+      CREATE ROLE alr_cr CREATEROLE;
+      CREATE ROLE alr_t;
+      CREATE ROLE alr_outsider;
+      CREATE ROLE alr_super SUPERUSER
+    expect: ok
+  - sql: |
+      GRANT alr_t TO alr_cr WITH ADMIN OPTION
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION alr_cr
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_t PASSWORD 'managed_pw'
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_t CREATEROLE
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_t SUPERUSER
+    expect: error
+    sqlstate: "42501"
+    comment: non-superusers cannot change SUPERUSER
+  - sql: |
+      ALTER ROLE alr_t CREATEDB
+    expect: error
+    sqlstate: "42501"
+    comment: the role lacks CREATEDB itself
+  - sql: |
+      ALTER ROLE alr_t REPLICATION
+    expect: error
+    sqlstate: "42501"
+    comment: the role lacks REPLICATION itself
+  - sql: |
+      ALTER ROLE alr_outsider CREATEROLE
+    expect: error
+    sqlstate: "42501"
+    comment: no ADMIN OPTION on this role
+  - sql: |
+      ALTER ROLE alr_super SET application_name = 'alr_x'
+    expect: error
+    sqlstate: "42501"
+    comment: only superusers can alter superuser roles
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      DROP ROLE alr_super;
+      DROP ROLE alr_outsider;
+      DROP ROLE alr_t;
+      DROP ROLE alr_cr
+    expect: ok

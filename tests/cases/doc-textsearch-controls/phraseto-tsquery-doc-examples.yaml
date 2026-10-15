@@ -1,0 +1,36 @@
+# phraseto_tsquery uses FOLLOWED BY, and stop words become distance gaps, so phrase matches check word order and spacing.
+id: doc-textsearch-controls.phraseto-tsquery-doc-examples
+title: phraseto_tsquery encodes stop words as distance gaps and matches exact order
+family: doc-textsearch-controls
+tier: core
+feature_ids: [phraseto-tsquery, followed-by, stop-words, phrase-match, positions]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "textsearch.sgml#textsearch-controls (phraseto_tsquery examples)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT phraseto_tsquery('english', 'The Fat Rats')
+    expect: rows
+  - sql: |
+      SELECT phraseto_tsquery('english', 'The Fat & Rats:C')
+    expect: rows
+    comment: operators and weight labels are not recognized
+  - sql: |
+      SELECT phraseto_tsquery('english', 'fat the rat')
+    expect: rows
+    comment: the stop word between fat and rat becomes a distance-2 operator
+  - sql: |
+      SELECT phraseto_tsquery('english', 'the') IS NULL AS is_null, phraseto_tsquery('english', 'the')::text AS q
+    expect: rows
+    comment: a stop-word-only phrase gives an empty tsquery with a notice
+  - sql: |
+      SELECT
+        to_tsvector('english', 'the fat rat') @@ phraseto_tsquery('english', 'fat the rat') AS shifted,
+        to_tsvector('english', 'the fat cat rat') @@ phraseto_tsquery('english', 'fat rat') AS interrupted,
+        to_tsvector('english', 'the fat rat') @@ phraseto_tsquery('english', 'fat rat') AS adjacent,
+        to_tsvector('english', 'fat and rat') @@ phraseto_tsquery('english', 'fat rat') AS plain_across_stop,
+        to_tsvector('english', 'fat and rat') @@ phraseto_tsquery('english', 'fat and rat') AS phrase_with_stop
+    expect: rows
+    comment: a plain phrase fails across a stop word, while the phrase that spells the stop word matches

@@ -1,0 +1,39 @@
+# After CLOSE the portal is gone: a second CLOSE and a FETCH both fail with invalid cursor name.
+id: doc-plpgsql-cursors.close-then-fetch-or-close-errors
+title: Closing a cursor twice or fetching after CLOSE fails
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, close, fetch, portal]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION close_twice() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE c refcursor := 'close_twice_portal';
+  BEGIN
+    OPEN c FOR SELECT name FROM items ORDER BY id;
+    CLOSE c;
+    CLOSE c;
+    RETURN 'unreachable';
+  END $$;
+  CREATE FUNCTION fetch_after_close() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE c refcursor := 'fetch_after_close_portal'; r text;
+  BEGIN
+    OPEN c FOR SELECT name FROM items ORDER BY id;
+    CLOSE c;
+    FETCH c INTO r;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT close_twice()
+    expect: error
+    sqlstate: "34000"
+  - sql: |
+      SELECT fetch_after_close()
+    expect: error
+    sqlstate: "34000"

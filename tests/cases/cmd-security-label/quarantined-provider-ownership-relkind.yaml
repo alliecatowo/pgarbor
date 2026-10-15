@@ -1,0 +1,40 @@
+# Ownership is enforced and column labels are limited to tables, views, matviews, composite types, foreign and partitioned tables; needs a loaded provider to reach these checks.
+id: cmd-security-label.quarantined-provider-ownership-relkind
+title: With a loaded provider, only the owner may label and column labels are limited by relkind
+family: cmd-security-label
+tier: extended
+feature_ids: [security-label, security-label-provider, security-label-ownership, security-label-column]
+required_capabilities: [security-label, create-table, create-view, create-sequence, create-role, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-description; ref/security_label.sgml#sql-security-label-params-object-name"
+sessions: [a]
+setup: |
+  CREATE ROLE sl_owner_test;
+  CREATE TABLE sl_own (id int4, c text);
+  CREATE VIEW sl_own_v AS SELECT id FROM sl_own;
+  CREATE SEQUENCE sl_own_s
+steps:
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_own.c IS 'label-col'
+    expect: ok
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_own_v.id IS 'label-view-col'
+    expect: ok
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_own_s.last_value IS 'label-seq-col'
+    expect: error
+    sqlstate: "42809"
+    comment: column labels are not allowed on sequences
+  - sql: |
+      SET ROLE sl_owner_test
+    expect: ok
+  - sql: |
+      SECURITY LABEL ON TABLE sl_own IS 'not-owner'
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+quarantine:
+  reason: "needs a registered label provider module (contrib dummy_seclabel or sepgsql); pgarbor-oracle does not ship one, so ownership and relkind checks are unreachable"

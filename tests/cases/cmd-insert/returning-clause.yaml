@@ -1,0 +1,40 @@
+# RETURNING returns the inserted rows (computed over the new row); OLD values are NULL for a plain INSERT.
+id: cmd-insert.returning-clause
+title: RETURNING with star, expressions, output names, defaults, and OLD/NEW aliases on plain INSERT
+family: cmd-insert
+tier: core
+feature_ids: [insert, returning, column-defaults, serial]
+required_capabilities: [create-table, insert, select, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-insert (Description: RETURNING; Examples: DEFAULT clause returning sequence number)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did serial PRIMARY KEY, dname text NOT NULL, weight int DEFAULT 1);
+steps:
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (DEFAULT, 'XYZ Widgets') RETURNING did
+    expect: rows
+    comment: the sequence-generated default is returned
+  - sql: |
+      INSERT INTO distributors (dname) VALUES ('Acme') RETURNING *
+    expect: rows
+  - sql: |
+      INSERT INTO distributors (dname, weight) VALUES ('Beta', 5), ('Gamma', DEFAULT)
+      RETURNING did * 10 AS scaled_id, upper(dname) AS up, weight + 1
+    expect: rows
+    order: multiset
+    comment: multirow RETURNING with expressions and output names
+  - sql: |
+      INSERT INTO distributors (dname, weight) VALUES ('Delta', 2)
+      RETURNING WITH (OLD AS o, NEW AS n) o.did AS old_did, o.dname AS old_dname, n.dname AS new_dname
+    expect: rows
+    comment: for a simple INSERT every OLD value is NULL
+  - sql: |
+      INSERT INTO distributors (dname) VALUES (NULL)
+    expect: error
+    sqlstate: "23502"
+    comment: a failed insert returns no rows and inserts nothing
+  - sql: |
+      SELECT count(*) AS n, max(did) AS max_did FROM distributors
+    expect: rows

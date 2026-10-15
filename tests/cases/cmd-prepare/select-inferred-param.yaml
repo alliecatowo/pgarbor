@@ -1,0 +1,36 @@
+# Documented example: SELECT with a typed and an inferred parameter; EXECUTE twice with different dates.
+id: cmd-prepare.select-inferred-param
+title: PREPARE a join SELECT whose second parameter type is inferred from context
+family: cmd-prepare
+tier: core
+feature_ids: [prepare, execute, select, join, prepared-statements, type-inference]
+required_capabilities: [create-table, insert, select, join, prepared-statements]
+provenance:
+  source: pg-docs
+  ref: "ref/prepare.sgml#sql-prepare-examples (second example)"
+sessions: [a]
+setup: |
+  CREATE TABLE users (usrid int PRIMARY KEY, name text);
+  CREATE TABLE logs (usrid int, date date, msg text);
+  INSERT INTO users VALUES (1, 'ann'), (2, 'bob');
+  INSERT INTO logs VALUES (1, '2024-03-05', 'login'), (1, '2024-03-05', 'edit'), (1, '2024-03-06', 'logout'), (2, '2024-03-05', 'login');
+steps:
+  - sql: |
+      PREPARE usrrptplan (int) AS
+          SELECT u.name, l.msg FROM users u, logs l
+          WHERE u.usrid = $1 AND u.usrid = l.usrid AND l.date = $2
+    expect: ok
+  - sql: |
+      EXECUTE usrrptplan(1, '2024-03-05')
+    expect: rows
+    order: multiset
+    comment: $2 is inferred as date from l.date
+  - sql: |
+      EXECUTE usrrptplan(1, '2024-03-06')
+    expect: rows
+    order: multiset
+  - sql: |
+      EXECUTE usrrptplan(2, '2024-03-06')
+    expect: rows
+    order: multiset
+    comment: no matching rows, empty result

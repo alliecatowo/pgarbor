@@ -1,0 +1,45 @@
+# Row-level locks are released during savepoint rollback, as table-level locks are.
+id: doc-explicit-locking.row-lock-released-on-savepoint-rollback
+title: Row lock taken by SELECT FOR UPDATE after a savepoint is released by ROLLBACK TO
+family: doc-explicit-locking
+tier: core
+feature_ids: [select-for-update, row-locks, savepoints, transactions, multi-session, update]
+required_capabilities: [create-table, insert, select, update, row-locks, savepoints, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-rows (row-level locks released at transaction end or during savepoint rollback)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SAVEPOINT s
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t WHERE id = 1 FOR UPDATE
+    expect: rows
+  - session: a
+    sql: |
+      ROLLBACK TO SAVEPOINT s
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE t SET v = v + 1 WHERE id = 1
+    expect: ok
+    comment: the row lock was released, so this does not wait
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

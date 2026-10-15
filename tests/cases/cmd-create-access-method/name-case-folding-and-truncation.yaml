@@ -1,0 +1,32 @@
+# Unquoted names fold to lower case, quoted names keep case, and names longer than NAMEDATALEN-1 are truncated to 63 bytes.
+id: cmd-create-access-method.name-case-folding-and-truncation
+title: Unquoted access method names fold to lower case, quoted names are kept, long names truncate to 63 bytes
+family: cmd-create-access-method
+tier: extended
+feature_ids: [create-access-method, identifiers, case-folding, identifier-truncation]
+required_capabilities: [create-access-method, table-access-method, select]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method (name); identifier rules per SQL syntax, verified against PG18.6 oracle"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ACCESS METHOD MyAM TYPE TABLE HANDLER heap_tableam_handler
+    expect: ok
+  - sql: |
+      CREATE ACCESS METHOD "MixedCase" TYPE TABLE HANDLER pg_catalog.heap_tableam_handler
+    expect: ok
+    comment: schema-qualified handler name is accepted
+  - sql: |
+      SELECT amname FROM pg_am WHERE amname IN ('myam', 'MixedCase', 'mixedcase', 'MyAM') ORDER BY amname
+    expect: rows
+    order: ordered
+    comment: MyAM became myam; MixedCase stays quoted; no lower-case mixedcase exists
+  - sql: |
+      CREATE ACCESS METHOD ok_am_0123456789012345678901234567890123456789012345678901234567890123456789 TYPE INDEX HANDLER hashhandler
+    expect: ok
+    comment: the name is silently truncated to 63 bytes with a NOTICE
+  - sql: |
+      SELECT length(amname) AS n, amname FROM pg_am WHERE amname LIKE 'ok_am%'
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# ROLLBACK AND CHAIN starts a new block with the isolation level and read-only mode of the one it ended.
+id: cmd-rollback.and-chain-keeps-characteristics
+title: ROLLBACK AND CHAIN carries isolation level and read-only mode into the next block
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, and-chain, isolation-level, read-only, transactions, guc, errors]
+required_capabilities: [create-table, insert, select, transactions, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback-chain (AND CHAIN starts a new transaction with the same characteristics)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY
+    expect: ok
+  - sql: |
+      ROLLBACK AND CHAIN
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso, current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: serializable and read only, carried over
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "25006"
+    comment: read only mode is still enforced in the chained block
+  - sql: |
+      ROLLBACK
+    expect: ok
+    comment: ends the aborted chained block
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered

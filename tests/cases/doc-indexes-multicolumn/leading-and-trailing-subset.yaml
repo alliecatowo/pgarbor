@@ -1,0 +1,31 @@
+# A multicolumn B-tree index is usable with conditions on any subset of its columns; results must be exact.
+id: doc-indexes-multicolumn.leading-and-trailing-subset
+title: Conditions on the leading column alone, the trailing column alone, and IS NULL all return exact results
+family: doc-indexes-multicolumn
+tier: core
+feature_ids: [multicolumn-index, btree-index, where-clause, null-semantics]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (any subset of the index's columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (major int, minor int, name varchar);
+  CREATE INDEX test2_mm_idx ON test2 (major, minor);
+  INSERT INTO test2 VALUES (1, 1, 'a'), (1, 2, 'b'), (2, 1, NULL), (2, 2, 'd'), (NULL, 1, 'e'), (1, NULL, 'f')
+steps:
+  - sql: |
+      SELECT major, minor, name FROM test2 WHERE major = 2 ORDER BY minor, name
+    expect: rows
+    order: ordered
+    comment: leading column only
+  - sql: |
+      SELECT major, minor, name FROM test2 WHERE minor = 1 ORDER BY major NULLS LAST, name
+    expect: rows
+    order: ordered
+    comment: trailing column only, so the index is less selective but results must match
+  - sql: |
+      SELECT major, minor, name FROM test2 WHERE major IS NULL
+    expect: rows
+    order: multiset
+    comment: a NULL leading key is matched only by IS NULL

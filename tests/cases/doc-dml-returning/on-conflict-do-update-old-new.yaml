@@ -1,0 +1,33 @@
+# In INSERT ON CONFLICT DO UPDATE, old values are non-NULL for the conflicting row, and new holds the updated values.
+id: doc-dml-returning.on-conflict-do-update-old-new
+title: INSERT ON CONFLICT DO UPDATE RETURNING gives non-NULL old values for the conflicting row
+family: doc-dml-returning
+tier: core
+feature_ids: [returning, returning-old-new, insert, on-conflict, excluded-row, null-semantics]
+required_capabilities: [create-table, insert, select, returning, returning-old-new, on-conflict]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (old values non-NULL for conflicting rows in INSERT ... ON CONFLICT DO UPDATE)"
+sessions: [a]
+setup: |
+  CREATE TABLE inv (sku text PRIMARY KEY, qty int4 NOT NULL, note text);
+  INSERT INTO inv VALUES ('a', 1, NULL);
+steps:
+  - sql: |
+      INSERT INTO inv VALUES ('a', 5, 'dup')
+        ON CONFLICT (sku) DO UPDATE SET qty = inv.qty + EXCLUDED.qty
+        RETURNING sku, old.qty AS old_qty, new.qty AS new_qty, old.note IS NULL AS old_note_null
+    expect: rows
+    order: ordered
+    comment: old.note is NULL because the stored row had NULL, not because old is NULL
+  - sql: |
+      INSERT INTO inv VALUES ('n', 4, 'fresh')
+        ON CONFLICT (sku) DO UPDATE SET qty = inv.qty + EXCLUDED.qty
+        RETURNING sku, old.qty IS NULL AS old_null, new.qty AS new_qty
+    expect: rows
+    order: ordered
+    comment: a non-conflicting insert has NULL old values
+  - sql: |
+      SELECT sku, qty, note FROM inv ORDER BY sku
+    expect: rows
+    order: ordered

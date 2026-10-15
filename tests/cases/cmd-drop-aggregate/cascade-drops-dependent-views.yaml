@@ -1,0 +1,34 @@
+# CASCADE drops the view using the aggregate and, transitively, views built on that view.
+id: cmd-drop-aggregate.cascade-drops-dependent-views
+title: DROP AGGREGATE CASCADE removes dependent views recursively
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, create-view, create-aggregate, dependency-tracking]
+required_capabilities: [aggregates, create-aggregate, create-function, create-view, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (CASCADE)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2';
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0');
+      CREATE VIEW v_avg AS SELECT myavg(1) AS a;
+      CREATE VIEW v_avg2 AS SELECT a FROM v_avg
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(integer) CASCADE
+    expect: ok
+    comment: emits a NOTICE that the drop cascades to view v_avg and v_avg2
+  - sql: |
+      SELECT a FROM v_avg
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT a FROM v_avg2
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT count(*) AS left_over FROM pg_proc WHERE proname = 'myavg' AND prokind = 'a'
+    expect: rows
+    order: multiset

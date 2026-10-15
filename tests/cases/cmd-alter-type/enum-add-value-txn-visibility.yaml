@@ -1,0 +1,46 @@
+# A label added inside a transaction block cannot be used until that transaction commits; rollback removes it.
+id: cmd-alter-type.enum-add-value-txn-visibility
+title: "New enum label is unusable inside its transaction, and a rollback discards it"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, enum-type, enum-add-value, transactions]
+required_capabilities: [create-type, alter-type, enum-type, transactions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (Notes: a new value added inside a transaction block cannot be used until the transaction has been committed)"
+sessions: [a]
+setup: |
+  CREATE TYPE colors AS ENUM ('red', 'green', 'blue');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER TYPE colors ADD VALUE 'teal' AFTER 'green'
+    expect: ok
+  - sql: |
+      SELECT 'teal'::colors
+    expect: error
+    sqlstate: "55P04"
+    comment: the label exists but is not yet committed, so it cannot be used
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT v, n FROM unnest(enum_range(NULL::colors)) WITH ORDINALITY AS t(v, n) ORDER BY n
+    expect: rows
+    order: ordered
+    comment: rollback removed teal
+  - sql: |
+      BEGIN;
+      ALTER TYPE colors ADD VALUE 'teal' AFTER 'green';
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT 'teal'::colors AS committed_label
+    expect: rows
+    comment: after commit the label is usable
+  - sql: |
+      SELECT v, n FROM unnest(enum_range(NULL::colors)) WITH ORDINALITY AS t(v, n) ORDER BY n
+    expect: rows
+    order: ordered

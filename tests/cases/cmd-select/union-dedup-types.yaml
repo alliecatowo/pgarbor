@@ -1,0 +1,43 @@
+# UNION removes duplicates, UNION ALL keeps them, set operations evaluate left to right, and mismatched types fail.
+id: cmd-select.union-dedup-types
+title: UNION vs UNION ALL duplicate handling, left-to-right evaluation, and UNION type mismatch
+family: cmd-select
+tier: core
+feature_ids: [select, union, union-all]
+required_capabilities: [create-table, insert, select, union]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-union (UNION examples, left-to-right evaluation)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did int4, name text);
+  CREATE TABLE actors (id int4, name text);
+  INSERT INTO distributors VALUES (108, 'Westward'), (111, 'Walt Disney'), (112, 'Warner Bros.'), (101, 'British Lion');
+  INSERT INTO actors VALUES (1, 'Woody Allen'), (2, 'Warren Beatty'), (3, 'Walter Matthau'), (4, 'Westward'), (5, 'Meryl Streep');
+steps:
+  - sql: |
+      SELECT distributors.name FROM distributors WHERE distributors.name LIKE 'W%'
+      UNION
+      SELECT actors.name FROM actors WHERE actors.name LIKE 'W%'
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: Westward appears in both inputs and is returned once
+  - sql: |
+      SELECT distributors.name FROM distributors WHERE distributors.name LIKE 'W%'
+      UNION ALL
+      SELECT actors.name FROM actors WHERE actors.name LIKE 'W%'
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: UNION ALL keeps the duplicate Westward
+  - sql: |
+      SELECT 1 AS n UNION SELECT 1 UNION ALL SELECT 1
+    expect: rows
+    order: multiset
+    comment: evaluated left to right, so the first UNION dedups before UNION ALL appends
+  - sql: |
+      SELECT name FROM actors UNION SELECT did FROM distributors
+    expect: error
+    sqlstate: "42804"
+    comment: text and integer columns cannot be matched

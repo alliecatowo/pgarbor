@@ -1,0 +1,37 @@
+# LIMIT applies to the whole set operation unless the input query is parenthesized.
+id: doc-queries-union.parenthesized-limit
+title: Parenthesized set-operation inputs carry their own LIMIT and ORDER BY
+family: doc-queries-union
+tier: core
+feature_ids: [union, limit, offset, order-by, set-operations]
+required_capabilities: [create-table, insert, select, union, limit]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/queries.sgml#queries-union"
+sessions: [a]
+setup: |
+  CREATE TABLE b (a int4);
+  CREATE TABLE y (x int4);
+  INSERT INTO b VALUES (10), (20), (30);
+  INSERT INTO y VALUES (20), (40);
+steps:
+  - sql: |
+      SELECT a FROM b UNION SELECT x FROM y LIMIT 10
+    expect: rows
+    order: multiset
+    comment: "LIMIT larger than the result: all of {10,20,30,40}"
+  - sql: |
+      (SELECT a FROM b ORDER BY a DESC LIMIT 2) UNION SELECT x FROM y
+    expect: rows
+    order: multiset
+    comment: "{30,20} UNION {20,40} = {20,30,40}"
+  - sql: |
+      SELECT a FROM b UNION (SELECT x FROM y ORDER BY x LIMIT 1)
+    expect: rows
+    order: multiset
+    comment: "{10,20,30} UNION {20} = {10,20,30}"
+  - sql: |
+      SELECT a FROM b UNION SELECT x FROM y ORDER BY 1 LIMIT 2 OFFSET 1
+    expect: rows
+    order: ordered
+    comment: "sorted {10,20,30,40}, skip 1, take 2"

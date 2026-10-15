@@ -1,0 +1,36 @@
+# The documented sub-select form and the USING join form delete the same rows, as the Notes section describes.
+id: cmd-delete.subselect-and-using-equivalent
+title: Sub-select and USING forms of DELETE delete the same rows
+family: cmd-delete
+tier: core
+feature_ids: [delete, subquery, using, join, in-operator, create-table, insert, select]
+required_capabilities: [create-table, insert, select, delete, subqueries, joins]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#notes (sub-select equivalent of the USING example)"
+sessions: [a]
+setup: |
+  CREATE TABLE producers (id int4 PRIMARY KEY, name text);
+  CREATE TABLE films (id int4 PRIMARY KEY, producer_id int4, title text);
+  INSERT INTO producers VALUES (1, 'foo'), (2, 'bar');
+  INSERT INTO films VALUES (10, 1, 'A'), (11, 2, 'B'), (12, 1, 'C'), (13, NULL, 'D');
+steps:
+  - sql: |
+      DELETE FROM films WHERE producer_id IN (SELECT id FROM producers WHERE name = 'foo')
+    expect: ok
+    comment: standard sub-select form; deletes films 10 and 12
+  - sql: |
+      SELECT id, title FROM films ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO films VALUES (10, 1, 'A'), (12, 1, 'C')
+    expect: ok
+  - sql: |
+      DELETE FROM films USING producers WHERE films.producer_id = producers.id AND producers.name = 'foo'
+    expect: ok
+    comment: USING form on the same data deletes the same two rows
+  - sql: |
+      SELECT id, title FROM films ORDER BY id
+    expect: rows
+    order: ordered

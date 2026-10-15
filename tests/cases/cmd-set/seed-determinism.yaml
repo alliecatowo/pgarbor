@@ -1,0 +1,42 @@
+# SET SEED sets the random() generator; the seed range is -1 to 1 inclusive, and values outside it are rejected.
+id: cmd-set.seed-determinism
+title: SET SEED reproduces random() values and rejects seeds outside [-1, 1]
+family: cmd-set
+tier: extended
+feature_ids: [set, seed, random]
+required_capabilities: [select, guc, create-table, insert, update]
+provenance:
+  source: pg-docs
+  ref: "ref/set.sgml#sql-set (Parameters: SEED)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEMP TABLE cmd_set_rand (a float8, b float8)
+    expect: ok
+  - sql: |
+      SET SEED = 0.5; INSERT INTO cmd_set_rand SELECT random()
+    expect: ok
+  - sql: |
+      SET SEED = 0.5; UPDATE cmd_set_rand SET b = random()
+    expect: ok
+  - sql: |
+      SELECT a = b AS same_sequence FROM cmd_set_rand
+    expect: rows
+    comment: same seed gives same draw
+  - sql: |
+      SET SEED = -1
+    expect: ok
+    comment: lower boundary accepted
+  - sql: |
+      SET SEED TO 1
+    expect: ok
+    comment: upper boundary accepted
+  - sql: |
+      SET SEED = 2
+    expect: error
+    sqlstate: "22023"
+    comment: outside -1..1
+  - sql: |
+      SET SEED = -1.5
+    expect: error
+    sqlstate: "22023"

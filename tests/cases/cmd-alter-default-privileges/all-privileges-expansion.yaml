@@ -1,0 +1,43 @@
+# ALL and ALL PRIVILEGES expand per object type; for tables this includes MAINTAIN in PG 18.
+id: cmd-alter-default-privileges.all-privileges-expansion
+title: ALL and ALL PRIVILEGES expand to each object type's full privilege set including MAINTAIN
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, grant, all-privileges, maintain-privilege, sequences, default-acl]
+required_capabilities: [create-schema, create-table, create-function, sequences, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-synopsis (GRANT ALL [PRIVILEGES] ON TABLES / SEQUENCES / FUNCTIONS / TYPES / SCHEMAS / LARGE OBJECTS)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_webuser') THEN CREATE ROLE adp_webuser; END IF;
+  END $$;
+  CREATE SCHEMA adp_all;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_all GRANT ALL ON TABLES TO adp_webuser;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_all GRANT ALL PRIVILEGES ON SEQUENCES TO adp_webuser;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_all GRANT ALL ON FUNCTIONS TO adp_webuser;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_all GRANT ALL ON TYPES TO adp_webuser
+    expect: ok
+  - sql: |
+      SELECT defaclobjtype, defaclacl::text FROM pg_default_acl WHERE defaclnamespace = 'adp_all'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: one row per object type with the expanded privilege letters
+  - sql: |
+      CREATE TABLE adp_all.tall (a int);
+      CREATE SEQUENCE adp_all.sall
+    expect: ok
+  - sql: |
+      SELECT relname, relacl::text FROM pg_class WHERE relname IN ('tall', 'sall') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the table entry includes m for MAINTAIN and the sequence entry includes rwU
+  - sql: |
+      SELECT has_table_privilege('adp_webuser', 'adp_all.tall', 'MAINTAIN') AS maintain,
+             has_table_privilege('adp_webuser', 'adp_all.tall', 'TRUNCATE') AS truncate
+    expect: rows
+    order: multiset
+    comment: MAINTAIN is a table privilege that ALL now covers

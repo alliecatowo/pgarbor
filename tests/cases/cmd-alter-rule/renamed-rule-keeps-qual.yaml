@@ -1,0 +1,32 @@
+# A conditional DO INSTEAD rule keeps its WHERE qualification and its action after being renamed.
+id: cmd-alter-rule.renamed-rule-keeps-qual
+title: A renamed conditional DO INSTEAD rule keeps its qualification and action
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, rules, insert, conditional-rules]
+required_capabilities: [create-table, create-rule, insert, select, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/alter_rule.sgml#sql-alterrule (ALTER RULE changes only the name; the definition is unchanged)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4);
+  CREATE TABLE big (id int4);
+  CREATE RULE ins_split AS ON INSERT TO emp WHERE NEW.id > 10 DO INSTEAD INSERT INTO big VALUES (NEW.id);
+steps:
+  - sql: |
+      ALTER RULE ins_split ON emp RENAME TO split_big
+    expect: ok
+  - sql: |
+      SELECT definition FROM pg_rules WHERE tablename = 'emp' AND rulename = 'split_big'
+    expect: rows
+    order: ordered
+    comment: pg_rules shows the rule under its new name, with the same WHERE qualification and action
+  - sql: |
+      INSERT INTO emp VALUES (1), (20)
+    expect: ok
+  - sql: |
+      SELECT 'emp' AS tbl, id FROM emp UNION ALL SELECT 'big', id FROM big ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: id 1 falls through to emp; id 20 is redirected to big by the renamed rule

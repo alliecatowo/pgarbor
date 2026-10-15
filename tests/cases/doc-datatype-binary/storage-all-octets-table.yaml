@@ -1,0 +1,30 @@
+# Store every single-octet value 0..255 as a bytea and check length, byte-wise ordering and extremes.
+id: doc-datatype-binary.storage-all-octets-table
+title: Every single-octet bytea value round-trips and orders byte-wise from 0x00 to 0xFF
+family: doc-datatype-binary
+tier: core
+feature_ids: [bytea, binary-strings, ordering, insert]
+required_capabilities: [create-table, insert, select, generate-series]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-binary (binary strings store all octet values; operations process actual bytes)"
+sessions: [a]
+setup: |
+  CREATE TABLE blobs (id int PRIMARY KEY, data bytea NOT NULL);
+  INSERT INTO blobs SELECT g, decode(lpad(to_hex(g), 2, '0'), 'hex') FROM generate_series(0, 255) AS g
+steps:
+  - sql: |
+      SELECT count(*) AS n, sum(length(data)) AS total_bytes, min(data) AS lo, max(data) AS hi FROM blobs
+    expect: rows
+  - sql: |
+      SELECT id, data, length(data) AS len FROM blobs WHERE id IN (0, 1, 9, 10, 127, 128, 255) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT data FROM blobs WHERE data >= '\x7f' AND data < '\x81' ORDER BY data
+    expect: rows
+    order: ordered
+    comment: bytewise comparison, not locale collation
+  - sql: |
+      SELECT count(*) AS matching FROM blobs WHERE data = decode(lpad(to_hex(id), 2, '0'), 'hex')
+    expect: rows

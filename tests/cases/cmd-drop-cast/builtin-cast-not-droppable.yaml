@@ -1,0 +1,35 @@
+# Built-in casts that the system requires cannot be dropped, even by a superuser and even with CASCADE.
+id: cmd-drop-cast.builtin-cast-not-droppable
+title: "Dropping a built-in system-required cast fails with dependent_objects_still_exist"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, builtin-casts, dependencies]
+required_capabilities: [select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+steps:
+  - sql: |
+      DROP CAST (int4 AS int8)
+    expect: error
+    sqlstate: "2BP01"
+    comment: the system depends on this cast, so the drop is refused
+  - sql: |
+      DROP CAST (int4 AS int8) CASCADE
+    expect: error
+    sqlstate: "2BP01"
+    comment: CASCADE does not override the system dependency
+  - sql: |
+      DROP CAST IF EXISTS (int4 AS int8)
+    expect: error
+    sqlstate: "2BP01"
+    comment: IF EXISTS only suppresses the missing-object case
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'int4'::regtype AND casttarget = 'int8'::regtype
+    expect: rows
+    order: multiset
+    comment: the built-in cast is still present
+  - sql: |
+      SELECT CAST(7 AS int8) AS still_works
+    expect: rows

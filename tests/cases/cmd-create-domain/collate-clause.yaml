@@ -1,0 +1,29 @@
+# COLLATE on a domain changes ordering and comparison; COLLATE on a non-collatable base type is an error.
+id: cmd-create-domain.collate-clause
+title: Domain COLLATE clause controls ordering and comparison, and is rejected for non-collatable base types
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, collation]
+required_capabilities: [create-domain, create-table, insert, select, collation]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (collation)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dcoll AS text COLLATE "C";
+  CREATE TABLE tcoll (v dcoll);
+  INSERT INTO tcoll VALUES ('b'), ('B'), ('a');
+steps:
+  - sql: |
+      SELECT v FROM tcoll ORDER BY v
+    expect: rows
+    order: ordered
+    comment: "C collation sorts by code point, so uppercase B precedes lowercase a and b"
+  - sql: |
+      SELECT ('a'::dcoll < 'B'::dcoll) AS lt
+    expect: rows
+  - sql: |
+      CREATE DOMAIN dcoll_int AS int COLLATE "C"
+    expect: error
+    sqlstate: "42804"
+    comment: collations are not supported by integer

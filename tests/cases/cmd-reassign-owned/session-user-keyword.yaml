@@ -1,0 +1,39 @@
+# SESSION_USER as the old role names the session's login role, here set with SET SESSION AUTHORIZATION.
+id: cmd-reassign-owned.session-user-keyword
+title: "REASSIGN OWNED BY SESSION_USER reassigns objects of the session user"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, session-user, session-authorization]
+required_capabilities: [roles, session-authorization, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-synopsis (SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE ROLE ro12_s;
+  CREATE ROLE ro12_m;
+  GRANT ro12_m TO ro12_s;
+  CREATE TABLE ro12_t (a int4);
+  ALTER TABLE ro12_t OWNER TO ro12_s;
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION ro12_s
+    expect: ok
+  - sql: |
+      SELECT session_user AS u
+    expect: rows
+    order: ordered
+  - sql: |
+      REASSIGN OWNED BY SESSION_USER TO ro12_m
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro12_t'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP OWNED BY ro12_m; DROP ROLE ro12_s; DROP ROLE ro12_m
+    expect: ok
+    comment: cleanup

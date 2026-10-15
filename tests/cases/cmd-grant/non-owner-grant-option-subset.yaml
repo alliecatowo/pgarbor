@@ -1,0 +1,63 @@
+# A non-owner GRANT proceeds with only the privileges it holds grant options for; ungrantable named privileges produce a warning and are skipped.
+id: cmd-grant.non-owner-grant-option-subset
+title: Non-owner GRANT passes on only grantable privileges and warns when a named privilege is not grantable
+family: cmd-grant
+tier: core
+feature_ids: [grant, grant-option, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-notes (non-owner GRANT and grant option warnings)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_own;
+  CREATE ROLE cgg_mid;
+  CREATE ROLE cgg_leaf;
+  CREATE ROLE cgg_leaf2;
+  CREATE ROLE cgg_outsider;
+  CREATE TABLE cgg_gt (a int4, b int4);
+  ALTER TABLE cgg_gt OWNER TO cgg_own;
+  GRANT SELECT ON cgg_gt TO cgg_mid WITH GRANT OPTION;
+  GRANT INSERT ON cgg_gt TO cgg_mid;
+steps:
+  - sql: |
+      SET ROLE cgg_mid
+    expect: ok
+  - sql: |
+      GRANT ALL PRIVILEGES ON cgg_gt TO cgg_leaf
+    expect: ok
+    comment: ALL forms pass on the grantable subset, here SELECT only
+  - sql: |
+      GRANT SELECT, INSERT ON cgg_gt TO cgg_leaf2
+    expect: notice
+    comment: INSERT is not grantable by cgg_mid, so a warning is issued and only SELECT is granted
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT grantee, privilege_type, is_grantable FROM information_schema.table_privileges
+       WHERE table_name = 'cgg_gt' AND grantee IN ('cgg_mid', 'cgg_leaf', 'cgg_leaf2')
+       ORDER BY grantee, privilege_type
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE cgg_leaf
+    expect: ok
+  - sql: |
+      GRANT SELECT ON cgg_gt TO cgg_outsider
+    expect: notice
+    comment: leaf holds SELECT without a grant option, so nothing is granted and a warning is issued
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE cgg_outsider
+    expect: ok
+  - sql: |
+      GRANT SELECT ON cgg_gt TO cgg_leaf2
+    expect: error
+    sqlstate: "42501"
+    comment: a role with no privilege on the object cannot GRANT on it at all
+  - sql: |
+      RESET ROLE
+    expect: ok

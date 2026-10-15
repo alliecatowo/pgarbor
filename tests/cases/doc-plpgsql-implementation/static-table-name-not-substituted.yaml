@@ -1,0 +1,44 @@
+# A variable holding a table name is not substituted into a static FROM clause; EXECUTE with a formatted
+# identifier is required for a dynamic table name.
+id: doc-plpgsql-implementation.static-table-name-not-substituted
+title: Variable is not substituted for a table name; EXECUTE with format() is
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, variable-substitution, execute, dynamic-sql]
+required_capabilities: [create-table, insert, select, create-function, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Plan Caching)"
+sessions: [a]
+setup: |
+  CREATE TABLE accts (id int);
+  INSERT INTO accts VALUES (1), (2), (3);
+  CREATE FUNCTION dyn_tbl(tname text) RETURNS bigint AS $$
+  DECLARE tbl text := tname; n bigint;
+  BEGIN
+    SELECT count(*) INTO n FROM tbl;
+    RETURN n;
+  END;
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION dyn_exec(tname text) RETURNS bigint AS $$
+  DECLARE n bigint;
+  BEGIN
+    EXECUTE format('SELECT count(*) FROM %I', tname) INTO n;
+    RETURN n;
+  END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT dyn_tbl('accts')
+    expect: error
+    sqlstate: "42P01"
+    comment: FROM tbl names a relation called tbl, not the value of the variable
+  - sql: |
+      SELECT dyn_exec('accts')
+    expect: rows
+    order: ordered
+    comment: EXECUTE builds the statement text at run time, so the value 3 is returned
+  - sql: |
+      SELECT dyn_exec('no_such_table_zz')
+    expect: error
+    sqlstate: "42P01"

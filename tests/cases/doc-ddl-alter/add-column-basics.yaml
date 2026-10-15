@@ -1,0 +1,49 @@
+# ADD COLUMN: NULL by default, a constant DEFAULT fills existing rows, NOT NULL needs a default on a non-empty table, duplicate names fail.
+id: doc-ddl-alter.add-column-basics
+title: ADD COLUMN fills existing rows with NULL or a constant default; NOT NULL without default fails
+family: doc-ddl-alter
+tier: core
+feature_ids: [alter-table, add-column, column-default, not-null, null-semantics, errors]
+required_capabilities: [create-table, alter-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-alter (Adding a Column)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text, price numeric);
+  INSERT INTO products VALUES (1, 'a', 1.5), (2, 'b', NULL);
+steps:
+  - sql: |
+      ALTER TABLE products ADD COLUMN description text
+    expect: ok
+    comment: with no DEFAULT the new column is NULL in every existing row
+  - sql: |
+      SELECT product_no, description IS NULL AS desc_null FROM products ORDER BY product_no
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE products ADD COLUMN stock integer DEFAULT 0 NOT NULL
+    expect: ok
+    comment: a constant default satisfies NOT NULL for the existing rows
+  - sql: |
+      SELECT product_no, stock FROM products ORDER BY product_no
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE products ADD COLUMN notes text NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: no default means existing rows get NULL, which violates NOT NULL; the ADD fails
+  - sql: |
+      ALTER TABLE products ADD COLUMN description text
+    expect: error
+    sqlstate: "42701"
+    comment: a second column with the same name is rejected
+  - sql: |
+      INSERT INTO products (product_no, name) VALUES (3, 'c')
+    expect: ok
+  - sql: |
+      SELECT product_no, description, stock FROM products ORDER BY product_no
+    expect: rows
+    order: ordered
+    comment: rows inserted after the ADD pick up the defaults; the failed ADD left no notes column

@@ -1,0 +1,50 @@
+# suppress_redundant_updates_trigger raises an error unless it is a row-level BEFORE UPDATE trigger
+# (and cannot be called directly). Each misuse gets its own table so the failures stay independent.
+id: doc-functions-trigger.suppress-redundant-updates-misuse-errors
+title: suppress_redundant_updates_trigger rejects AFTER, INSERT, statement-level and direct use
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, suppress-redundant-updates, errors]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-trigger (suppress_redundant_updates_trigger: applied as a row-level BEFORE UPDATE trigger)"
+sessions: [a]
+setup: |
+  CREATE TABLE m_after (id int, v int);
+  CREATE TRIGGER m_after_t AFTER UPDATE ON m_after FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
+  CREATE TABLE m_ins (id int, v int);
+  CREATE TRIGGER m_ins_t BEFORE INSERT ON m_ins FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
+  CREATE TABLE m_stmt (id int, v int);
+  CREATE TRIGGER m_stmt_t BEFORE UPDATE ON m_stmt FOR EACH STATEMENT EXECUTE FUNCTION suppress_redundant_updates_trigger();
+  INSERT INTO m_after VALUES (1, 1);
+  INSERT INTO m_stmt VALUES (1, 1);
+steps:
+  - sql: |
+      UPDATE m_after SET v = 2 WHERE id = 1
+    expect: error
+    sqlstate: "39P01"
+    comment: AFTER UPDATE is not allowed (must be called before update)
+  - sql: |
+      SELECT id, v FROM m_after
+    expect: rows
+    comment: the failed update was rolled back
+  - sql: |
+      INSERT INTO m_ins VALUES (1, 1)
+    expect: error
+    sqlstate: "39P01"
+    comment: BEFORE INSERT is not allowed (must be called on update)
+  - sql: |
+      SELECT suppress_redundant_updates_trigger()
+    expect: error
+    sqlstate: "39P01"
+    comment: direct call is not allowed (must be called as trigger)
+  - sql: |
+      UPDATE m_stmt SET v = 2 WHERE id = 1
+    expect: error
+    sqlstate: "39P01"
+    comment: FOR EACH STATEMENT is not allowed (must be called for each row)
+  - sql: |
+      SELECT id, v FROM m_stmt
+    expect: rows
+    comment: the failed statement left the row unchanged

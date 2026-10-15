@@ -1,0 +1,42 @@
+# Routine identity is the exact argument type list: no implicit casts, and tables are not routines.
+id: cmd-drop-routine.missing-routine-and-type-mismatch-errors
+title: "DROP ROUTINE errors for unknown names, mismatched argument types, and tables"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, errors, function-identity]
+required_capabilities: [create-function, create-table, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-parameters (argtype); drop_routine.sgml"
+sessions: [a]
+setup: |
+  CREATE FUNCTION mm_f(integer) RETURNS int LANGUAGE sql AS 'SELECT $1';
+  CREATE TABLE mm_t (a int);
+steps:
+  - sql: |
+      DROP ROUTINE mm_nosuch(integer)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP ROUTINE mm_f(bigint)
+    expect: error
+    sqlstate: "42883"
+    comment: integer is not matched by bigint in the identity lookup
+  - sql: |
+      DROP ROUTINE mm_f(text)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP ROUTINE mm_t()
+    expect: error
+    sqlstate: "42883"
+    comment: a table is not a routine
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'mm_f'
+    expect: rows
+    order: multiset
+    comment: none of the failed drops removed anything
+  - sql: |
+      SELECT count(*) AS n FROM mm_t
+    expect: rows
+    order: multiset

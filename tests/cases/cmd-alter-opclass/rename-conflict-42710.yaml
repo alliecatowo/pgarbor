@@ -1,0 +1,37 @@
+# Renaming an opclass to a name already used by another opclass for the same index method and schema fails; a same-name rename also fails.
+id: cmd-alter-opclass.rename-conflict-42710
+title: "RENAME TO a name already taken in the schema for the same access method raises duplicate_object"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, rename, unique-name]
+required_capabilities: [create-operator-class, alter-operator-class, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR CLASS aoc_cmd_c2a FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  CREATE OPERATOR CLASS aoc_cmd_c2b FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_c2a USING btree RENAME TO aoc_cmd_c2b
+    expect: error
+    sqlstate: "42710"
+    comment: name already used by aoc_cmd_c2b in public for btree
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_c2a USING btree RENAME TO aoc_cmd_c2a
+    expect: error
+    sqlstate: "42710"
+    comment: renaming to its own name is also rejected
+  - sql: |
+      SELECT opcname FROM pg_opclass WHERE opcname LIKE 'aoc_cmd_c2%' ORDER BY opcname
+    expect: rows
+    order: ordered
+    comment: both opclasses keep their names
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_c2a USING btree RENAME TO aoc_cmd_c2c
+    expect: ok
+  - sql: |
+      SELECT opcname FROM pg_opclass WHERE opcname LIKE 'aoc_cmd_c2%' ORDER BY opcname
+    expect: rows
+    order: ordered

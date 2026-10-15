@@ -1,0 +1,34 @@
+# Default behavior is RESTRICT: a table column whose COLLATE clause uses the collation blocks the drop.
+id: cmd-drop-collation.restrict-default-dependent-column
+title: "DROP COLLATION refuses to drop a collation used by a column, with and without explicit RESTRICT"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, restrict, dependencies, create-table]
+required_capabilities: [create-collation, drop-collation, icu-provider, create-table, collate-clause, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_collation.sgml#sql-dropcollation (RESTRICT is the default)"
+sessions: [a]
+setup: |
+  CREATE COLLATION dc_r (provider = icu, locale = 'de-DE');
+  CREATE TABLE dc_t (id int4, s text COLLATE dc_r);
+  INSERT INTO dc_t VALUES (1, 'x');
+steps:
+  - sql: |
+      DROP COLLATION dc_r
+    expect: error
+    sqlstate: "2BP01"
+    comment: column s of dc_t depends on dc_r
+  - sql: |
+      DROP COLLATION dc_r RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT count(*) FROM pg_collation WHERE collname = 'dc_r'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, s FROM dc_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: table and data are untouched by the refused drop

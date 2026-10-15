@@ -1,0 +1,39 @@
+id: cmd-create-materialized-view.basic-populated
+title: CREATE MATERIALIZED VIEW populates at creation by default and with explicit WITH DATA
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, group-by, aggregates, numeric]
+required_capabilities: [create-table, insert, select, create-materialized-view, group-by, aggregates, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (Description, WITH [NO] DATA)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales (id int4 PRIMARY KEY, region text NOT NULL, amt numeric(8,2) NOT NULL);
+  INSERT INTO sales VALUES (1, 'north', 10.50), (2, 'south', 4.25), (3, 'north', 0.25);
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_totals AS
+        SELECT region, sum(amt) AS total, count(*) AS n FROM sales GROUP BY region
+    expect: ok
+  - session: a
+    sql: |
+      SELECT region, total, n FROM mv_totals ORDER BY region
+    expect: rows
+    order: ordered
+    comment: populated at creation time
+  - session: a
+    sql: |
+      SELECT matviewname, ispopulated FROM pg_matviews WHERE matviewname = 'mv_totals'
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_explicit AS SELECT id, amt FROM sales WHERE amt > 1 WITH DATA
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, amt FROM mv_explicit ORDER BY id
+    expect: rows
+    order: ordered

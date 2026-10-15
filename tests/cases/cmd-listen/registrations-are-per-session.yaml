@@ -1,0 +1,31 @@
+# Registrations belong to one session: a LISTEN in session a is invisible to session b, and NOTIFY from b is accepted.
+id: cmd-listen.registrations-are-per-session
+title: LISTEN registration is private to its session while NOTIFY is shared by the database
+family: cmd-listen
+tier: core
+feature_ids: [listen, notify, multi-session, pg-listening-channels]
+required_capabilities: [listen-notify, multi-session, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/listen.sgml#sql-listen (Description: NOTIFY from this or another session notifies all listeners)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      LISTEN shared_ch
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) AS n FROM pg_listening_channels()
+    expect: rows
+    comment: session b has no registrations
+  - session: b
+    sql: |
+      NOTIFY shared_ch, 'from-b'
+    expect: ok
+    comment: the notification reaches session a after commit; it is not a recorded result here
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM pg_listening_channels()
+    expect: rows
+    comment: session a still has exactly one registration

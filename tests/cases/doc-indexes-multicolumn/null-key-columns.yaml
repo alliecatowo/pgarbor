@@ -1,0 +1,29 @@
+# NULL keys in a multicolumn index: equality never matches NULL, IS NULL does, and NULL keys are stored and found.
+id: doc-indexes-multicolumn.null-key-columns
+title: NULL values in multicolumn index keys match only IS NULL predicates
+family: doc-indexes-multicolumn
+tier: core
+feature_ids: [multicolumn-index, btree-index, null-semantics, where-clause]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (conditions on indexed columns; NULL semantics of comparisons)"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (major int, minor int, name varchar);
+  CREATE INDEX test2_mm_idx ON test2 (major, minor);
+  INSERT INTO test2 VALUES (1, 1, 'a'), (1, 2, 'b'), (2, 1, NULL), (2, 2, 'd'), (NULL, 1, 'e'), (1, NULL, 'f')
+steps:
+  - sql: |
+      SELECT name FROM test2 WHERE major = 1 AND minor IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT name FROM test2 WHERE major = 1 AND minor = NULL
+    expect: rows
+    order: multiset
+    comment: equality with NULL is never true, so zero rows
+  - sql: |
+      SELECT major, minor, name FROM test2 WHERE minor = 1 ORDER BY major NULLS LAST
+    expect: rows
+    order: ordered

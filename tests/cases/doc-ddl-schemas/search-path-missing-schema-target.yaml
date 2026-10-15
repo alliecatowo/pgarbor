@@ -1,0 +1,41 @@
+# search_path may name schemas that do not exist; they are skipped. The first existing entry is the
+# current schema and the creation target, and with no existing entry creation fails.
+id: doc-ddl-schemas.search-path-missing-schema-target
+title: Missing schemas in search_path are skipped for current schema and creation target
+family: doc-ddl-schemas
+tier: core
+feature_ids: [search-path, current-schema, create-table, errors]
+required_capabilities: [create-schema, create-table, select, errors, guc, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-path (The first schema in the search path that exists is the default location for creating new objects)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA target_s
+    expect: ok
+  - sql: |
+      SET search_path TO nosuch_schema_q, public
+    expect: ok
+  - sql: |
+      SELECT current_schema()
+    expect: rows
+    comment: nosuch_schema_q is ignored, so public is the current schema
+  - sql: |
+      SET search_path TO nosuch_schema_q, target_s
+    expect: ok
+  - sql: |
+      CREATE TABLE placed (id int4)
+    expect: ok
+  - sql: |
+      SELECT schemaname FROM pg_tables WHERE tablename = 'placed'
+    expect: rows
+    comment: created in the first existing schema on the path
+  - sql: |
+      SET search_path TO nosuch_schema_q
+    expect: ok
+  - sql: |
+      CREATE TABLE nowhere (id int4)
+    expect: error
+    sqlstate: "3F000"
+    comment: no schema on the path exists, so there is nowhere to create the table

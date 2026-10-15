@@ -1,0 +1,31 @@
+# Mixed view: plain column references are updatable, a computed column is read-only.
+id: cmd-create-view.computed-column-readonly
+title: Computed view column is read-only while plain base column references stay updatable
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, updatable-views, expressions, update, errors]
+required_capabilities: [create-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview-updatable-views (mix of updatable and non-updatable columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy'), (2, 'B', 'Comedy'), (3, 'C', 'Drama'), (4, 'D', 'Comedy');
+steps:
+  - sql: |
+      CREATE VIEW cv AS SELECT id, title, upper(title) AS up FROM films
+    expect: ok
+  - sql: |
+      UPDATE cv SET title = 'zz' WHERE id = 1
+    expect: ok
+    comment: a plain reference to a base column is updatable
+  - sql: |
+      UPDATE cv SET up = 'z' WHERE id = 1
+    expect: error
+    sqlstate: "0A000"
+    comment: the computed column is not a column of the base relation
+  - sql: |
+      SELECT id, title, up FROM cv ORDER BY id
+    expect: rows
+    order: ordered

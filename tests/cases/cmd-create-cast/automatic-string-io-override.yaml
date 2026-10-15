@@ -1,0 +1,46 @@
+# Automatic I/O casts: integer to text is assignment-capable, text to integer is explicit-only; a user WITH INOUT cast replaces the automatic one.
+id: cmd-create-cast.automatic-string-io-override
+title: "Automatic I/O casts to strings assign implicitly, and a user cast can replace the automatic cast"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, io-conversion-cast, assignment-cast, string-types]
+required_capabilities: [create-cast, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-notes (automatic I/O conversion casts)"
+sessions: [a]
+setup: |
+  CREATE TABLE aio_t (s text, i int4);
+steps:
+  - sql: |
+      INSERT INTO aio_t (s, i) VALUES (5, 6)
+    expect: ok
+    comment: integer to text is an automatic assignment cast
+  - sql: |
+      INSERT INTO aio_t (i) SELECT '7'::text
+    expect: error
+    sqlstate: "42804"
+    comment: text to integer is an automatic explicit-only cast
+  - sql: |
+      SELECT CAST('12'::text AS int4) AS parsed
+    expect: rows
+  - sql: |
+      CREATE CAST (int4 AS text) WITH INOUT
+    expect: ok
+    comment: replaces the automatic cast; a WITH INOUT cast is explicit-only unless AS ASSIGNMENT or AS IMPLICIT is given
+  - sql: |
+      INSERT INTO aio_t (s) VALUES (9)
+    expect: error
+    sqlstate: "42804"
+    comment: the replacement is explicit-only, so the assignment no longer works
+  - sql: |
+      SELECT CAST(9 AS text) AS explicit_text
+    expect: rows
+  - sql: |
+      CREATE CAST (int4 AS text) WITH INOUT
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT s, i FROM aio_t ORDER BY i
+    expect: rows
+    order: ordered

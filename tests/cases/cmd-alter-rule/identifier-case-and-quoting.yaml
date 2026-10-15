@@ -1,0 +1,35 @@
+# Unquoted rule names fold to lower case, quoted names keep their case and are distinct from folded ones.
+id: cmd-alter-rule.identifier-case-and-quoting
+title: ALTER RULE folds unquoted names and treats quoted names as case-sensitive
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, identifiers, case-folding, rules]
+required_capabilities: [create-table, create-rule, select, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS (case folding of unquoted identifiers)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4);
+  CREATE RULE notify_all AS ON INSERT TO emp DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      ALTER RULE NOTIFY_ALL ON EMP RENAME TO "Mixed"
+    expect: ok
+    comment: the unquoted rule and table names fold to notify_all and emp
+  - sql: |
+      ALTER RULE "Mixed" ON emp RENAME TO mixed2
+    expect: ok
+  - sql: |
+      ALTER RULE "MIXED2" ON emp RENAME TO y
+    expect: error
+    sqlstate: "42704"
+    comment: quoted names are case-sensitive, so MIXED2 does not match mixed2
+  - sql: |
+      ALTER RULE mixed2 ON emp RENAME TO "Quoted Name"
+    expect: ok
+    comment: a quoted new name may contain spaces
+  - sql: |
+      SELECT rulename FROM pg_rules WHERE tablename = 'emp' ORDER BY 1
+    expect: rows
+    order: ordered

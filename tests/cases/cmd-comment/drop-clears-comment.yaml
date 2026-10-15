@@ -1,0 +1,86 @@
+# Comments are dropped with their object: a dropped column, a dropped table (including via CASCADE), and a dropped function lose their comment, while rename keeps it and a recreated object starts with none.
+id: cmd-comment.drop-clears-comment
+title: Comments disappear with dropped columns, tables, dependent views and functions, and survive renames
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-drop, comment-rename, comment-column-drop, comment-cascade]
+required_capabilities: [comment, create-table, create-view, create-function, sql-functions, alter-table, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-desc (Comments are automatically dropped when their object is dropped)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE cmd_dc (id int4 PRIMARY KEY, note text, n int4)
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE cmd_dc IS 'table to drop'
+    expect: ok
+  - sql: |
+      COMMENT ON COLUMN cmd_dc.note IS 'note column'
+    expect: ok
+  - sql: |
+      COMMENT ON COLUMN cmd_dc.n IS 'n column'
+    expect: ok
+  - sql: |
+      COMMENT ON INDEX cmd_dc_pkey IS 'pk index'
+    expect: ok
+  - sql: |
+      ALTER TABLE cmd_dc DROP COLUMN note
+    expect: ok
+  - sql: |
+      SELECT objsubid, description FROM pg_description WHERE objoid = 'cmd_dc'::regclass AND classoid = 'pg_class'::regclass ORDER BY objsubid
+    expect: rows
+    order: ordered
+    comment: the dropped column's comment is gone; the other column's comment is kept
+  - sql: |
+      ALTER TABLE cmd_dc RENAME TO cmd_dc2
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_dc2'::regclass, 'pg_class') AS descr, col_description('cmd_dc2'::regclass, 3) AS n_descr
+    expect: rows
+    comment: rename keeps the table and column comments
+  - sql: |
+      DROP TABLE cmd_dc2
+    expect: ok
+  - sql: |
+      SELECT count(*) AS leftover FROM pg_description WHERE description IN ('table to drop', 'n column', 'pk index')
+    expect: rows
+    comment: dropping the table removes its table, column and index comments
+  - sql: |
+      CREATE TABLE cmd_dc2 (id int4)
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_dc2'::regclass, 'pg_class') IS NULL AS fresh_table_has_no_comment
+    expect: rows
+  - sql: |
+      DROP TABLE cmd_dc2
+    expect: ok
+  - sql: |
+      CREATE TABLE cmd_base (id int4)
+    expect: ok
+  - sql: |
+      CREATE VIEW cmd_bv AS SELECT id FROM cmd_base
+    expect: ok
+  - sql: |
+      COMMENT ON VIEW cmd_bv IS 'dependent view comment'
+    expect: ok
+  - sql: |
+      DROP TABLE cmd_base CASCADE
+    expect: ok
+    comment: the cascade also drops cmd_bv and its comment
+  - sql: |
+      SELECT count(*) AS view_comment_left FROM pg_description WHERE description = 'dependent view comment'
+    expect: rows
+  - sql: |
+      CREATE FUNCTION cmd_f() RETURNS int4 LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      COMMENT ON FUNCTION cmd_f() IS 'function comment'
+    expect: ok
+  - sql: |
+      DROP FUNCTION cmd_f()
+    expect: ok
+  - sql: |
+      SELECT count(*) AS function_comment_left FROM pg_description WHERE description = 'function comment'
+    expect: rows

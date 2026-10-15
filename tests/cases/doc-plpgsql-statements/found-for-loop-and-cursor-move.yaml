@@ -1,0 +1,47 @@
+# FOUND after a FOR loop reflects whether the loop ran at all; FETCH and MOVE set FOUND and MOVE skips rows.
+id: doc-plpgsql-statements.found-for-loop-and-cursor-move
+title: FOUND after FOR loops, FETCH and MOVE on a cursor
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, found, for-loop, cursors, fetch, move]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-diagnostics"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('bo', 20), ('cy', 20);
+  CREATE FUNCTION f_loop_found(p int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r record;
+  BEGIN
+    FOR r IN SELECT * FROM emp WHERE salary = p LOOP
+      NULL;
+    END LOOP;
+    RETURN FOUND::text;
+  END $$;
+  CREATE FUNCTION f_cursor() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c CURSOR FOR SELECT empname FROM emp ORDER BY empname;
+    n text;
+    s text := '';
+  BEGIN
+    OPEN c;
+    FETCH c INTO n;
+    s := s || FOUND::text || ':' || n;
+    MOVE FORWARD 1 FROM c;
+    s := s || ' ' || FOUND::text;
+    FETCH c INTO n;
+    s := s || ' ' || n;
+    CLOSE c;
+    RETURN s;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_loop_found(20) AS loop_ran, f_loop_found(99) AS loop_empty
+    expect: rows
+    comment: FOUND is true after a FOR loop that iterated and false when it did not
+  - sql: |
+      SELECT f_cursor() AS cursor_steps
+    expect: rows
+    comment: FETCH sets FOUND, MOVE FORWARD 1 skips bo, so the next FETCH returns cy

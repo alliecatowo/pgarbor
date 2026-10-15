@@ -1,0 +1,64 @@
+# WHERE CURRENT OF fails when the cursor is not positioned on a row, does not exist, or was closed.
+id: cmd-update.where-current-of-errors
+title: WHERE CURRENT OF errors for unpositioned, unknown, and closed cursors
+family: cmd-update
+tier: core
+feature_ids: [update, where-current-of, cursors, errors]
+required_capabilities: [create-table, insert, select, update, cursors, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (cursor_name must be a non-grouping query on the target; WHERE CURRENT OF uses the most recently fetched row)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (code text PRIMARY KEY, kind text);
+  INSERT INTO films VALUES ('A', 'Drama')
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c3 CURSOR FOR SELECT code FROM films
+    expect: ok
+  - sql: |
+      UPDATE films SET kind = 'Q' WHERE CURRENT OF c3
+    expect: error
+    sqlstate: "24000"
+    comment: no FETCH yet, so the cursor is not positioned on a row
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      UPDATE films SET kind = 'Y' WHERE CURRENT OF nosuch
+    expect: error
+    sqlstate: "34000"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c4 CURSOR FOR SELECT code FROM films
+    expect: ok
+  - sql: |
+      FETCH c4
+    expect: rows
+  - sql: |
+      CLOSE c4
+    expect: ok
+  - sql: |
+      UPDATE films SET kind = 'Y' WHERE CURRENT OF c4
+    expect: error
+    sqlstate: "34000"
+    comment: a closed cursor no longer exists
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT code, kind FROM films
+    expect: rows
+    order: multiset
+    comment: every failed update was rolled back, so the row is unchanged

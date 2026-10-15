@@ -1,0 +1,35 @@
+# Listener registrations belong to one session; UNLISTEN * in one session leaves another session's registrations alone.
+id: cmd-unlisten.star-is-per-session
+title: UNLISTEN * in one session does not remove registrations held by another session
+family: cmd-unlisten
+tier: core
+feature_ids: [unlisten, unlisten-wildcard, listen, multi-session, pg-listening-channels]
+required_capabilities: [listen-notify, multi-session, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/unlisten.sgml#sql-unlisten (Description: cancels registrations of the current session)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      LISTEN s1
+    expect: ok
+  - session: b
+    sql: |
+      LISTEN s1; LISTEN s2
+    expect: ok
+  - session: a
+    sql: |
+      UNLISTEN *
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM pg_listening_channels()
+    expect: rows
+    comment: session a has no registrations
+  - session: b
+    sql: |
+      SELECT pg_listening_channels() AS ch ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: session b still has s1 and s2

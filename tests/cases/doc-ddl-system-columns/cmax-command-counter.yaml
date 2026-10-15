@@ -1,0 +1,42 @@
+# cmax records the command within the deleting or updating transaction that superseded a row version.
+id: doc-ddl-system-columns.cmax-command-counter
+title: cmax records the command that superseded a row version
+family: doc-ddl-system-columns
+tier: core
+feature_ids: [system-columns, cmax, update, delete, transactions, multi-session]
+required_capabilities: [create-table, insert, select, update, delete, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-system-columns (cmax: command identifier within the deleting transaction)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE t SET v = v + 1 WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      DELETE FROM t WHERE id = 2
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v, xmax <> '0'::xid AS xmax_set, cmax FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the superseded version of row 1 has cmax 0 (the UPDATE); row 2 has cmax 1 (the DELETE, second command)
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

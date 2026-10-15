@@ -1,0 +1,28 @@
+# Adjacent RANGE partitions may share a bound because upper bounds are exclusive; MINVALUE/MAXVALUE
+# make open-ended partitions. The shared value 10 belongs to the upper partition.
+id: doc-ddl-partitioning.range-shared-bound-and-unbounded
+title: Adjacent range partitions share a bound; the shared value belongs to the upper partition
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, range-partitioning, partition-routing, partition-bounds]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Declarative Partitioning: 'adjacent partitions can share a bound value')"
+sessions: [a]
+setup: |
+  CREATE TABLE rng (id int) PARTITION BY RANGE (id);
+  CREATE TABLE rng_low PARTITION OF rng FOR VALUES FROM (MINVALUE) TO (10);
+  CREATE TABLE rng_high PARTITION OF rng FOR VALUES FROM (10) TO (MAXVALUE);
+steps:
+  - sql: |
+      INSERT INTO rng VALUES (9), (10), (19), (-2147483648), (2147483647)
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, id FROM rng ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tableoid::regclass::text AS part, count(*) FROM rng GROUP BY 1 ORDER BY 1
+    expect: rows
+    order: ordered

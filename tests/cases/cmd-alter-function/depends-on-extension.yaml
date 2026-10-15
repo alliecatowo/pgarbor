@@ -1,0 +1,37 @@
+# DEPENDS ON EXTENSION records an extension dependency (deptype 'x') idempotently; NO DEPENDS
+# removes it; an unknown extension is an error.
+id: cmd-alter-function.depends-on-extension
+title: DEPENDS ON EXTENSION and NO DEPENDS ON EXTENSION add and remove the extension dependency
+family: cmd-alter-function
+tier: extended
+feature_ids: [alter-function, extension-dependency]
+required_capabilities: [create-function, alter-function, extension, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (DEPENDS ON EXTENSION / NO DEPENDS ON EXTENSION)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dep1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION dep1(int) DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      ALTER FUNCTION dep1(int) DEPENDS ON EXTENSION plpgsql
+    expect: ok
+    comment: repeating the same dependency is accepted
+  - sql: |
+      SELECT count(*) AS n FROM pg_depend WHERE objid = 'dep1'::regproc AND deptype = 'x'
+    expect: rows
+    comment: exactly one extension dependency recorded
+  - sql: |
+      ALTER FUNCTION dep1(int) DEPENDS ON EXTENSION no_such_extension_xyz
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER FUNCTION dep1(int) NO DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_depend WHERE objid = 'dep1'::regproc AND deptype = 'x'
+    expect: rows
+    comment: expect 0

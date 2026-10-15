@@ -1,0 +1,33 @@
+# jsonb existence operators test top-level keys and array elements only, never nested keys or object values.
+id: doc-datatype-json.jsonb-existence
+title: jsonb key-exists operators match top-level keys and array strings but not nested keys or values
+family: doc-datatype-json
+tier: core
+feature_ids: [jsonb, jsonb-existence]
+required_capabilities: [select, jsonb]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#datatype-json (jsonb Containment and Existence: existence operator examples)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT
+        '["foo", "bar", "baz"]'::jsonb ? 'bar' AS array_element,
+        '{"foo": "bar"}'::jsonb ? 'foo' AS object_key,
+        '{"foo": "bar"}'::jsonb ? 'bar' AS object_value_not_considered,
+        '{"foo": {"bar": "baz"}}'::jsonb ? 'bar' AS nested_not_top_level,
+        '"foo"'::jsonb ? 'foo' AS primitive_string,
+        '{"a": null}'::jsonb ? 'a' AS null_valued_key
+    expect: rows
+    comment: doc examples plus a key whose value is JSON null
+  - sql: |
+      SELECT
+        '{"a": 1, "b": 2}'::jsonb ?| array['a', 'z'] AS any_present,
+        '{"a": 1}'::jsonb ?| array['z'] AS none_present,
+        '{"a": 1}'::jsonb ?& array['a'] AS all_present,
+        '{"a": 1}'::jsonb ?& array['a', 'b'] AS not_all_present
+    expect: rows
+    comment: ?| is any-of, ?& is all-of, both top level only
+  - sql: |
+      SELECT '{}'::jsonb ?& array[]::text[] AS empty_all_vacuous, '{}'::jsonb ?| array[]::text[] AS empty_any
+    expect: rows

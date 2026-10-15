@@ -1,0 +1,29 @@
+# DROP RULE IF EXISTS drops an existing rule silently and downgrades a missing one to a notice.
+id: cmd-drop-rule.if-exists-notice
+title: DROP RULE IF EXISTS succeeds for existing rules and emits a notice for missing ones
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-rule, if-exists]
+required_capabilities: [create-table, create-rule, drop-rule, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (IF EXISTS parameter)"
+sessions: [a]
+setup: |
+  CREATE TABLE ie (a int4);
+  CREATE RULE ie_r AS ON INSERT TO ie DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      DROP RULE IF EXISTS ie_r ON ie
+    expect: ok
+  - sql: |
+      DROP RULE IF EXISTS ie_r ON ie
+    expect: notice
+    comment: second drop of the same rule is a notice, not an error
+  - sql: |
+      DROP RULE IF EXISTS never_created ON ie
+    expect: notice
+  - sql: |
+      SELECT count(*) FROM pg_rules WHERE tablename = 'ie'
+    expect: rows
+    comment: no rules remain on ie

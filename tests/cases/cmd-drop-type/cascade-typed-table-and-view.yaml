@@ -1,0 +1,48 @@
+# CASCADE drops a typed table and a view over a composite-typed column; a typed table's rows go with it.
+id: cmd-drop-type.cascade-typed-table-and-view
+title: CASCADE drops a table created OF the type and a view that depends on a typed column
+family: cmd-drop-type
+tier: core
+feature_ids: [drop-type, cascade, create-table, create-view, composite-types]
+required_capabilities: [drop-type, create-type, create-table, create-view, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_type.sgml#sql-droptype (CASCADE: table columns)"
+sessions: [a]
+setup: |
+  CREATE TYPE pt AS (x int4, y int4);
+  CREATE TABLE tt OF pt;
+  INSERT INTO tt VALUES (1, 2);
+  CREATE TYPE vt AS (a int4);
+  CREATE TABLE vtab (x vt);
+  CREATE VIEW vv AS SELECT x FROM vtab;
+steps:
+  - sql: |
+      DROP TYPE pt
+    expect: error
+    sqlstate: "2BP01"
+    comment: the typed table depends on pt
+  - sql: |
+      DROP TYPE vt
+    expect: error
+    sqlstate: "2BP01"
+    comment: column x of vtab and the view depend on vt
+  - sql: |
+      DROP TYPE pt CASCADE
+    expect: ok
+  - sql: |
+      SELECT to_regclass('tt') IS NULL AS typed_table_gone
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TYPE vt CASCADE
+    expect: ok
+  - sql: |
+      SELECT to_regclass('vv') IS NULL AS view_gone
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'vtab'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: the typed column is gone, the table itself remains with no columns

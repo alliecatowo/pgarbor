@@ -1,0 +1,40 @@
+# A view that reads a composite field blocks DROP ATTRIBUTE; CASCADE drops the dependent views with a notice.
+id: cmd-alter-type.drop-attribute-view-dependency
+title: "DROP ATTRIBUTE is refused while a view depends on the field; CASCADE drops the views"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, composite-type, drop-attribute, view-dependency, cascade]
+required_capabilities: [create-type, alter-type, composite-type, create-table, create-view, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (DROP ATTRIBUTE; CASCADE and RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TYPE pt AS (x int, y text);
+  CREATE TABLE pts (p pt);
+  CREATE VIEW v1 AS SELECT (ROW(1, 'a')::pt).y AS yy;
+  CREATE VIEW v2 AS SELECT (p).y AS yy FROM pts;
+steps:
+  - sql: |
+      SELECT viewname FROM pg_views WHERE schemaname = 'public' ORDER BY viewname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TYPE pt DROP ATTRIBUTE y
+    expect: error
+    sqlstate: "2BP01"
+    comment: both views depend on field y; RESTRICT is the default
+  - sql: |
+      ALTER TYPE pt DROP ATTRIBUTE y CASCADE
+    expect: ok
+    comment: CASCADE drops v1 and v2 and reports a notice
+  - sql: |
+      SELECT viewname FROM pg_views WHERE schemaname = 'public' ORDER BY viewname
+    expect: rows
+    order: ordered
+    comment: no views remain
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'pt'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: only x remains

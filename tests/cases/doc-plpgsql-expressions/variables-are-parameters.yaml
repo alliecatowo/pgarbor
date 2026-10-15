@@ -1,0 +1,35 @@
+# Variables are substituted as query parameters, not as SQL text, so quotes inside values are plain data.
+id: doc-plpgsql-expressions.variables-are-parameters
+title: PL/pgSQL variables in expressions are bound as parameters, not spliced into SQL text
+family: doc-plpgsql-expressions
+tier: core
+feature_ids: [plpgsql, expressions, parameters, quoting]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-expressions (variable names are replaced by query parameters)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'O''Brien'), (4, 'x'' OR ''1''=''1');
+  CREATE FUNCTION count_named(needle text) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    IF count(*) > 0 FROM t WHERE name = needle THEN
+      RETURN (SELECT count(*)::int FROM t WHERE name = needle);
+    END IF;
+    RETURN 0;
+  END $$;
+  CREATE FUNCTION id_of(needle text) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE v int;
+  BEGIN
+    v := id FROM t WHERE name = needle;
+    RETURN v;
+  END $$;
+steps:
+  - sql: |
+      SELECT count_named('O''Brien') AS obrien, count_named('a'' OR ''1''=''1') AS injected, count_named('zzz') AS none
+    expect: rows
+    comment: the quote characters are data; the injected-looking text matches only the literal row
+  - sql: |
+      SELECT id_of('O''Brien') AS id_obrien
+    expect: rows

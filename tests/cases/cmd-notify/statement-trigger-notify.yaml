@@ -1,0 +1,43 @@
+# The documented technique: a statement-level trigger that calls pg_notify on each INSERT, UPDATE or DELETE statement.
+id: cmd-notify.statement-trigger-notify
+title: Statement-level trigger sends a notification per DML statement
+family: cmd-notify
+tier: core
+feature_ids: [notify, triggers, plpgsql, pg-notify-function]
+required_capabilities: [create-table, insert, update, delete, select, listen-notify, triggers, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "ref/notify.sgml#sql-notify (Description: NOTIFY in a statement trigger)"
+sessions: [a]
+setup: |
+  CREATE TABLE tracked (id int4 PRIMARY KEY, v text);
+  CREATE FUNCTION tracked_notify() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      PERFORM pg_notify('tracked_changes', TG_OP);
+      RETURN NULL;
+  END
+  $$;
+  CREATE TRIGGER tracked_stmt AFTER INSERT OR UPDATE OR DELETE ON tracked
+      FOR EACH STATEMENT EXECUTE FUNCTION tracked_notify();
+steps:
+  - sql: |
+      LISTEN tracked_changes
+    expect: ok
+  - sql: |
+      INSERT INTO tracked VALUES (1, 'a'), (2, 'b')
+    expect: ok
+    comment: one statement, one trigger firing, even for two rows
+  - sql: |
+      UPDATE tracked SET v = 'z' WHERE id = 1
+    expect: ok
+  - sql: |
+      DELETE FROM tracked WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT id, v FROM tracked ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_listening_channels() AS channel
+    expect: rows
+    order: multiset

@@ -1,0 +1,31 @@
+# An index stored with nulls first can satisfy ORDER BY x ASC NULLS FIRST or ORDER BY x DESC NULLS LAST depending on scan direction.
+id: doc-indexes-ordering.nulls-first-index-both-directions
+title: NULLS FIRST index answers ASC NULLS FIRST and DESC NULLS LAST orderings
+family: doc-indexes-ordering
+tier: core
+feature_ids: [btree-index, nulls-ordering, order-by, create-index]
+required_capabilities: [create-table, insert, select, order-by, create-index, btree-index, nulls]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-ordering (test2_info_nulls_low example)"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (id int4, info int4);
+  CREATE INDEX test2_info_nulls_low ON test2 (info NULLS FIRST);
+  INSERT INTO test2 VALUES (1, NULL), (2, 5), (3, 1), (4, NULL), (5, 3);
+steps:
+  - sql: |
+      SELECT id, info FROM test2 ORDER BY info ASC NULLS FIRST, id
+    expect: rows
+    order: ordered
+    comment: forward scan of the index
+  - sql: |
+      SELECT id, info FROM test2 ORDER BY info DESC NULLS LAST, id
+    expect: rows
+    order: ordered
+    comment: backward scan of the same index
+  - sql: |
+      SELECT id, info FROM test2 ORDER BY info DESC, id
+    expect: rows
+    order: ordered
+    comment: DESC without NULLS keeps the default NULLS FIRST and must not reuse the nulls-last reading

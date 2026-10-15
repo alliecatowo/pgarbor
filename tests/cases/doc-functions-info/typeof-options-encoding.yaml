@@ -1,0 +1,41 @@
+# pg_typeof, COLLATION FOR, pg_options_to_table, and pg_char_to_encoding / pg_encoding_to_char round-trips.
+id: doc-functions-info.typeof-options-encoding
+title: pg_typeof, COLLATION FOR, storage-option expansion and encoding name lookups
+family: doc-functions-info
+tier: core
+feature_ids: [pg-typeof, collation-for, pg-options-to-table, encoding-names]
+required_capabilities: [select, catalog-introspection, collation]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (pg_typeof, COLLATION FOR, pg_options_to_table, pg_char_to_encoding)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_typeof(33) AS int_type,
+             pg_typeof('foo') AS unknown_lit,
+             pg_typeof(33::bigint) AS big_type
+    expect: rows
+    comment: documented pg_typeof(33) is integer; an untyped literal is unknown
+  - sql: |
+      SELECT COLLATION FOR ('foo'::text) AS default_coll,
+             COLLATION FOR ('foo' COLLATE "C") AS c_coll
+    expect: rows
+    comment: documented, collation names are quoted and schema-qualified if necessary
+  - sql: |
+      SELECT COLLATION FOR (1)
+    expect: error
+    sqlstate: "42804"
+    comment: documented, an error is raised for a non-collatable type
+  - sql: |
+      SELECT option_name, option_value
+      FROM pg_options_to_table(ARRAY['fillfactor=70', 'autovacuum_enabled=false'])
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_char_to_encoding('UTF8') AS utf8_id,
+             pg_char_to_encoding('nosuch_enc_fi') AS unknown_id,
+             pg_encoding_to_char(6) AS utf8_name,
+             pg_encoding_to_char(9999) = '' AS bad_id_empty
+    expect: rows
+    comment: documented, unknown encoding name gives -1; invalid encoding number gives an empty string

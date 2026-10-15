@@ -1,0 +1,34 @@
+# tsvector_update_trigger_column takes the text search configuration per row from a regconfig column.
+id: doc-textsearch-features.trigger-builtin-column-config
+title: Per-row configuration via tsvector_update_trigger_column
+family: doc-textsearch-features
+tier: extended
+feature_ids: [tsvector-update-trigger, regconfig, triggers]
+required_capabilities: [create-table, create-trigger, insert, select, triggers, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-update-triggers"
+steps:
+  - sql: |
+      CREATE TABLE docs_cfg (
+          title   text,
+          body    text,
+          cfg     regconfig,
+          tsv     tsvector
+      )
+    expect: ok
+  - sql: |
+      CREATE TRIGGER docs_cfg_upd BEFORE INSERT OR UPDATE
+      ON docs_cfg FOR EACH ROW EXECUTE FUNCTION
+      tsvector_update_trigger_column(tsv, cfg, title, body)
+    expect: ok
+  - sql: |
+      INSERT INTO docs_cfg VALUES
+        ('running dogs', 'running dogs', 'pg_catalog.english'::regconfig, NULL),
+        ('running dogs', 'running dogs', 'pg_catalog.simple'::regconfig, NULL)
+    expect: ok
+  - sql: |
+      SELECT cfg::text AS cfg, tsv::text AS tsv FROM docs_cfg ORDER BY cfg::text
+    expect: rows
+    order: ordered
+    comment: english stems and drops nothing here, simple keeps the surface forms

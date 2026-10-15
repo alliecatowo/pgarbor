@@ -1,0 +1,35 @@
+# OWNER TO accepts CURRENT_ROLE, CURRENT_USER and SESSION_USER; an unknown role or a non-matching
+# argument list is an error.
+id: cmd-alter-function.owner-change
+title: OWNER TO accepts the CURRENT_ROLE/CURRENT_USER/SESSION_USER keywords and rejects unknown roles
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, owner, roles]
+required_capabilities: [create-function, alter-function, roles, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Description; Parameters: new_owner)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION own1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION own1(int) OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      ALTER FUNCTION own1(int) OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      ALTER FUNCTION own1(int) OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(proowner) = current_user AS owned_by_me FROM pg_proc WHERE proname = 'own1'
+    expect: rows
+  - sql: |
+      ALTER FUNCTION own1(int) OWNER TO no_such_role_xyz
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER FUNCTION own1(int, int) OWNER TO CURRENT_USER
+    expect: error
+    sqlstate: "42883"

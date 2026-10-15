@@ -1,0 +1,35 @@
+# A volatile DEFAULT (nextval) is evaluated per existing row when the column is added, so existing rows get distinct values.
+id: doc-ddl-alter.add-column-volatile-default
+title: ADD COLUMN with a volatile DEFAULT (nextval) gives each existing row its own value
+family: doc-ddl-alter
+tier: core
+feature_ids: [alter-table, add-column, column-default, volatile-default, sequences, errors]
+required_capabilities: [create-table, alter-table, insert, select, sequences, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-alter (Adding a Column: volatile default values)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE products_seq;
+  CREATE TABLE products (id integer PRIMARY KEY, name text);
+  INSERT INTO products VALUES (10, 'a'), (20, 'b'), (30, 'c');
+steps:
+  - sql: |
+      ALTER TABLE products ADD COLUMN serial_no integer DEFAULT nextval('products_seq')
+    expect: ok
+    comment: a volatile default is computed per row at ALTER time
+  - sql: |
+      SELECT count(*), count(DISTINCT serial_no), min(serial_no), max(serial_no) FROM products
+    expect: rows
+    comment: aggregate form, since which row gets which value is not specified
+  - sql: |
+      INSERT INTO products (id, name) VALUES (40, 'd')
+    expect: ok
+  - sql: |
+      SELECT serial_no FROM products WHERE id = 40
+    expect: rows
+    comment: the next nextval value after the three existing rows
+  - sql: |
+      ALTER TABLE products ADD COLUMN serial_no integer
+    expect: error
+    sqlstate: "42701"

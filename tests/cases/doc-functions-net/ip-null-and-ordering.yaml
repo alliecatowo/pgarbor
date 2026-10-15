@@ -1,0 +1,37 @@
+# NULL propagation through inet functions and operators, and the ordering of inet values in ORDER BY.
+id: doc-functions-net.ip-null-and-ordering
+title: NULL propagation through inet functions and operators, and inet sort order
+family: doc-functions-net
+tier: core
+feature_ids: [inet-functions, null-propagation, inet-comparison, inet-ordering]
+required_capabilities: [select, inet, cidr]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-net (comparison operators paragraph, IP Address Functions table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT masklen(NULL::inet) AS ml, host(NULL::inet) AS h, family(NULL::inet) AS f, broadcast(NULL::inet) AS b, network(NULL::inet) AS n
+    expect: rows
+    order: multiset
+    comment: strict functions return NULL for NULL input
+  - sql: |
+      SELECT inet_same_family(NULL::inet, inet '10.0.0.1') AS sf, NULL::inet & inet '10.0.0.1' AS band, inet '10.0.0.1' + NULL::bigint AS plus_null, inet '10.0.0.1' << NULL::inet AS subnet_null
+    expect: rows
+    order: multiset
+    comment: NULL in any argument makes the operator or function result NULL
+  - sql: |
+      SELECT count(*) AS total, count(a) AS non_null, count(*) FILTER (WHERE a << inet '10.0.0.0/8') AS in_net FROM (VALUES (inet '10.1.2.3'), (inet '11.0.0.1'), (NULL::inet)) AS v(a)
+    expect: rows
+    order: multiset
+    comment: count(a) skips NULL; the NULL row yields NULL in the containment test, so FILTER does not count it
+  - sql: |
+      SELECT a FROM (VALUES (inet '10.0.0.2'), (inet '::1'), (inet '10.0.0.1/16'), (inet '10.0.0.1'), (inet '9.255.255.255'), (NULL::inet)) AS v(a) WHERE a IS NOT NULL ORDER BY a
+    expect: rows
+    order: ordered
+    comment: IPv4 sorts before IPv6; equal addresses order by netmask length
+  - sql: |
+      SELECT inet '10.0.0.1' < inet '10.0.0.2' AS lt, inet '10.0.0.1/8' = inet '10.0.0.1/16' AS eq_mask, inet '10.0.0.1' < inet '::1' AS v4_before_v6, cidr '10.0.0.0/8' = inet '10.0.0.0/8' AS cidr_eq_inet
+    expect: rows
+    order: multiset
+    comment: netmask length participates in equality, so /8 and /16 differ; cidr compares equal to the same inet

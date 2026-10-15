@@ -1,0 +1,56 @@
+# Documented: OWNER TO accepts a role name or CURRENT_USER, CURRENT_ROLE, SESSION_USER.
+id: cmd-alter-tsdictionary.owner-to-role-and-keywords
+title: "ALTER TEXT SEARCH DICTIONARY OWNER TO accepts a role name and the CURRENT_USER/CURRENT_ROLE/SESSION_USER keywords"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, owner, owner-keywords, roles]
+required_capabilities: [create-role, create-text-search-dictionary, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (OWNER TO { new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER })"
+sessions: [a]
+setup: |
+  CREATE ROLE tsd_own_r1;
+  CREATE TEXT SEARCH DICTIONARY h_dict (TEMPLATE = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY h_dict OWNER TO tsd_own_r1
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(dictowner) FROM pg_ts_dict WHERE dictname = 'h_dict'
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE tsd_own_r1
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY h_dict OWNER TO CURRENT_USER
+    expect: ok
+    comment: the current role is the owner, so this is allowed
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY h_dict OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY h_dict OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(dictowner) = session_user FROM pg_ts_dict WHERE dictname = 'h_dict'
+    expect: rows
+    comment: owner is now the session user
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY h_dict OWNER TO nosuchrole
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY h_dict OWNER TO tsd_own_r1
+    expect: ok
+  - sql: |
+      DROP TEXT SEARCH DICTIONARY h_dict
+    expect: ok
+  - sql: |
+      DROP ROLE tsd_own_r1
+    expect: ok
+    comment: cleanup of the cluster-wide role

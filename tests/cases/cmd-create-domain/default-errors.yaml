@@ -1,0 +1,45 @@
+# DEFAULT must match the domain type (coerced at CREATE time), may not contain subqueries, and is checked on insert.
+id: cmd-create-domain.default-errors
+title: DEFAULT expression type, subquery and CHECK rules, including a default that violates the domain CHECK
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, domain-default, check-constraint]
+required_capabilities: [create-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (DEFAULT expression)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DOMAIN bad_text_default AS int DEFAULT 'abc'
+    expect: error
+    sqlstate: "22P02"
+    comment: the default must be a valid value of the domain type
+  - sql: |
+      CREATE DOMAIN sub_default AS int DEFAULT (SELECT 1)
+    expect: error
+    sqlstate: "0A000"
+    comment: subqueries are not allowed in a domain DEFAULT
+  - sql: |
+      SELECT typname FROM pg_type WHERE typname IN ('bad_text_default', 'sub_default') ORDER BY typname
+    expect: rows
+    order: ordered
+    comment: neither failed CREATE DOMAIN left a type behind
+  - sql: |
+      CREATE DOMAIN pos_default AS int DEFAULT -1 CHECK (VALUE > 0)
+    expect: ok
+  - sql: |
+      CREATE TABLE tpos (v pos_default)
+    expect: ok
+  - sql: |
+      INSERT INTO tpos VALUES (DEFAULT)
+    expect: error
+    sqlstate: "23514"
+    comment: the default is converted to the domain and therefore checked
+  - sql: |
+      INSERT INTO tpos VALUES (5)
+    expect: ok
+  - sql: |
+      SELECT v FROM tpos ORDER BY v
+    expect: rows
+    order: ordered

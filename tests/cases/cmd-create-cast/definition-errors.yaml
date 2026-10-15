@@ -1,0 +1,68 @@
+# Invalid CREATE CAST definitions are rejected by the function signature, return type, identity and lookup checks; failures leave no catalog entry.
+id: cmd-create-cast.definition-errors
+title: "Invalid CREATE CAST definitions fail with their documented checks and leave no cast behind"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, cast-function, cast-validation]
+required_capabilities: [create-type, create-cast, create-function-sql, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-parameters (function_name, argument and return types)"
+sessions: [a]
+setup: |
+  CREATE TYPE de_a AS (v int);
+  CREATE TYPE de_b AS (v int);
+  CREATE FUNCTION de_fn_int(int4) RETURNS de_b LANGUAGE sql AS $$ SELECT ROW($1)::de_b $$;
+  CREATE FUNCTION de_fn_text(de_a) RETURNS text LANGUAGE sql AS $$ SELECT '' $$;
+  CREATE FUNCTION de_fn_ok(de_a) RETURNS de_b LANGUAGE sql AS $$ SELECT ROW(($1).v)::de_b $$;
+  CREATE FUNCTION de_ov(int4) RETURNS de_b LANGUAGE sql AS $$ SELECT ROW($1)::de_b $$;
+  CREATE FUNCTION de_ov(text) RETURNS de_b LANGUAGE sql AS $$ SELECT ROW(1)::de_b $$;
+steps:
+  - sql: |
+      CREATE CAST (de_a AS de_b) WITH FUNCTION de_fn_int(int4)
+    expect: error
+    sqlstate: "42P17"
+    comment: the function argument type does not match the source type
+  - sql: |
+      CREATE CAST (de_a AS de_b) WITH FUNCTION de_fn_text(de_a)
+    expect: error
+    sqlstate: "42P17"
+    comment: the return type does not match the target type
+  - sql: |
+      CREATE CAST (de_a AS de_a) WITH FUNCTION de_fn_ok(de_a)
+    expect: error
+    sqlstate: "42P17"
+    comment: identical source and target need a function with more than one argument
+  - sql: |
+      CREATE CAST (de_a AS de_b) WITH FUNCTION de_ov
+    expect: error
+    sqlstate: "42725"
+    comment: without an argument list the function name must be unique
+  - sql: |
+      CREATE CAST (de_a AS de_b) WITH FUNCTION de_ov(de_a)
+    expect: error
+    sqlstate: "42883"
+    comment: the named signature does not exist
+  - sql: |
+      CREATE CAST (de_a AS de_b) WITH FUNCTION de_missing(de_a)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE CAST (de_nosuch AS de_b) WITH INOUT
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'de_a'::regtype
+    expect: rows
+    comment: no failed definition left an entry behind
+  - sql: |
+      CREATE CAST (de_a AS de_b) WITH FUNCTION de_fn_ok(de_a)
+    expect: ok
+  - sql: |
+      CREATE CAST (de_a AS de_b) WITH FUNCTION de_fn_ok(de_a)
+    expect: error
+    sqlstate: "42710"
+    comment: the same source and target pair cannot be declared twice
+  - sql: |
+      SELECT (CAST(ROW(9)::de_a AS de_b)).v AS v
+    expect: rows

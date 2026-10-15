@@ -1,0 +1,48 @@
+# Array functions and operators applied to a table column with NULL, empty and NULL-element rows:
+# cardinality, positions, sorting, LATERAL unnest, containment filters, and concatenation per row.
+id: doc-functions-array.table-driven
+title: Array functions over a table column with NULL, empty and NULL-element rows
+family: doc-functions-array
+tier: core
+feature_ids: [array-functions, array-operators, unnest, lateral-join, nulls]
+required_capabilities: [create-table, insert, select, joins, arrays]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-array"
+sessions: [a]
+setup: |
+  CREATE TABLE tarr (k int4 PRIMARY KEY, a int4[]);
+  INSERT INTO tarr VALUES (1, ARRAY[3,1,2]), (2, '{}'), (3, NULL), (4, ARRAY[NULL,5,NULL]);
+steps:
+  - sql: |
+      SELECT k, cardinality(a) AS card, array_length(a, 1) AS len, array_position(a, 2) AS pos_of_2, array_to_string(a, '+', '?') AS joined FROM tarr ORDER BY k
+    expect: rows
+    order: ordered
+    comment: empty array has cardinality 0 but NULL length; NULL array gives NULLs everywhere
+  - sql: |
+      SELECT k, array_sort(a) AS sorted FROM tarr ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT t.k, u.e FROM tarr t, LATERAL unnest(t.a) AS u(e) ORDER BY t.k, u.e NULLS LAST
+    expect: rows
+    order: ordered
+    comment: rows with NULL or empty arrays contribute no rows to the lateral unnest
+  - sql: |
+      SELECT t.k, count(u.e) AS non_null FROM tarr t LEFT JOIN LATERAL unnest(t.a) AS u(e) ON true GROUP BY t.k ORDER BY t.k
+    expect: rows
+    order: ordered
+    comment: left lateral join keeps every outer row; count skips NULL elements
+  - sql: |
+      SELECT k FROM tarr WHERE a @> ARRAY[1] ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k FROM tarr WHERE 5 = ANY (a) ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k, a || 9 AS appended, array_remove(a, NULL) AS no_nulls FROM tarr ORDER BY k
+    expect: rows
+    order: ordered
+    comment: appending to a NULL array gives a one-element array; removing NULLs keeps non-NULL elements

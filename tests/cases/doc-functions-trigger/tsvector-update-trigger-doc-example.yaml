@@ -1,0 +1,42 @@
+# The documented tsvector_update_trigger example: the trigger fills tsv from title and body using the
+# english configuration, and @@ matches the result.
+id: doc-functions-trigger.tsvector-update-trigger-doc-example
+title: tsvector_update_trigger computes tsv from title and body with the english configuration
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, text-search, tsvector, insert, update]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, text-search]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#builtin-triggers-table (tsvector_update_trigger); textsearch.sgml#textsearch-update-triggers"
+sessions: [a]
+setup: |
+  CREATE TABLE messages (
+      title       text,
+      body        text,
+      tsv         tsvector
+  );
+  CREATE TRIGGER tsvectorupdate BEFORE INSERT OR UPDATE
+  ON messages FOR EACH ROW EXECUTE FUNCTION
+  tsvector_update_trigger(tsv, 'pg_catalog.english', title, body);
+steps:
+  - sql: |
+      INSERT INTO messages VALUES('title here', 'the body text is here')
+    expect: ok
+  - sql: |
+      SELECT title, body, tsv FROM messages
+    expect: rows
+    order: multiset
+    comment: expect tsv 'bodi':4 'text':5 'titl':1 (stop words dropped, stems applied)
+  - sql: |
+      SELECT title, body FROM messages WHERE tsv @@ to_tsquery('title & body')
+    expect: rows
+    order: multiset
+  - sql: |
+      UPDATE messages SET body = 'changed words' WHERE title = 'title here'
+    expect: ok
+  - sql: |
+      SELECT title, body, tsv FROM messages
+    expect: rows
+    order: multiset
+    comment: a change to body is reflected in tsv without touching tsv

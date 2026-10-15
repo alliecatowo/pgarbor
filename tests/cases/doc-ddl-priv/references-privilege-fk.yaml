@@ -1,0 +1,54 @@
+# REFERENCES lets a role create a foreign key to a table, without granting SELECT on that table.
+id: doc-ddl-priv.references-privilege-fk
+title: REFERENCES privilege permits a foreign key to a table the role cannot read
+family: doc-ddl-priv
+tier: core
+feature_ids: [references, foreign-key, grant, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, errors, create-schema]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (REFERENCES: allows creation of a foreign key constraint referencing a table)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_rf_rw;
+  CREATE SCHEMA rf_s;
+  GRANT USAGE, CREATE ON SCHEMA rf_s TO ddp_rf_rw;
+  CREATE TABLE rf_s.parent (id int4 PRIMARY KEY);
+  GRANT REFERENCES ON rf_s.parent TO ddp_rf_rw;
+steps:
+  - sql: |
+      SET ROLE ddp_rf_rw
+    expect: ok
+  - sql: |
+      CREATE TABLE rf_s.child (pid int4 REFERENCES rf_s.parent (id))
+    expect: ok
+    comment: REFERENCES on the parent is enough to create the constraint
+  - sql: |
+      INSERT INTO rf_s.child VALUES (1)
+    expect: error
+    sqlstate: "23503"
+    comment: the parent row is missing, so the foreign key rejects the row
+  - sql: |
+      SELECT id FROM rf_s.parent
+    expect: error
+    sqlstate: "42501"
+    comment: REFERENCES does not grant SELECT on the parent
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      INSERT INTO rf_s.parent VALUES (1)
+    expect: ok
+  - sql: |
+      SET ROLE ddp_rf_rw
+    expect: ok
+  - sql: |
+      INSERT INTO rf_s.child VALUES (1)
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT pid FROM rf_s.child ORDER BY pid
+    expect: rows
+    order: ordered

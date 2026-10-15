@@ -1,0 +1,53 @@
+# Referential integrity checks bypass row security: a child row may reference a parent row the session cannot see.
+id: doc-ddl-rowsecurity.fk-check-bypasses-rls
+title: "Foreign key checks ignore RLS on the referenced table"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, foreign-key, select, insert]
+required_capabilities: [create-table, insert, select, rls, foreign-key, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: Referential integrity checks ... always bypass row security"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr07_u;
+  CREATE TABLE par (id int4 PRIMARY KEY, owner text);
+  INSERT INTO par VALUES (1, 'pgarbor_case_role_dr07_u'), (2, 'someone_else');
+  CREATE TABLE chi (id int4 PRIMARY KEY, pid int4 REFERENCES par (id));
+  GRANT SELECT, INSERT ON par, chi TO pgarbor_case_role_dr07_u;
+  ALTER TABLE par ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY par_own ON par USING (owner = current_user);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr07_u
+    expect: ok
+  - sql: |
+      SELECT id FROM par ORDER BY id
+    expect: rows
+    order: ordered
+    comment: parent row 2 is hidden from this role
+  - sql: |
+      INSERT INTO chi VALUES (1, 2)
+    expect: ok
+    comment: INSERT 0 1 - the FK check sees parent row 2 regardless of RLS
+  - sql: |
+      INSERT INTO chi VALUES (2, 9)
+    expect: error
+    sqlstate: "23503"
+    comment: a parent row that does not exist at all still fails the FK check
+  - sql: |
+      SELECT id, pid FROM chi ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE chi
+    expect: ok
+  - sql: |
+      DROP TABLE par
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr07_u
+    expect: ok

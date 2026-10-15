@@ -1,0 +1,51 @@
+# An index access method needs an operator class; once an index uses it, DROP ACCESS METHOD needs CASCADE.
+id: cmd-create-access-method.index-am-opclass-and-drop-dependency
+title: Custom index AM requires an operator class, serves index scans, and blocks DROP until CASCADE
+family: cmd-create-access-method
+tier: extended
+feature_ids: [create-access-method, index-access-method, create-operator-class, create-index, drop-access-method]
+required_capabilities: [create-table, insert, select, create-index, create-access-method, index-access-method, create-operator-class]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method; dependency rules per DROP ACCESS METHOD (dependent indexes); verified against PG18.6 oracle"
+sessions: [a]
+setup: |
+  CREATE FUNCTION heptree_handler(internal) RETURNS index_am_handler LANGUAGE internal AS 'hashhandler';
+  CREATE ACCESS METHOD heptree TYPE INDEX HANDLER heptree_handler;
+  CREATE TABLE t (id int4, v text);
+  INSERT INTO t VALUES (2, 'b'), (1, 'a'), (3, 'c');
+steps:
+  - sql: |
+      CREATE INDEX t_id_heptree ON t USING heptree (id)
+    expect: error
+    sqlstate: "42704"
+    comment: no default operator class exists for int4 under the new access method
+  - sql: |
+      CREATE OPERATOR CLASS heptree_int4_ops DEFAULT FOR TYPE int4 USING heptree AS OPERATOR 1 = (int4, int4), FUNCTION 1 hashint4(int4)
+    expect: ok
+  - sql: |
+      CREATE INDEX t_id_heptree ON t USING heptree (id)
+    expect: ok
+  - sql: |
+      SET enable_seqscan = off
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t WHERE id = 2 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT i.relname, am.amname FROM pg_class i JOIN pg_index x ON x.indexrelid = i.oid JOIN pg_am am ON am.oid = i.relam WHERE i.relname = 't_id_heptree'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ACCESS METHOD heptree
+    expect: error
+    sqlstate: "2BP01"
+    comment: the index and operator class depend on the access method
+  - sql: |
+      DROP ACCESS METHOD heptree CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_am WHERE amname = 'heptree'
+    expect: rows
+    order: ordered

@@ -1,0 +1,47 @@
+# SHARE mode lets readers through but blocks the ROW EXCLUSIVE lock taken by INSERT.
+id: doc-explicit-locking.share-blocks-insert
+title: SHARE table lock admits SELECT and blocks a concurrent INSERT
+family: doc-explicit-locking
+tier: core
+feature_ids: [lock-table, lock-modes, transactions, multi-session, insert]
+required_capabilities: [create-table, insert, select, lock-table, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-tables (SHARE and ROW EXCLUSIVE conflict)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE t IN SHARE MODE
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: SHARE does not conflict with ACCESS SHARE
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (2, 20)
+    async: true
+    expect_blocked: true
+    comment: ROW EXCLUSIVE conflicts with SHARE
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

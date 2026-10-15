@@ -1,0 +1,91 @@
+# EXECUTE runs a dynamic command string: USING supplies $n values, INTO takes the first row, format %I
+# quotes identifiers, EXECUTE does not change FOUND, and STRICT applies to the dynamic query.
+id: doc-plpgsql-statements.execute-using-into-format
+title: EXECUTE with USING, INTO, format %I identifiers, FOUND behavior, and STRICT errors
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, execute, dynamic-sql, using, into, format, found, strict]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-executing-dyn"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('bo', 20), ('cy', 20);
+  CREATE FUNCTION f_count_above(who text, d int) RETURNS bigint LANGUAGE plpgsql AS $$
+  DECLARE c bigint;
+  BEGIN
+    EXECUTE 'SELECT count(*) FROM emp WHERE salary >= $1 AND empname <> $2' INTO c USING d, who;
+    RETURN c;
+  END $$;
+  CREATE FUNCTION f_count_col(tabname text, colname text) RETURNS bigint LANGUAGE plpgsql AS $$
+  DECLARE c bigint;
+  BEGIN
+    EXECUTE format('SELECT count(%I) FROM %I', colname, tabname) INTO c;
+    RETURN c;
+  END $$;
+  CREATE FUNCTION f_exec_first_desc() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n text;
+  BEGIN
+    EXECUTE 'SELECT empname FROM emp ORDER BY empname DESC' INTO n;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION f_exec_nodata() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n text := 'pre';
+  BEGIN
+    EXECUTE 'SELECT empname FROM emp WHERE false' INTO n;
+    RETURN coalesce(n, '<null>') || ' ' || FOUND::text;
+  END $$;
+  CREATE FUNCTION f_exec_keeps_found() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    PERFORM 1;
+    EXECUTE 'SELECT 1 FROM emp WHERE false';
+    RETURN FOUND::text;
+  END $$;
+  CREATE FUNCTION f_exec_strict_none() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n text;
+  BEGIN
+    EXECUTE 'SELECT empname FROM emp WHERE salary = $1' INTO STRICT n USING 99;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION f_exec_strict_many() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n text;
+  BEGIN
+    EXECUTE 'SELECT empname FROM emp WHERE salary = $1' INTO STRICT n USING 20;
+    RETURN n;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_count_above('ann', 15) AS above
+    expect: rows
+    comment: parameters bound with USING; bo and cy match
+  - sql: |
+      SELECT f_count_col('emp', 'empname') AS non_null_names
+    expect: rows
+    comment: format %I quotes identifiers
+  - sql: |
+      SELECT f_exec_first_desc() AS first_row
+    expect: rows
+    comment: without STRICT the first row of the dynamic query is kept
+  - sql: |
+      SELECT f_exec_nodata() AS no_row
+    expect: rows
+    comment: no rows assign NULL
+  - sql: |
+      SELECT f_exec_keeps_found() AS found_after_execute
+    expect: rows
+    comment: EXECUTE does not change FOUND, so the earlier PERFORM result remains true
+  - sql: |
+      SELECT f_exec_strict_none()
+    expect: error
+    sqlstate: "P0002"
+  - sql: |
+      SELECT f_exec_strict_many()
+    expect: error
+    sqlstate: "P0003"
+  - sql: |
+      SELECT f_count_col('emp', 'no_such_col')
+    expect: error
+    sqlstate: "42703"
+    comment: a dynamic identifier that does not exist fails at run time

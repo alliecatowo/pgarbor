@@ -1,0 +1,41 @@
+# A cast whose source is a domain is accepted with a warning and ignored by explicit casts; DROP CAST removes its entry like any other.
+id: cmd-drop-cast.domain-source-cast-drop
+title: "DROP CAST removes a cast declared on a domain source that is otherwise ignored"
+family: cmd-drop-cast
+tier: extended
+feature_ids: [drop-cast, create-cast, domains]
+required_capabilities: [create-domain, create-type, create-cast, create-function-sql, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dd_pos AS int4 CHECK (VALUE > 0);
+  CREATE TYPE dd_box AS (v int4);
+  CREATE FUNCTION dd_mk(int4) RETURNS dd_box LANGUAGE sql AS $$ SELECT ROW($1)::dd_box $$;
+steps:
+  - sql: |
+      CREATE CAST (dd_pos AS dd_box) WITH FUNCTION dd_mk(int4)
+    expect: ok
+    compare_message: false
+    comment: a warning reports that casts from domains are ignored
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'dd_pos'::regtype AND casttarget = 'dd_box'::regtype
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT CAST(CAST(4 AS dd_pos) AS dd_box)
+    expect: error
+    sqlstate: "42846"
+    comment: the domain cast is not used by explicit casts
+  - sql: |
+      DROP CAST (dd_pos AS dd_box)
+    expect: ok
+  - sql: |
+      DROP CAST (dd_pos AS dd_box)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'dd_pos'::regtype
+    expect: rows
+    order: multiset

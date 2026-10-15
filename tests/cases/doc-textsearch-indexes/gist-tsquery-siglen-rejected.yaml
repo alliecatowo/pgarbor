@@ -1,0 +1,27 @@
+# siglen applies to tsvector GiST indexes only; the tsquery opclass takes no options.
+id: doc-textsearch-indexes.gist-tsquery-siglen-rejected
+title: siglen is rejected on GiST indexes over tsquery columns
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gist-index, tsquery-column, siglen, index-validation]
+required_capabilities: [create-table, create-index, gist-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (siglen optional for GiST)"
+notes: "The docs list siglen under the GiST synopsis without restricting it to tsvector. The recorded server behavior rejects it for tsquery_ops, so this case pins that."
+steps:
+  - sql: |
+      CREATE TABLE qs (id int4, q tsquery)
+    expect: ok
+  - sql: |
+      CREATE INDEX qs_gist_sig ON qs USING GIST (q tsquery_ops (siglen = 50))
+    expect: error
+    sqlstate: "22023"
+    comment: tsquery_ops has no options
+  - sql: |
+      CREATE INDEX qs_gist ON qs USING GIST (q)
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'qs' ORDER BY indexname
+    expect: rows
+    order: ordered

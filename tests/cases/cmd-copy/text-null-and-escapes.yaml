@@ -1,0 +1,40 @@
+# Text format: default NULL is \N, a custom NULL string replaces it, and backslash, tab, newline and CR are escaped on output.
+id: cmd-copy.text-null-and-escapes
+title: "COPY text format: NULL string and backslash escaping on output"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-to, copy-text-format, copy-null-string, copy-escapes]
+required_capabilities: [create-table, insert, select, copy]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy-text-format; option NULL"
+sessions: [a]
+setup: |
+  CREATE TABLE tx (id int4, name text, note text);
+  INSERT INTO tx VALUES
+    (1, 'plain', 'x'),
+    (2, E'tab\there', E'line1\nline2'),
+    (3, '', NULL),
+    (4, 'back\slash', '\N'),
+    (5, 'cr' || chr(13) || 'x', NULL);
+steps:
+  - sql: |
+      COPY (SELECT id, name, note FROM tx ORDER BY id) TO STDOUT
+    expect: ok
+    order: ordered
+    comment: default NULL is \N; backslash, tab, newline and CR are escaped; a literal \N value becomes \\N
+  - sql: |
+      COPY (SELECT id, name, note FROM tx ORDER BY id) TO STDOUT (NULL 'NIL')
+    expect: ok
+    order: ordered
+    comment: custom NULL string is written unescaped in place of NULL
+  - sql: |
+      COPY (SELECT id, name, note FROM tx ORDER BY id) TO STDOUT (NULL '')
+    expect: ok
+    order: ordered
+    comment: with an empty NULL string, NULL and the empty string become indistinguishable
+  - sql: |
+      COPY (SELECT id, name, note FROM tx ORDER BY id) TO STDOUT (FORMAT text, DELIMITER ',')
+    expect: ok
+    order: ordered
+    comment: a comma delimiter is not escaped in text format unless it appears in data

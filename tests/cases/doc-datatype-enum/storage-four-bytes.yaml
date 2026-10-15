@@ -1,0 +1,26 @@
+# An enum value occupies four bytes on disk (datatype.sgml#datatype-enum-implementation-details); pg_column_size reports the stored width.
+id: doc-datatype-enum.storage-four-bytes
+title: Enum column values are stored in four bytes regardless of label length
+family: doc-datatype-enum
+tier: core
+feature_ids: [enum-storage, pg-column-size, enum-column]
+required_capabilities: [create-type, create-table, insert, select, functions]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-enum-implementation-details"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy', 'a_considerably_longer_label');
+  CREATE TABLE mood_rows (id int4 PRIMARY KEY, m mood);
+  INSERT INTO mood_rows SELECT g, (ARRAY['sad','ok','happy','a_considerably_longer_label']::mood[])[1 + g % 4] FROM generate_series(1, 40) g
+steps:
+  - sql: |
+      SELECT DISTINCT pg_column_size(m) AS stored_bytes FROM mood_rows
+    expect: rows
+    order: multiset
+    comment: every label, including the long one, takes 4 bytes
+  - sql: |
+      SELECT count(*) AS n FROM mood_rows WHERE m = 'a_considerably_longer_label'
+    expect: rows
+    order: multiset
+    comment: 10 of 40 rows use the longest label

@@ -1,0 +1,31 @@
+# Channel names are truncated to 63 bytes by the parser for NOTIFY, but pg_notify rejects a channel of 64 or more bytes.
+id: cmd-notify.channel-length-boundary
+title: Channel names up to 63 bytes are accepted and longer pg_notify channels are rejected
+family: cmd-notify
+tier: core
+feature_ids: [notify, pg-notify-function, identifier-truncation]
+required_capabilities: [select, listen-notify]
+provenance:
+  source: pg-docs
+  ref: "ref/notify.sgml#sql-notify (Parameters: channel, any identifier); ref/notify.sgml#pg_notify"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_notify(repeat('a', 63), 'x')
+    expect: rows
+    comment: 63 bytes is the largest accepted channel name
+  - sql: |
+      SELECT pg_notify(repeat('a', 64), 'x')
+    expect: error
+    sqlstate: "22023"
+    comment: 64 bytes is rejected by pg_notify
+  - sql: |
+      NOTIFY aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    expect: ok
+    compare_message: false
+    comment: identifier longer than 63 bytes is truncated by the parser with a NOTICE; the notification is sent on the truncated name
+  - sql: |
+      SELECT pg_notify(repeat('a', 64), 'x')
+    expect: error
+    sqlstate: "22023"
+    comment: the truncated name is 63 bytes, so the same explicit 64-byte name still fails

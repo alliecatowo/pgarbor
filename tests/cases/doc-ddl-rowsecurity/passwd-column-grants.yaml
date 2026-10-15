@@ -1,0 +1,101 @@
+# The manuals' passwd example: admin sees all rows; a normal user sees public columns, changes only own row, and only allowed shells.
+id: doc-ddl-rowsecurity.passwd-column-grants
+title: "passwd example: column grants plus own-row UPDATE policy with a shell whitelist"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, column-privileges, with-check, update, delete, insert]
+required_capabilities: [create-table, insert, select, update, delete, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: the passwd example (admin_all, all_view, user_mod)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr05_adm;
+  CREATE ROLE pgarbor_case_role_dr05_bob;
+  CREATE ROLE pgarbor_case_role_dr05_alice;
+  CREATE TABLE passwd (
+    user_name text UNIQUE NOT NULL, pwhash text, uid int PRIMARY KEY, gid int NOT NULL,
+    real_name text NOT NULL, home_phone text, extra_info text, home_dir text NOT NULL, shell text NOT NULL);
+  INSERT INTO passwd VALUES
+    ('pgarbor_case_role_dr05_adm', 'xxx', 0, 0, 'Admin', '111-222-3333', null, '/root', '/bin/dash'),
+    ('pgarbor_case_role_dr05_bob', 'xxx', 1, 1, 'Bob', '123-456-7890', null, '/home/bob', '/bin/zsh'),
+    ('pgarbor_case_role_dr05_alice', 'xxx', 2, 1, 'Alice', '098-765-4321', null, '/home/alice', '/bin/zsh');
+  ALTER TABLE passwd ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY admin_all ON passwd TO pgarbor_case_role_dr05_adm USING (true) WITH CHECK (true);
+  CREATE POLICY all_view ON passwd FOR SELECT USING (true);
+  CREATE POLICY user_mod ON passwd FOR UPDATE
+    USING (current_user = user_name)
+    WITH CHECK (current_user = user_name AND shell IN ('/bin/bash', '/bin/sh', '/bin/dash', '/bin/zsh', '/bin/tcsh'));
+  GRANT SELECT, INSERT, UPDATE, DELETE ON passwd TO pgarbor_case_role_dr05_adm;
+  GRANT SELECT (user_name, uid, gid, real_name, home_phone, extra_info, home_dir, shell) ON passwd TO PUBLIC;
+  GRANT UPDATE (pwhash, real_name, home_phone, extra_info, shell) ON passwd TO PUBLIC;
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr05_adm
+    expect: ok
+  - sql: |
+      SELECT user_name, uid FROM passwd ORDER BY uid
+    expect: rows
+    order: ordered
+    comment: admin sees every row
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr05_alice
+    expect: ok
+  - sql: |
+      SELECT user_name, real_name, home_dir, shell FROM passwd ORDER BY uid
+    expect: rows
+    order: ordered
+    comment: all rows are visible through all_view, on the public columns only
+  - sql: |
+      TABLE passwd
+    expect: error
+    sqlstate: "42501"
+    comment: pwhash is not granted to alice, so the whole-table read is refused
+  - sql: |
+      UPDATE passwd SET user_name = 'joe'
+    expect: error
+    sqlstate: "42501"
+    comment: no column-level UPDATE privilege on user_name
+  - sql: |
+      UPDATE passwd SET real_name = 'Alice Doe'
+    expect: ok
+    comment: UPDATE 1 - only alice's own row passes the USING clause
+  - sql: |
+      UPDATE passwd SET real_name = 'John Doe' WHERE user_name = 'pgarbor_case_role_dr05_adm'
+    expect: ok
+    comment: UPDATE 0 - the admin row is invisible to alice
+  - sql: |
+      UPDATE passwd SET shell = '/bin/xx'
+    expect: error
+    sqlstate: "42501"
+    comment: the WITH CHECK shell whitelist rejects /bin/xx
+  - sql: |
+      DELETE FROM passwd
+    expect: error
+    sqlstate: "42501"
+    comment: no DELETE privilege
+  - sql: |
+      INSERT INTO passwd (user_name) VALUES ('xxx')
+    expect: error
+    sqlstate: "42501"
+    comment: no INSERT privilege
+  - sql: |
+      UPDATE passwd SET pwhash = 'abc'
+    expect: ok
+    comment: UPDATE 1 - alice can change her own password hash
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT user_name, real_name, shell FROM passwd ORDER BY uid
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE passwd
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr05_adm, pgarbor_case_role_dr05_bob, pgarbor_case_role_dr05_alice
+    expect: ok

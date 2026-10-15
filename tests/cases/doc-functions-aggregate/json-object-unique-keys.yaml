@@ -1,0 +1,57 @@
+# Duplicate keys: json_object_agg keeps both, jsonb_object_agg keeps the last, the _unique variants raise 22030.
+id: doc-functions-aggregate.json-object-unique-keys
+title: Duplicate-key behavior of json and jsonb object aggregates, including the _unique and _strict variants
+family: doc-functions-aggregate
+tier: core
+feature_ids: [json-object-agg, jsonb-object-agg, json-object-agg-unique, json-object-agg-strict, json-object-agg-unique-strict, duplicate-keys]
+required_capabilities: [select, aggregates, json, jsonb, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (json_object_agg_unique, json_object_agg_unique_strict: 'If there is a duplicate key an error is thrown')"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT json_object_agg(k, v) AS j FROM (VALUES ('a', 1), ('a', 2)) t(k, v)
+    expect: rows
+    comment: json_object_agg does not enforce key uniqueness
+  - sql: |
+      SELECT jsonb_object_agg(k, v) AS j FROM (VALUES ('a', 1), ('a', 2)) t(k, v)
+    expect: rows
+    comment: jsonb keeps one value per key, so the duplicate collapses to the last value
+  - sql: |
+      SELECT json_object_agg_unique(k, v) AS j FROM (VALUES ('a', 1), ('a', 2)) t(k, v)
+    expect: error
+    sqlstate: "22030"
+    comment: duplicate key error
+  - sql: |
+      SELECT jsonb_object_agg_unique(k, v) AS j FROM (VALUES ('a', 1), ('a', 2)) t(k, v)
+    expect: error
+    sqlstate: "22030"
+    comment: duplicate key error for the jsonb variant too
+  - sql: |
+      SELECT json_object_agg_unique(k, v) AS j FROM (VALUES ('a', 1), ('b', NULL)) t(k, v)
+    expect: rows
+    comment: _unique keeps NULL values, no duplicates present
+  - sql: |
+      SELECT json_object_agg_unique_strict(k, v) AS j FROM (VALUES ('a', 1), ('b', NULL)) t(k, v)
+    expect: rows
+    comment: _unique_strict skips the NULL-valued entry
+  - sql: |
+      SELECT jsonb_object_agg_strict(k, v) AS j FROM (VALUES ('a', 1), ('b', NULL)) t(k, v)
+    expect: rows
+    comment: strict jsonb variant skips NULL values
+  - sql: |
+      SELECT jsonb_object_agg_strict(k, v) FROM (VALUES (NULL::text, 1)) t(k, v)
+    expect: error
+    sqlstate: "22023"
+    comment: a NULL key is rejected by the jsonb object aggregates
+  - sql: |
+      SELECT json_object_agg_unique_strict(k, v) FROM (VALUES ('a', 1), ('a', 2)) t(k, v)
+    expect: error
+    sqlstate: "22030"
+    comment: duplicate keys are rejected for the strict unique variant
+  - sql: |
+      SELECT jsonb_object_agg_unique_strict(k, v) FROM (VALUES ('a', 1), ('a', NULL)) t(k, v)
+    expect: error
+    sqlstate: "22030"
+    comment: observed PG 18.6 behavior - a duplicate key whose later value is NULL still raises 22030, although the docs describe NULL-valued entries as skipped

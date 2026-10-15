@@ -1,0 +1,46 @@
+# A failing SECURITY LABEL aborts its transaction (25P02 for later commands) and stops a multi-statement simple query at the failing statement.
+id: cmd-security-label.txn-abort-and-multistatement
+title: Failed SECURITY LABEL aborts the transaction and halts the rest of a simple query
+family: cmd-security-label
+tier: core
+feature_ids: [security-label, transactions, security-label-errors]
+required_capabilities: [security-label, create-table, transactions, errors, select]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-description"
+sessions: [a]
+setup: |
+  CREATE TABLE sl_txn (id int4);
+  INSERT INTO sl_txn VALUES (1)
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO sl_txn VALUES (2)
+    expect: ok
+  - sql: |
+      SECURITY LABEL ON TABLE sl_txn IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT id FROM sl_txn ORDER BY id
+    expect: error
+    sqlstate: "25P02"
+    comment: the earlier INSERT is rolled back with the aborted transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id FROM sl_txn ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SECURITY LABEL ON TABLE sl_txn IS NULL; INSERT INTO sl_txn VALUES (3)
+    expect: error
+    sqlstate: "22023"
+    comment: the failing first statement stops the simple query; the INSERT is never run
+  - sql: |
+      SELECT id FROM sl_txn ORDER BY id
+    expect: rows
+    order: ordered

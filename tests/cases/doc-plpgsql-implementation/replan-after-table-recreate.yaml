@@ -1,0 +1,35 @@
+# A function's cached statement follows the table by name: after DROP and re-CREATE with a different shape,
+# the next call re-analyzes and sees the new table.
+id: doc-plpgsql-implementation.replan-after-table-recreate
+title: Cached PL/pgSQL statement is re-analyzed after the referenced table is dropped and recreated
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, plan-cache, drop-table, create-table]
+required_capabilities: [create-table, insert, select, drop-table, create-function, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Plan Caching)"
+sessions: [a]
+setup: |
+  CREATE TABLE pc (a int);
+  INSERT INTO pc VALUES (5);
+  CREATE FUNCTION pcf() RETURNS int AS $$
+  BEGIN RETURN (SELECT max(a) FROM pc); END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT pcf()
+    expect: rows
+    order: ordered
+    comment: first call caches the plan against the original table
+  - sql: |
+      DROP TABLE pc
+    expect: ok
+  - sql: |
+      CREATE TABLE pc (a int, b int); INSERT INTO pc VALUES (7, 0)
+    expect: ok
+  - sql: |
+      SELECT pcf()
+    expect: rows
+    order: ordered
+    comment: the cached plan is invalidated and rebuilt, so the new table's rows are read

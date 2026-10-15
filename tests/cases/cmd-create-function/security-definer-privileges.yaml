@@ -1,0 +1,39 @@
+# SECURITY DEFINER with a pinned search_path is recorded in pg_proc; by default EXECUTE is granted to
+# PUBLIC, and REVOKE ALL FROM PUBLIC removes it.
+id: cmd-create-function.security-definer-privileges
+title: SECURITY DEFINER with a pinned search_path; default PUBLIC EXECUTE is removed by REVOKE
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, security-definer, search-path, execute-privilege, revoke]
+required_capabilities: [create-function, sql-functions, catalog-introspection, privileges, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-security (Writing SECURITY DEFINER Functions Safely)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION sdf(int) RETURNS int LANGUAGE sql
+          EXTERNAL SECURITY DEFINER
+          SET search_path = admin, pg_temp
+          AS 'select $1 * 2'
+    expect: ok
+    comment: EXTERNAL is optional; schema admin need not exist for the SET clause
+  - sql: |
+      SELECT prosecdef, proconfig FROM pg_proc WHERE proname = 'sdf'
+    expect: rows
+    comment: prosecdef true; proconfig holds search_path=admin, pg_temp
+  - sql: |
+      SELECT has_function_privilege('public', 'sdf(int)', 'EXECUTE') AS public_before
+    expect: rows
+    comment: true; new functions grant EXECUTE to PUBLIC by default
+  - sql: |
+      REVOKE ALL ON FUNCTION sdf(int) FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT has_function_privilege('public', 'sdf(int)', 'EXECUTE') AS public_after
+    expect: rows
+    comment: "false"
+  - sql: |
+      SELECT sdf(21) AS owner_call
+    expect: rows
+    comment: 42; the owner keeps EXECUTE privilege

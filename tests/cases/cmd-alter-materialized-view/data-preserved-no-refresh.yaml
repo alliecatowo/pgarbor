@@ -1,0 +1,36 @@
+# ALTER changes auxiliary properties only: the materialized data is neither refreshed nor dropped.
+id: cmd-alter-materialized-view.data-preserved-no-refresh
+title: "ALTER MATERIALIZED VIEW keeps the stale snapshot until REFRESH"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, materialized-views, refresh]
+required_capabilities: [create-table, insert, select, create-materialized-view, alter-materialized-view, refresh-materialized-view]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (ALTER changes auxiliary properties, not the query)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_dp_base (id int4 PRIMARY KEY, amt int4 NOT NULL);
+  INSERT INTO amv_dp_base VALUES (1, 10), (2, 20);
+  CREATE MATERIALIZED VIEW amv_dp_mv AS SELECT id, amt FROM amv_dp_base;
+steps:
+  - sql: |
+      INSERT INTO amv_dp_base VALUES (3, 30)
+    expect: ok
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_dp_mv RENAME TO amv_dp_mv2;
+      ALTER MATERIALIZED VIEW amv_dp_mv2 SET (fillfactor = 80);
+      ALTER MATERIALIZED VIEW amv_dp_mv2 ALTER COLUMN amt SET STATISTICS 50
+    expect: ok
+  - sql: |
+      SELECT id, amt FROM amv_dp_mv2 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: still the pre-insert snapshot, row 3 absent
+  - sql: |
+      REFRESH MATERIALIZED VIEW amv_dp_mv2
+    expect: ok
+  - sql: |
+      SELECT id, amt FROM amv_dp_mv2 ORDER BY id
+    expect: rows
+    order: ordered

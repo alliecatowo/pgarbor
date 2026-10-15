@@ -1,0 +1,48 @@
+# A virtual generated column cannot have a user-defined type or use user-defined functions;
+# a stored generated column may, and it is computed at write time.
+id: doc-ddl-generated-columns.virtual-user-defined
+title: Virtual generated columns reject user-defined types and functions while stored ones accept them
+family: doc-ddl-generated-columns
+tier: extended
+feature_ids: [generated-columns, virtual-generated-columns, stored-generated-columns, user-defined-types]
+required_capabilities: [create-table, insert, select, create-type, create-function-sql, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TYPE pair AS (a int, b int);
+  CREATE FUNCTION twice(int) RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT $1 * 2'
+steps:
+  - sql: |
+      CREATE TABLE vt_type (x int, p pair GENERATED ALWAYS AS (ROW(x, x)::pair) VIRTUAL)
+    expect: error
+    sqlstate: "0A000"
+    comment: a virtual generated column cannot have a user-defined type
+  - sql: |
+      CREATE TABLE vt_func (x int, g int GENERATED ALWAYS AS (twice(x)) VIRTUAL)
+    expect: error
+    sqlstate: "0A000"
+    comment: a virtual generation expression cannot call a user-defined function
+  - sql: |
+      CREATE TABLE st_type (x int, p pair GENERATED ALWAYS AS (ROW(x, x)::pair) STORED)
+    expect: ok
+    comment: the same type is allowed for a stored generated column
+  - sql: |
+      CREATE TABLE st_func (x int, g int GENERATED ALWAYS AS (twice(x)) STORED)
+    expect: ok
+  - sql: |
+      INSERT INTO st_type (x) VALUES (3)
+    expect: ok
+  - sql: |
+      INSERT INTO st_func (x) VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT x, (p).a AS pa, (p).b AS pb FROM st_type
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT x, g FROM st_func
+    expect: rows
+    order: multiset
+    comment: twice(3) is 6, computed when written

@@ -1,0 +1,45 @@
+# Lookup is by exact argument types; a non-matching signature, a bad '*' form, or OUT mode fails and drops nothing.
+id: cmd-drop-aggregate.missing-and-mismatch-errors
+title: DROP AGGREGATE errors for wrong signatures, missing names, and invalid argument forms
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, aggregates, errors]
+required_capabilities: [aggregates, create-aggregate, create-function, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (aggregate_signature, argtype)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2'
+    expect: ok
+  - sql: |
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(text)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP AGGREGATE myavg(bigint)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP AGGREGATE myavg(*)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP AGGREGATE myavg(OUT integer)
+    expect: error
+    sqlstate: "0A000"
+  - sql: |
+      DROP AGGREGATE myavg
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT count(*) AS still_there FROM pg_proc WHERE proname = 'myavg' AND prokind = 'a'
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP AGGREGATE myavg(int)
+    expect: ok

@@ -1,0 +1,45 @@
+# Documented: the builtin provider requires locale, accepts C, C.UTF-8 and PG_UNICODE_FAST, and orders by code point for C.
+id: cmd-create-collation.builtin-provider
+title: "CREATE COLLATION provider builtin accepts its documented locales and rejects the rest"
+family: cmd-create-collation
+tier: core
+feature_ids: [create-collation, builtin-provider, locale]
+required_capabilities: [create-collation, builtin-provider, collate-clause, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_collation.sgml#sql-createcollation (Parameters: locale, builtin)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE COLLATION cmd_cc_bc (provider = builtin, locale = 'C')
+    expect: ok
+  - sql: |
+      CREATE COLLATION cmd_cc_bfast (provider = builtin, locale = 'PG_UNICODE_FAST')
+    expect: ok
+  - sql: |
+      CREATE COLLATION cmd_cc_butf8 (provider = builtin, locale = 'C.UTF-8')
+    expect: ok
+  - sql: |
+      SELECT w FROM (VALUES ('b'), ('B'), ('a'), ('A')) AS v(w) ORDER BY w COLLATE cmd_cc_bc
+    expect: rows
+    order: ordered
+    comment: code point order, uppercase before lowercase
+  - sql: |
+      SELECT collname, collprovider, collisdeterministic FROM pg_collation WHERE collname LIKE 'cmd\_cc\_b%' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE COLLATION cmd_cc_bad1 (provider = builtin)
+    expect: error
+    sqlstate: "42P17"
+    comment: locale is required for the builtin provider
+  - sql: |
+      CREATE COLLATION cmd_cc_bad2 (provider = builtin, locale = 'xx')
+    expect: error
+    sqlstate: "42809"
+    comment: only C, C.UTF-8 and PG_UNICODE_FAST are valid
+  - sql: |
+      CREATE COLLATION cmd_cc_bad3 (provider = builtin, locale = 'C', deterministic = false)
+    expect: error
+    sqlstate: "0A000"
+    comment: nondeterministic collations need ICU

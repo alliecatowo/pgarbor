@@ -1,0 +1,38 @@
+# PRIMARY KEY and UNIQUE constraints are enforced by B-tree indexes that the catalog records as unique.
+id: doc-indexes-ordering.pk-and-unique-constraint-btree-catalog
+title: Primary key and unique constraints create unique B-tree indexes
+family: doc-indexes-ordering
+tier: core
+feature_ids: [unique-index, primary-key, unique-constraint, btree-index, catalog]
+required_capabilities: [create-table, insert, select, order-by, create-index, unique-index, btree-index, primary-key, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-ordering (PostgreSQL automatically creates a unique index for a unique constraint or primary key)"
+sessions: [a]
+setup: |
+  CREATE TABLE pk_t (id int4 PRIMARY KEY, a int4, b int4, UNIQUE (a, b));
+  INSERT INTO pk_t VALUES (1, 1, 1);
+steps:
+  - sql: |
+      SELECT c.relname, am.amname, x.indisunique, x.indisprimary, x.indnkeyatts
+      FROM pg_index x
+      JOIN pg_class c ON c.oid = x.indexrelid
+      JOIN pg_am am ON am.oid = c.relam
+      WHERE x.indrelid = 'pk_t'::regclass
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO pk_t VALUES (1, 2, 2)
+    expect: error
+    sqlstate: "23505"
+    comment: primary key index enforces uniqueness
+  - sql: |
+      INSERT INTO pk_t VALUES (2, 1, 1)
+    expect: error
+    sqlstate: "23505"
+    comment: unique constraint index enforces uniqueness on (a, b)
+  - sql: |
+      INSERT INTO pk_t VALUES (3, 1, NULL), (4, 1, NULL)
+    expect: ok
+    comment: NULL in a unique constraint is not equal to NULL by default

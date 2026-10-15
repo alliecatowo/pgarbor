@@ -1,0 +1,38 @@
+# Transaction-level advisory locks conflict with session-level requests on the same key and release at commit with no unlock call.
+id: doc-explicit-locking.advisory-xact-lock-released-at-commit
+title: Transaction-level advisory lock blocks other sessions until commit
+family: doc-explicit-locking
+tier: core
+feature_ids: [advisory-locks, transactions, multi-session]
+required_capabilities: [advisory-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#advisory-locks (transaction-level locks released at end of transaction; session and transaction requests block each other)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT pg_advisory_xact_lock(7)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS session_level
+    expect: rows
+    comment: session-level request conflicts with the transaction-level holder
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_xact_lock(7) AS xact_level
+    expect: rows
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_xact_lock(7) AS xact_level
+    expect: rows
+    comment: released at a's commit, no explicit unlock needed

@@ -1,0 +1,32 @@
+# The documentation says a bare VALUES list is effectively equal to a UNION ALL of SELECTs. Verify with
+# set difference in both directions, which must both be empty, and check multiplicity with duplicates.
+id: cmd-values.equivalence-with-union-all
+title: Bare VALUES is multiset-equal to the documented UNION ALL of SELECTs
+family: cmd-values
+tier: core
+feature_ids: [values, union-all, set-operations]
+required_capabilities: [values, select, union]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/values.sgml#sql-values (Examples: bare VALUES command equivalent to SELECT ... UNION ALL)"
+sessions: [a]
+steps:
+  - sql: |
+      (SELECT column1, column2 FROM (VALUES (1, 'one'), (2, 'two'), (3, 'three')) v)
+      EXCEPT ALL
+      (SELECT 1, 'one' UNION ALL SELECT 2, 'two' UNION ALL SELECT 3, 'three')
+    expect: rows
+    order: multiset
+    comment: expect zero rows
+  - sql: |
+      (SELECT 1, 'one' UNION ALL SELECT 2, 'two' UNION ALL SELECT 3, 'three')
+      EXCEPT ALL
+      (SELECT column1, column2 FROM (VALUES (1, 'one'), (2, 'two'), (3, 'three')) v)
+    expect: rows
+    order: multiset
+    comment: expect zero rows in the other direction too
+  - sql: |
+      SELECT count(*) AS n FROM (VALUES (1), (1), (1)) v
+    expect: rows
+    order: ordered
+    comment: duplicates are kept, as with UNION ALL

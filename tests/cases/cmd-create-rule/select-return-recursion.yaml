@@ -1,0 +1,27 @@
+# Two views whose _RETURN rules reference each other form a cycle; the SELECT is rejected instead of looping.
+id: cmd-create-rule.select-return-recursion
+title: Mutually recursive _RETURN rules on two views make SELECT fail with infinite recursion
+family: cmd-create-rule
+tier: extended
+feature_ids: [create-rule, select, views, return-rule, recursion, errors]
+required_capabilities: [create-view, create-rule, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Notes: circular _RETURN rules example)"
+sessions: [a]
+setup: |
+  CREATE VIEW va AS SELECT 1 AS x;
+  CREATE VIEW vbb AS SELECT 1 AS x;
+steps:
+  - sql: |
+      CREATE OR REPLACE RULE "_RETURN" AS ON SELECT TO va DO INSTEAD SELECT * FROM vbb
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE RULE "_RETURN" AS ON SELECT TO vbb DO INSTEAD SELECT * FROM va
+    expect: ok
+    comment: each definition is accepted on its own, as the documentation says
+  - sql: |
+      SELECT * FROM va
+    expect: error
+    sqlstate: "42P17"
+    comment: the rewriter detects the cycle and reports infinite recursion

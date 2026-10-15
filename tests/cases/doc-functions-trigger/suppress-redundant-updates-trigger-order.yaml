@@ -1,0 +1,63 @@
+# Triggers fire in name order. The suppression trigger only sees the final NEW row when it fires last,
+# which is why the documentation tells you to give it a name that sorts after the other triggers.
+id: doc-functions-trigger.suppress-redundant-updates-trigger-order
+title: suppress_redundant_updates_trigger sees a row only after earlier BEFORE triggers have changed it
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, suppress-redundant-updates, trigger-ordering, update]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-trigger (suppress_redundant_updates_trigger: fire it last for each row, triggers fire in name order)"
+sessions: [a]
+setup: |
+  CREATE TABLE ord (id int, v int);
+  CREATE TABLE ordlog (k text);
+  CREATE FUNCTION ord_clamp() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.v := OLD.v;
+    RETURN NEW;
+  END
+  $$;
+  CREATE FUNCTION ord_log() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO ordlog VALUES (TG_OP);
+    RETURN NULL;
+  END
+  $$;
+  CREATE TRIGGER a_clamp BEFORE UPDATE ON ord FOR EACH ROW EXECUTE FUNCTION ord_clamp();
+  CREATE TRIGGER z_min_update BEFORE UPDATE ON ord FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
+  CREATE TRIGGER ord_aft AFTER UPDATE ON ord FOR EACH ROW EXECUTE FUNCTION ord_log();
+  INSERT INTO ord VALUES (1, 5);
+steps:
+  - sql: |
+      UPDATE ord SET v = 9 WHERE id = 1
+    expect: ok
+    comment: a_clamp restores v to 5 before z_min_update runs, so the update is suppressed (UPDATE 0)
+  - sql: |
+      SELECT count(*) FROM ordlog
+    expect: rows
+    comment: expect 0
+  - sql: |
+      SELECT id, v FROM ord ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TRIGGER z_min_update ON ord
+    expect: ok
+  - sql: |
+      CREATE TRIGGER a_0min BEFORE UPDATE ON ord FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()
+    expect: ok
+    comment: "a_0min sorts before a_clamp, so it compares NEW (v=9) against OLD (v=5) before the clamp runs"
+  - sql: |
+      UPDATE ord SET v = 9 WHERE id = 1
+    expect: ok
+    comment: the suppression check sees a change, so the row is physically updated (UPDATE 1); the clamp then writes 5 back
+  - sql: |
+      SELECT count(*) FROM ordlog
+    expect: rows
+    comment: expect 1
+  - sql: |
+      SELECT id, v FROM ord ORDER BY id
+    expect: rows
+    order: ordered

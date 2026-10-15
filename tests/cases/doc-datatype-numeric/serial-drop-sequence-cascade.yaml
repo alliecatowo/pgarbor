@@ -1,0 +1,31 @@
+# The sequence behind a serial column cannot be dropped plainly; CASCADE removes the column default.
+id: doc-datatype-numeric.serial-drop-sequence-cascade
+title: Dropping a serial column's sequence needs CASCADE and then removes the column default
+family: doc-datatype-numeric
+tier: core
+feature_ids: [serial, sequences, drop, dependencies, errors]
+required_capabilities: [create-table, insert, select, errors, sequences, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-serial"
+sessions: [a]
+setup: |
+  CREATE TABLE ser2 (id serial PRIMARY KEY, note text);
+steps:
+  - sql: |
+      DROP SEQUENCE ser2_id_seq
+    expect: error
+    sqlstate: "2BP01"
+    comment: the column default depends on the sequence
+  - sql: |
+      DROP SEQUENCE ser2_id_seq CASCADE
+    expect: ok
+    compare_message: false
+  - sql: |
+      INSERT INTO ser2(note) VALUES ('x')
+    expect: error
+    sqlstate: "23502"
+    comment: default removed, so id is NULL and NOT NULL rejects it
+  - sql: |
+      SELECT count(*) FROM ser2
+    expect: rows

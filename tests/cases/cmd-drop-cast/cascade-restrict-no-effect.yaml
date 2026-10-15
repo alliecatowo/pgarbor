@@ -1,0 +1,42 @@
+# CASCADE and RESTRICT have no effect on casts: a view that uses a cast does not block DROP CAST, and it keeps working after the drop.
+id: cmd-drop-cast.cascade-restrict-no-effect
+title: "CASCADE and RESTRICT are accepted for casts and leave dependent views intact"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, create-cast, create-view, cascade, restrict]
+required_capabilities: [create-type, create-cast, create-function-sql, create-view, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-parameters (CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_m AS (v int);
+  CREATE FUNCTION cr_f(int4) RETURNS cr_m LANGUAGE sql AS $$ SELECT ROW($1)::cr_m $$;
+  CREATE CAST (int4 AS cr_m) WITH FUNCTION cr_f(int4);
+  CREATE VIEW cr_v AS SELECT CAST(3 AS cr_m) AS m;
+steps:
+  - sql: |
+      SELECT (m).v AS v FROM cr_v
+    expect: rows
+  - sql: |
+      DROP CAST (int4 AS cr_m) RESTRICT
+    expect: ok
+    comment: RESTRICT does not block the drop because casts have no dependents
+  - sql: |
+      SELECT (m).v AS v FROM cr_v
+    expect: rows
+    comment: the view stored its own function reference and still works
+  - sql: |
+      CREATE CAST (int4 AS cr_m) WITH FUNCTION cr_f(int4)
+    expect: ok
+  - sql: |
+      DROP CAST (int4 AS cr_m) CASCADE
+    expect: ok
+    comment: CASCADE is also accepted with no effect
+  - sql: |
+      SELECT (m).v AS v FROM cr_v
+    expect: rows
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'int4'::regtype AND casttarget = 'cr_m'::regtype
+    expect: rows
+    order: multiset

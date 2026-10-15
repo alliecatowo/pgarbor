@@ -1,0 +1,41 @@
+# NEGATOR links both operators, like COMMUTATOR. Once set, the negator of either side cannot be changed,
+# and a third operator cannot claim an operator that is already another operator's negator.
+id: cmd-alter-operator.negator-pair-link
+title: "ALTER OPERATOR SET NEGATOR links both directions and refuses to re-point an existing negator"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, negator, errors, catalog-introspection]
+required_capabilities: [alter-operator, create-operator, create-function-sql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#notes (SET NEGATOR also sets the negator of neg_op)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_ng_eq(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 = $2 $$;
+  CREATE FUNCTION cmd_ao_ng_ne(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 <> $2 $$;
+  CREATE FUNCTION cmd_ao_ng_lt(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR === (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_ng_eq);
+  CREATE OPERATOR !=! (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_ng_ne);
+  CREATE OPERATOR <<< (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_ng_lt);
+steps:
+  - sql: |
+      ALTER OPERATOR === (int8, int8) SET (NEGATOR = !=!)
+    expect: ok
+  - sql: |
+      SELECT o.oprname AS operator, n.oprname AS negator,
+             o.oprnegate = n.oid AS forward, n.oprnegate = o.oid AS backward
+      FROM pg_operator o JOIN pg_operator n ON n.oid = o.oprnegate
+      WHERE o.oprname IN ('===', '!=!') AND o.oprnamespace = 'public'::regnamespace
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR === (int8, int8) SET (NEGATOR = <<<)
+    expect: error
+    sqlstate: "42P13"
+    comment: the negator of === is already set and cannot be changed
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (NEGATOR = !=!)
+    expect: error
+    sqlstate: "42P13"
+    comment: "!=! is already the negator of ==="

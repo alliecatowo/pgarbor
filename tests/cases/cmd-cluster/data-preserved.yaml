@@ -1,0 +1,36 @@
+# Reordering must not change row contents, index lookups, or the empty-table case.
+id: cmd-cluster.data-preserved
+title: CLUSTER preserves all row data and index lookups, including on an empty table
+family: cmd-cluster
+tier: core
+feature_ids: [cluster, cluster-using, indexes, select]
+required_capabilities: [create-table, create-index, insert, select, update]
+provenance:
+  source: pg-docs
+  ref: "ref/cluster.sgml#sql-cluster (Description: CLUSTER physically reorders the table; Examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4, name text);
+  CREATE INDEX t_v ON t (v);
+  INSERT INTO t VALUES (1, 30, 'c'), (2, 10, 'a'), (3, 20, 'b'), (4, NULL, NULL);
+  CREATE TABLE e (id int4, v int4);
+  CREATE INDEX e_v ON e (v);
+steps:
+  - sql: |
+      CLUSTER t USING t_v
+    expect: ok
+  - sql: |
+      SELECT id, v, name FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name FROM t WHERE v = 20
+    expect: rows
+    comment: index lookup still works after reordering
+  - sql: |
+      CLUSTER e USING e_v
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM e
+    expect: rows
+    comment: clustering an empty table is a no-op

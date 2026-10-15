@@ -1,0 +1,33 @@
+# Privileges are the sum of direct, inherited-from-role and PUBLIC grants; revoking PUBLIC leaves the others.
+id: cmd-revoke.direct-grant-survives-public-revoke
+title: REVOKE SELECT FROM PUBLIC leaves privileges held directly or through a granted role
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, public-role, role-membership, inherit, privileges]
+required_capabilities: [create-table, select, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-description (revoking SELECT from PUBLIC does not necessarily mean all roles have lost SELECT)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvp2_direct;
+  CREATE ROLE rvp2_grp;
+  CREATE ROLE rvp2_member;
+  CREATE ROLE rvp2_other;
+  CREATE TABLE rvp2_t (id int4);
+  INSERT INTO rvp2_t VALUES (1);
+  GRANT SELECT ON rvp2_t TO PUBLIC;
+  GRANT SELECT ON rvp2_t TO rvp2_direct;
+  GRANT SELECT ON rvp2_t TO rvp2_grp;
+  GRANT rvp2_grp TO rvp2_member;
+steps:
+  - sql: |
+      REVOKE SELECT ON rvp2_t FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT r.role, has_table_privilege(r.role, 'rvp2_t', 'SELECT') AS sel
+      FROM (VALUES ('rvp2_direct'), ('rvp2_member'), ('rvp2_other')) AS r(role)
+      ORDER BY r.role
+    expect: rows
+    order: ordered
+    comment: direct and inherited grants survive; a role with no grant loses it

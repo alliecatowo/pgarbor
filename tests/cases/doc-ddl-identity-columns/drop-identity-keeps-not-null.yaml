@@ -1,0 +1,37 @@
+# DROP IDENTITY removes the generated default but the column stays NOT NULL; DROP IDENTITY IF EXISTS is a no-op on plain columns.
+id: doc-ddl-identity-columns.drop-identity-keeps-not-null
+title: DROP IDENTITY removes generation but leaves the column NOT NULL
+family: doc-ddl-identity-columns
+tier: core
+feature_ids: [identity-columns, alter-table, errors]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-identity-columns"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE dr (id int GENERATED ALWAYS AS IDENTITY, v int)
+    expect: ok
+  - sql: |
+      INSERT INTO dr (v) VALUES (1)
+    expect: ok
+  - sql: |
+      ALTER TABLE dr ALTER COLUMN id DROP IDENTITY
+    expect: ok
+  - sql: |
+      INSERT INTO dr (v) VALUES (2)
+    expect: error
+    sqlstate: "23502"
+    comment: no sequence default any more, and NOT NULL is retained
+  - sql: |
+      INSERT INTO dr (id, v) VALUES (7, 3)
+    expect: ok
+  - sql: |
+      ALTER TABLE dr ALTER COLUMN id DROP IDENTITY IF EXISTS
+    expect: ok
+    comment: notice only, the column is not an identity column any more
+  - sql: |
+      SELECT id, v FROM dr ORDER BY id
+    expect: rows
+    order: ordered

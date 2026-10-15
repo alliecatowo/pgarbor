@@ -1,0 +1,50 @@
+# RESTRICT is only part of the action-list and SET/RESET-style forms, not of OWNER TO or RENAME.
+# RENAME TO takes an unqualified name; the (*) aggregate spelling is ALTER AGGREGATE syntax only.
+id: cmd-alter-routine.restrict-and-syntax
+title: RESTRICT attaches only to action lists and RENAME/OWNER/SET SCHEMA reject qualified or (*) forms
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, restrict, syntax]
+required_capabilities: [create-function, create-aggregate, alter-function, aggregates, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: action [ ... ] [ RESTRICT ]; RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE AGGREGATE agg3(*) (SFUNC = int8inc, STYPE = int8, INITCOND = '0');
+steps:
+  - sql: |
+      ALTER ROUTINE foo(integer) STABLE RESTRICT
+    expect: ok
+  - sql: |
+      ALTER ROUTINE foo(integer) RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: RESTRICT needs at least one action
+  - sql: |
+      ALTER ROUTINE foo(integer) OWNER TO CURRENT_USER RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: the OWNER TO form has no RESTRICT
+  - sql: |
+      ALTER ROUTINE foo(integer) RENAME TO public.zz
+    expect: error
+    sqlstate: "42601"
+    comment: RENAME TO takes a bare name, the schema is changed with SET SCHEMA
+  - sql: |
+      ALTER ROUTINE agg3(*) RENAME TO agg4
+    expect: error
+    sqlstate: "42601"
+    comment: the (*) form is accepted only by ALTER AGGREGATE
+  - sql: |
+      ALTER ROUTINE agg3() RENAME TO agg4
+    expect: ok
+    comment: the zero-argument identity is accepted
+  - sql: |
+      ALTER ROUTINE foo(integer) RENAME TO zz
+    expect: ok
+  - sql: |
+      SELECT proname, prokind FROM pg_proc WHERE proname IN ('foo', 'zz', 'agg3', 'agg4') AND pronamespace = 'public'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered

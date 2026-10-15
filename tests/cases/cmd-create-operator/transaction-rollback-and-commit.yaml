@@ -1,0 +1,41 @@
+# CREATE OPERATOR is transactional, including the shell entries it creates for a missing COMMUTATOR.
+id: cmd-create-operator.transaction-rollback-and-commit
+title: "CREATE OPERATOR and its commutator shell roll back with the transaction and survive COMMIT"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, transactions, commutator, shell-operators]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select, transactions]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/create_operator.sgml#notes (dummy commutator entries)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_add8t(int8, int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 + $2 $$;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #&&# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_add8t, COMMUTATOR = #&&@)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS inside FROM pg_operator WHERE oprname IN ('#&&#', '#&&@')
+    expect: rows
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS after_rollback FROM pg_operator WHERE oprname IN ('#&&#', '#&&@')
+    expect: rows
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR #&&&# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_add8t)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT 2 #&&&# 3 AS committed_call
+    expect: rows

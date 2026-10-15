@@ -1,0 +1,69 @@
+# percentile_cont and percentile_disc: interpolation, array fractions, NULL inputs and fractions, and out-of-range errors.
+id: doc-functions-aggregate.ordered-set-percentiles
+title: percentile_cont and percentile_disc with scalar and array fractions, NULL handling and range errors
+family: doc-functions-aggregate
+tier: core
+feature_ids: [percentile-cont, percentile-disc, ordered-set-aggregate, within-group, percentile-array-fractions]
+required_capabilities: [select, aggregates, float8, interval, errors, arrays]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (Ordered-Set Aggregate Functions: percentile_cont, percentile_disc; 'a null fraction value simply produces a null result')"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) AS median_cont
+      FROM (VALUES (1.0::float8), (NULL), (2), (3), (4)) v(x)
+    expect: rows
+    comment: NULL inputs are ignored; continuous median interpolates between 2 and 3
+  - sql: |
+      SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS median_disc
+      FROM (VALUES (1), (NULL), (2), (3), (4)) v(x)
+    expect: rows
+    comment: discrete percentile returns an input value, here 2
+  - sql: |
+      SELECT percentile_cont(ARRAY[0.25, 0.75]) WITHIN GROUP (ORDER BY x) AS q
+      FROM (VALUES (1.0::float8), (2), (3), (4)) v(x)
+    expect: rows
+    comment: array of fractions returns an array of interpolated values
+  - sql: |
+      SELECT percentile_disc(ARRAY[0.25, 0.75]) WITHIN GROUP (ORDER BY x) AS q
+      FROM (VALUES (1), (2), (3), (4)) v(x)
+    expect: rows
+    comment: discrete array form returns input values
+  - sql: |
+      SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS m FROM (VALUES ('b'::text), ('a'), ('c')) v(x)
+    expect: rows
+    comment: percentile_disc accepts any sortable type
+  - sql: |
+      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) AS m
+      FROM (VALUES (interval '1 hour'), (interval '3 hours')) v(x)
+    expect: rows
+    comment: percentile_cont over interval interpolates to 2 hours
+  - sql: |
+      SELECT percentile_cont(NULL::float8) WITHIN GROUP (ORDER BY x) AS m
+      FROM (VALUES (1.0::float8)) v(x)
+    expect: rows
+    comment: a NULL fraction produces NULL
+  - sql: |
+      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) AS m FROM (VALUES (NULL::float8)) v(x)
+    expect: rows
+    comment: no non-null input gives NULL
+  - sql: |
+      SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS m FROM (SELECT 1 AS x WHERE false) v
+    expect: rows
+    comment: empty input gives NULL
+  - sql: |
+      SELECT percentile_disc(1.0) WITHIN GROUP (ORDER BY x) AS a, percentile_cont(1) WITHIN GROUP (ORDER BY x::float8) AS b
+      FROM (VALUES (1), (2), (3)) v(x)
+    expect: rows
+    comment: fraction 1.0 is the maximum and is inside the allowed range
+  - sql: |
+      SELECT percentile_cont(1.5) WITHIN GROUP (ORDER BY x) FROM (VALUES (1.0::float8)) v(x)
+    expect: error
+    sqlstate: "22003"
+    comment: fractions must be between 0 and 1
+  - sql: |
+      SELECT percentile_disc(-0.1) WITHIN GROUP (ORDER BY x) FROM (VALUES (1)) v(x)
+    expect: error
+    sqlstate: "22003"
+    comment: negative fractions are rejected

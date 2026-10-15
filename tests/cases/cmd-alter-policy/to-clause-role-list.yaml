@@ -1,0 +1,49 @@
+# The TO clause replaces the whole role list. CURRENT_USER, SESSION_USER and CURRENT_ROLE resolve to a role name,
+# PUBLIC absorbs other entries, and an unknown role is 42704 and leaves the list unchanged.
+id: cmd-alter-policy.to-clause-role-list
+title: "ALTER POLICY TO replaces the role list and resolves special role keywords"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, policies, roles, catalog-introspection, errors]
+required_capabilities: [create-table, select, rls, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (TO role_name | PUBLIC | CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p ON t USING (v > 0);
+steps:
+  - sql: |
+      SELECT policyname, roles::text FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: a policy created without TO applies to PUBLIC
+  - sql: |
+      ALTER POLICY p ON t TO CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT policyname, roles = ARRAY[CURRENT_USER::name] AS is_current_user FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: CURRENT_USER is stored as the current role's name
+  - sql: |
+      ALTER POLICY p ON t TO SESSION_USER, CURRENT_ROLE
+    expect: ok
+    comment: duplicate role entries collapse into one
+  - sql: |
+      SELECT policyname, roles = ARRAY[SESSION_USER::name] AS is_session_user FROM pg_policies WHERE tablename = 't'
+    expect: rows
+  - sql: |
+      ALTER POLICY p ON t TO CURRENT_USER, PUBLIC
+    expect: ok
+    comment: specifying PUBLIC alongside other roles makes the list PUBLIC (a warning is raised)
+  - sql: |
+      SELECT policyname, roles::text FROM pg_policies WHERE tablename = 't'
+    expect: rows
+  - sql: |
+      ALTER POLICY p ON t TO pgarbor_case_no_such_role
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT policyname, roles::text FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: the failed statement left the role list as PUBLIC

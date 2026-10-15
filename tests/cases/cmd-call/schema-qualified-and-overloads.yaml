@@ -1,0 +1,38 @@
+# CALL accepts a schema-qualified name and resolves overloaded procedures by argument type; an
+# argument with no exact or implicit match is rejected.
+id: cmd-call.schema-qualified-and-overloads
+title: CALL with a schema-qualified name and overloaded procedures resolved by argument type
+family: cmd-call
+tier: core
+feature_ids: [call, procedures, overloading, schema-qualification, insert]
+required_capabilities: [create-table, insert, select, create-procedure, call, create-schema]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/call.sgml#sql-call (Parameters: name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  CREATE PROCEDURE public.p_sch() LANGUAGE SQL AS $$ INSERT INTO t VALUES (7, 's') $$;
+  CREATE PROCEDURE p_ov(a int) LANGUAGE SQL AS $$ INSERT INTO t VALUES (a, 'int') $$;
+  CREATE PROCEDURE p_ov(a text) LANGUAGE SQL AS $$ INSERT INTO t VALUES (0, a) $$;
+steps:
+  - sql: |
+      CALL public.p_sch()
+    expect: ok
+  - sql: |
+      CALL p_ov(1)
+    expect: ok
+    comment: integer argument selects the int overload
+  - sql: |
+      CALL p_ov('a')
+    expect: ok
+    comment: unknown literal selects the text overload
+  - sql: |
+      CALL p_ov(1::bigint)
+    expect: error
+    sqlstate: "42883"
+    comment: no overload accepts bigint; no implicit bigint to int4 for procedure resolution
+  - sql: |
+      SELECT id, v FROM t ORDER BY id, v
+    expect: rows
+    order: ordered

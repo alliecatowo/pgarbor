@@ -1,0 +1,33 @@
+# anyenum accepts only enum types; enum-typed NULLs still bind the type (datatype.sgml#datatype-pseudotypes-table, datatype-enum).
+id: doc-datatype-pseudo.anyenum-labels
+title: anyenum functions bind enum types and enum_first, enum_last and enum_range follow declaration order
+family: doc-datatype-pseudo
+tier: core
+feature_ids: [pseudo-types, anyenum, enum-type, polymorphic-functions]
+required_capabilities: [create-type, create-function-sql, enum-type, errors]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-pseudotypes-table"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE FUNCTION enum_label(anyenum) RETURNS text LANGUAGE sql AS $$ SELECT $1::text $$
+steps:
+  - sql: |
+      SELECT enum_label('happy'::mood) AS lbl, enum_label(NULL::mood) IS NULL AS nul
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT enum_first(NULL::mood) AS first_lbl, enum_last(NULL::mood) AS last_lbl
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x::text AS lbl FROM unnest(enum_range(NULL::mood)) AS x
+    expect: rows
+    order: ordered
+    comment: enum_range returns labels in declaration order
+  - sql: |
+      SELECT enum_label('happy')
+    expect: error
+    sqlstate: "42883"
+    comment: an untyped literal cannot bind anyenum, so no function matches

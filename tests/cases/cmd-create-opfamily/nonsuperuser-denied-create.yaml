@@ -1,0 +1,40 @@
+# Creating an operator family is superuser-only: even with CREATE on the schema a regular role gets 42501.
+id: cmd-create-opfamily.nonsuperuser-denied-create
+title: Regular role cannot create an operator family, with or without schema CREATE privilege
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, privileges, superuser-only, errors]
+required_capabilities: [create-operator-family, create-schema, roles, privileges, set-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: Presently, the creating user must be a superuser)"
+sessions: [a]
+setup: |
+  CREATE ROLE cof_nsu;
+  CREATE SCHEMA cof_nsu_s;
+  GRANT CREATE ON SCHEMA cof_nsu_s TO cof_nsu
+steps:
+  - sql: |
+      SET ROLE cof_nsu
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY cof_nsu_s.cof_denied USING btree
+    expect: error
+    sqlstate: "42501"
+    comment: schema CREATE is granted, but the superuser check still fails
+  - sql: |
+      CREATE OPERATOR FAMILY public.cof_denied2 USING btree
+    expect: error
+    sqlstate: "42501"
+    comment: no CREATE on public for this role
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opfamily WHERE opfname LIKE 'cof_denied%'
+    expect: rows
+  - sql: |
+      REVOKE CREATE ON SCHEMA cof_nsu_s FROM cof_nsu;
+      DROP SCHEMA cof_nsu_s;
+      DROP ROLE cof_nsu
+    expect: ok

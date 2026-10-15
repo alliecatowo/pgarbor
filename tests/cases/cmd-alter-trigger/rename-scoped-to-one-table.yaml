@@ -1,0 +1,31 @@
+# Trigger names are unique per table, so renaming one table's trigger leaves a same-named trigger on another table alone.
+id: cmd-alter-trigger.rename-scoped-to-one-table
+title: "RENAME affects only the named table when two tables share a trigger name"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, rename, triggers]
+required_capabilities: [create-table, select, triggers, plpgsql, create-function, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE a1 (id int4);
+  CREATE TABLE a2 (id int4);
+  CREATE FUNCTION ath_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TRIGGER same_name BEFORE INSERT ON a1 FOR EACH ROW EXECUTE FUNCTION ath_noop();
+  CREATE TRIGGER same_name BEFORE INSERT ON a2 FOR EACH ROW EXECUTE FUNCTION ath_noop();
+steps:
+  - sql: |
+      ALTER TRIGGER same_name ON a1 RENAME TO a1_renamed
+    expect: ok
+  - sql: |
+      SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: a1 has a1_renamed; a2 still has same_name
+  - sql: |
+      ALTER TRIGGER same_name ON a1 RENAME TO a1_again
+    expect: error
+    sqlstate: "42704"
+    comment: the old name no longer exists on a1

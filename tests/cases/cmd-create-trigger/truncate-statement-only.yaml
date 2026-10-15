@@ -1,0 +1,49 @@
+# TRUNCATE triggers: BEFORE and AFTER statement-level fire even on empty tables; row-level TRUNCATE is rejected.
+id: cmd-create-trigger.truncate-statement-only
+title: TRUNCATE triggers are statement-level only and fire even when the table is empty
+family: cmd-create-trigger
+tier: extended
+feature_ids: [create-trigger, truncate-trigger, statement-level-trigger, before-trigger, after-trigger, errors]
+required_capabilities: [create-table, insert, select, truncate, plpgsql, triggers, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER description (TRUNCATE only FOR EACH STATEMENT)"
+setup: |
+  CREATE TABLE t (id int);
+  INSERT INTO t VALUES (1), (2);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  CREATE FUNCTION log_trunc() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ' ' || TG_WHEN || ' ' || TG_OP || ' ' || TG_LEVEL);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER t_before BEFORE TRUNCATE ON t FOR EACH STATEMENT EXECUTE FUNCTION log_trunc()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER t_after AFTER TRUNCATE ON t FOR EACH STATEMENT EXECUTE FUNCTION log_trunc()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER t_row AFTER TRUNCATE ON t FOR EACH ROW EXECUTE FUNCTION log_trunc()
+    expect: error
+    sqlstate: "0A000"
+    comment: TRUNCATE FOR EACH ROW triggers are not supported
+  - sql: |
+      TRUNCATE t
+    expect: ok
+    comment: both statement triggers fire
+  - sql: |
+      TRUNCATE t
+    expect: ok
+    comment: table is already empty, statement triggers still fire
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tgname FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered
+    comment: t_row was never created

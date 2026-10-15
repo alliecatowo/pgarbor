@@ -1,0 +1,40 @@
+# ALTER MAPPING FOR ... REPLACE only touches the listed token types; other token types keep the old dictionary.
+id: cmd-alter-tsconfig.replace-scoped-to-token-types
+title: "ALTER MAPPING FOR limits REPLACE to the named token types"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, alter-mapping-replace, token-type]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (ALTER MAPPING REPLACE ... FOR restricts to token types)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY english (template = snowball, language = english);
+  CREATE TEXT SEARCH DICTIONARY swedish (template = snowball, language = swedish);
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+  ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING FOR asciiword, word WITH swedish;
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config
+        ALTER MAPPING FOR asciiword REPLACE swedish WITH english
+    expect: ok
+  - sql: |
+      SELECT m.maptokentype, m.mapseqno, d.dictname
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig AND m.maptokentype IN (1, 2)
+       ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: asciiword now english; word still swedish
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config
+        ALTER MAPPING FOR word REPLACE swedish WITH english
+    expect: ok
+  - sql: |
+      SELECT count(*) FILTER (WHERE d.dictname = 'english') AS english_maps,
+             count(*) FILTER (WHERE d.dictname = 'swedish') AS swedish_maps
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig AND m.maptokentype IN (1, 2)
+    expect: rows
+    order: multiset

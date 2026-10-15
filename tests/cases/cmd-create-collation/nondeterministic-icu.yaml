@@ -1,0 +1,36 @@
+# Documented: DETERMINISTIC defaults to true; nondeterministic comparison (with a suitable ICU locale) can make case-insensitive equality; only ICU supports it.
+id: cmd-create-collation.nondeterministic-icu
+title: "CREATE COLLATION DETERMINISTIC false gives case-insensitive equality under ICU level 2 only"
+family: cmd-create-collation
+tier: core
+feature_ids: [create-collation, deterministic, nondeterministic-collation, icu-provider]
+required_capabilities: [create-collation, icu-provider, nondeterministic-collation, collate-clause, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_collation.sgml#sql-createcollation (Parameters: DETERMINISTIC)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE COLLATION cmd_cc_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)
+    expect: ok
+  - sql: |
+      CREATE COLLATION cmd_cc_ci3 (provider = icu, locale = 'und', deterministic = false)
+    expect: ok
+  - sql: |
+      CREATE COLLATION cmd_cc_det (provider = icu, locale = 'und')
+    expect: ok
+    comment: no DETERMINISTIC clause means deterministic
+  - sql: |
+      SELECT 'abc' = 'ABC' COLLATE cmd_cc_ci AS ci_equal, 'abc' = 'ABC' COLLATE cmd_cc_ci3 AS level3_equal, 'abc' = 'ABC' COLLATE cmd_cc_det AS det_equal
+    expect: rows
+    order: ordered
+    comment: level 2 ignores case, level 3 does not, deterministic does not
+  - sql: |
+      SELECT collname, collisdeterministic FROM pg_collation WHERE collname LIKE 'cmd\_cc\_%' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE COLLATION cmd_cc_libc_nd (provider = libc, locale = 'C', deterministic = false)
+    expect: error
+    sqlstate: "0A000"
+    comment: nondeterministic collations are ICU only

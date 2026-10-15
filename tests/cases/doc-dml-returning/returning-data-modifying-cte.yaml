@@ -1,0 +1,31 @@
+# A data-modifying WITH query whose DELETE RETURNING feeds an INSERT, which itself returns the moved rows.
+id: doc-dml-returning.returning-data-modifying-cte
+title: DELETE RETURNING inside a WITH clause feeds an INSERT whose RETURNING reports moved rows
+family: doc-dml-returning
+tier: core
+feature_ids: [returning, with-queries, delete, insert, insert-select]
+required_capabilities: [create-table, insert, select, delete, returning, cte, insert-select]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (RETURNING with INSERT ... SELECT); queries.sgml#queries-with-modify"
+sessions: [a]
+setup: |
+  CREATE TABLE q_active (id int4 PRIMARY KEY, label text);
+  CREATE TABLE q_archive (id int4 PRIMARY KEY, label text);
+  INSERT INTO q_active VALUES (1, 'alpha'), (2, 'beta'), (3, 'gamma');
+steps:
+  - sql: |
+      WITH moved AS (
+        DELETE FROM q_active WHERE id >= 2 RETURNING id, label
+      )
+      INSERT INTO q_archive (id, label) SELECT id, upper(label) FROM moved
+      RETURNING id, label
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT 'active' AS tbl, id, label FROM q_active
+      UNION ALL
+      SELECT 'archive', id, label FROM q_archive
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered

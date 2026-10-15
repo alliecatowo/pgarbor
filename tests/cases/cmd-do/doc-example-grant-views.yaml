@@ -1,0 +1,38 @@
+# The documented DO example grants SELECT on every view in schema public through a dynamic GRANT loop.
+# Substitution: the doc example grants to role webuser; this case grants to the predefined role pg_read_all_data
+# because CREATE ROLE is cluster-global and would collide between concurrent cases.
+id: cmd-do.doc-example-grant-views
+title: Documented example grants on all public views via a FOR loop and dynamic GRANT
+family: cmd-do
+tier: core
+feature_ids: [do, plpgsql, dynamic-sql, grant, create-view]
+required_capabilities: [create-table, create-view, plpgsql, privileges, select]
+provenance:
+  source: pg-docs
+  ref: "ref/do.sgml#sql-do-examples (Grant all privileges on all views in schema public)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4 PRIMARY KEY, v text);
+  CREATE VIEW v1 AS SELECT id FROM base;
+  CREATE VIEW v2 AS SELECT v FROM base;
+steps:
+  - sql: |
+      DO $$DECLARE r record;
+      BEGIN
+          FOR r IN SELECT table_schema, table_name FROM information_schema.tables
+                   WHERE table_type = 'VIEW' AND table_schema = 'public'
+          LOOP
+              EXECUTE 'GRANT SELECT ON ' || quote_ident(r.table_schema) || '.' || quote_ident(r.table_name) || ' TO pg_read_all_data';
+          END LOOP;
+      END$$
+    expect: ok
+  - sql: |
+      SELECT c.relname, c.relkind
+      FROM pg_class c
+      WHERE c.relnamespace = 'public'::regnamespace
+        AND EXISTS (SELECT 1 FROM aclexplode(c.relacl) a
+                    WHERE a.grantee = 'pg_read_all_data'::regrole AND a.privilege_type = 'SELECT')
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only the two views are granted; the base table gets no explicit ACL entry

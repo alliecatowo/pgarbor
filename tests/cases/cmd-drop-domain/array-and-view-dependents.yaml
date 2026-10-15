@@ -1,0 +1,37 @@
+# Array-of-domain columns and view columns of a domain type both block RESTRICT and go away under CASCADE.
+id: cmd-drop-domain.array-and-view-dependents
+title: RESTRICT refuses a domain used by an array column or a view; CASCADE drops both
+family: cmd-drop-domain
+tier: core
+feature_ids: [drop-domain, arrays, views, cascade]
+required_capabilities: [create-domain, drop-domain, create-table, create-view, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_domain.sgml#sql-dropdomain (CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN code_t AS varchar(4);
+  CREATE TABLE codes (k int4, arr code_t[]);
+  CREATE VIEW code_v AS SELECT k, 'a'::code_t AS c FROM codes;
+steps:
+  - sql: |
+      DROP DOMAIN code_t
+    expect: error
+    sqlstate: "2BP01"
+    comment: refused while the array column or the view depends on it
+  - sql: |
+      SELECT to_regclass('code_v') IS NOT NULL AS view_there
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP DOMAIN code_t CASCADE
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'codes'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: the array column is gone, k remains
+  - sql: |
+      SELECT to_regclass('code_v') IS NULL AS view_gone
+    expect: rows
+    order: ordered

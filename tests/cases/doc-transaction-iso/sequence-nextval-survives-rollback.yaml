@@ -1,0 +1,40 @@
+# Sequence changes are not rolled back: nextval inside an aborted transaction is not reused, and serial counters behave the same.
+id: doc-transaction-iso.sequence-nextval-survives-rollback
+title: nextval and serial defaults are not undone by ROLLBACK
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, sequences, serial, insert, rollback]
+required_capabilities: [create-table, insert, select, transactions, sequences]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#transaction-iso"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE doc_seq;
+  CREATE TABLE doc_serial (id serial PRIMARY KEY, v text NOT NULL);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT nextval('doc_seq')
+    expect: rows
+    comment: "1"
+  - sql: |
+      INSERT INTO doc_serial (v) VALUES ('rolled back')
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT nextval('doc_seq')
+    expect: rows
+    comment: "2 - the value 1 is not reused"
+  - sql: |
+      INSERT INTO doc_serial (v) VALUES ('kept')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM doc_serial ORDER BY id
+    expect: rows
+    order: ordered
+    comment: serial value 2 for the committed row, not 1

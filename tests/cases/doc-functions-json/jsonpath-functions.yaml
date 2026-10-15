@@ -1,0 +1,50 @@
+# Documented jsonb_path_exists/match/query/query_array/query_first functions: named variables from the vars argument, silent mode, and documented error conditions.
+id: doc-functions-json.jsonpath-functions
+title: jsonb_path_* functions with named variables, silent mode, and documented errors
+family: doc-functions-json
+tier: core
+feature_ids: [jsonpath-functions, jsonpath-variables, jsonpath-silent-mode]
+required_capabilities: [select, jsonb, jsonpath]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-processing (jsonb_path_exists, jsonb_path_match, jsonb_path_query, jsonb_path_query_array, jsonb_path_query_first)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT jsonb_path_exists('{"a":[1,2,3,4,5]}', '$.a[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}') AS exists_vars,
+             jsonb_path_match('{"a":[1,2,3,4,5]}', 'exists($.a[*] ? (@ >= $min && @ <= $max))', '{"min":2, "max":4}') AS match_vars
+    expect: rows
+    comment: "documented examples; the predicate form is required for jsonb_path_match"
+  - sql: |
+      SELECT jsonb_path_query_array('{"a":[1,2,3,4,5]}', '$.a[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}') AS qarray,
+             jsonb_path_query_first('{"a":[1,2,3,4,5]}', '$.a[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}') AS qfirst
+    expect: rows
+  - sql: |
+      SELECT * FROM jsonb_path_query('{"a":[1,2,3,4,5]}', '$.a[*] ? (@ >= $min && @ <= $max)', '{"min":2, "max":4}')
+    expect: rows
+    order: multiset
+    comment: "documented example returns one row per item, here 2, 3 and 4"
+  - sql: |
+      SELECT jsonb_path_query_first('{"a":[1]}', '$.zz') IS NULL AS first_none_is_null,
+             jsonb_path_query_array('{"a":[1]}', '$.zz') AS array_none_is_empty,
+             jsonb_path_exists('{"a":[1]}', '$.zz') AS exists_none
+    expect: rows
+  - sql: |
+      SELECT * FROM jsonb_path_query('{"a":[1,2,3,4,5]}', '$.a[*] > 2')
+    expect: rows
+    order: multiset
+    comment: "a predicate check expression yields a single boolean item"
+  - sql: |
+      SELECT jsonb_path_match('{"a":[1,2]}', '$.a[*]') AS non_boolean
+    expect: error
+    sqlstate: "22038"
+    comment: "jsonb_path_match needs a single boolean result, so a two-item sequence is an error"
+  - sql: |
+      SELECT jsonb_path_exists('{"a":1}', 'strict $.b', '{}', true) AS silent_structural_error
+    expect: rows
+    comment: "with silent true the structural error is suppressed; the documented result is NULL"
+  - sql: |
+      SELECT jsonb_path_exists('{"a":1}', 'strict $.b') AS strict_missing_member
+    expect: error
+    sqlstate: "2203A"
+    comment: "without silent, a strict-mode missing member raises SQL/JSON member not found"

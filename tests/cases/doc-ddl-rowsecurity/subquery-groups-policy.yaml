@@ -1,0 +1,67 @@
+# Policy predicate with a sub-SELECT on another table: the manuals' privilege-level example, single session.
+id: doc-ddl-rowsecurity.subquery-groups-policy
+title: "Policy sub-SELECT on a users table grants rows by privilege level"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, subquery, select, update, foreign-key]
+required_capabilities: [create-table, insert, select, update, rls, roles, foreign-key]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: privilege groups example (groups, users, information)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr08_own;
+  CREATE ROLE pgarbor_case_role_dr08_mal;
+  CREATE TABLE groups (group_id int PRIMARY KEY, group_name text NOT NULL);
+  INSERT INTO groups VALUES (1, 'low'), (2, 'medium'), (5, 'high');
+  GRANT ALL ON groups TO pgarbor_case_role_dr08_own;
+  GRANT SELECT ON groups TO PUBLIC;
+  CREATE TABLE users (user_name text PRIMARY KEY, group_id int NOT NULL REFERENCES groups);
+  INSERT INTO users VALUES ('pgarbor_case_role_dr08_own', 5), ('pgarbor_case_role_dr08_mal', 2);
+  GRANT ALL ON users TO pgarbor_case_role_dr08_own;
+  GRANT SELECT ON users TO PUBLIC;
+  CREATE TABLE information (info text, group_id int NOT NULL REFERENCES groups);
+  INSERT INTO information VALUES ('barely secret', 1), ('slightly secret', 2), ('very secret', 5);
+  ALTER TABLE information ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY fp_s ON information FOR SELECT
+    USING (group_id <= (SELECT group_id FROM users WHERE user_name = current_user));
+  CREATE POLICY fp_u ON information FOR UPDATE
+    USING (group_id <= (SELECT group_id FROM users WHERE user_name = current_user));
+  GRANT ALL ON information TO PUBLIC;
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr08_mal
+    expect: ok
+  - sql: |
+      SELECT info FROM information ORDER BY info
+    expect: rows
+    order: ordered
+    comment: group 2 is at or below mal's level, so rows 1 and 2 are visible
+  - sql: |
+      UPDATE information SET info = 'hidden' WHERE group_id = 5
+    expect: ok
+    comment: UPDATE 0 - the high-group row fails the FOR UPDATE policy
+  - sql: |
+      UPDATE information SET info = 'medium edit' WHERE group_id = 2
+    expect: ok
+    comment: UPDATE 1
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT info FROM information ORDER BY info
+    expect: rows
+    order: ordered
+    comment: the owner (superuser here) sees all three rows
+  - sql: |
+      DROP TABLE information
+    expect: ok
+  - sql: |
+      DROP TABLE users
+    expect: ok
+  - sql: |
+      DROP TABLE groups
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr08_own, pgarbor_case_role_dr08_mal
+    expect: ok

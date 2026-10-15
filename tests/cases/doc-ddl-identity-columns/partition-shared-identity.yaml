@@ -1,0 +1,40 @@
+# Partitions inherit the identity from the partitioned parent (values come from the parent's sequence); a partition with its own identity cannot be attached.
+id: doc-ddl-identity-columns.partition-shared-identity
+title: Partitions inherit the parent identity sequence and reject attached tables with their own identity
+family: doc-ddl-identity-columns
+tier: extended
+feature_ids: [identity-columns, partitioning, errors]
+required_capabilities: [create-table, insert, select, alter-table, partitioning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-identity-columns"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE par (id int GENERATED ALWAYS AS IDENTITY, v int) PARTITION BY RANGE (v)
+    expect: ok
+  - sql: |
+      CREATE TABLE par1 PARTITION OF par FOR VALUES FROM (0) TO (10)
+    expect: ok
+  - sql: |
+      CREATE TABLE par4 PARTITION OF par FOR VALUES FROM (20) TO (30)
+    expect: ok
+  - sql: |
+      INSERT INTO par (v) VALUES (5), (25)
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, id, v FROM par ORDER BY v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_get_serial_sequence('par', 'id') IS NULL AS parent_has_seq, pg_get_serial_sequence('par4', 'id') IS NULL AS part_has_seq
+    expect: rows
+    order: multiset
+  - sql: |
+      CREATE TABLE p5 (id int GENERATED ALWAYS AS IDENTITY, v int)
+    expect: ok
+  - sql: |
+      ALTER TABLE par ATTACH PARTITION p5 FOR VALUES FROM (40) TO (50)
+    expect: error
+    sqlstate: "55000"
+    comment: the new partition may not contain an identity column

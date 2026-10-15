@@ -1,0 +1,42 @@
+# A custom parameter set in one session is not visible to another session; each session keeps its own value.
+id: cmd-show.custom-parameter-is-session-local
+title: A dotted custom parameter set in one session is unrecognized in another session
+family: cmd-show
+tier: extended
+feature_ids: [show, set, custom-guc, sessions, isolation-of-settings]
+required_capabilities: [select, guc, multi-session]
+provenance:
+  source: hand
+  ref: "ref/show.sgml#sql-show; ref/set.sgml#sql-set (SET affects the current session)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SET app.secret = 'x'
+    expect: ok
+  - session: a
+    sql: |
+      SHOW app.secret
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      SHOW app.secret
+    expect: error
+    sqlstate: "42704"
+    comment: the placeholder exists only in session a
+  - session: b
+    sql: |
+      SET app.secret = 'y'
+    expect: ok
+  - session: b
+    sql: |
+      SHOW app.secret
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      SHOW app.secret
+    expect: rows
+    order: ordered
+    comment: session a still sees its own value x

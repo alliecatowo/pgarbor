@@ -1,0 +1,44 @@
+# TABLESPACE moves rebuilt indexes; the built-in pg_default tablespace avoids on-disk paths, and an unknown name is rejected.
+id: cmd-reindex.tablespace-option
+title: REINDEX TABLESPACE moves rebuilt indexes and rejects unknown tablespaces
+family: cmd-reindex
+tier: extended
+feature_ids: [reindex, reindex-tablespace, reindex-index, reindex-table, tablespaces, errors]
+required_capabilities: [create-table, create-index, insert, select, reindex, tablespaces, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: TABLESPACE new_tablespace; Notes: When using the TABLESPACE clause)"
+sessions: [a]
+setup: |
+  CREATE TABLE ts_t (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX ts_t_v ON ts_t (v);
+  INSERT INTO ts_t VALUES (1, 1), (2, 2);
+steps:
+  - sql: |
+      REINDEX (TABLESPACE pg_default) INDEX ts_t_v
+    expect: ok
+  - sql: |
+      REINDEX (TABLESPACE pg_default) TABLE ts_t
+    expect: ok
+  - sql: |
+      SELECT ts.spcname
+      FROM pg_class c
+      JOIN pg_tablespace ts ON ts.oid = CASE WHEN c.reltablespace = 0
+        THEN (SELECT dattablespace FROM pg_database WHERE datname = current_database())
+        ELSE c.reltablespace END
+      WHERE c.oid = 'ts_t_v'::regclass
+    expect: rows
+    order: ordered
+    comment: the index is in pg_default after the move
+  - sql: |
+      REINDEX (TABLESPACE pgarbor_no_such_tablespace) INDEX ts_t_v
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      BEGIN; REINDEX (TABLESPACE pg_default) INDEX ts_t_v; COMMIT
+    expect: ok
+    comment: TABLESPACE with a plain index rebuild is allowed in a transaction
+  - sql: |
+      SELECT id FROM ts_t WHERE v = 2 ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# varchar(n): excess trailing spaces are silently dropped, other overlength input is an error; an explicit cast truncates.
+id: doc-datatype-character.varchar-length-limit-explicit-cast
+title: varchar(5) drops excess spaces, rejects overlength values with 22001, and explicit cast truncates
+family: doc-datatype-character
+tier: core
+feature_ids: [character-varying, varchar-n, length-limit, explicit-cast, string-data-truncation]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-character (Using the Character Types, test2 example)"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (b varchar(5))
+steps:
+  - sql: |
+      INSERT INTO test2 VALUES ('ok')
+    expect: ok
+  - sql: |
+      INSERT INTO test2 VALUES ('good      ')
+    expect: ok
+    comment: 10 characters with 6 trailing spaces; the excess spaces are dropped, storing 'good' + one space
+  - sql: |
+      INSERT INTO test2 VALUES ('too long')
+    expect: error
+    sqlstate: "22001"
+    comment: non-space characters beyond n are an error
+  - sql: |
+      INSERT INTO test2 VALUES ('too long'::varchar(5))
+    expect: ok
+    comment: explicit cast truncates without error
+  - sql: |
+      SELECT b, char_length(b) FROM test2 ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'toolong'::varchar(3) AS t3, 'ab   '::varchar(3) AS sp
+    expect: rows
+    comment: explicit casts truncate over-length text, and spaces beyond n are removed

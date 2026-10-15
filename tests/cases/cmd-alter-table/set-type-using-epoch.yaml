@@ -1,0 +1,30 @@
+# The documented USING example converts Unix epoch seconds to timestamptz; NULL stays NULL; converting back uses extract(epoch).
+id: cmd-alter-table.set-type-using-epoch
+title: "SET DATA TYPE with USING converts epoch seconds to timestamptz and back"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, alter-column-type, using-clause, timestamptz, null-semantics]
+required_capabilities: [create-table, alter-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: change an integer column containing Unix timestamps via USING)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (foo_timestamp int4);
+  INSERT INTO foo VALUES (0), (86400), (NULL);
+steps:
+  - sql: |
+      ALTER TABLE foo ALTER COLUMN foo_timestamp SET DATA TYPE timestamp with time zone USING timestamp with time zone 'epoch' + foo_timestamp * interval '1 second'
+    expect: ok
+  - sql: |
+      SELECT (foo_timestamp AT TIME ZONE 'UTC')::text AS ts FROM foo ORDER BY foo_timestamp NULLS LAST
+    expect: rows
+    order: ordered
+    comment: rendered in UTC so the output does not depend on the session TimeZone
+  - sql: |
+      ALTER TABLE foo ALTER COLUMN foo_timestamp TYPE int4 USING extract(epoch FROM foo_timestamp)::int4
+    expect: ok
+  - sql: |
+      SELECT foo_timestamp FROM foo ORDER BY foo_timestamp NULLS LAST
+    expect: rows
+    order: ordered

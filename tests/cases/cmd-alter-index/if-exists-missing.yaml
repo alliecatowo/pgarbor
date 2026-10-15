@@ -1,0 +1,55 @@
+# IF EXISTS on a missing index: every subform issues a NOTICE and succeeds; without it each subform raises 42P01.
+id: cmd-alter-index.if-exists-missing
+title: IF EXISTS skips a missing index with a NOTICE for each subform; otherwise 42P01
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, if-exists, notices, errors]
+required_capabilities: [create-table, create-index, alter-index, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (Parameters: IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE TABLE ev (id int4, payload text);
+  CREATE INDEX ev_id_idx ON ev (id);
+steps:
+  - sql: |
+      ALTER INDEX IF EXISTS ghost_idx SET (fillfactor = 70)
+    expect: notice
+  - sql: |
+      ALTER INDEX IF EXISTS ghost_idx RESET (fillfactor)
+    expect: notice
+  - sql: |
+      ALTER INDEX IF EXISTS ghost_idx RENAME TO ghost_idx2
+    expect: notice
+  - sql: |
+      ALTER INDEX IF EXISTS ghost_idx SET TABLESPACE pg_default
+    expect: notice
+  - sql: |
+      ALTER INDEX IF EXISTS ghost_idx ALTER COLUMN 1 SET STATISTICS 100
+    expect: notice
+  - sql: |
+      ALTER INDEX ghost_idx SET (fillfactor = 70)
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER INDEX ghost_idx RESET (fillfactor)
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER INDEX ghost_idx RENAME TO ghost_idx2
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER INDEX ghost_idx SET TABLESPACE pg_default
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER INDEX ghost_idx ALTER COLUMN 1 SET STATISTICS 100
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'ev' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the existing index is untouched by the no-op IF EXISTS statements

@@ -1,0 +1,36 @@
+# RENAME TO changes the schema name only: contained objects and their data stay reachable under the new name, and the old name is gone.
+id: cmd-alter-schema.rename-keeps-objects-reachable
+title: ALTER SCHEMA RENAME TO keeps tables and rows reachable under the new name and removes the old name
+family: cmd-alter-schema
+tier: core
+feature_ids: [alter-schema, rename, schema, qualified-names]
+required_capabilities: [create-schema, alter-schema, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_schema.sgml#sql-alterschema (Description; Synopsis: RENAME TO)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cmd_as_old;
+  CREATE TABLE cmd_as_old.items (id int4 PRIMARY KEY, label text);
+  INSERT INTO cmd_as_old.items VALUES (2, 'b'), (1, 'a');
+steps:
+  - sql: |
+      ALTER SCHEMA cmd_as_old RENAME TO cmd_as_new
+    expect: ok
+  - sql: |
+      SELECT id, label FROM cmd_as_new.items ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows are unchanged under the new schema name
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname LIKE 'cmd_as_%' ORDER BY nspname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM cmd_as_old.items
+    expect: error
+    sqlstate: "3F000"
+    comment: the old schema name no longer resolves
+  - sql: |
+      DROP TABLE cmd_as_new.items; DROP SCHEMA cmd_as_new
+    expect: ok

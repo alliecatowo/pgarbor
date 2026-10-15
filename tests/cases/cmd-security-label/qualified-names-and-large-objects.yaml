@@ -1,0 +1,49 @@
+# Schema-qualified object names and large object OIDs resolve only after the provider check; a labeled name form and an OID never change the 22023 outcome.
+id: cmd-security-label.qualified-names-and-large-objects
+title: Schema-qualified, column-qualified and large object OID targets all reach the provider check
+family: cmd-security-label
+tier: extended
+feature_ids: [security-label, security-label-qualified-names, security-label-large-object, security-label-column]
+required_capabilities: [security-label, create-schema, create-table, large-objects, errors, select]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-params-object-name; ref/security_label.sgml#sql-security-label-params-large-object-oid"
+sessions: [a]
+setup: |
+  CREATE SCHEMA sl_q;
+  CREATE TABLE sl_q.emp (id int4, name text);
+  SELECT lo_create(424242)
+steps:
+  - sql: |
+      SECURITY LABEL ON TABLE sl_q.emp IS 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: schema-qualified table name
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_q.emp.name IS 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: schema.table.column form
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_q.emp.nosuch IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL ON TABLE sl_q.nosuch IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL ON LARGE OBJECT 424242 IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL ON LARGE OBJECT 1 IS 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: an OID with no large object behind it also stops at the provider check
+  - sql: |
+      SELECT count(*) AS labels FROM pg_seclabels
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(424242)
+    expect: rows

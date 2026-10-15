@@ -1,0 +1,32 @@
+# RESTRICT is the default: a materialized view with a dependent materialized view cannot be dropped (2BP01).
+id: cmd-drop-materialized-view.restrict-default-blocks-drop
+title: Default and explicit RESTRICT refuse to drop a materialized view that has dependents
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, restrict, dependencies]
+required_capabilities: [create-table, insert, select, create-materialized-view, drop-materialized-view, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE rd_base (id int4);
+  INSERT INTO rd_base VALUES (1), (2);
+  CREATE MATERIALIZED VIEW rd_parent AS SELECT id FROM rd_base;
+  CREATE MATERIALIZED VIEW rd_child AS SELECT id FROM rd_parent;
+steps:
+  - sql: |
+      DROP MATERIALIZED VIEW rd_parent
+    expect: error
+    sqlstate: "2BP01"
+    comment: default behavior is RESTRICT; rd_child depends on rd_parent
+  - sql: |
+      DROP MATERIALIZED VIEW rd_parent RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT gives the same result
+  - sql: |
+      SELECT id FROM rd_child ORDER BY id
+    expect: rows
+    order: ordered
+    comment: nothing was dropped

@@ -1,0 +1,32 @@
+# Statistics may only be defined on tables, foreign tables and materialized views: a plain view, a missing relation and a missing column are errors.
+id: cmd-create-statistics.view-and-missing-objects-rejected
+title: CREATE STATISTICS rejects views, missing relations and missing columns
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, relation-kinds, argument-validation]
+required_capabilities: [create-table, views, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Description: table, foreign table or materialized view)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_base (a int, b int);
+  CREATE VIEW cs_v AS SELECT a, b FROM cs_base;
+steps:
+  - sql: |
+      CREATE STATISTICS cs_v_s ON a, b FROM cs_v
+    expect: error
+    sqlstate: "42809"
+    comment: a view is not a supported target
+  - sql: |
+      CREATE STATISTICS cs_missing_s ON a, b FROM cs_no_such_table
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      CREATE STATISTICS cs_nocol_s ON a, no_such_col FROM cs_base
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext
+    expect: rows
+    comment: no statistics object was created by the failed statements

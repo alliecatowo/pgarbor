@@ -1,0 +1,28 @@
+# CYCLE clause: detects revisits on the current path and stops expanding those rows.
+id: doc-queries-with.cycle-clause-terminates
+title: CYCLE clause flags revisited graph nodes and stops the recursion on cycles
+family: doc-queries-with
+tier: extended
+feature_ids: [with-clause, recursive-cte, cycle-clause]
+required_capabilities: [create-table, insert, select, with, recursive-cte, cycle-clause]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-with (Cycle Detection, built-in syntax; CYCLE id SET is_cycle USING path)"
+sessions: [a]
+setup: |
+  CREATE TABLE graph (id int, link int, data text);
+  INSERT INTO graph VALUES (1, 2, 'x'), (2, 3, 'y'), (3, 1, 'z'), (3, 4, 'w');
+steps:
+  - sql: |
+      WITH RECURSIVE search_graph(id, link, data, depth) AS (
+          SELECT g.id, g.link, g.data, 1
+          FROM graph g
+        UNION ALL
+          SELECT g.id, g.link, g.data, sg.depth + 1
+          FROM graph g, search_graph sg
+          WHERE g.id = sg.link
+      ) CYCLE id SET is_cycle USING path
+      SELECT id, link, data, depth, is_cycle FROM search_graph
+    expect: rows
+    order: multiset
+    comment: the 1-2-3-1 cycle is cut off once a row repeats on its path; the visible-rows set is deterministic

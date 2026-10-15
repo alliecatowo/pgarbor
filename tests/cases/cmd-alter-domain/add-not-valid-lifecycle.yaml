@@ -1,0 +1,55 @@
+# NOT VALID skips existing rows, still checks new writes, and VALIDATE CONSTRAINT succeeds only once data conforms.
+id: cmd-alter-domain.add-not-valid-lifecycle
+title: "NOT VALID CHECK ignores stored rows, enforces new writes, and VALIDATE CONSTRAINT waits for clean data"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, check-constraint, not-valid, validate-constraint]
+required_capabilities: [create-domain, alter-domain, create-table, insert, update, delete, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (ADD ... NOT VALID; VALIDATE CONSTRAINT; Notes)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN digits AS text;
+  CREATE TABLE readings (id int, v digits);
+  INSERT INTO readings VALUES (1, 'abc'), (2, '123');
+steps:
+  - sql: |
+      ALTER DOMAIN digits ADD CONSTRAINT digits_chk CHECK (VALUE ~ '^[0-9]+$') NOT VALID
+    expect: ok
+    comment: the stored value 'abc' is not checked
+  - sql: |
+      SELECT conname, convalidated FROM pg_constraint WHERE contypid = 'digits'::regtype ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO readings VALUES (3, 'xyz')
+    expect: error
+    sqlstate: "23514"
+    comment: new rows are always checked, even against NOT VALID constraints
+  - sql: |
+      INSERT INTO readings VALUES (3, '456')
+    expect: ok
+  - sql: |
+      UPDATE readings SET v = 'bad' WHERE id = 3
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      ALTER DOMAIN digits VALIDATE CONSTRAINT digits_chk
+    expect: error
+    sqlstate: "23514"
+    comment: row 1 still holds 'abc'
+  - sql: |
+      DELETE FROM readings WHERE id = 1
+    expect: ok
+  - sql: |
+      ALTER DOMAIN digits VALIDATE CONSTRAINT digits_chk
+    expect: ok
+  - sql: |
+      SELECT conname, convalidated FROM pg_constraint WHERE contypid = 'digits'::regtype ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, v FROM readings ORDER BY id
+    expect: rows
+    order: ordered

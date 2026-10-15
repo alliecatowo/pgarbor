@@ -1,0 +1,54 @@
+# ADD ATTRIBUTE and DROP ATTRIBUTE change a composite's field list; IF EXISTS turns a missing drop into a notice; COLLATE is limited to collatable types.
+id: cmd-alter-type.composite-add-drop-attribute
+title: "ADD and DROP ATTRIBUTE on a composite, including IF EXISTS and COLLATE errors"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, composite-type, add-attribute, drop-attribute]
+required_capabilities: [create-type, alter-type, composite-type, select, order-by]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (ADD ATTRIBUTE, DROP ATTRIBUTE [ IF EXISTS ]; example: ALTER TYPE compfoo ADD ATTRIBUTE f3 int)"
+sessions: [a]
+setup: |
+  CREATE TYPE compfoo AS (f1 int, f2 text);
+steps:
+  - sql: |
+      ALTER TYPE compfoo ADD ATTRIBUTE f3 int
+    expect: ok
+    comment: documented example
+  - sql: |
+      SELECT ROW(1, 'a', 3)::compfoo
+    expect: rows
+  - sql: |
+      ALTER TYPE compfoo ADD ATTRIBUTE f3 int
+    expect: error
+    sqlstate: "42701"
+    comment: attribute names must be unique
+  - sql: |
+      ALTER TYPE compfoo DROP ATTRIBUTE IF EXISTS nosuch
+    expect: notice
+    comment: a missing attribute is skipped with a notice
+  - sql: |
+      ALTER TYPE compfoo DROP ATTRIBUTE nosuch
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER TYPE compfoo DROP ATTRIBUTE f1
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'compfoo'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: remaining fields are f2 then f3
+  - sql: |
+      SELECT ROW('x', 4)::compfoo
+    expect: rows
+  - sql: |
+      ALTER TYPE compfoo ADD ATTRIBUTE f4 int COLLATE "C"
+    expect: error
+    sqlstate: "42804"
+    comment: integer does not accept a collation
+  - sql: |
+      ALTER TYPE compfoo ADD ATTRIBUTE f5 text COLLATE "C"
+    expect: ok
+    comment: text accepts a collation

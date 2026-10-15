@@ -1,0 +1,46 @@
+# ADD CONSTRAINT without a name gets a generated name (table_column_check, table_column_key); a violating row blocks the ADD; an explicit name is kept.
+id: doc-ddl-alter.add-constraint-default-names
+title: ADD CHECK and UNIQUE get generated names; an existing violating row blocks the ADD
+family: doc-ddl-alter
+tier: core
+feature_ids: [alter-table, add-constraint, check-constraint, unique-constraint, constraint-naming, errors]
+required_capabilities: [create-table, alter-table, insert, update, select, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-alter (Adding a Constraint)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer, name text);
+  INSERT INTO products VALUES (1, 'a'), (2, '');
+steps:
+  - sql: |
+      ALTER TABLE products ADD CHECK (name <> '')
+    expect: error
+    sqlstate: "23514"
+    comment: the existing row with an empty name violates the new CHECK
+  - sql: |
+      UPDATE products SET name = 'b' WHERE product_no = 2
+    expect: ok
+  - sql: |
+      ALTER TABLE products ADD CHECK (name <> '')
+    expect: ok
+  - sql: |
+      ALTER TABLE products ADD UNIQUE (product_no)
+    expect: ok
+  - sql: |
+      ALTER TABLE products ADD CONSTRAINT some_name UNIQUE (name)
+    expect: ok
+  - sql: |
+      SELECT conname, contype FROM pg_constraint WHERE conrelid = 'products'::regclass ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: generated names are products_name_check and products_product_no_key; an explicit name is kept
+  - sql: |
+      INSERT INTO products VALUES (1, 'c')
+    expect: error
+    sqlstate: "23505"
+    comment: the generated unique constraint rejects a duplicate product_no
+  - sql: |
+      INSERT INTO products VALUES (3, '')
+    expect: error
+    sqlstate: "23514"

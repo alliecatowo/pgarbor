@@ -1,0 +1,30 @@
+# Documented hstore example shape: CREATE TRANSFORM FOR hstore with FROM SQL and TO SQL functions.
+# Stand-ins: LANGUAGE internal replaces the doc's LANGUAGE C (no shared library), LANGUAGE sql replaces plpython3u (not installed).
+id: cmd-create-transform.docs-example-hstore-shape
+title: "Documented hstore transform example creates both directions and is listed in pg_transform"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, transform-from-sql, transform-to-sql, hstore-type]
+required_capabilities: [create-transform, create-function, create-extension, internal-language-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-examples"
+sessions: [a]
+setup: |
+  CREATE EXTENSION hstore;
+  CREATE FUNCTION hstore_to_plpython_stub(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+  CREATE FUNCTION plpython_to_hstore_stub(val internal) RETURNS hstore LANGUAGE internal IMMUTABLE STRICT AS 'textin';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR hstore LANGUAGE sql (
+          FROM SQL WITH FUNCTION hstore_to_plpython_stub(internal),
+          TO SQL WITH FUNCTION plpython_to_hstore_stub(internal)
+      )
+    expect: ok
+  - sql: |
+      SELECT t.trftype::regtype::text AS type_name, l.lanname AS language,
+             t.trffromsql::regprocedure::text AS from_fn, t.trftosql::regprocedure::text AS to_fn
+        FROM pg_transform t JOIN pg_language l ON l.oid = t.trflang
+       ORDER BY 1
+    expect: rows
+    order: ordered

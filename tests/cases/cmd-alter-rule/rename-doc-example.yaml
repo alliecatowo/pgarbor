@@ -1,0 +1,36 @@
+# The documented example: ALTER RULE renames a rule on a table; the renamed rule keeps firing and the old name is gone.
+id: cmd-alter-rule.rename-doc-example
+title: ALTER RULE renames the documented notify_all rule to notify_me on emp
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, rules, errors]
+required_capabilities: [create-table, create-rule, insert, update, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_rule.sgml#sql-alterrule (Examples: ALTER RULE notify_all ON emp RENAME TO notify_me)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4, name text);
+  CREATE TABLE emp_log (msg text);
+  CREATE RULE notify_all AS ON UPDATE TO emp DO ALSO INSERT INTO emp_log VALUES ('updated');
+steps:
+  - sql: |
+      ALTER RULE notify_all ON emp RENAME TO notify_me
+    expect: ok
+  - sql: |
+      SELECT tablename, rulename FROM pg_rules WHERE schemaname = 'public' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE emp SET name = 'x' WHERE id = 1
+    expect: ok
+    comment: the rule is unconditional, so it fires even though no rows match
+  - sql: |
+      SELECT msg FROM emp_log ORDER BY msg
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP RULE notify_all ON emp
+    expect: error
+    sqlstate: "42704"
+    comment: the old name no longer exists after the rename

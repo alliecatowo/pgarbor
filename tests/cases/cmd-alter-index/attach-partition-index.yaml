@@ -1,0 +1,61 @@
+# ALTER INDEX ... ATTACH PARTITION: the parent stays invalid until every partition is attached; attached children cannot be dropped alone and drop with the parent.
+id: cmd-alter-index.attach-partition-index
+title: ATTACH PARTITION makes a partitioned index valid once all partitions are attached; attached children are protected
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, partitioned-indexes, attach-partition, dependencies]
+required_capabilities: [create-table, create-index, partitioned-tables, alter-index, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (ATTACH PARTITION)"
+sessions: [a]
+setup: |
+  CREATE TABLE pt (k int4, v int4) PARTITION BY RANGE (k);
+  CREATE TABLE pt1 (k int4, v int4);
+  CREATE TABLE pt2 (k int4, v int4);
+  ALTER TABLE pt ATTACH PARTITION pt1 FOR VALUES FROM (0) TO (10);
+  ALTER TABLE pt ATTACH PARTITION pt2 FOR VALUES FROM (10) TO (20);
+  CREATE INDEX pt_k ON ONLY pt (k);
+  CREATE INDEX pt1_k ON pt1 (k);
+steps:
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx, indisvalid FROM pg_index WHERE indrelid = 'pt'::regclass ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: a parent index created ON ONLY is invalid until all partitions are covered
+  - sql: |
+      ALTER INDEX pt_k ATTACH PARTITION pt1_k
+    expect: ok
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx, indisvalid FROM pg_index WHERE indrelid = 'pt'::regclass ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: pt2 has no matching index yet, so the parent is still invalid
+  - sql: |
+      CREATE INDEX pt2_k ON pt2 (k)
+    expect: ok
+  - sql: |
+      ALTER INDEX pt_k ATTACH PARTITION pt2_k
+    expect: ok
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx, indisvalid FROM pg_index WHERE indrelid = 'pt'::regclass ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: parent is now valid
+  - sql: |
+      SELECT inhrelid::regclass::text AS child, inhparent::regclass::text AS parent FROM pg_inherits WHERE inhparent = 'pt_k'::regclass ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP INDEX pt2_k
+    expect: error
+    sqlstate: "2BP01"
+    comment: an attached index cannot be dropped by itself
+  - sql: |
+      DROP INDEX pt_k
+    expect: ok
+    comment: dropping the parent drops the attached children
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_class WHERE relname IN ('pt1_k', 'pt2_k')
+    expect: rows
+    order: ordered

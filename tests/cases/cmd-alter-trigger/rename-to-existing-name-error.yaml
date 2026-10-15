@@ -1,0 +1,31 @@
+# Renaming to a name already used by another trigger on the same table fails; renaming to its own name is a no-op.
+id: cmd-alter-trigger.rename-to-existing-name-error
+title: "RENAME TO a name used by another trigger on the same table is rejected"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, rename, triggers, errors]
+required_capabilities: [create-table, select, triggers, plpgsql, create-function, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+  CREATE FUNCTION ath_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TRIGGER trg_a BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION ath_noop();
+  CREATE TRIGGER trg_b BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION ath_noop();
+steps:
+  - sql: |
+      ALTER TRIGGER trg_a ON t RENAME TO trg_b
+    expect: error
+    sqlstate: "42710"
+    comment: duplicate trigger name on the same table
+  - sql: |
+      SELECT tgname FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered
+    comment: both triggers unchanged after the failed rename
+  - sql: |
+      ALTER TRIGGER trg_a ON t RENAME TO trg_a
+    expect: ok
+    comment: renaming a trigger to its current name succeeds

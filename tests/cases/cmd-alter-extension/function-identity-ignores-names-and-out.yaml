@@ -1,0 +1,33 @@
+# Function identity is the name plus input argument types: argument names, OUT arguments and the VARIADIC marker do not create a second identity.
+id: cmd-alter-extension.function-identity-ignores-names-and-out
+title: ADD FUNCTION identifies members by input argument types, ignoring names, OUT and VARIADIC markers
+family: cmd-alter-extension
+tier: core
+feature_ids: [alter-extension, add-member, function-identity, argmode, errors]
+required_capabilities: [create-extension, create-function, alter-extension, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (argmode, argname, argtype)"
+sessions: [a]
+setup: |
+  CREATE EXTENSION hstore;
+  CREATE FUNCTION myfn(a int, OUT b int) LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION vfn(VARIADIC xs int[]) RETURNS int LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      ALTER EXTENSION hstore ADD FUNCTION myfn(x int)
+    expect: ok
+    comment: argument name x differs from a but the identity is myfn(integer)
+  - sql: |
+      ALTER EXTENSION hstore ADD FUNCTION vfn(VARIADIC ys int[])
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD FUNCTION myfn(int)
+    expect: error
+    sqlstate: "55000"
+    comment: same identity as the member added above
+  - sql: |
+      ALTER EXTENSION hstore ADD FUNCTION vfn(int[])
+    expect: error
+    sqlstate: "55000"
+    comment: the VARIADIC marker is not part of the identity

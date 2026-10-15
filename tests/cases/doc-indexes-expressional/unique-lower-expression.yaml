@@ -1,0 +1,50 @@
+# UNIQUE index on lower(email) enforces case-insensitive uniqueness, which a plain UNIQUE constraint cannot express.
+id: doc-indexes-expressional.unique-lower-expression
+title: UNIQUE expression index on lower(email) rejects case-variant duplicates; NULL keys never conflict
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, unique-index, lower, null-semantics, errors]
+required_capabilities: [create-table, create-index, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (UNIQUE on lower(col1))"
+sessions: [a]
+setup: |
+  CREATE TABLE users (id int4 PRIMARY KEY, email text);
+  CREATE UNIQUE INDEX users_email_ci ON users (lower(email));
+  INSERT INTO users VALUES (1, 'a@x.org');
+steps:
+  - sql: |
+      INSERT INTO users VALUES (2, 'A@X.ORG')
+    expect: error
+    sqlstate: "23505"
+    comment: differs from an existing row only by case, so the lowered keys collide
+  - sql: |
+      INSERT INTO users VALUES (2, 'a@x.org')
+    expect: error
+    sqlstate: "23505"
+    comment: identical values collide too
+  - sql: |
+      INSERT INTO users VALUES (2, 'b@x.org')
+    expect: ok
+  - sql: |
+      INSERT INTO users VALUES (3, NULL), (4, NULL)
+    expect: ok
+    comment: NULL keys are never equal, so several NULL rows are allowed
+  - sql: |
+      INSERT INTO users VALUES (5, 'B@X.org')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO users VALUES (6, 'z@x.org'), (7, 'Z@X.org')
+    expect: error
+    sqlstate: "23505"
+    comment: a multi-row INSERT fails as a whole, so neither row is stored
+  - sql: |
+      UPDATE users SET email = 'C@x.org' WHERE id = 2
+    expect: ok
+    comment: a row may be updated to a new value; its old key is released
+  - sql: |
+      SELECT id, email FROM users ORDER BY id
+    expect: rows
+    order: ordered

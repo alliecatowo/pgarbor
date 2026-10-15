@@ -1,0 +1,35 @@
+# Documented note: inside a transaction block the called procedure may not run transaction control
+# statements; the error aborts the enclosing transaction, so nothing from the procedure persists.
+id: cmd-call.txn-block-rejects-commit
+title: COMMIT inside a procedure called from an explicit transaction block raises 2D000
+family: cmd-call
+tier: core
+feature_ids: [call, procedures, transactions, commit, rollback]
+required_capabilities: [create-table, insert, select, create-procedure, call, plpgsql, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/call.sgml#sql-call (Notes: transaction control)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  CREATE PROCEDURE p_tx() LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO t VALUES (9, 'tx');
+    COMMIT;
+    INSERT INTO t VALUES (10, 'after');
+  END $$;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CALL p_tx()
+    expect: error
+    sqlstate: "2D000"
+  - sql: |
+      ROLLBACK
+    expect: ok
+    comment: the transaction is aborted; ROLLBACK is the only useful next step
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows

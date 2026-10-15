@@ -1,0 +1,39 @@
+# WINDOW clause defines a named window reused by several window functions, plus window-function placement and unknown-window errors.
+id: cmd-select.window-named-clause
+title: Named WINDOW clause reused by window functions, window function in WHERE and unknown window name errors
+family: cmd-select
+tier: core
+feature_ids: [select, window, window-functions, named-window]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-window (WINDOW clause)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales (id int4 PRIMARY KEY, region text, amt int4);
+  INSERT INTO sales VALUES (1, 'east', 10), (2, 'east', 30), (3, 'east', 20), (4, 'west', 5), (5, 'west', 50);
+steps:
+  - sql: |
+      SELECT id, region, row_number() OVER w AS rn, sum(amt) OVER w AS running
+      FROM sales
+      WINDOW w AS (PARTITION BY region ORDER BY id)
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the default frame is RANGE UNBOUNDED PRECEDING to CURRENT ROW, unique ORDER BY keys make it deterministic
+  - sql: |
+      SELECT id, count(*) OVER (PARTITION BY region) AS c
+      FROM sales
+      ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM sales WHERE row_number() OVER () > 1
+    expect: error
+    sqlstate: "42P20"
+    comment: window functions are not allowed in WHERE
+  - sql: |
+      SELECT id, sum(amt) OVER nosuch FROM sales
+    expect: error
+    sqlstate: "42704"
+    comment: window "nosuch" does not exist

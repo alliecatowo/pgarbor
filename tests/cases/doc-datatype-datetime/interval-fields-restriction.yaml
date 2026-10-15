@@ -1,0 +1,32 @@
+# Documented: an interval fields restriction (YEAR, HOUR TO MINUTE, SECOND and so on) decides how unmarked quantities are read and discards fields smaller than the least significant allowed field. Precision is accepted only when the fields include SECOND.
+id: doc-datatype-datetime.interval-fields-restriction
+title: Interval field restrictions decide unit reading, discard smaller fields, and round to precision
+family: doc-datatype-datetime
+tier: core
+feature_ids: [interval-type, interval-fields, interval-precision, interval-syntax-errors]
+required_capabilities: [select, interval, errors]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-datetime (interval fields phrases; precision applies only to SECOND; Interval Input: fields restrict unmarked quantities)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT INTERVAL '1' YEAR AS unmarked_year, INTERVAL '1' AS unmarked_seconds
+    expect: rows
+    comment: "with YEAR the unmarked 1 is a year; without fields it is a second"
+  - sql: |
+      SELECT INTERVAL '1 day 2:03:04' HOUR TO MINUTE AS seconds_discarded
+    expect: rows
+    comment: "the day is kept while seconds below the least significant field are dropped"
+  - sql: |
+      SELECT CAST('1 year 2 months' AS interval DAY TO SECOND) AS month_fields_kept
+    expect: rows
+  - sql: |
+      SELECT INTERVAL '01:02:03.456' HOUR TO SECOND(2) AS rounded_to_precision
+    expect: rows
+    comment: "precision with SECOND rounds the seconds field"
+  - sql: |
+      SELECT CAST('1 2:03:04.5' AS interval DAY TO MINUTE(2))
+    expect: error
+    sqlstate: "42601"
+    comment: "precision is not allowed when the fields exclude SECOND"

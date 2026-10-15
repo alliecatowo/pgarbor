@@ -1,0 +1,24 @@
+# Sequence advancement is not transactional, so nextval inside a rolled-back savepoint is not undone.
+id: cmd-savepoint.sequence-not-rolled-back
+title: nextval consumed after a savepoint is not returned by ROLLBACK TO SAVEPOINT
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, sequence, nextval, begin, commit, select]
+required_capabilities: [sequence, select, transactions, savepoints]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-savepoint.html; sequences are non-transactional (ref/create_sequence.sgml Notes)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s;
+steps:
+  - sql: |
+      BEGIN;
+      SAVEPOINT sp;
+      SELECT nextval('s') AS first;
+      ROLLBACK TO SAVEPOINT sp;
+      SELECT nextval('s') AS second;
+      COMMIT
+    expect: rows
+    order: ordered
+    comment: first=1 is consumed and not reused; second=2

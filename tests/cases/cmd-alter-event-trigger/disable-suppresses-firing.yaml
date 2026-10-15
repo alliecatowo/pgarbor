@@ -1,0 +1,29 @@
+# DISABLE: a disabled event trigger is still known to the system but is not executed when its event occurs.
+id: cmd-alter-event-trigger.disable-suppresses-firing
+title: DISABLE stops an event trigger from firing on its event
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      CREATE TABLE t1 (a int4)
+    expect: error
+    sqlstate: P0001
+    comment: enabled (origin) trigger fires on CREATE TABLE and raises
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard DISABLE
+    expect: ok
+  - sql: |
+      CREATE TABLE t1 (a int4)
+    expect: ok
+    comment: disabled trigger is not executed
+  - sql: |
+      SELECT to_regclass('t1') IS NOT NULL AS created
+    expect: rows

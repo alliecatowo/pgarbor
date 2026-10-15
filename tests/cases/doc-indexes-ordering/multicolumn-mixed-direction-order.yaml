@@ -1,0 +1,31 @@
+# A (x ASC, y DESC) index satisfies ORDER BY x ASC, y DESC; a plain (x, y) index cannot. Result order is the same either way.
+id: doc-indexes-ordering.multicolumn-mixed-direction-order
+title: Mixed-direction multicolumn ORDER BY returns rows in per-column direction order
+family: doc-indexes-ordering
+tier: core
+feature_ids: [btree-index, multicolumn-index, order-by, nulls-ordering, create-index]
+required_capabilities: [create-table, insert, select, order-by, create-index, btree-index, multi-column-index, nulls]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-ordering (two-column index on (x ASC, y DESC))"
+sessions: [a]
+setup: |
+  CREATE TABLE m2 (id int4 PRIMARY KEY, x int4, y int4);
+  CREATE INDEX m2_x_asc_y_desc ON m2 (x ASC, y DESC);
+  INSERT INTO m2 VALUES (1, 1, 1), (2, 1, 3), (3, 1, NULL), (4, 2, 2), (5, 2, NULL), (6, NULL, 4), (7, 0, 7);
+steps:
+  - sql: |
+      SELECT id, x, y FROM m2 ORDER BY x ASC, y DESC, id
+    expect: rows
+    order: ordered
+    comment: matches the index exactly; y DESC puts NULL first within each x
+  - sql: |
+      SELECT id, x, y FROM m2 ORDER BY x DESC, y ASC, id
+    expect: rows
+    order: ordered
+    comment: fully reversed direction, NULLS LAST for x and y ascending
+  - sql: |
+      SELECT id, x, y FROM m2 ORDER BY x, y, id
+    expect: rows
+    order: ordered
+    comment: all-ascending order, which this index cannot produce directly

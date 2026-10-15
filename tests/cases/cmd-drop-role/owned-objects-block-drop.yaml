@@ -1,0 +1,38 @@
+# A role that owns a table cannot be dropped until ownership is reassigned; then the drop succeeds.
+id: cmd-drop-role.owned-objects-block-drop
+title: "DROP ROLE fails with 2BP01 while the role owns a table; REASSIGN OWNED unblocks it"
+family: cmd-drop-role
+tier: core
+feature_ids: [drop-role, reassign-owned, owner, errors]
+required_capabilities: [roles, create-table, reassign-owned, errors, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_role.sgml#sql-droprole-description (drop owned objects or reassign ownership)"
+sessions: [a]
+setup: |
+  CREATE ROLE drr_own;
+  CREATE TABLE drr_own_t (i int4);
+  ALTER TABLE drr_own_t OWNER TO drr_own;
+steps:
+  - sql: |
+      DROP ROLE drr_own
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT tableowner FROM pg_tables WHERE tablename = 'drr_own_t'
+    expect: rows
+    order: multiset
+  - sql: |
+      REASSIGN OWNED BY drr_own TO postgres
+    expect: ok
+  - sql: |
+      DROP ROLE drr_own
+    expect: ok
+  - sql: |
+      SELECT tableowner FROM pg_tables WHERE tablename = 'drr_own_t'
+    expect: rows
+    order: multiset
+    comment: the table survives and is now owned by postgres
+  - sql: |
+      DROP TABLE drr_own_t
+    expect: ok

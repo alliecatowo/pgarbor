@@ -1,0 +1,62 @@
+# A deferred foreign key looks at the end-of-transaction state: deleting a parent fails at COMMIT unless it is restored.
+id: cmd-set-constraints.delete-referenced-row-deferred
+title: Deleting a referenced parent fails at COMMIT when deferred, and passes if the parent is re-inserted
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, foreign-key, delete, transactions, commit, errors]
+required_capabilities: [create-table, insert, select, delete, transactions, constraints, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: DEFERRED constraints are not checked until transaction commit)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_fk REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+  INSERT INTO p VALUES (10), (20);
+  INSERT INTO c VALUES (1, 10);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DELETE FROM p WHERE id = 10
+    expect: error
+    sqlstate: "23503"
+    comment: IMMEDIATE by default, so the delete fails at the statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+  - sql: |
+      DELETE FROM p WHERE id = 10
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23503"
+    comment: the referencing row is still present at commit
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+  - sql: |
+      DELETE FROM p WHERE id = 10
+    expect: ok
+  - sql: |
+      INSERT INTO p VALUES (10)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: the end-of-transaction state has the parent again
+  - sql: |
+      SELECT c.id, p.id AS parent FROM c JOIN p ON p.id = c.pid ORDER BY c.id
+    expect: rows
+    order: ordered

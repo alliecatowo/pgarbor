@@ -1,0 +1,54 @@
+# SET CONSTRAINTS accepts a list of names (optionally schema-qualified) and ALL; the deferred checks fire at COMMIT.
+id: cmd-set-constraints.deferred-list-and-all-at-commit
+title: Name list with a schema-qualified name defers both checks; ALL defers the rest and COMMIT reports the leftover orphan
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, foreign-key, transactions, commit]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (synopsis: { ALL | name [, ...] }; Description: SET CONSTRAINTS ALL changes the mode of all deferrable constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE p1 (id int4 PRIMARY KEY);
+  CREATE TABLE p2 (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, a int4 CONSTRAINT c_a REFERENCES p1 (id) DEFERRABLE INITIALLY IMMEDIATE, b int4 CONSTRAINT c_b REFERENCES p2 (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_a, public.c_b DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (1, 100, 200)
+    expect: ok
+    comment: both foreign keys are unsatisfied but deferred
+  - sql: |
+      INSERT INTO p1 VALUES (100)
+    expect: ok
+  - sql: |
+      INSERT INTO p2 VALUES (200)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ALL DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (2, 101, NULL)
+    expect: ok
+    comment: NULL in b skips that foreign key; a = 101 is an orphan
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23503"
+    comment: the deferred check for c_a fails at commit and the whole transaction is discarded
+  - sql: |
+      SELECT id, a, b FROM c ORDER BY id
+    expect: rows
+    order: ordered

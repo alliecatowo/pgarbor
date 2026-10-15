@@ -1,0 +1,37 @@
+# WITH storage parameters are recorded as reloptions; out-of-range and unknown options are rejected.
+id: cmd-create-index.storage-params-fillfactor
+title: Index storage parameters fillfactor and deduplicate_items are stored and validated
+family: cmd-create-index
+tier: extended
+feature_ids: [create-index, storage-parameters, fillfactor, deduplicate-items]
+required_capabilities: [create-table, create-index, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Index Storage Parameters: fillfactor, deduplicate_items; Examples: fillfactor = 70, deduplicate_items = off)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, rating int4);
+  INSERT INTO films VALUES (1, 'a', 1), (2, 'b', 2);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX title_idx ON films (title) WITH (fillfactor = 70, deduplicate_items = off)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'title_idx'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE INDEX f_fill ON films (rating) WITH (fillfactor = 5)
+    expect: error
+    sqlstate: "22023"
+    comment: fillfactor below 10 is out of bounds
+  - sql: |
+      CREATE INDEX f_bad ON films (rating) WITH (nosuchopt = 1)
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized storage parameter
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('f_fill', 'f_bad')
+    expect: rows
+    order: ordered
+    comment: rejected builds leave no index behind

@@ -1,0 +1,30 @@
+# Documented: renaming changes the name only; objects referring to the dictionary (by OID) keep working.
+id: cmd-alter-tsdictionary.rename-keeps-configuration-mapping
+title: "Renaming a dictionary keeps its text search configuration mapping working"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, rename, text-search-configuration, mapping]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (RENAME TO new_name); doc/src/sgml/textsearch.sgml (configuration mappings reference dictionaries)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY k_dict (TEMPLATE = snowball, language = english);
+  CREATE TEXT SEARCH CONFIGURATION k_cfg (copy = simple);
+  ALTER TEXT SEARCH CONFIGURATION k_cfg ALTER MAPPING FOR asciiword WITH k_dict;
+steps:
+  - sql: |
+      SELECT to_tsvector('k_cfg', 'the running cats')
+    expect: rows
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY k_dict RENAME TO k_renamed
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('k_cfg', 'the running cats')
+    expect: rows
+    comment: same output after rename
+  - sql: |
+      SELECT d.dictname FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict WHERE m.mapcfg = 'k_cfg'::regconfig AND m.maptokentype = 1
+    expect: rows
+    comment: the mapping now shows the new name

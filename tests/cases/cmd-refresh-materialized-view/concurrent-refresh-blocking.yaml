@@ -1,0 +1,53 @@
+id: cmd-refresh-materialized-view.concurrent-refresh-blocking
+title: A CONCURRENTLY refresh does not block readers but serializes with another refresh of the same view
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, refresh-concurrently, row-locks, multi-session]
+required_capabilities: [create-table, insert, select, create-index, create-materialized-view, refresh-materialized-view, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (CONCURRENTLY: only one REFRESH at a time)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE src (id int4 PRIMARY KEY, amt int4 NOT NULL);
+  INSERT INTO src VALUES (1, 10), (2, 20);
+  CREATE MATERIALIZED VIEW mv AS SELECT id, amt FROM src;
+  CREATE UNIQUE INDEX mv_id ON mv (id);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO src VALUES (3, 30)
+    expect: ok
+  - session: a
+    sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv
+    expect: ok
+    comment: holds ExclusiveLock on mv until COMMIT; a sees its own uncommitted row
+  - session: b
+    sql: |
+      SELECT id, amt FROM mv ORDER BY id
+    expect: rows
+    order: ordered
+    comment: readers are not blocked and see the pre-refresh snapshot
+  - session: b
+    sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv
+    async: true
+    expect_blocked: true
+    comment: second refresh waits for a's ExclusiveLock
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, amt FROM mv ORDER BY id
+    expect: rows
+    order: ordered

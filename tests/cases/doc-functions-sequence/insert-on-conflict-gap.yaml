@@ -1,0 +1,32 @@
+# An INSERT ... ON CONFLICT that takes the DO NOTHING path still consumes a nextval default, leaving a gap.
+id: doc-functions-sequence.insert-on-conflict-gap
+title: A conflicting INSERT with ON CONFLICT DO NOTHING consumes a sequence value, leaving a gap in the ids
+family: doc-functions-sequence
+tier: core
+feature_ids: [nextval, serial-default, insert-on-conflict, gaps]
+required_capabilities: [sequences, create-table, insert, select, unique-constraints]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (INSERT with an ON CONFLICT clause computes nextval before detecting conflict)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_oc;
+  CREATE TABLE t_oc (id int4 PRIMARY KEY DEFAULT nextval('s_oc'), v text UNIQUE);
+steps:
+  - sql: |
+      INSERT INTO t_oc (v) VALUES ('a')
+    expect: ok
+  - sql: |
+      INSERT INTO t_oc (v) VALUES ('a') ON CONFLICT (v) DO NOTHING
+    expect: ok
+    comment: the default nextval runs before the conflict is detected, so id 2 is consumed and lost
+  - sql: |
+      INSERT INTO t_oc (v) VALUES ('b') ON CONFLICT (v) DO NOTHING
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t_oc ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT last_value, is_called FROM s_oc
+    expect: rows

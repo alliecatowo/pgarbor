@@ -1,0 +1,60 @@
+# make_date, make_time, make_timestamp, make_timestamptz and make_interval: documented examples, named arguments, rollover and errors.
+id: doc-functions-datetime.make-constructors-and-errors
+title: make_* constructors build documented values, accept named arguments, and reject out-of-range fields
+family: doc-functions-datetime
+tier: core
+feature_ids: [make-date, make-time, make-timestamp, make-timestamptz, make-interval, named-arguments]
+required_capabilities: [select, date-type, timestamp, interval, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime-table (make_date, make_time, make_timestamp, make_timestamptz, make_interval)"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT make_date(2013, 7, 15) AS d,
+             make_time(8, 15, 23.5) AS t,
+             make_timestamp(2013, 7, 15, 8, 15, 23.5) AS ts,
+             make_interval(days => 10) AS iv
+    expect: rows
+    order: multiset
+    comment: documented 2013-07-15, 08:15:23.5, 2013-07-15 08:15:23.5, 10 days
+  - sql: |
+      SELECT make_timestamptz(2013, 7, 15, 8, 15, 23.5) AS utc_tz,
+             make_timestamptz(2013, 7, 15, 8, 15, 23.5, 'America/New_York') AS ny_tz
+    expect: rows
+    order: multiset
+    comment: with the session in UTC the optional zone argument decides the instant; 08:15:23.5 New York is 12:15:23.5 UTC
+  - sql: |
+      SELECT make_interval(years => 1, months => 2, weeks => 1, days => 3, hours => 4, mins => 5, secs => 6.5) AS full_iv,
+             make_interval() AS empty_iv
+    expect: rows
+    order: multiset
+    comment: all arguments are optional and default to zero
+  - sql: |
+      SELECT make_timestamp(2013, 7, 15, 8, 15, 60) AS sec_60
+    expect: rows
+    order: multiset
+    comment: seconds value 60 rolls over into the next minute rather than failing
+  - sql: |
+      SELECT make_date(2013, 2, 30) AS feb_30
+    expect: error
+    sqlstate: "22008"
+    comment: day out of range for the month
+  - sql: |
+      SELECT make_date(2013, 13, 1) AS month_13
+    expect: error
+    sqlstate: "22008"
+    comment: month out of range
+  - sql: |
+      SELECT make_time(25, 0, 0) AS hour_25
+    expect: error
+    sqlstate: "22008"
+    comment: hour out of range
+  - sql: |
+      SELECT make_timestamptz(2013, 7, 15, 8, 15, 23.5, 'No/Such_Zone') AS bad_zone
+    expect: error
+    sqlstate: "22023"
+    comment: unknown time zone name is invalid_parameter_value

@@ -1,0 +1,46 @@
+# A column DEFAULT must also convert: a text default blocks conversion to integer until dropped; a new default is converted on the new type.
+id: doc-ddl-alter.alter-type-default-cast
+title: ALTER COLUMN TYPE also converts the DEFAULT; an unconvertible default blocks the change
+family: doc-ddl-alter
+tier: core
+feature_ids: [alter-table, alter-column-type, column-default, using-clause, errors]
+required_capabilities: [create-table, alter-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-alter (Changing a Column's Data Type: converting the default value)"
+sessions: [a]
+setup: |
+  CREATE TABLE tp (a integer, t text DEFAULT '5');
+  INSERT INTO tp (a, t) VALUES (1, '2'), (2, NULL);
+steps:
+  - sql: |
+      ALTER TABLE tp ALTER COLUMN t TYPE integer USING t::integer
+    expect: error
+    sqlstate: "42804"
+    comment: the USING clause converts the data, but the default '5' cannot be cast automatically
+  - sql: |
+      SELECT a, t FROM tp ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the failed ALTER left t as text with its data intact
+  - sql: |
+      ALTER TABLE tp ALTER COLUMN t DROP DEFAULT
+    expect: ok
+  - sql: |
+      ALTER TABLE tp ALTER COLUMN t TYPE integer USING t::integer
+    expect: ok
+  - sql: |
+      SELECT a, t FROM tp ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE tp ALTER COLUMN t SET DEFAULT 9
+    expect: ok
+  - sql: |
+      INSERT INTO tp (a) VALUES (3) RETURNING t
+    expect: rows
+    comment: the new default is an integer literal, so it fits the integer column
+  - sql: |
+      SELECT a, t FROM tp ORDER BY a
+    expect: rows
+    order: ordered

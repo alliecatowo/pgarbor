@@ -1,0 +1,55 @@
+# Function identity is the list of input argument types. A bare name is ambiguous when overloaded
+# (42725). Argument types match exactly, with no implicit coercion (text does not match varchar).
+# Unknown argument types fail with 42704.
+id: cmd-drop-function.overloads-and-type-matching
+title: Overloaded names need an argument list; argument types must match exactly
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, overloading, argument-type-matching, type-name-aliases]
+required_capabilities: [create-function, drop-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (Description; name parameter)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION ov(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION ov(text) RETURNS text LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION ov
+    expect: error
+    sqlstate: "42725"
+    comment: the name is not unique, so an argument list is required
+  - sql: |
+      DROP FUNCTION ov(pg_catalog.int4)
+    expect: ok
+    comment: pg_catalog.int4 is the same type as int and integer
+  - sql: |
+      CREATE FUNCTION tv(varchar) RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION tv(text)
+    expect: error
+    sqlstate: "42883"
+    comment: text and varchar are different types; there is no implicit coercion for matching
+  - sql: |
+      DROP FUNCTION tv(nosuchtype)
+    expect: error
+    sqlstate: "42704"
+    comment: the argument type does not exist
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'tv'
+    expect: rows
+    order: multiset
+    comment: the failed drops left tv(varchar) in place
+  - sql: |
+      DROP FUNCTION ov(text), tv(varchar)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname IN ('ov', 'tv')
+    expect: rows
+    order: multiset
+    comment: 0 rows remain

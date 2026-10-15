@@ -1,0 +1,61 @@
+# BUFFER_USAGE_LIMIT accepts 0 and sizes from 128 kB to 16 GB, rejects values outside that range, and is incompatible with FULL unless ANALYZE is given.
+id: cmd-vacuum.buffer-usage-limit
+title: "VACUUM BUFFER_USAGE_LIMIT boundaries, units and FULL interaction"
+family: cmd-vacuum
+tier: extended
+feature_ids: [vacuum, buffer-usage-limit, size-units, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: BUFFER_USAGE_LIMIT, size)"
+sessions: [a]
+setup: |
+  CREATE TABLE vbu (id int4);
+  INSERT INTO vbu SELECT g FROM generate_series(1, 10) g;
+steps:
+  - sql: |
+      VACUUM (BUFFER_USAGE_LIMIT 0) vbu
+    expect: ok
+    comment: disables the buffer access strategy
+  - sql: |
+      VACUUM (BUFFER_USAGE_LIMIT '128 kB') vbu
+    expect: ok
+    comment: minimum non-zero value
+  - sql: |
+      VACUUM (BUFFER_USAGE_LIMIT '16 GB') vbu
+    expect: ok
+    comment: maximum value
+  - sql: |
+      VACUUM (BUFFER_USAGE_LIMIT '127 kB') vbu
+    expect: error
+    sqlstate: "22023"
+    comment: one kilobyte below the minimum
+  - sql: |
+      VACUUM (BUFFER_USAGE_LIMIT 16777217) vbu
+    expect: error
+    sqlstate: "22023"
+    comment: a bare number is kilobytes; one above the maximum
+  - sql: |
+      VACUUM (BUFFER_USAGE_LIMIT '1 TB') vbu
+    expect: error
+    sqlstate: "22023"
+    comment: above the maximum
+  - sql: |
+      VACUUM (BUFFER_USAGE_LIMIT 'abc') vbu
+    expect: error
+    sqlstate: "22023"
+    comment: not a size
+  - sql: |
+      VACUUM (FULL, BUFFER_USAGE_LIMIT '256 kB') vbu
+    expect: error
+    sqlstate: "0A000"
+    comment: not allowed with FULL unless ANALYZE is also given
+  - sql: |
+      VACUUM (FULL, BUFFER_USAGE_LIMIT 0, ANALYZE) vbu
+    expect: ok
+    comment: allowed with FULL when ANALYZE is also present
+  - sql: |
+      VACUUM (FULL, ANALYZE, BUFFER_USAGE_LIMIT '64 kB') vbu
+    expect: error
+    sqlstate: "22023"
+    comment: the range is checked even when the FULL rule is satisfied

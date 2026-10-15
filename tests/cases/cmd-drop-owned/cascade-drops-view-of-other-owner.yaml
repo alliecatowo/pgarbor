@@ -1,0 +1,43 @@
+# A view owned by another role depends on a table owned by the role. RESTRICT refuses; CASCADE drops the view too.
+id: cmd-drop-owned.cascade-drops-view-of-other-owner
+title: "DROP OWNED CASCADE recurses into a view owned by a different role, RESTRICT refuses"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, cascade, restrict, views, dependencies]
+required_capabilities: [roles, drop-role, create-table, create-view, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-notes (CASCADE may recurse to objects owned by other users)"
+sessions: [a]
+setup: |
+  CREATE ROLE dro3_owner;
+  CREATE ROLE dro3_viewer;
+  CREATE TABLE dro3_base (a int4);
+  ALTER TABLE dro3_base OWNER TO dro3_owner;
+  INSERT INTO dro3_base VALUES (10), (20);
+  CREATE VIEW dro3_view AS SELECT a * 2 AS doubled FROM dro3_base;
+  ALTER VIEW dro3_view OWNER TO dro3_viewer;
+steps:
+  - sql: |
+      DROP OWNED BY dro3_owner
+    expect: error
+    sqlstate: "2BP01"
+    comment: dro3_view, owned by dro3_viewer, depends on dro3_base
+  - sql: |
+      SELECT doubled FROM dro3_view ORDER BY doubled
+    expect: rows
+    order: ordered
+    comment: the view still works after the refused command
+  - sql: |
+      DROP OWNED BY dro3_owner CASCADE
+    expect: ok
+    comment: the dependent view is dropped even though another role owns it
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname LIKE 'dro3%' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT doubled FROM dro3_view
+    expect: error
+    sqlstate: "42P01"
+    comment: the view no longer exists

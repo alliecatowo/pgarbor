@@ -1,0 +1,40 @@
+# PREPARE accepts UPDATE with RETURNING and MERGE, and each EXECUTE runs the statement.
+id: cmd-prepare.update-merge-dml
+title: Prepared UPDATE with RETURNING and prepared MERGE are executed with bound values
+family: cmd-prepare
+tier: core
+feature_ids: [prepare, execute, update, merge, returning, prepared-statements]
+required_capabilities: [create-table, insert, update, merge, returning, prepared-statements, select]
+provenance:
+  source: pg-docs
+  ref: "ref/prepare.sgml#sql-prepare (Parameters: statement: UPDATE, MERGE)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (a int, b text);
+  INSERT INTO foo VALUES (1, 'one'), (2, 'two')
+steps:
+  - sql: |
+      PREPARE u1 (text, int) AS UPDATE foo SET b = $1 WHERE a = $2 RETURNING a, b
+    expect: ok
+  - sql: |
+      EXECUTE u1('upd', 1)
+    expect: rows
+    order: ordered
+  - sql: |
+      PREPARE m1 (int, text) AS
+          MERGE INTO foo t USING (VALUES ($1, $2)) AS s (a, b) ON t.a = s.a
+          WHEN MATCHED THEN UPDATE SET b = s.b
+          WHEN NOT MATCHED THEN INSERT (a, b) VALUES (s.a, s.b)
+    expect: ok
+  - sql: |
+      EXECUTE m1(1, 'merged')
+    expect: ok
+    comment: matches existing row a=1, command tag MERGE 1
+  - sql: |
+      EXECUTE m1(9, 'new')
+    expect: ok
+    comment: no match, inserts row a=9
+  - sql: |
+      SELECT a, b FROM foo ORDER BY a
+    expect: rows
+    order: ordered

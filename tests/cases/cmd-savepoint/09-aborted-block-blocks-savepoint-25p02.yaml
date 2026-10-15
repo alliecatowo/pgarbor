@@ -1,0 +1,38 @@
+# In a failed transaction block, SAVEPOINT is rejected until ROLLBACK TO an existing savepoint.
+id: cmd-savepoint.aborted-block-25p02
+title: SAVEPOINT inside an aborted transaction block fails with in_failed_sql_transaction
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, errors, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-savepoint.html (Description; Notes) with errors/25P02 behavior"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - sql: |
+      BEGIN;
+      SAVEPOINT s1
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SAVEPOINT s2
+    expect: error
+    sqlstate: "25P02"
+    comment: a new savepoint cannot be established in the failed block
+  - sql: |
+      ROLLBACK TO SAVEPOINT s1
+    expect: ok
+    comment: rolling back to an existing savepoint restores the block
+  - sql: |
+      SAVEPOINT s2
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok

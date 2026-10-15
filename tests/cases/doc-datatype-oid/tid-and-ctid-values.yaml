@@ -1,0 +1,28 @@
+# tid is a (block, tuple index) pair; ctid is the physical location of a row, and tid values order and compare.
+id: doc-datatype-oid.tid-and-ctid-values
+title: "tid literals and ctid values in a fresh table order and compare as block and index pairs"
+family: doc-datatype-oid
+tier: extended
+feature_ids: [tid, ctid, system-columns, tuple-identifier]
+required_capabilities: [create-table, insert, select, system-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-oid (tid: pair (block number, tuple index within block); ctid system column)"
+sessions: [a]
+setup: |
+  CREATE TABLE doc_oid_tid_t (id int);
+  INSERT INTO doc_oid_tid_t VALUES (1), (2)
+steps:
+  - sql: |
+      SELECT ctid::text AS loc FROM doc_oid_tid_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: two rows in a fresh heap page are block 0 with indexes 1 and 2
+  - sql: |
+      SELECT '(0,1)'::tid AS t, '(0,1)'::tid < '(0,2)'::tid AS lt, '(1,1)'::tid > '(0,9)'::tid AS block_wins
+    expect: rows
+    comment: comparison is by block number first, then tuple index
+  - sql: |
+      SELECT ctid FROM doc_oid_tid_t WHERE ctid = '(0,2)'::tid
+    expect: rows
+    comment: a tid literal can locate a row directly

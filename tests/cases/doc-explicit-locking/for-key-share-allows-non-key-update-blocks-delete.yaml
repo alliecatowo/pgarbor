@@ -1,0 +1,45 @@
+# FOR KEY SHARE does not stop a non-key UPDATE, but it does stop DELETE.
+id: doc-explicit-locking.for-key-share-allows-non-key-update-blocks-delete
+title: FOR KEY SHARE admits a non-key UPDATE but a DELETE waits until the key-share lock ends
+family: doc-explicit-locking
+tier: core
+feature_ids: [select-for-key-share, row-locks, update, delete, transactions, multi-session]
+required_capabilities: [create-table, insert, select, update, delete, row-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-rows (FOR KEY SHARE; a key-shared lock blocks DELETE and key-changing UPDATE only)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t WHERE id = 1 FOR KEY SHARE
+    expect: rows
+  - session: b
+    sql: |
+      UPDATE t SET v = v + 1 WHERE id = 1
+    expect: ok
+    comment: non-key UPDATE does not conflict with FOR KEY SHARE
+  - session: b
+    sql: |
+      DELETE FROM t WHERE id = 1
+    async: true
+    expect_blocked: true
+    comment: DELETE takes FOR UPDATE, which conflicts with FOR KEY SHARE
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) AS remaining FROM t WHERE id = 1
+    expect: rows

@@ -1,0 +1,54 @@
+# Only the owner of the table may change its triggers; a non-owner gets insufficient_privilege even for DEPENDS ON EXTENSION.
+id: cmd-alter-trigger.non-owner-cannot-alter
+title: "A non-owner of the table cannot RENAME or set DEPENDS ON EXTENSION"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, ownership, roles, errors]
+required_capabilities: [create-table, select, triggers, plpgsql, create-function, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (Description: You must own the table)"
+sessions: [a]
+setup: |
+  CREATE TABLE ct (id int4);
+  CREATE FUNCTION ath_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TRIGGER ctrg AFTER INSERT ON ct FOR EACH ROW EXECUTE FUNCTION ath_noop();
+steps:
+  - sql: |
+      CREATE ROLE cmd_at_plain NOSUPERUSER
+    expect: ok
+  - sql: |
+      SET ROLE cmd_at_plain
+    expect: ok
+  - sql: |
+      ALTER TRIGGER ctrg ON ct RENAME TO nope
+    expect: error
+    sqlstate: "42501"
+    comment: must be owner of table ct
+  - sql: |
+      ALTER TRIGGER ctrg ON ct DEPENDS ON EXTENSION plpgsql
+    expect: error
+    sqlstate: "42501"
+    comment: the ownership check precedes the extension lookup
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER TABLE ct OWNER TO cmd_at_plain
+    expect: ok
+  - sql: |
+      SET ROLE cmd_at_plain
+    expect: ok
+  - sql: |
+      ALTER TRIGGER ctrg ON ct RENAME TO owned_name
+    expect: ok
+    comment: the table owner may rename the trigger
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE ct
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_at_plain
+    expect: ok

@@ -1,0 +1,47 @@
+# A column CHECK added with ADD COLUMN is checked against the DEFAULT; the failed ADD leaves the table unchanged; NULL passes a CHECK.
+id: doc-ddl-alter.add-column-check-default
+title: "ADD COLUMN with a CHECK: the DEFAULT must satisfy it, and NULL passes"
+family: doc-ddl-alter
+tier: core
+feature_ids: [alter-table, add-column, check-constraint, column-default, null-semantics, errors]
+required_capabilities: [create-table, alter-table, insert, select, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-alter (Adding a Column: the default value must satisfy the given constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text);
+  INSERT INTO products VALUES (1, 'a'), (2, 'b');
+steps:
+  - sql: |
+      ALTER TABLE products ADD COLUMN description text DEFAULT '' CHECK (description <> '')
+    expect: error
+    sqlstate: "23514"
+    comment: the default '' violates the CHECK, so the whole ADD fails
+  - sql: |
+      SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'products' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+    comment: the failed ADD left the table unchanged
+  - sql: |
+      ALTER TABLE products ADD COLUMN description text DEFAULT 'none' CHECK (description <> '')
+    expect: ok
+  - sql: |
+      SELECT product_no, description FROM products ORDER BY product_no
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE products ADD COLUMN code text CHECK (code <> '')
+    expect: ok
+    comment: no default, so existing rows hold NULL, and a NULL CHECK result passes
+  - sql: |
+      INSERT INTO products (product_no, name, code) VALUES (3, 'c', NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO products (product_no, name, code) VALUES (4, 'd', '')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT product_no, code IS NULL AS code_null FROM products ORDER BY product_no
+    expect: rows
+    order: ordered

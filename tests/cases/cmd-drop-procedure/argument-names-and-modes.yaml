@@ -1,0 +1,43 @@
+# Argument names are ignored, IN is the default mode, and an OUT-only procedure is found by an empty
+# list or by its OUT type.
+id: cmd-drop-procedure.argument-names-and-modes
+title: DROP PROCEDURE ignores argument names, accepts explicit IN, and finds OUT-only procedures
+family: cmd-drop-procedure
+tier: core
+feature_ids: [drop-procedure, create-procedure, inout-arguments, argmode-lookup]
+required_capabilities: [create-procedure, drop-procedure, plpgsql, sql-language, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure (argname, argmode; Notes on OUT arguments)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE pn(x int) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP PROCEDURE pn(y int)
+    expect: ok
+    comment: only the types count
+  - sql: |
+      CREATE PROCEDURE pin(a int) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP PROCEDURE pin(IN int)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE pb(OUT r text) LANGUAGE plpgsql AS $$ BEGIN r := 'o'; END $$
+    expect: ok
+  - sql: |
+      DROP PROCEDURE pb(OUT text)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE pb(OUT r text) LANGUAGE plpgsql AS $$ BEGIN r := 'o'; END $$
+    expect: ok
+  - sql: |
+      DROP PROCEDURE pb()
+    expect: ok
+    comment: OUT-only procedures have an empty input-argument list
+  - sql: |
+      SELECT count(*) AS procs FROM pg_proc WHERE proname IN ('pn', 'pin', 'pb')
+    expect: rows
+    order: multiset

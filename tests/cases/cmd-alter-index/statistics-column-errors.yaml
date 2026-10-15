@@ -1,0 +1,35 @@
+# ALTER COLUMN n SET STATISTICS is only valid for expression index columns; plain columns and out-of-range ordinals fail.
+id: cmd-alter-index.statistics-column-errors
+title: SET STATISTICS fails on plain index columns and on column numbers outside the index
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, statistics-target, expression-index, errors]
+required_capabilities: [create-table, create-index, alter-index, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (ALTER COLUMN SET STATISTICS: only on index columns defined as an expression)"
+sessions: [a]
+setup: |
+  CREATE TABLE measured (x int4, y int4, z int4, t int4);
+  CREATE INDEX coord_idx ON measured (x, y, (z + t));
+steps:
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 1 SET STATISTICS 100
+    expect: error
+    sqlstate: "0A000"
+    comment: column 1 is the plain column x, not an expression
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 4 SET STATISTICS 100
+    expect: error
+    sqlstate: "42703"
+    comment: the index has only three columns
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 0 SET STATISTICS 100
+    expect: error
+    sqlstate: "22023"
+    comment: the column number is parsed first and must be in range 1 to 32767
+  - sql: |
+      SELECT attnum, attstattarget FROM pg_attribute WHERE attrelid = 'coord_idx'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: all failed statements left the statistics targets unchanged

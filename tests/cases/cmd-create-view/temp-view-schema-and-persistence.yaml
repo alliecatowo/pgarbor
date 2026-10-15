@@ -1,0 +1,34 @@
+# Temporary views cannot take a permanent schema name; a view over a temporary table becomes temporary too.
+id: cmd-create-view.temp-view-schema-and-persistence
+title: Temp view rejects a permanent schema and a view over a temp table is itself temporary
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, temp-view, temp-tables, errors]
+required_capabilities: [create-table, select, temp-tables, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview (TEMPORARY parameter)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEMP VIEW tv AS SELECT 1 AS one
+    expect: ok
+  - sql: |
+      SELECT one FROM tv
+    expect: rows
+  - sql: |
+      CREATE TEMP VIEW public.tv3 AS SELECT 3 AS three
+    expect: error
+    sqlstate: "42P16"
+    comment: a schema name cannot be given when creating a temporary view
+  - sql: |
+      CREATE TEMP TABLE tt (a int4)
+    expect: ok
+  - sql: |
+      CREATE VIEW vfromtemp AS SELECT a FROM tt
+    expect: ok
+    comment: the view becomes temporary because it references a temporary table, although TEMP was not specified
+  - sql: |
+      SELECT c.relname, c.relpersistence FROM pg_class c WHERE c.relname IN ('tv', 'vfromtemp') ORDER BY c.relname
+    expect: rows
+    order: ordered

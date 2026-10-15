@@ -1,0 +1,36 @@
+# Statement-level BEFORE INSERT sees only pre-statement rows; statement-level AFTER INSERT sees all rows of the statement.
+id: doc-trigger-datachanges.stmt-before-after-insert
+title: Statement-level BEFORE and AFTER INSERT triggers see pre- and post-statement row sets
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, statement-level-triggers, plpgsql, insert, visibility]
+required_capabilities: [create-table, insert, select, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (statement-level triggers follow simple visibility rules)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  CREATE FUNCTION s_bef() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('s_bef_ins', (SELECT count(*) FROM t));
+    RETURN NULL;
+  END $$;
+  CREATE FUNCTION s_aft() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('s_aft_ins', (SELECT count(*) FROM t));
+    RETURN NULL;
+  END $$;
+  CREATE TRIGGER trg_stmt_bef BEFORE INSERT ON t FOR EACH STATEMENT EXECUTE FUNCTION s_bef();
+  CREATE TRIGGER trg_stmt_aft AFTER INSERT ON t FOR EACH STATEMENT EXECUTE FUNCTION s_aft();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (3, 30), (4, 40), (5, 50)
+    expect: ok
+  - sql: |
+      SELECT tag, n FROM lg ORDER BY seq
+    expect: rows
+    order: ordered
+    comment: the BEFORE firing counts only the pre-existing rows; the AFTER firing counts all of them

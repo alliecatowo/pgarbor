@@ -1,0 +1,35 @@
+# Table inheritance: a child does not inherit identity generation, but it keeps the parent's NOT NULL.
+id: doc-ddl-identity-columns.inheritance-child-not-identity
+title: Inheriting child table does not get identity generation but keeps NOT NULL
+family: doc-ddl-identity-columns
+tier: extended
+feature_ids: [identity-columns, inheritance, errors]
+required_capabilities: [create-table, insert, select, inheritance]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-identity-columns"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE inh_p (id int GENERATED ALWAYS AS IDENTITY, v int)
+    expect: ok
+  - sql: |
+      CREATE TABLE inh_c (id int, v int) INHERITS (inh_p)
+    expect: ok
+    comment: the child column definition does not repeat the identity clause
+  - sql: |
+      INSERT INTO inh_c (v) VALUES (1)
+    expect: error
+    sqlstate: "23502"
+    comment: no sequence default on the child, and NOT NULL is inherited
+  - sql: |
+      INSERT INTO inh_c (id, v) VALUES (9, 2)
+    expect: ok
+  - sql: |
+      INSERT INTO inh_p (v) VALUES (3)
+    expect: ok
+    comment: the parent's own identity sequence still produces 1
+  - sql: |
+      SELECT tableoid::regclass::text AS tbl, id, v FROM inh_p ORDER BY v
+    expect: rows
+    order: ordered

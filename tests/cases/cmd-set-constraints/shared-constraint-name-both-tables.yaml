@@ -1,0 +1,39 @@
+# Foreign key names need only be unique per table, and SET CONSTRAINTS by name acts on every match.
+id: cmd-set-constraints.shared-constraint-name-both-tables
+title: One SET CONSTRAINTS name defers the same-named foreign key on two tables
+family: cmd-set-constraints
+tier: extended
+feature_ids: [set-constraints, deferrable, foreign-key, constraint-names, transactions]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Notes: constraint names are not unique within a schema; SET CONSTRAINTS acts on all matches)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c1 (id int4 PRIMARY KEY, pid int4 CONSTRAINT fk_dup REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+  CREATE TABLE c2 (id int4 PRIMARY KEY, pid int4 CONSTRAINT fk_dup REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS fk_dup DEFERRED
+    expect: ok
+    comment: acts on both c1.fk_dup and c2.fk_dup
+  - sql: |
+      INSERT INTO c1 VALUES (1, 10)
+    expect: ok
+  - sql: |
+      INSERT INTO c2 VALUES (2, 20)
+    expect: ok
+  - sql: |
+      INSERT INTO p VALUES (10), (20)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT 'c1' AS t, id, pid FROM c1 UNION ALL SELECT 'c2', id, pid FROM c2 ORDER BY 1, 2
+    expect: rows
+    order: ordered

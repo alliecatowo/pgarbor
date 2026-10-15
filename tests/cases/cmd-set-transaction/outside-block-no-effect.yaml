@@ -1,0 +1,39 @@
+# SET TRANSACTION outside a transaction block only warns and has no lasting effect; later statements behave as defaults.
+id: cmd-set-transaction.outside-block-no-effect
+title: SET TRANSACTION outside a transaction block warns and changes nothing
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, isolation-level, read-only, deferrable, notices]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Notes: if SET TRANSACTION is executed without a prior START TRANSACTION or BEGIN, it emits a warning and otherwise has no effect)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      SET TRANSACTION ISOLATION LEVEL SERIALIZABLE
+    expect: notice
+    comment: WARNING "SET TRANSACTION can only be used in transaction blocks"
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: still read committed
+  - sql: |
+      SET TRANSACTION READ ONLY
+    expect: notice
+  - sql: |
+      SELECT current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: still off
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+    comment: the autocommit write is not blocked by the ignored READ ONLY
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

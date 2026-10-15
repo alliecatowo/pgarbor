@@ -1,0 +1,36 @@
+# IF EXISTS turns a missing relation into a NOTICE; without it the same statement is an error.
+id: cmd-alter-materialized-view.if-exists-missing-noop
+title: "ALTER MATERIALIZED VIEW IF EXISTS on a missing name is a no-op with notice"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, if-exists, rename, error-handling]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (synopsis: [ IF EXISTS ])"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_ifx_base (id int4);
+  CREATE MATERIALIZED VIEW amv_ifx_present AS SELECT id FROM amv_ifx_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW IF EXISTS amv_ifx_missing RENAME TO amv_ifx_other
+    expect: ok
+    comment: NOTICE relation does not exist, skipping; statement succeeds
+  - sql: |
+      ALTER MATERIALIZED VIEW IF EXISTS amv_ifx_missing SET (fillfactor = 50)
+    expect: ok
+    comment: IF EXISTS also applies to the SET action form
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ifx_missing RENAME TO amv_ifx_other
+    expect: error
+    sqlstate: "42P01"
+    comment: without IF EXISTS the missing relation is an error
+  - sql: |
+      ALTER MATERIALIZED VIEW IF EXISTS amv_ifx_present RENAME TO amv_ifx_renamed
+    expect: ok
+    comment: IF EXISTS does not suppress the action when the relation exists
+  - sql: |
+      SELECT matviewname FROM pg_matviews WHERE matviewname LIKE 'amv_ifx%' ORDER BY 1
+    expect: rows
+    order: ordered

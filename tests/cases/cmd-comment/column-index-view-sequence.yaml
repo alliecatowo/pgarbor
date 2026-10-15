@@ -1,0 +1,108 @@
+# COMMENT ON COLUMN, INDEX, VIEW, MATERIALIZED VIEW, SEQUENCE, TYPE and SCHEMA store comments on the right catalog entries; the wrong object kind is rejected.
+id: cmd-comment.column-index-view-sequence
+title: COMMENT ON COLUMN, INDEX, VIEW, MATERIALIZED VIEW, SEQUENCE, TYPE and SCHEMA read back through catalog helpers
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-column, comment-index, comment-view, comment-materialized-view, comment-sequence, comment-type, comment-schema]
+required_capabilities: [comment, create-table, create-view, create-materialized-view, create-index, create-sequence, create-type, create-schema, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-examples (COLUMN, INDEX, VIEW, MATERIALIZED VIEW, SEQUENCE, TYPE, SCHEMA examples); ref/comment.sgml#sql-comment-params-object-name"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA cmt_schema
+    expect: ok
+  - sql: |
+      CREATE TABLE cmt_items (id int4 PRIMARY KEY, label text, qty int4)
+    expect: ok
+  - sql: |
+      CREATE TABLE cmt_schema.inner_t (x int4)
+    expect: ok
+  - sql: |
+      CREATE INDEX cmt_items_label_idx ON cmt_items (label)
+    expect: ok
+  - sql: |
+      CREATE VIEW cmt_v AS SELECT id, label FROM cmt_items
+    expect: ok
+  - sql: |
+      CREATE MATERIALIZED VIEW cmt_mv AS SELECT id FROM cmt_items
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE cmt_seq
+    expect: ok
+  - sql: |
+      CREATE TYPE cmt_pair AS (a int4, b text)
+    expect: ok
+  - sql: |
+      COMMENT ON SCHEMA cmt_schema IS 'Departmental data'
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE cmt_items IS 'Items table'
+    expect: ok
+  - sql: |
+      COMMENT ON COLUMN cmt_items.label IS 'Employee ID number'
+    expect: ok
+  - sql: |
+      COMMENT ON INDEX cmt_items_label_idx IS 'Index on label'
+    expect: ok
+  - sql: |
+      COMMENT ON VIEW cmt_v IS 'View of departmental costs'
+    expect: ok
+  - sql: |
+      COMMENT ON COLUMN cmt_v.label IS 'view column comment'
+    expect: ok
+  - sql: |
+      COMMENT ON MATERIALIZED VIEW cmt_mv IS 'Summary of order history'
+    expect: ok
+  - sql: |
+      COMMENT ON SEQUENCE cmt_seq IS 'Used to generate primary keys'
+    expect: ok
+  - sql: |
+      COMMENT ON TYPE cmt_pair IS 'Complex number data type'
+    expect: ok
+  - sql: |
+      COMMENT ON COLUMN cmt_pair.b IS 'composite attribute'
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE cmt_schema.inner_t IS 'Employee Information'
+    expect: ok
+  - sql: |
+      SELECT 'table' AS kind, obj_description('cmt_items'::regclass, 'pg_class') AS descr
+      UNION ALL SELECT 'column', col_description('cmt_items'::regclass, 2)
+      UNION ALL SELECT 'index', obj_description('cmt_items_label_idx'::regclass, 'pg_class')
+      UNION ALL SELECT 'view', obj_description('cmt_v'::regclass, 'pg_class')
+      UNION ALL SELECT 'view column', col_description('cmt_v'::regclass, 2)
+      UNION ALL SELECT 'matview', obj_description('cmt_mv'::regclass, 'pg_class')
+      UNION ALL SELECT 'sequence', obj_description('cmt_seq'::regclass, 'pg_class')
+      UNION ALL SELECT 'type', obj_description('cmt_pair'::regtype, 'pg_type')
+      UNION ALL SELECT 'composite column', col_description('cmt_pair'::regclass, 2)
+      UNION ALL SELECT 'schema', obj_description('cmt_schema'::regnamespace, 'pg_namespace')
+      UNION ALL SELECT 'schema table', obj_description('cmt_schema.inner_t'::regclass, 'pg_class')
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMENT ON COLUMN cmt_seq.x IS 'no such column'
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      COMMENT ON TABLE cmt_v IS 'a view is not a table'
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      COMMENT ON INDEX cmt_items IS 'a table is not an index'
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      COMMENT ON SEQUENCE cmt_items IS 'a table is not a sequence'
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      COMMENT ON VIEW cmt_items IS 'a table is not a view'
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      COMMENT ON COLUMN cmt_items IS 'column name must be qualified'
+    expect: error
+    sqlstate: "42601"

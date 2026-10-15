@@ -1,0 +1,59 @@
+# AFTER row-level audit trigger from the manual: one emp_audit row per INSERT, UPDATE and DELETE, selected by TG_OP.
+id: doc-plpgsql-trigger.audit-row-trigger-insert-update-delete
+title: AFTER row trigger writes an audit row per insert, update and delete, chosen by TG_OP
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, after-triggers, plpgsql, tg-op, audit, insert, update, delete]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, update, delete, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (A PL/pgSQL Trigger Function for Auditing)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (
+      empname           text NOT NULL,
+      salary            integer
+  );
+  CREATE TABLE emp_audit(
+      operation         char(1)   NOT NULL,
+      stamp             timestamp NOT NULL,
+      userid            text      NOT NULL,
+      empname           text      NOT NULL,
+      salary            integer
+  );
+  CREATE OR REPLACE FUNCTION process_emp_audit() RETURNS TRIGGER AS $emp_audit$
+      BEGIN
+          IF (TG_OP = 'DELETE') THEN
+              INSERT INTO emp_audit SELECT 'D', now(), current_user, OLD.*;
+          ELSIF (TG_OP = 'UPDATE') THEN
+              INSERT INTO emp_audit SELECT 'U', now(), current_user, NEW.*;
+          ELSIF (TG_OP = 'INSERT') THEN
+              INSERT INTO emp_audit SELECT 'I', now(), current_user, NEW.*;
+          END IF;
+          RETURN NULL;
+      END;
+  $emp_audit$ LANGUAGE plpgsql;
+  CREATE TRIGGER emp_audit
+  AFTER INSERT OR UPDATE OR DELETE ON emp
+      FOR EACH ROW EXECUTE FUNCTION process_emp_audit();
+steps:
+  - sql: |
+      INSERT INTO emp VALUES ('a', 1), ('b', 2)
+    expect: ok
+    comment: two insert audit rows, one per row
+  - sql: |
+      UPDATE emp SET salary = salary + 10
+    expect: ok
+    comment: two update audit rows holding the NEW values
+  - sql: |
+      DELETE FROM emp WHERE empname = 'a'
+    expect: ok
+    comment: one delete audit row holding the OLD values
+  - sql: |
+      SELECT operation, empname, salary, userid = current_user AS by_me FROM emp_audit ORDER BY operation, empname, salary
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT empname, salary FROM emp ORDER BY empname
+    expect: rows
+    order: ordered

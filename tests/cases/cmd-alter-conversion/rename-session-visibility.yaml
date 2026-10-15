@@ -1,0 +1,38 @@
+# Under READ COMMITTED, another session sees the old conversion name until the renaming transaction commits.
+id: cmd-alter-conversion.rename-session-visibility
+title: A rename is invisible to other sessions until the renaming transaction commits
+family: cmd-alter-conversion
+tier: core
+feature_ids: [alter-conversion, rename, transactions, read-committed, multi-session]
+required_capabilities: [alter-conversion, create-conversion, catalog-introspection, transactions, multi-session]
+provenance:
+  source: hand
+  ref: "PG18 transaction-iso READ COMMITTED applied to alter_conversion.sgml RENAME TO"
+sessions: [a, b]
+setup: |
+  CREATE CONVERSION vis_old FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      ALTER CONVERSION vis_old RENAME TO vis_new
+    expect: ok
+  - session: b
+    sql: |
+      SELECT conname FROM pg_conversion WHERE conname LIKE 'vis_%' ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: b still sees the old name
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT conname FROM pg_conversion WHERE conname LIKE 'vis_%' ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: after commit b sees the new name

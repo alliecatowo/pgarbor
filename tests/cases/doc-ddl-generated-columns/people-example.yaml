@@ -1,0 +1,40 @@
+# The documented people example: a virtual-by-default generated column and an explicit STORED
+# one computed from the same expression, with NULL propagation and the catalog view of both.
+id: doc-ddl-generated-columns.people-example
+title: Documented height example computes virtual and stored columns and propagates NULL
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, virtual-generated-columns, stored-generated-columns]
+required_capabilities: [create-table, insert, select, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE people (
+      id int,
+      height_cm numeric,
+      height_in numeric GENERATED ALWAYS AS (height_cm / 2.54),
+      height_in_stored numeric GENERATED ALWAYS AS (height_cm / 2.54) STORED
+  )
+steps:
+  - sql: |
+      INSERT INTO people (id, height_cm) VALUES (1, 180), (2, NULL)
+    expect: ok
+  - sql: |
+      SELECT id, height_cm, height_in, height_in_stored FROM people ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both generated columns hold 180 / 2.54; the NULL input yields NULL in both kinds
+  - sql: |
+      SELECT column_name, is_generated, generation_expression
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'people'
+      ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+    comment: a generated column without STORED/VIRTUAL is virtual; both report is_generated ALWAYS
+  - sql: |
+      UPDATE people SET height_cm = 254 WHERE id = 2 RETURNING id, height_in, height_in_stored
+    expect: rows
+    comment: the stored and virtual columns track the base column after an UPDATE

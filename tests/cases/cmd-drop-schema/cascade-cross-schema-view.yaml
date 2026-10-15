@@ -1,0 +1,42 @@
+# CASCADE may remove objects in other schemas: a view in public over a table in the dropped schema goes too.
+id: cmd-drop-schema.cascade-cross-schema-view
+title: DROP SCHEMA RESTRICT refuses while a public view depends on it; CASCADE drops that view but not public tables
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, cascade, cross-schema-dependencies, create-view]
+required_capabilities: [create-schema, create-table, create-view, insert, select, drop-schema, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Notes: Using the CASCADE option might remove objects in other schemas)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA ca;
+  CREATE TABLE ca.base (id int PRIMARY KEY);
+  INSERT INTO ca.base VALUES (1), (2);
+  CREATE VIEW public.base_view AS SELECT id FROM ca.base;
+  CREATE TABLE public.kept (x int);
+  INSERT INTO public.kept VALUES (9);
+steps:
+  - sql: |
+      DROP SCHEMA ca
+    expect: error
+    sqlstate: "2BP01"
+    comment: public.base_view depends on ca.base, so the default refuses
+  - sql: |
+      SELECT id FROM public.base_view ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the refused drop left the view working
+  - sql: |
+      DROP SCHEMA ca CASCADE
+    expect: notice
+    comment: CASCADE drops the dependent view in public as well
+  - sql: |
+      SELECT count(*) AS views FROM pg_views WHERE schemaname = 'public' AND viewname = 'base_view'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x FROM public.kept
+    expect: rows
+    order: multiset
+    comment: an unrelated table in public keeps its rows

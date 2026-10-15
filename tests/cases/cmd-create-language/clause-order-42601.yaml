@@ -1,0 +1,36 @@
+# Clause order is fixed: HANDLER first, then INLINE, then VALIDATOR; TRUSTED and PROCEDURAL come before LANGUAGE.
+id: cmd-create-language.clause-order-42601
+title: Out-of-order HANDLER, INLINE, VALIDATOR and TRUSTED clauses are syntax errors, the documented order is accepted
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, syntax, clauses, trusted]
+required_capabilities: [create-language, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Synopsis)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE LANGUAGE cl_o1 INLINE plpgsql_inline_handler HANDLER plpgsql_call_handler
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE LANGUAGE cl_o2 HANDLER plpgsql_call_handler VALIDATOR plpgsql_validator INLINE plpgsql_inline_handler
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE LANGUAGE cl_o3 TRUSTED HANDLER plpgsql_call_handler
+    expect: error
+    sqlstate: "42601"
+    comment: TRUSTED belongs before LANGUAGE, not after it
+  - sql: |
+      CREATE TRUSTED PROCEDURAL LANGUAGE cl_o4 HANDLER plpgsql_call_handler INLINE plpgsql_inline_handler VALIDATOR plpgsql_validator
+    expect: ok
+  - sql: |
+      SELECT lanname, lanpltrusted, lanplcallfoid::regproc AS call_handler, laninline::regproc AS inline_handler, lanvalidator::regproc AS validator FROM pg_language WHERE lanname = 'cl_o4'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS failed_leftovers FROM pg_language WHERE lanname IN ('cl_o1', 'cl_o2', 'cl_o3')
+    expect: rows
+    order: ordered

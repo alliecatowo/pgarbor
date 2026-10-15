@@ -1,0 +1,35 @@
+# A schema-qualified name refers to that schema only; the search path does not find it.
+id: cmd-drop-aggregate.schema-qualified-name
+title: DROP AGGREGATE with schema-qualified names and an unqualified miss
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, create-aggregate, schemas, aggregates]
+required_capabilities: [aggregates, create-aggregate, create-function, create-schema, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (name, optionally schema-qualified)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA s_agg
+    expect: ok
+  - sql: |
+      CREATE FUNCTION s_agg.my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2'
+    expect: ok
+  - sql: |
+      CREATE AGGREGATE s_agg.myavg(integer) (SFUNC = s_agg.my_add, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(integer)
+    expect: error
+    sqlstate: "42883"
+    comment: not in public, and the search path does not include s_agg
+  - sql: |
+      DROP AGGREGATE s_agg.myavg(integer)
+    expect: ok
+  - sql: |
+      DROP AGGREGATE IF EXISTS s_agg.myavg(integer)
+    expect: notice
+  - sql: |
+      DROP SCHEMA s_agg CASCADE
+    expect: ok

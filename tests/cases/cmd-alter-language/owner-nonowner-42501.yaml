@@ -1,0 +1,52 @@
+# Only the owner (or a superuser) may use ALTER LANGUAGE, and an owner can only hand a language to a role it is a member of.
+id: cmd-alter-language.owner-nonowner-42501
+title: Non-owners cannot rename or reassign a language, and owners need membership to transfer it
+family: cmd-alter-language
+tier: core
+feature_ids: [alter-language, owner, privileges, roles, set-role]
+required_capabilities: [alter-language, roles, set-role, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_language.sgml#sql-alterlanguage (Description: You must be superuser or owner of the language)"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS al_no_owner;
+  DROP ROLE IF EXISTS al_no_other;
+  CREATE ROLE al_no_owner NOLOGIN;
+  CREATE ROLE al_no_other NOLOGIN;
+  ALTER LANGUAGE plpgsql OWNER TO al_no_owner;
+steps:
+  - sql: |
+      SET ROLE al_no_other
+    expect: ok
+  - sql: |
+      ALTER LANGUAGE plpgsql RENAME TO pl_hijack
+    expect: error
+    sqlstate: "42501"
+    comment: al_no_other does not own plpgsql
+  - sql: |
+      ALTER LANGUAGE plpgsql OWNER TO al_no_other
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE al_no_owner
+    expect: ok
+  - sql: |
+      ALTER LANGUAGE plpgsql OWNER TO al_no_other
+    expect: error
+    sqlstate: "42501"
+    comment: the owner is not a member of al_no_other, so it cannot hand the language to that role
+  - sql: |
+      ALTER LANGUAGE plpgsql RENAME TO pl_owned
+    expect: ok
+    comment: the owner may rename its language
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT lanname, pg_get_userbyid(lanowner) = 'al_no_owner' AS owned_by_owner FROM pg_language WHERE lanname IN ('plpgsql', 'pl_owned', 'pl_hijack') ORDER BY lanname
+    expect: rows
+    order: ordered

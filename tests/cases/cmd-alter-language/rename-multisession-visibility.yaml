@@ -1,0 +1,42 @@
+# The catalog change from an uncommitted ALTER LANGUAGE RENAME is invisible to another session until COMMIT.
+id: cmd-alter-language.rename-multisession-visibility
+title: Uncommitted language rename is invisible to another session until commit
+family: cmd-alter-language
+tier: extended
+feature_ids: [alter-language, rename, transactions, read-committed, catalog-introspection]
+required_capabilities: [alter-language, transactions, multi-session, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_language.sgml#sql-alterlanguage (Description); https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      ALTER LANGUAGE plpgsql RENAME TO pl_inflight
+    expect: ok
+  - session: a
+    sql: |
+      SELECT lanname FROM pg_language WHERE lanname IN ('plpgsql', 'pl_inflight') ORDER BY lanname
+    expect: rows
+    order: ordered
+    comment: a sees its own uncommitted rename
+  - session: b
+    sql: |
+      SELECT lanname FROM pg_language WHERE lanname IN ('plpgsql', 'pl_inflight') ORDER BY lanname
+    expect: rows
+    order: ordered
+    comment: b still sees the committed name plpgsql
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT lanname FROM pg_language WHERE lanname IN ('plpgsql', 'pl_inflight') ORDER BY lanname
+    expect: rows
+    order: ordered
+    comment: after commit b sees only pl_inflight

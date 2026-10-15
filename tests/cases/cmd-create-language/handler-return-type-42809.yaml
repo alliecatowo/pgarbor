@@ -1,0 +1,33 @@
+# A HANDLER function must return the language_handler pseudo-type.
+id: cmd-create-language.handler-return-type-42809
+title: HANDLER function that does not return language_handler is rejected with 42809
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, handler, error-handling, pseudo-types]
+required_capabilities: [create-language, create-function-sql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Parameters: HANDLER call_handler, 'returning the language_handler type')"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cl_h_int() RETURNS int LANGUAGE sql AS 'select 1';
+  CREATE FUNCTION cl_h_void() RETURNS void LANGUAGE sql AS 'select null::void';
+steps:
+  - sql: |
+      CREATE LANGUAGE cl_badret HANDLER cl_h_int
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      CREATE LANGUAGE cl_badvoid HANDLER cl_h_void
+    expect: error
+    sqlstate: "42809"
+    comment: void is not language_handler either
+  - sql: |
+      CREATE FUNCTION cl_h_sql() RETURNS language_handler LANGUAGE sql AS 'select 1'
+    expect: error
+    sqlstate: "42P13"
+    comment: an SQL-language function cannot have the language_handler return type, so a handler must be a C-style function
+  - sql: |
+      SELECT count(*) FROM pg_language WHERE lanname LIKE 'cl_bad%'
+    expect: rows
+    order: ordered

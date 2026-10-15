@@ -1,0 +1,39 @@
+# Documented contrast: a sub-SELECT NULLs unmatched targets, while a FROM join leaves them unchanged.
+id: cmd-update.from-join-vs-subselect-unmatched
+title: Sub-SELECT and FROM-join forms differ for target rows with no match
+family: cmd-update
+tier: core
+feature_ids: [update, from-clause, subselect, join]
+required_capabilities: [create-table, insert, select, update, subqueries, join]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (Examples: accounts/employees sub-select vs FROM join; unmatched rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE employees (id int PRIMARY KEY, first_name text, last_name text, sales_count int DEFAULT 0);
+  CREATE TABLE accounts (name text, sales_person int, contact_first_name text, contact_last_name text);
+  INSERT INTO employees VALUES (1, 'Ann', 'Lee', 0), (2, 'Bob', 'Ray', 0);
+  INSERT INTO accounts VALUES ('Acme Corporation', 1, 'x', 'y'), ('NoSales', 99, 'keep', 'keep'), ('Other', NULL, 'keep2', 'keep2')
+steps:
+  - sql: |
+      UPDATE accounts SET (contact_first_name, contact_last_name) =
+        (SELECT first_name, last_name FROM employees WHERE employees.id = accounts.sales_person)
+    expect: ok
+    comment: count 3, unmatched accounts get NULL names
+  - sql: |
+      SELECT name, contact_first_name, contact_last_name FROM accounts ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE accounts SET contact_first_name = 'J', contact_last_name = 'K'
+        FROM employees WHERE employees.id = accounts.sales_person AND accounts.name = 'NoSales'
+    expect: ok
+    comment: no join partner for NoSales, so count 0
+  - sql: |
+      UPDATE employees SET sales_count = sales_count + 1
+        FROM accounts WHERE accounts.name = 'Acme Corporation' AND employees.id = accounts.sales_person
+    expect: ok
+  - sql: |
+      SELECT id, sales_count FROM employees ORDER BY id
+    expect: rows
+    order: ordered

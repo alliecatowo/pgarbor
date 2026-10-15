@@ -1,0 +1,37 @@
+# GIN and GiST require an operator class; scalar and text columns have no default one for these methods.
+id: doc-textsearch-indexes.gin-default-opclass-rejected
+title: GIN and GiST reject non-tsvector columns without a default operator class
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gin-index, gist-index, operator-class, index-validation]
+required_capabilities: [create-table, create-index, gin-index, gist-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (column must be of tsvector type)"
+steps:
+  - sql: |
+      CREATE TABLE t (id int4 PRIMARY KEY, body text, tsv tsvector)
+    expect: ok
+  - sql: |
+      CREATE INDEX t_gin_int ON t USING GIN (id)
+    expect: error
+    sqlstate: "42704"
+    comment: integer has no default GIN operator class
+  - sql: |
+      CREATE INDEX t_gin_text ON t USING GIN (body)
+    expect: error
+    sqlstate: "42704"
+    comment: the column must be tsvector, plain text is rejected
+  - sql: |
+      CREATE INDEX t_gist_text ON t USING GIST (body)
+    expect: error
+    sqlstate: "42704"
+    comment: text has no default GiST operator class in core PostgreSQL
+  - sql: |
+      CREATE INDEX t_tsv_gin ON t USING GIN (tsv)
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 't' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: failed CREATE INDEX statements leave no index behind

@@ -1,0 +1,45 @@
+# A cast with a domain as source is ignored (warning only); casts to or from a domain use the casts of the underlying type.
+id: cmd-create-cast.domain-casts-ignored
+title: "Casts whose source is a domain are ignored and domain values use the underlying type's casts"
+family: cmd-create-cast
+tier: extended
+feature_ids: [create-cast, domains, cast-validation]
+required_capabilities: [create-domain, create-type, create-cast, create-function-sql, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-description (A cast to or from a domain type currently has no effect)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dc_pos AS int4 CHECK (VALUE > 0);
+  CREATE TYPE dc_w AS (v numeric);
+  CREATE FUNCTION dc_int_to_w(int4) RETURNS dc_w LANGUAGE sql AS $$ SELECT ROW($1::numeric)::dc_w $$;
+steps:
+  - sql: |
+      CREATE CAST (dc_pos AS dc_w) WITH FUNCTION dc_int_to_w(int4)
+    expect: ok
+    compare_message: false
+    comment: the source is a domain, so the cast is accepted with a warning and has no effect
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'dc_pos'::regtype
+    expect: rows
+    comment: no cast entry is used for the domain source
+  - sql: |
+      SELECT CAST(3::dc_pos AS dc_w) AS no_effect
+    expect: error
+    sqlstate: "42846"
+    comment: the domain's underlying int4 has no cast to dc_w yet
+  - sql: |
+      CREATE CAST (int4 AS dc_w) WITH FUNCTION dc_int_to_w(int4)
+    expect: ok
+  - sql: |
+      SELECT (CAST(3::dc_pos AS dc_w)).v AS via_underlying
+    expect: rows
+    comment: the cast of the underlying type applies to the domain value
+  - sql: |
+      SELECT CAST(42 AS dc_pos) AS domain_ok
+    expect: rows
+  - sql: |
+      SELECT CAST(-1 AS dc_pos) AS domain_bad
+    expect: error
+    sqlstate: "23514"
+    comment: the domain constraint is still enforced on the cast result

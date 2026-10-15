@@ -1,0 +1,36 @@
+# A SQL-language function body that uses an operator records no dependency, so DROP OPERATOR succeeds and the function fails at call time.
+id: cmd-drop-operator.function-body-stale-after-drop
+title: Dropping an operator used in a SQL function body succeeds, and the function fails when called afterwards
+family: cmd-drop-operator
+tier: extended
+feature_ids: [drop-operator, sql-functions, dependencies, operator-resolution]
+required_capabilities: [drop-operator, create-operator, create-function-sql, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#parameters (CASCADE: objects that depend on the operator)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dfb_add(integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT $1 + $2 $$;
+  CREATE OPERATOR !+! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dfb_add);
+  CREATE FUNCTION dfb_use() RETURNS integer LANGUAGE sql AS $$ SELECT 7 !+! 8 $$;
+steps:
+  - sql: |
+      SELECT dfb_use() AS before_drop
+    expect: rows
+    comment: "expected result 15"
+  - sql: |
+      DROP OPERATOR !+! (integer, integer)
+    expect: ok
+    comment: no dependency is recorded for the string body, so there is no RESTRICT refusal
+  - sql: |
+      SELECT dfb_use() AS after_drop
+    expect: error
+    sqlstate: "42883"
+    comment: the body is resolved when called and the operator no longer exists
+  - sql: |
+      CREATE OPERATOR !+! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dfb_add)
+    expect: ok
+  - sql: |
+      SELECT dfb_use() AS recreated
+    expect: rows
+    comment: recreating the operator makes the body work again

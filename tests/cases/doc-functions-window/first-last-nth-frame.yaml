@@ -1,0 +1,46 @@
+# first_value, last_value and nth_value are evaluated over the window frame; last_value default frame ends at the last peer.
+id: doc-functions-window.first-last-nth-frame
+title: first_value, last_value and nth_value over default and explicit frames
+family: doc-functions-window
+tier: core
+feature_ids: [window-functions, first-value, last-value, nth-value, window-frames]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (first_value, last_value, nth_value)"
+setup: |
+  CREATE TABLE f (id int4 PRIMARY KEY, ten int4);
+  INSERT INTO f VALUES (1,1), (2,1), (3,2), (4,2), (5,3);
+steps:
+  - sql: |
+      SELECT id, last_value(id) OVER (ORDER BY ten) AS l FROM f ORDER BY id
+    expect: rows
+    order: ordered
+    comment: default frame runs to the last peer of the current row, so the last row of each tie group is returned
+  - sql: |
+      SELECT id, last_value(id) OVER (ORDER BY ten ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS l FROM f ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a whole-partition frame gives the partition last row for every row
+  - sql: |
+      SELECT id, nth_value(id, 2) OVER (ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING) AS n2,
+             nth_value(id, 3) OVER (ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING) AS n3
+      FROM f ORDER BY id
+    expect: rows
+    order: ordered
+    comment: nth_value is NULL when the frame has fewer than n rows
+  - sql: |
+      SELECT id, first_value(id) OVER (ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING) AS f FROM f ORDER BY id
+    expect: rows
+    order: ordered
+    comment: first_value of an empty frame is NULL
+  - sql: |
+      SELECT nth_value(id, 0) OVER () FROM f
+    expect: error
+    sqlstate: "22016"
+    comment: n must be greater than zero
+  - sql: |
+      SELECT nth_value(id, -1) OVER () FROM f
+    expect: error
+    sqlstate: "22016"
+    comment: negative n is rejected the same way

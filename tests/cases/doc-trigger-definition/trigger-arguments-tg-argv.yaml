@@ -1,0 +1,36 @@
+# Trigger arguments given in CREATE TRIGGER are passed to the function as text in TG_ARGV, and TG_NARGS
+# gives their count. A trigger with no arguments sees TG_NARGS = 0 and NULL TG_ARGV elements.
+id: doc-trigger-definition.trigger-arguments-tg-argv
+title: Trigger arguments arrive as text in TG_ARGV and TG_NARGS counts them
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, plpgsql, insert, json]
+required_capabilities: [create-table, create-function, insert, select, plpgsql, triggers, jsonb, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (arguments for trigger functions; TG_ARGV)"
+sessions: [a]
+setup: |
+  CREATE TABLE ev (id int, a text, b text);
+  CREATE TABLE ev_log (seq int GENERATED ALWAYS AS IDENTITY, nargs int, arg0 text, arg1 text, col_a text);
+  CREATE FUNCTION log_args() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO ev_log (nargs, arg0, arg1, col_a)
+      VALUES (TG_NARGS, TG_ARGV[0], TG_ARGV[1], to_jsonb(NEW) ->> TG_ARGV[0]);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t1 AFTER INSERT ON ev FOR EACH ROW EXECUTE FUNCTION log_args('a', 'b');
+  CREATE TRIGGER t2 AFTER INSERT ON ev FOR EACH ROW EXECUTE FUNCTION log_args();
+steps:
+  - sql: |
+      INSERT INTO ev VALUES (1, 'alpha', 'beta')
+    expect: ok
+  - sql: |
+      SELECT nargs, arg0, arg1, col_a FROM ev_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM ev
+    expect: rows
+    order: ordered

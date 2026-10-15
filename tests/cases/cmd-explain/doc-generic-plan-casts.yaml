@@ -1,0 +1,27 @@
+# Documented GENERIC_PLAN example: parameter placeholders stay as $1 and $2 in the plan, with and without explicit casts.
+id: cmd-explain.doc-generic-plan-casts
+title: EXPLAIN (GENERIC_PLAN) keeps parameter placeholders, with and without casts
+family: cmd-explain
+tier: core
+feature_ids: [explain, explain-generic-plan, parameters, group-by]
+required_capabilities: [create-table, create-index, insert, select, explain, generic-plan]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/explain.sgml#examples"
+  license: "PostgreSQL documentation"
+sessions: [a]
+setup: |
+  CREATE TABLE test (id int4 PRIMARY KEY, foo int4, bar int4);
+  INSERT INTO test SELECT g, g % 10, g FROM generate_series(1, 300) g;
+  ANALYZE test;
+steps:
+  - sql: |
+      EXPLAIN (GENERIC_PLAN, COSTS OFF) SELECT sum(bar) FROM test WHERE id > $1 AND id < $2 GROUP BY foo
+    expect: rows
+    order: ordered
+    comment: the parser infers int4 for $1 and $2 from the comparison with id
+  - sql: |
+      EXPLAIN (GENERIC_PLAN, COSTS OFF) SELECT sum(bar) FROM test WHERE id > $1::integer AND id < $2::integer GROUP BY foo
+    expect: rows
+    order: ordered
+    comment: explicit casts give the same kind of generic plan

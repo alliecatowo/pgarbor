@@ -1,0 +1,43 @@
+# NO SCROLL cursor: forward FETCH works, backward FETCH is rejected.
+id: doc-plpgsql-cursors.no-scroll-backward-fetch-rejected
+title: NO SCROLL cursor rejects a backward FETCH
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, no-scroll, fetch, prior]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION no_scroll_forward_ok() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c NO SCROLL CURSOR FOR SELECT name FROM items ORDER BY id;
+    r text;
+  BEGIN
+    OPEN c;
+    FETCH NEXT FROM c INTO r;
+    FETCH NEXT FROM c INTO r;
+    RETURN r;
+  END $$;
+  CREATE FUNCTION no_scroll_prior_rejected() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c NO SCROLL CURSOR FOR SELECT name FROM items ORDER BY id;
+    r text;
+  BEGIN
+    OPEN c;
+    FETCH NEXT FROM c INTO r;
+    FETCH PRIOR FROM c INTO r;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT no_scroll_forward_ok()
+    expect: rows
+  - sql: |
+      SELECT no_scroll_prior_rejected()
+    expect: error
+    sqlstate: "55000"
+    comment: the scroll restriction is checked when the backward FETCH runs

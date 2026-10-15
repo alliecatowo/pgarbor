@@ -1,0 +1,24 @@
+# A per-column statistics target of zero disables statistics collection for that column.
+id: cmd-analyze.statistics-target-zero
+title: "A column with SET STATISTICS 0 gets no pg_stats row after ANALYZE"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, statistics-target, alter-table, pg-stats]
+required_capabilities: [create-table, insert, select, alter-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Notes: setting the statistics target to zero disables collection)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_st (id int4, a int, b text);
+  INSERT INTO an_st SELECT g, g % 5, 'x' || (g % 4) FROM generate_series(1, 100) g;
+  ALTER TABLE an_st ALTER COLUMN b SET STATISTICS 0;
+steps:
+  - sql: |
+      ANALYZE an_st
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_st' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: b is excluded

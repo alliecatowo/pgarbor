@@ -1,0 +1,35 @@
+# Dropping a column referenced by a partial index predicate drops the index automatically.
+id: doc-indexes-partial.drop-column-drops-index
+title: DROP COLUMN used in a partial index predicate removes that index
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, alter-table, drop-column, catalog-introspection]
+required_capabilities: [create-table, create-index, alter-table, insert, select, catalog-introspection]
+provenance:
+  source: hand
+  ref: "indices.sgml#indexes-partial; ddl.sgml (DROP COLUMN drops indexes involving the column)"
+sessions: [a]
+setup: |
+  CREATE TABLE ren (id int, flag boolean);
+  CREATE INDEX ren_ix ON ren (id) WHERE flag;
+  CREATE INDEX ren_plain ON ren (id);
+steps:
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'ren' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: both indexes exist before the drop
+  - sql: |
+      ALTER TABLE ren DROP COLUMN flag
+    expect: ok
+    comment: the partial index depends on flag and is dropped with it
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'ren' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: only the non-partial index remains
+  - sql: |
+      CREATE INDEX ren_flag_again ON ren (id) WHERE flag
+    expect: error
+    sqlstate: "42703"
+    comment: the predicate can no longer be written because the column is gone

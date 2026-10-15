@@ -1,0 +1,63 @@
+# OWNER TO needs the current role to be able to SET ROLE to the new owner, and the new owner needs CREATE on the opclass schema.
+id: cmd-alter-opclass.owner-change-requires-set-role-and-create
+title: "OWNER TO fails without SET ROLE membership, and fails when the new owner lacks CREATE on the schema"
+family: cmd-alter-opclass
+tier: extended
+feature_ids: [alter-operator-class, owner, roles, schema-privileges]
+required_capabilities: [create-operator-class, alter-operator-class, create-schema, roles, set-role, grant, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (Description: To alter the owner, you must be able to SET ROLE ... and that role must have CREATE privilege on the operator class's schema)"
+sessions: [a]
+setup: |
+  CREATE ROLE aoc_cmd_mem_a;
+  CREATE ROLE aoc_cmd_mem_b;
+  CREATE SCHEMA aoc_cmd_s8 AUTHORIZATION aoc_cmd_mem_a;
+  CREATE OPERATOR CLASS aoc_cmd_s8.aoc_cmd_ops8 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  ALTER OPERATOR CLASS aoc_cmd_s8.aoc_cmd_ops8 USING btree OWNER TO aoc_cmd_mem_a;
+steps:
+  - sql: |
+      SET ROLE aoc_cmd_mem_a
+    expect: ok
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_s8.aoc_cmd_ops8 USING btree OWNER TO aoc_cmd_mem_b
+    expect: error
+    sqlstate: "42501"
+    comment: aoc_cmd_mem_a cannot SET ROLE to aoc_cmd_mem_b
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT aoc_cmd_mem_b TO aoc_cmd_mem_a
+    expect: ok
+  - sql: |
+      SET ROLE aoc_cmd_mem_a
+    expect: ok
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_s8.aoc_cmd_ops8 USING btree OWNER TO aoc_cmd_mem_b
+    expect: error
+    sqlstate: "42501"
+    comment: aoc_cmd_mem_b has no CREATE privilege on schema aoc_cmd_s8
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT opcowner = (SELECT oid FROM pg_roles WHERE rolname = 'aoc_cmd_mem_a') FROM pg_opclass WHERE opcname = 'aoc_cmd_ops8'
+    expect: rows
+    order: ordered
+    comment: ownership did not change
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_s8.aoc_cmd_ops8 USING btree OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      ALTER SCHEMA aoc_cmd_s8 OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      REVOKE aoc_cmd_mem_b FROM aoc_cmd_mem_a
+    expect: ok
+  - sql: |
+      DROP ROLE aoc_cmd_mem_a
+    expect: ok
+  - sql: |
+      DROP ROLE aoc_cmd_mem_b
+    expect: ok

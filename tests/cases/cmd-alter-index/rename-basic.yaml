@@ -1,0 +1,50 @@
+# ALTER INDEX ... RENAME TO: docs example, schema-qualified name, collision and missing-index errors, IF EXISTS notice.
+id: cmd-alter-index.rename-basic
+title: ALTER INDEX RENAME TO renames the index, rejects collisions, and honours IF EXISTS
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, rename, if-exists, notices, errors]
+required_capabilities: [create-table, create-index, alter-index, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (RENAME, IF EXISTS, Examples: rename an existing index)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (id int4 PRIMARY KEY, name text);
+  CREATE INDEX distributors_name_idx ON distributors (name);
+  INSERT INTO distributors VALUES (1, 'acme'), (2, 'globex');
+steps:
+  - sql: |
+      ALTER INDEX distributors_name_idx RENAME TO distributors_name_key
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'distributors' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the old name is gone and the new name is present
+  - sql: |
+      ALTER INDEX distributors_name_key RENAME TO distributors_pkey
+    expect: error
+    sqlstate: "42P07"
+    comment: the target name is already taken by the primary key index
+  - sql: |
+      ALTER INDEX public.distributors_name_key RENAME TO suppliers
+    expect: ok
+    comment: schema-qualified name is accepted
+  - sql: |
+      ALTER INDEX no_such_index RENAME TO other
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER INDEX IF EXISTS no_such_index RENAME TO other
+    expect: notice
+    comment: IF EXISTS skips the missing index and only issues a NOTICE
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'distributors' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, name FROM distributors ORDER BY id
+    expect: rows
+    order: ordered
+    comment: renaming has no effect on stored data

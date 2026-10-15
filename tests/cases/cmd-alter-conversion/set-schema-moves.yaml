@@ -1,0 +1,31 @@
+# SET SCHEMA moves a conversion to another schema; the schema-qualified name then refers to it.
+id: cmd-alter-conversion.set-schema-moves
+title: ALTER CONVERSION SET SCHEMA moves the conversion, and later qualified references follow it
+family: cmd-alter-conversion
+tier: core
+feature_ids: [alter-conversion, set-schema, schemas, rename]
+required_capabilities: [alter-conversion, create-conversion, create-schema, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_conversion.sgml#sql-alterconversion (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA alter_conv_s1;
+  CREATE SCHEMA alter_conv_s2;
+  CREATE CONVERSION alter_conv_s1.mv_conv FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+steps:
+  - sql: |
+      ALTER CONVERSION alter_conv_s1.mv_conv SET SCHEMA alter_conv_s2
+    expect: ok
+  - sql: |
+      SELECT n.nspname, c.conname FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace WHERE c.conname = 'mv_conv' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only alter_conv_s2 has it now
+  - sql: |
+      ALTER CONVERSION alter_conv_s2.mv_conv RENAME TO mv_conv2
+    expect: ok
+  - sql: |
+      SELECT n.nspname, c.conname FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace WHERE c.conname LIKE 'mv_conv%' ORDER BY 1, 2
+    expect: rows
+    order: ordered

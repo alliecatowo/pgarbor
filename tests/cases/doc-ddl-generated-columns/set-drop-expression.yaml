@@ -1,0 +1,56 @@
+# ALTER COLUMN ... SET EXPRESSION recomputes both kinds; DROP EXPRESSION turns a stored generated
+# column into a plain column that keeps its stored values; both are errors on plain columns.
+id: doc-ddl-generated-columns.set-drop-expression
+title: SET EXPRESSION recomputes existing rows and DROP EXPRESSION keeps stored values as a plain column
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, alter-table, set-expression, drop-expression]
+required_capabilities: [create-table, insert, select, alter-table, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE se (x int, s int GENERATED ALWAYS AS (x + 1) STORED, v int GENERATED ALWAYS AS (x + 1) VIRTUAL);
+  INSERT INTO se (x) VALUES (1), (5)
+steps:
+  - sql: |
+      ALTER TABLE se ALTER COLUMN s SET EXPRESSION AS (x * 100)
+    expect: ok
+  - sql: |
+      ALTER TABLE se ALTER COLUMN v SET EXPRESSION AS (x * 100)
+    expect: ok
+  - sql: |
+      SELECT x, s, v FROM se ORDER BY x
+    expect: rows
+    order: ordered
+    comment: existing rows are recomputed for both the stored and the virtual column
+  - sql: |
+      ALTER TABLE se ALTER COLUMN s DROP EXPRESSION
+    expect: ok
+  - sql: |
+      SELECT attname, attgenerated FROM pg_attribute
+      WHERE attrelid = 'se'::regclass AND attnum > 0
+      ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: s is no longer generated; v keeps its kind
+  - sql: |
+      INSERT INTO se (x, s) VALUES (7, 1)
+    expect: ok
+    comment: s is now writable as a plain column
+  - sql: |
+      SELECT x, s, v FROM se ORDER BY x
+    expect: rows
+    order: ordered
+    comment: the stored values from before the drop are kept, and the virtual column still uses the new expression
+  - sql: |
+      ALTER TABLE se ALTER COLUMN x SET EXPRESSION AS (x)
+    expect: error
+    sqlstate: "55000"
+    comment: SET EXPRESSION requires a generated column
+  - sql: |
+      ALTER TABLE se ALTER COLUMN s DROP EXPRESSION
+    expect: error
+    sqlstate: "55000"
+    comment: DROP EXPRESSION on a column that is no longer generated fails

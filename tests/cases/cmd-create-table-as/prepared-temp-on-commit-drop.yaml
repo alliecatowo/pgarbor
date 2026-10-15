@@ -1,0 +1,36 @@
+# Doc example 3: a temporary table built from a prepared statement and dropped at commit.
+id: cmd-create-table-as.prepared-temp-on-commit-drop
+title: CREATE TEMP TABLE AS EXECUTE with ON COMMIT DROP disappears at commit
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, temp-table, on-commit, prepared-statements]
+required_capabilities: [create-table-as, create-table, temp-table, insert, select, prepared-statements, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (Examples: films_recent ON COMMIT DROP)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4, title text, date_prod date);
+  INSERT INTO films VALUES (1, 'alpha', '2001-05-01'), (2, 'beta', '2002-06-15'), (3, 'gamma', '2003-01-01');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      PREPARE recentfilms(date) AS SELECT * FROM films WHERE date_prod > $1
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE films_recent ON COMMIT DROP AS EXECUTE recentfilms('2002-01-01')
+    expect: ok
+  - sql: |
+      SELECT id, title FROM films_recent ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM films_recent
+    expect: error
+    sqlstate: "42P01"
+    comment: the temp table was dropped at COMMIT

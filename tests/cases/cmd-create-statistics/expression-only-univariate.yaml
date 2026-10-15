@@ -1,0 +1,35 @@
+# Single-expression form: no statistics kind may be given, stxkind is {e}, no stxkeys, and the expression is visible to ANALYZE output.
+id: cmd-create-statistics.expression-only-univariate
+title: Single-expression CREATE STATISTICS builds univariate expression statistics and rejects kinds
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, expression-statistics, univariate-statistics]
+required_capabilities: [create-table, insert, extended-statistics, catalog-introspection, analyze]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Description: first form; Parameters: statistics_kind)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_expr (a int, b int, c text);
+  INSERT INTO cs_expr VALUES (1, 2, 'x'), (2, 3, 'y'), (3, NULL, 'x'), (4, 4, NULL);
+steps:
+  - sql: |
+      CREATE STATISTICS cs_expr_s1 ON (a + b) FROM cs_expr
+    expect: ok
+  - sql: |
+      CREATE STATISTICS cs_expr_s2 (ndistinct) ON (a + b) FROM cs_expr
+    expect: error
+    sqlstate: "0A000"
+    comment: the statistics kind list is only allowed for the multivariate form
+  - sql: |
+      SELECT stxname, stxkind, stxkeys::text FROM pg_statistic_ext WHERE stxrelid = 'cs_expr'::regclass ORDER BY stxname
+    expect: rows
+    order: ordered
+  - sql: |
+      ANALYZE cs_expr
+    expect: ok
+  - sql: |
+      SELECT statistics_name, expr::text, n_distinct FROM pg_stats_ext_exprs ORDER BY statistics_name, expr::text
+    expect: rows
+    order: ordered
+    comment: univariate stats for the expression exist after ANALYZE

@@ -1,0 +1,29 @@
+# CHECKPOINT does not write user data, so it is permitted inside a READ ONLY transaction.
+id: cmd-checkpoint.allowed-in-read-only-transaction
+title: CHECKPOINT succeeds inside a READ ONLY transaction
+family: cmd-checkpoint
+tier: core
+feature_ids: [checkpoint, transactions, read-only]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/checkpoint.sgml#sql-checkpoint (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (5);
+steps:
+  - sql: |
+      BEGIN READ ONLY;
+      CHECKPOINT;
+      SELECT id FROM t;
+      COMMIT
+    expect: ok
+  - sql: |
+      BEGIN READ ONLY;
+      CHECKPOINT;
+      INSERT INTO t VALUES (6);
+      COMMIT
+    expect: error
+    sqlstate: "25006"
+    comment: CHECKPOINT itself is fine; the subsequent INSERT is rejected by the read-only transaction

@@ -1,0 +1,30 @@
+# A row-level BEFORE INSERT trigger does not see its own row, but sees rows inserted earlier by the same command.
+id: doc-trigger-datachanges.row-before-insert-prior-rows
+title: Row-level BEFORE INSERT sees rows already processed by the same command, not its own row
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, row-level-triggers, plpgsql, insert, visibility]
+required_capabilities: [create-table, insert, select, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (row-level BEFORE trigger sees effects of rows previously processed)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  CREATE FUNCTION rb_ins() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('rb_ins', (SELECT count(*) FROM t));
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER trg_rb_ins BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION rb_ins();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (3, 30), (4, 40), (5, 50)
+    expect: ok
+  - sql: |
+      SELECT n FROM lg WHERE tag = 'rb_ins'
+    expect: rows
+    order: multiset
+    comment: each firing sees the pre-existing rows plus the rows inserted before it, never its own row

@@ -1,0 +1,41 @@
+# Renaming an aggregate onto a name that already carries the same argument types fails with
+# duplicate_function (42723); a different argument list under the same name is an overload and is allowed.
+id: cmd-alter-aggregate.rename-conflict-sqlstate
+title: "ALTER AGGREGATE RENAME onto an identical signature fails with duplicate_function"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, rename, aggregates, errors, overloads]
+required_capabilities: [aggregates, create-aggregate, create-function, alter-aggregate, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#parameters (new_name, argtype)"
+setup: |
+  CREATE FUNCTION rc_sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE FUNCTION rc_txt_sf(int8, text) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + length($2) $$;
+  CREATE AGGREGATE agg_a(integer) (sfunc = rc_sf, stype = int8, initcond = '0');
+  CREATE AGGREGATE agg_b(integer) (sfunc = rc_sf, stype = int8, initcond = '0');
+  CREATE AGGREGATE agg_b(text) (sfunc = rc_txt_sf, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      ALTER AGGREGATE agg_a(integer) RENAME TO agg_a
+    expect: error
+    sqlstate: "42723"
+    comment: renaming to the current name is a conflict with itself
+  - sql: |
+      ALTER AGGREGATE agg_a(integer) RENAME TO agg_b
+    expect: error
+    sqlstate: "42723"
+    comment: agg_b(integer) already exists
+  - sql: |
+      ALTER AGGREGATE agg_a(text) RENAME TO agg_c
+    expect: error
+    sqlstate: "42883"
+    comment: no agg_a(text) exists
+  - sql: |
+      ALTER AGGREGATE agg_b(text) RENAME TO agg_a
+    expect: ok
+    comment: agg_a(text) is free, so the overload may take the name agg_a
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname IN ('agg_a', 'agg_b') ORDER BY 1, 2
+    expect: rows
+    order: ordered

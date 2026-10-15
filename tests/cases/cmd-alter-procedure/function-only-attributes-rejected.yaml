@@ -1,0 +1,47 @@
+# Function-only attributes (IMMUTABLE, STRICT, LEAKPROOF, PARALLEL, COST, CALLED ON NULL INPUT) are
+# not valid for a procedure and fail with 42P13; SECURITY is valid and still applies.
+id: cmd-alter-procedure.function-only-attributes-rejected
+title: ALTER PROCEDURE rejects function-only attributes with 42P13 and accepts SECURITY
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, volatility, parallel-safety, strict, leakproof, errors]
+required_capabilities: [create-procedure, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Synopsis: action list; Compatibility)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE attr_p(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE attr_p(integer) IMMUTABLE
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ALTER PROCEDURE attr_p(integer) STRICT
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ALTER PROCEDURE attr_p(integer) LEAKPROOF
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ALTER PROCEDURE attr_p(integer) PARALLEL SAFE
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ALTER PROCEDURE attr_p(integer) COST 10
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ALTER PROCEDURE attr_p(integer) CALLED ON NULL INPUT
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ALTER PROCEDURE attr_p(integer) SECURITY DEFINER
+    expect: ok
+    comment: SECURITY is a procedure attribute and is accepted
+  - sql: |
+      SELECT prosecdef, provolatile, proisstrict, proleakproof, proparallel FROM pg_proc WHERE proname = 'attr_p'
+    expect: rows
+    comment: expect t, v, f, f, u; the rejected statements changed nothing

@@ -1,0 +1,33 @@
+# Creating a partition whose bounds cover rows already sitting in the DEFAULT partition fails, because
+# the DEFAULT partition's implicit constraint would be violated. Those rows must be moved first.
+id: doc-ddl-partitioning.default-blocks-overlapping-new-partition
+title: Creating a partition over rows parked in DEFAULT is rejected
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, range-partitioning, default-partition, partition-maintenance]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (ATTACH PARTITION: DEFAULT partition must not hold rows that belong to the new partition)"
+sessions: [a]
+setup: |
+  CREATE TABLE dp (id int, v int) PARTITION BY RANGE (v);
+  CREATE TABLE dp_p1 PARTITION OF dp FOR VALUES FROM (0) TO (10);
+  CREATE TABLE dp_def PARTITION OF dp DEFAULT;
+  INSERT INTO dp VALUES (1, 55), (2, 3);
+steps:
+  - sql: |
+      CREATE TABLE dp_p2 PARTITION OF dp FOR VALUES FROM (50) TO (60)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT tableoid::regclass::text AS part, id, v FROM dp ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the failed CREATE leaves the row in the DEFAULT partition
+  - sql: |
+      DELETE FROM dp_def WHERE v = 55
+    expect: ok
+  - sql: |
+      CREATE TABLE dp_p2 PARTITION OF dp FOR VALUES FROM (50) TO (60)
+    expect: ok

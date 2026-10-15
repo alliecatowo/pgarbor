@@ -1,0 +1,77 @@
+# Sequence privileges: SELECT allows currval, UPDATE allows nextval and setval, USAGE allows currval and nextval.
+id: doc-ddl-priv.sequence-privilege-kinds
+title: Sequence SELECT, UPDATE and USAGE grants each allow a different set of functions
+family: doc-ddl-priv
+tier: core
+feature_ids: [sequence, grant, revoke, privileges, errors]
+required_capabilities: [sequence, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (privilege types for SEQUENCE: SELECT for currval, UPDATE for nextval and setval, USAGE for currval and nextval)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_sp_rw;
+  CREATE SEQUENCE sp_seq;
+steps:
+  - sql: |
+      SELECT nextval('sp_seq')
+    expect: rows
+    comment: the owner advances the sequence so currval has a value in this session
+  - sql: |
+      GRANT SELECT ON sp_seq TO ddp_sp_rw
+    expect: ok
+  - sql: |
+      SET ROLE ddp_sp_rw
+    expect: ok
+  - sql: |
+      SELECT currval('sp_seq')
+    expect: rows
+  - sql: |
+      SELECT nextval('sp_seq')
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE SELECT ON sp_seq FROM ddp_sp_rw
+    expect: ok
+  - sql: |
+      GRANT UPDATE ON sp_seq TO ddp_sp_rw
+    expect: ok
+  - sql: |
+      SET ROLE ddp_sp_rw
+    expect: ok
+  - sql: |
+      SELECT nextval('sp_seq')
+    expect: rows
+  - sql: |
+      SELECT setval('sp_seq', 20)
+    expect: rows
+  - sql: |
+      SELECT currval('sp_seq')
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE UPDATE ON sp_seq FROM ddp_sp_rw
+    expect: ok
+  - sql: |
+      GRANT USAGE ON sp_seq TO ddp_sp_rw
+    expect: ok
+  - sql: |
+      SET ROLE ddp_sp_rw
+    expect: ok
+  - sql: |
+      SELECT nextval('sp_seq')
+    expect: rows
+  - sql: |
+      SELECT setval('sp_seq', 30)
+    expect: error
+    sqlstate: "42501"
+    comment: USAGE does not allow setval
+  - sql: |
+      RESET ROLE
+    expect: ok

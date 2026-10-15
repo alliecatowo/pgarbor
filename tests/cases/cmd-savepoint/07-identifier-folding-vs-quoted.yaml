@@ -1,0 +1,41 @@
+# Unquoted savepoint names fold to lower case; a quoted mixed-case name is a different identifier.
+id: cmd-savepoint.identifier-folding-vs-quoted
+title: Unquoted savepoint names fold to lower case; quoted mixed-case names do not match them
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, identifier-case, errors, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/savepoint.sgml#sql-savepoint (Parameters: savepoint_name; identifier rules)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      SAVEPOINT MySp;
+      INSERT INTO t VALUES (1);
+      ROLLBACK TO mysp;
+      INSERT INTO t VALUES (2);
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: ROLLBACK TO mysp matched SAVEPOINT MySp (folded to mysp); only row 2 commits
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT MySp
+    expect: ok
+  - sql: |
+      ROLLBACK TO "MySp"
+    expect: error
+    sqlstate: "3B001"
+    comment: quoted MySp is case-sensitive and does not exist
+  - sql: |
+      ROLLBACK
+    expect: ok

@@ -1,0 +1,40 @@
+# TRUNCATE fires ON TRUNCATE triggers (BEFORE for all tables, then AFTER) but does not fire ON DELETE triggers.
+id: cmd-truncate.trigger-order-no-delete-trigger
+title: "TRUNCATE fires BEFORE and AFTER TRUNCATE triggers in table-list order and skips DELETE triggers"
+family: cmd-truncate
+tier: extended
+feature_ids: [truncate, triggers, on-truncate-trigger, plpgsql, insert, select]
+required_capabilities: [create-table, insert, select, triggers, plpgsql, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#notes (ON TRUNCATE triggers; ON DELETE triggers not fired)"
+sessions: [a]
+setup: |
+  CREATE TABLE evlog (seq serial PRIMARY KEY, ev text, tbl text);
+  CREATE FUNCTION evlog_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO evlog (ev, tbl) VALUES (TG_WHEN || '-' || TG_OP, TG_TABLE_NAME);
+    RETURN NULL;
+  END $$;
+  CREATE TABLE ta (id int4);
+  CREATE TABLE tb (id int4);
+  CREATE TRIGGER ta_bt BEFORE TRUNCATE ON ta FOR EACH STATEMENT EXECUTE FUNCTION evlog_fn();
+  CREATE TRIGGER ta_at AFTER TRUNCATE ON ta FOR EACH STATEMENT EXECUTE FUNCTION evlog_fn();
+  CREATE TRIGGER tb_bt BEFORE TRUNCATE ON tb FOR EACH STATEMENT EXECUTE FUNCTION evlog_fn();
+  CREATE TRIGGER tb_at AFTER TRUNCATE ON tb FOR EACH STATEMENT EXECUTE FUNCTION evlog_fn();
+  CREATE TRIGGER ta_del AFTER DELETE ON ta FOR EACH STATEMENT EXECUTE FUNCTION evlog_fn();
+  INSERT INTO ta VALUES (1);
+  INSERT INTO tb VALUES (2);
+steps:
+  - sql: |
+      TRUNCATE tb, ta
+    expect: ok
+  - sql: |
+      SELECT ev, tbl FROM evlog ORDER BY seq
+    expect: rows
+    order: ordered
+    comment: all BEFORE triggers run first, then AFTER triggers, each in the order the tables are processed
+  - sql: |
+      SELECT (SELECT count(*) FROM ta) AS ta_rows, (SELECT count(*) FROM tb) AS tb_rows
+    expect: rows
+    order: ordered

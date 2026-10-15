@@ -1,0 +1,49 @@
+# GET STACKED DIAGNOSTICS items, SQLSTATE and SQLERRM inside a handler, and empty strings for unset items.
+id: doc-plpgsql-control-structures.get-stacked-diagnostics-items
+title: "GET STACKED DIAGNOSTICS returns message, detail, hint, constraint and table; unset items are empty"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, exceptions, diagnostics, get-stacked-diagnostics, sqlstate]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Obtaining Information about an Error)"
+sessions: [a]
+setup: |
+  CREATE TABLE ut (a int PRIMARY KEY, b text);
+  INSERT INTO ut VALUES (1, 'x');
+  CREATE FUNCTION dup_diag() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE m text; d text; h text; st text; cn text; tn text; sn text; cl text;
+  BEGIN
+    INSERT INTO ut VALUES (1, 'dup');
+    RETURN 'no';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS m = MESSAGE_TEXT,
+                            d = PG_EXCEPTION_DETAIL,
+                            h = PG_EXCEPTION_HINT,
+                            st = RETURNED_SQLSTATE,
+                            cn = CONSTRAINT_NAME,
+                            tn = TABLE_NAME,
+                            sn = SCHEMA_NAME,
+                            cl = COLUMN_NAME;
+    RETURN concat_ws('|', m, d, h, st, cn, tn, sn, '[' || cl || ']') || ' sqlstate=' || SQLSTATE;
+  END $$;
+  CREATE FUNCTION div_diag() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE m text; d text; cn text; tn text; st text;
+  BEGIN
+    PERFORM 1 / 0;
+    RETURN 'no';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS m = MESSAGE_TEXT, d = PG_EXCEPTION_DETAIL,
+                            cn = CONSTRAINT_NAME, tn = TABLE_NAME, st = RETURNED_SQLSTATE;
+    RETURN concat_ws('|', m, '[' || d || ']', '[' || cn || ']', '[' || tn || ']', st) || ' errm=' || SQLERRM;
+  END $$;
+steps:
+  - sql: |
+      SELECT dup_diag() AS diag
+    expect: rows
+    comment: a unique violation fills message, detail, constraint, table, schema and SQLSTATE
+  - sql: |
+      SELECT div_diag() AS diag
+    expect: rows
+    comment: a division by zero sets no constraint, table or detail, so those items come back empty

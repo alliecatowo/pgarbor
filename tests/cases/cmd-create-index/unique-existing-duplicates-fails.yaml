@@ -1,0 +1,32 @@
+# A unique index build over data that already contains duplicates fails and leaves no index behind.
+id: cmd-create-index.unique-existing-duplicates-fails
+title: Building a unique index over duplicate data fails and leaves no index behind
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, unique-index, errors]
+required_capabilities: [create-table, create-index, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Parameters: UNIQUE: check for duplicate values when the index is created)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, rating int4);
+  INSERT INTO films VALUES (1, 'Jim Story', 5), (2, 'Jim Story', 3), (3, 'Other', 4);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX title_idx ON films (title)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname = 'title_idx'
+    expect: rows
+    order: ordered
+    comment: the failed build leaves no relation behind
+  - sql: |
+      CREATE INDEX title_idx ON films (title)
+    expect: ok
+    comment: a non-unique index over the same column is fine
+  - sql: |
+      SELECT id FROM films WHERE title = 'Jim Story' ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,33 @@
+# Documented example: ALTER MAPPING REPLACE english WITH swedish changes every mapping that uses english inside my_config.
+id: cmd-alter-tsconfig.doc-example-replace-dictionary
+title: "ALTER MAPPING REPLACE runs the documented english-to-swedish example"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, alter-mapping-replace, text-search-dictionary]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (Examples: ALTER MAPPING REPLACE english WITH swedish)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY english (template = snowball, language = english);
+  CREATE TEXT SEARCH DICTIONARY swedish (template = snowball, language = swedish);
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+  ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING FOR asciiword, word WITH english;
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config
+        ALTER MAPPING REPLACE english WITH swedish
+    expect: ok
+  - sql: |
+      SELECT m.maptokentype, m.mapseqno, d.dictname
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig AND m.maptokentype IN (1, 2)
+       ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_tsvector('my_config', 'running foxes')
+    expect: rows
+    order: ordered
+    comment: the swedish snowball stemmer is now used for both asciiword and word tokens

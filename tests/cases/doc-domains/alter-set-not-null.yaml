@@ -1,0 +1,36 @@
+# ALTER DOMAIN ... SET NOT NULL validates existing columns; DROP NOT NULL and DROP DEFAULT undo the settings.
+id: doc-domains.alter-set-not-null
+title: ALTER DOMAIN SET NOT NULL fails on existing NULLs; DROP DEFAULT removes the default
+family: doc-domains
+tier: core
+feature_ids: [domains, alter-domain, not-null, default]
+required_capabilities: [create-domain, create-table, insert, select, alter-domain, constraints]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#domains; sql-alterdomain"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dnn AS int DEFAULT 5;
+  CREATE TABLE tdnn (v dnn);
+  INSERT INTO tdnn VALUES (NULL), (7)
+steps:
+  - sql: |
+      ALTER DOMAIN dnn SET NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: an existing row holds NULL, so validation fails
+  - sql: |
+      ALTER DOMAIN dnn DROP NOT NULL
+    expect: ok
+    comment: no-op, the domain was never NOT NULL
+  - sql: |
+      ALTER DOMAIN dnn DROP DEFAULT
+    expect: ok
+  - sql: |
+      INSERT INTO tdnn DEFAULT VALUES
+    expect: ok
+    comment: the default is gone and the domain is nullable again, so the column gets NULL
+  - sql: |
+      SELECT v FROM tdnn ORDER BY v NULLS LAST
+    expect: rows
+    order: ordered

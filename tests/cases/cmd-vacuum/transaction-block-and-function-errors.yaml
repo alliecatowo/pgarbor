@@ -1,0 +1,35 @@
+# VACUUM cannot run inside a transaction block or from a function; it works again once outside them.
+id: cmd-vacuum.transaction-block-and-function-errors
+title: "VACUUM refused inside a transaction block and inside a DO block"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, transactions, plpgsql, errors]
+required_capabilities: [create-table, insert, select, transactions, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Notes: VACUUM cannot be executed inside a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE vtx (id int4);
+  INSERT INTO vtx VALUES (1), (2);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      VACUUM vtx
+    expect: error
+    sqlstate: "25001"
+    comment: active_sql_transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      DO $$ BEGIN VACUUM vtx; END $$
+    expect: error
+    sqlstate: "25001"
+    comment: VACUUM cannot be executed from a function
+  - sql: |
+      VACUUM vtx
+    expect: ok
+    comment: outside a transaction block it succeeds

@@ -1,0 +1,36 @@
+# NOT VALID is only accepted for CHECK constraints; ADD CONSTRAINT ... NOT NULL works once no NULLs are stored.
+id: cmd-alter-domain.not-null-not-valid-rejected
+title: "ADD CONSTRAINT NOT NULL rejects NOT VALID and needs stored data free of NULLs"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, not-null, not-valid]
+required_capabilities: [create-domain, alter-domain, create-table, insert, delete, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (domain_constraint; NOT VALID)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN token AS text;
+  CREATE TABLE tok (id int, t token);
+  INSERT INTO tok VALUES (1, 'a'), (2, NULL);
+steps:
+  - sql: |
+      ALTER DOMAIN token ADD CONSTRAINT token_nn NOT NULL NOT VALID
+    expect: error
+    sqlstate: "0A000"
+    comment: NOT VALID is only accepted for CHECK constraints
+  - sql: |
+      ALTER DOMAIN token ADD CONSTRAINT token_nn NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: row 2 holds NULL
+  - sql: |
+      DELETE FROM tok WHERE id = 2
+    expect: ok
+  - sql: |
+      ALTER DOMAIN token ADD CONSTRAINT token_nn NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO tok VALUES (3, NULL)
+    expect: error
+    sqlstate: "23502"

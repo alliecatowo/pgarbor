@@ -1,0 +1,39 @@
+# ALTER POLICY cannot change the command or the permissive/restrictive kind; the policy must be dropped and recreated.
+id: cmd-alter-policy.command-and-type-immutable
+title: "ALTER POLICY rejects FOR and AS clauses; drop and recreate changes the kind"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, policies, errors, ddl]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p ON t USING (v > 0);
+steps:
+  - sql: |
+      ALTER POLICY p ON t FOR SELECT USING (v > 1)
+    expect: error
+    sqlstate: "42601"
+    comment: the command to which the policy applies cannot be altered
+  - sql: |
+      ALTER POLICY p ON t AS RESTRICTIVE
+    expect: error
+    sqlstate: "42601"
+    comment: permissive or restrictive cannot be altered
+  - sql: |
+      SELECT policyname, permissive, cmd FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: still PERMISSIVE and ALL
+  - sql: |
+      DROP POLICY p ON t
+    expect: ok
+  - sql: |
+      CREATE POLICY p ON t AS RESTRICTIVE FOR DELETE USING (v > 0)
+    expect: ok
+    comment: the supported way to change those properties is to drop and recreate
+  - sql: |
+      SELECT policyname, permissive, cmd FROM pg_policies WHERE tablename = 't'
+    expect: rows

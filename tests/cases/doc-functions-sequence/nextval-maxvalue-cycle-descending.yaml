@@ -1,0 +1,40 @@
+# nextval with NO CYCLE stops at MAXVALUE or MINVALUE with 2200H, CYCLE wraps around, and a negative increment counts down.
+id: doc-functions-sequence.nextval-maxvalue-cycle-descending
+title: nextval errors at the bound without CYCLE, wraps with CYCLE, and counts down with a negative increment
+family: doc-functions-sequence
+tier: core
+feature_ids: [nextval, create-sequence, cycle, minvalue, maxvalue, increment, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (nextval: other behaviors via CREATE SEQUENCE parameters)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_nc MINVALUE 1 MAXVALUE 3 NO CYCLE;
+  CREATE SEQUENCE s_cy MINVALUE 1 MAXVALUE 3 CYCLE;
+  CREATE SEQUENCE s_dn INCREMENT -2 START 10 MINVALUE 1 MAXVALUE 10;
+steps:
+  - sql: |
+      SELECT nextval('s_nc') AS a, nextval('s_nc') AS b, nextval('s_nc') AS c
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT nextval('s_nc') AS v
+    expect: error
+    sqlstate: "2200H"
+    comment: NO CYCLE refuses to go past MAXVALUE
+  - sql: |
+      SELECT nextval('s_cy') AS a, nextval('s_cy') AS b, nextval('s_cy') AS c, nextval('s_cy') AS d
+    expect: rows
+    order: ordered
+    comment: CYCLE wraps back to MINVALUE after MAXVALUE
+  - sql: |
+      SELECT nextval('s_dn') AS a, nextval('s_dn') AS b, nextval('s_dn') AS c, nextval('s_dn') AS d, nextval('s_dn') AS e
+    expect: rows
+    order: ordered
+    comment: START 10 with increment -2 counts down 10, 8, 6, 4, 2
+  - sql: |
+      SELECT nextval('s_dn') AS v
+    expect: error
+    sqlstate: "2200H"
+    comment: the next value would be 0, below MINVALUE 1

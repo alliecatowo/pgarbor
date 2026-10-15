@@ -1,0 +1,40 @@
+# SELECT FROM ... JOIN ... USING: merged join column, qualified and unqualified references.
+id: cmd-select.join-using
+title: JOIN USING merges the join column and LEFT JOIN keeps unmatched rows
+family: cmd-select
+tier: core
+feature_ids: [select, from, join, join-using]
+required_capabilities: [create-table, insert, select, join]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-from and ref/select.sgml#sql-select examples (join distributors and films)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did int4 PRIMARY KEY, name text);
+  CREATE TABLE films (title text, did int4, date_prod date, kind text);
+  INSERT INTO distributors VALUES (101, 'British Lion'), (107, 'Columbia'), (109, '20th Century Fox');
+  INSERT INTO films VALUES
+    ('The Third Man', 101, '1949-12-23', 'Drama'),
+    ('The African Queen', 101, '1951-08-11', 'Romantic'),
+    ('Chicken Run', 109, '2000-06-21', 'Action'),
+    ('Orphan Film', 999, '2001-01-01', 'Drama');
+steps:
+  - sql: |
+      SELECT f.title, f.did, d.name, f.date_prod, f.kind
+      FROM distributors d JOIN films f USING (did)
+      ORDER BY f.title
+    expect: rows
+    order: ordered
+    comment: inner join drops the film whose did (999) has no distributor
+  - sql: |
+      SELECT * FROM distributors d JOIN films f USING (did) ORDER BY f.title
+    expect: rows
+    order: ordered
+    comment: USING merges did into a single output column
+  - sql: |
+      SELECT d.name, f.title
+      FROM distributors d LEFT JOIN films f USING (did)
+      ORDER BY d.name, f.title
+    expect: rows
+    order: ordered
+    comment: Columbia has no films, so its title is NULL

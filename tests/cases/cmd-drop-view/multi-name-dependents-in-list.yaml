@@ -1,0 +1,32 @@
+# Dependents named in the same DROP VIEW list are not blocking under RESTRICT; CASCADE with a list also works.
+id: cmd-drop-view.multi-name-dependents-in-list
+title: DROP VIEW with a list succeeds under RESTRICT when every dependent is listed too
+family: cmd-drop-view
+tier: core
+feature_ids: [drop-view, multiple-names, restrict, dependencies]
+required_capabilities: [create-view, drop-view, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_view.sgml#sql-dropview (name [, ...]; RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE VIEW mr_base AS SELECT 1 AS x;
+  CREATE VIEW mr_dep AS SELECT x FROM mr_base;
+  CREATE VIEW mc_p AS SELECT 2 AS y;
+  CREATE VIEW mc_q AS SELECT y FROM mc_p;
+steps:
+  - sql: |
+      DROP VIEW mr_base, mr_dep
+    expect: ok
+    comment: RESTRICT only refuses for dependents outside the drop list
+  - sql: |
+      SELECT to_regclass('mr_base') IS NULL AS base_gone, to_regclass('mr_dep') IS NULL AS dep_gone
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP VIEW mc_q, mc_p CASCADE
+    expect: ok
+  - sql: |
+      SELECT to_regclass('mc_p') IS NULL AS p_gone, to_regclass('mc_q') IS NULL AS q_gone
+    expect: rows
+    order: ordered

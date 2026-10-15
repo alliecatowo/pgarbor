@@ -1,0 +1,37 @@
+# The documented example: drop two statistics objects in different schemas with IF EXISTS.
+# A second run of the same command finds both missing and only issues notices.
+id: cmd-drop-statistics.docs-example-if-exists
+title: Documented IF EXISTS example across two schemas, then a rerun that only notices
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, drop-if-exists, extended-statistics, schemas]
+required_capabilities: [create-table, create-schema, extended-statistics, drop-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics (Examples)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA accounting;
+  CREATE TABLE accounting.users (uid int, created timestamp, name text);
+  CREATE TABLE public.grants (user_id int, role_id int);
+  CREATE STATISTICS accounting.users_uid_creation ON uid, created FROM accounting.users;
+  CREATE STATISTICS public.grants_user_role ON user_id, role_id FROM public.grants;
+steps:
+  - sql: |
+      SELECT stxnamespace::regnamespace::text AS schema, stxname FROM pg_statistic_ext ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP STATISTICS IF EXISTS
+          accounting.users_uid_creation,
+          public.grants_user_role
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext
+    expect: rows
+  - sql: |
+      DROP STATISTICS IF EXISTS
+          accounting.users_uid_creation,
+          public.grants_user_role
+    expect: notice
+    comment: both are gone, so IF EXISTS skips each with a NOTICE and the command succeeds

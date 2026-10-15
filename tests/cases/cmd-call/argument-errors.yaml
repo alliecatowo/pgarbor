@@ -1,0 +1,52 @@
+# Documented argument rules: every parameter without a default needs an argument; named and
+# positional arguments may not be mixed with positional after named; argument types are checked.
+id: cmd-call.argument-errors
+title: CALL rejects missing, unknown, surplus and mistyped arguments
+family: cmd-call
+tier: core
+feature_ids: [call, procedures, named-arguments, default-arguments, errors]
+required_capabilities: [create-table, insert, select, create-procedure, call, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/call.sgml#sql-call (Parameters: argument)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  CREATE PROCEDURE p_def(a int, b int DEFAULT 10, c text DEFAULT 'x') LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO t VALUES (a, format('%s/%s/%s', a, b, c));
+  END $$;
+steps:
+  - sql: |
+      CALL p_def(b => 1)
+    expect: error
+    sqlstate: "42883"
+    comment: a has no default and is not supplied
+  - sql: |
+      CALL p_def()
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CALL p_def(1, 2, 3, 4)
+    expect: error
+    sqlstate: "42883"
+    comment: more arguments than parameters
+  - sql: |
+      CALL p_def(zz => 1)
+    expect: error
+    sqlstate: "42883"
+    comment: unknown parameter name
+  - sql: |
+      CALL p_def(a => 1, 2)
+    expect: error
+    sqlstate: "42601"
+    comment: positional argument cannot follow a named argument
+  - sql: |
+      CALL p_def('abc')
+    expect: error
+    sqlstate: "22P02"
+    comment: text that is not an integer cannot be converted to int4
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    comment: no failing call inserted a row

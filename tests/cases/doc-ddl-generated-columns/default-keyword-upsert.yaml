@@ -1,0 +1,38 @@
+# DEFAULT is the only value allowed for a generated column, including in multi-row VALUES,
+# ON CONFLICT DO UPDATE SET, and UPDATE. The recomputed value follows the new base values.
+id: doc-ddl-generated-columns.default-keyword-upsert
+title: DEFAULT for a generated column works in multi-row VALUES, UPDATE, and ON CONFLICT
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, default-keyword, on-conflict, returning]
+required_capabilities: [create-table, insert, update, select, on-conflict, returning, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE d (id int PRIMARY KEY, a int, g int GENERATED ALWAYS AS (a * 2) STORED);
+  INSERT INTO d (id, a, g) VALUES (1, 10, DEFAULT), (2, 20, DEFAULT)
+steps:
+  - sql: |
+      SELECT id, a, g FROM d ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO d (id, a, g) VALUES (1, 99, DEFAULT)
+      ON CONFLICT (id) DO UPDATE SET a = EXCLUDED.a + 1, g = DEFAULT
+      RETURNING id, a, g
+    expect: rows
+    comment: the conflicting row takes a = 100 and g is recomputed to 200
+  - sql: |
+      INSERT INTO d (id, a, g) VALUES (3, 5, DEFAULT), (4, 6, DEFAULT) RETURNING id, g
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE d SET g = DEFAULT WHERE id = 2 RETURNING id, a, g
+    expect: rows
+    comment: DEFAULT on a plain UPDATE recomputes from the unchanged a
+  - sql: |
+      SELECT id, a, g FROM d ORDER BY id
+    expect: rows
+    order: ordered

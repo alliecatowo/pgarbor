@@ -1,0 +1,42 @@
+# CACHE preallocates values per session: last_value reflects the reserved block, and a reconnect discards unused cached values, leaving holes.
+id: cmd-create-sequence.cache-preallocation-holes
+title: CACHE reserves a block per session, reflected in last_value, and unused cached values are lost on reconnect
+family: cmd-create-sequence
+tier: core
+feature_ids: [create-sequence, cache, last-value, sequence-holes]
+required_capabilities: [sequences, select, reconnect, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#parameters (CACHE) and #notes"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SEQUENCE sq_c CACHE 10
+    expect: ok
+  - sql: |
+      SELECT nextval('sq_c')
+    expect: rows
+    comment: first call returns 1 and reserves 1..10
+  - sql: |
+      SELECT last_value, is_called FROM sq_c
+    expect: rows
+    comment: last_value shows the latest value reserved by any session, 10
+  - sql: |
+      SELECT cache_size FROM pg_sequences WHERE sequencename = 'sq_c'
+    expect: rows
+  - reconnect: true
+    comment: the unused cached values 2..10 are lost with the session
+  - sql: |
+      SELECT nextval('sq_c')
+    expect: rows
+    comment: a new session reserves a fresh block starting at 11, leaving a hole at 2..10
+  - sql: |
+      SELECT last_value, is_called FROM sq_c
+    expect: rows
+  - sql: |
+      CREATE SEQUENCE sq_c1
+    expect: ok
+  - sql: |
+      SELECT cache_size FROM pg_sequences WHERE sequencename = 'sq_c1'
+    expect: rows
+    comment: CACHE defaults to 1

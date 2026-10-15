@@ -1,0 +1,57 @@
+# ARRAY constructors: element type resolution, nesting, empty arrays, the subquery form, and rectangularity errors.
+id: doc-sql-expressions.array-constructors
+title: ARRAY constructors from lists, nested arrays, subqueries and their documented errors
+family: doc-sql-expressions
+tier: core
+feature_ids: [array-constructor, array-types, errors]
+required_capabilities: [select, insert, create-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-array-constructors"
+sessions: [a]
+setup: |
+  CREATE TABLE arr (f1 int4[], f2 int4[]);
+  INSERT INTO arr VALUES (ARRAY[[1,2],[3,4]], ARRAY[[5,6],[7,8]]);
+steps:
+  - sql: |
+      SELECT ARRAY[1,2,3+4] AS a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ARRAY[1,2,22.7]::integer[] AS a
+    expect: rows
+    order: ordered
+    comment: the cast applies to each element, so 22.7 becomes 23
+  - sql: |
+      SELECT ARRAY[ARRAY[1,2], ARRAY[3,4]] = ARRAY[[1,2],[3,4]] AS same
+    expect: rows
+    order: ordered
+    comment: the inner ARRAY keyword may be omitted
+  - sql: |
+      SELECT ARRAY[f1, f2, '{{9,10},{11,12}}'::int4[]] AS a FROM arr
+    expect: rows
+    order: ordered
+    comment: multidimensional elements may be any array of the right kind
+  - sql: |
+      SELECT ARRAY[]::integer[] AS a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ARRAY[] AS a
+    expect: error
+    sqlstate: "42P18"
+    comment: an empty array needs an explicit cast
+  - sql: |
+      SELECT ARRAY[[1,2],[3]]
+    expect: error
+    sqlstate: "2202E"
+    comment: inner constructors must produce sub-arrays of identical dimensions
+  - sql: |
+      SELECT ARRAY(SELECT ARRAY[i, i*2] FROM generate_series(1,5) AS a(i)) AS a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ARRAY(SELECT i FROM generate_series(1,3) i) AS a, array_lower(ARRAY(SELECT i FROM generate_series(1,3) i), 1) AS lb
+    expect: rows
+    order: ordered
+    comment: subscripts of an ARRAY-built value start at one

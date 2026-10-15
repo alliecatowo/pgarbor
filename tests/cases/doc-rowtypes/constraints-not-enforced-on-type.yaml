@@ -1,0 +1,28 @@
+# Documented restriction: a composite type carries no constraints, so a CHECK on a table defined
+# from the same row shape does not apply to a ROW value built outside the table.
+id: doc-rowtypes.constraints-not-enforced-on-type
+title: Table CHECK constraints do not apply to composite values built outside the table
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, check-constraints, row-constructor]
+required_capabilities: [create-table, insert, select, composite-types, row-constructor, constraints]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-declare"
+sessions: [a]
+setup: |
+  CREATE TABLE inventory_item (name text, supplier_id integer, price numeric CHECK (price > 0));
+steps:
+  - sql: |
+      SELECT ROW('x', 1, -1)::inventory_item AS outside_table
+    expect: rows
+    comment: accepted because the composite type has no constraints
+  - sql: |
+      INSERT INTO inventory_item VALUES ('x', 1, -1)
+    expect: error
+    sqlstate: "23514"
+    comment: the same values are rejected by the table's CHECK
+  - sql: |
+      SELECT count(*) FROM inventory_item
+    expect: rows
+    order: multiset

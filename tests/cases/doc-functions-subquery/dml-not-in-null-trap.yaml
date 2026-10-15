@@ -1,0 +1,35 @@
+# NOT IN over a subquery containing NULL inside DELETE and UPDATE, versus the NULL-free rewrite.
+id: doc-functions-subquery.dml-not-in-null-trap
+title: NOT IN against a NULL-containing subquery deletes nothing, while a NULL-free subquery deletes the expected rows
+family: doc-functions-subquery
+tier: core
+feature_ids: [not-in-subquery, delete, update, null-semantics, returning]
+required_capabilities: [create-table, insert, delete, update, subquery, returning]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (NOT IN with NULL)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  CREATE TABLE tab2 (col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+  INSERT INTO tab2 VALUES (10), (10), (NULL);
+steps:
+  - sql: |
+      DELETE FROM tab1 WHERE col2 NOT IN (SELECT col2 FROM tab2) RETURNING col1
+    expect: rows
+    order: multiset
+    comment: the NULL in tab2 makes every NOT IN result non-true, so nothing is deleted
+  - sql: |
+      DELETE FROM tab1 WHERE col2 NOT IN (SELECT col2 FROM tab2 WHERE col2 IS NOT NULL) RETURNING col1
+    expect: rows
+    order: multiset
+    comment: rows 2 and 4 are unequal; row 3 has NULL col2 and survives
+  - sql: |
+      SELECT col1 FROM tab1 ORDER BY col1
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE tab1 SET col2 = 0 WHERE col1 = ANY (SELECT col1 FROM tab1 WHERE col1 > 2) RETURNING col1, col2
+    expect: rows
+    order: multiset

@@ -1,0 +1,47 @@
+# A prefix operator needs a one-argument function and a binary one a two-argument function; a procedure is not usable.
+# FUNCTION and PROCEDURE are interchangeable spellings for the same clause.
+id: cmd-create-operator.arity-and-procedure-keyword
+title: "Operator function arity must match the argument kind, and PROCEDURE is a synonym for FUNCTION"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, prefix-operators, binary-operators, procedure-keyword]
+required_capabilities: [create-operator, create-function-sql, create-procedure, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#description (function arity and PROCEDURE keyword)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_add8(int8, int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 + $2 $$;
+  CREATE FUNCTION cco_inc8(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 + 1 $$;
+  CREATE PROCEDURE cco_proc8(int8, int8) LANGUAGE sql AS $$ SELECT $1 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR !>! (RIGHTARG = int8, FUNCTION = cco_add8)
+    expect: error
+    sqlstate: "42883"
+    comment: prefix operator with a two-argument function
+  - sql: |
+      CREATE OPERATOR !+! (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_inc8)
+    expect: error
+    sqlstate: "42883"
+    comment: binary operator with a one-argument function
+  - sql: |
+      CREATE OPERATOR !#! (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_proc8)
+    expect: error
+    sqlstate: "42883"
+    comment: a procedure is not a function, so it cannot implement an operator
+  - sql: |
+      CREATE OPERATOR !>! (RIGHTARG = int8, PROCEDURE = cco_inc8)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR !+! (LEFTARG = int8, RIGHTARG = int8, FUNCTION = cco_add8)
+    expect: ok
+  - sql: |
+      SELECT oprname, oprkind, oprleft::regtype AS left_t, oprright::regtype AS right_t, oprcode::regproc AS fn
+      FROM pg_operator WHERE oprname IN ('!>!', '!+!', '!#!') AND oprnamespace = 'public'::regnamespace
+      ORDER BY oprname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT !>! 5 AS prefix_result, 2 !+! 3 AS binary_result
+    expect: rows

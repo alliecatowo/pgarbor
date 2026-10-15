@@ -1,0 +1,40 @@
+# Documented search_path example: SET search_path on a procedure applies only during its CALL and
+# RESET restores the caller's path. The body reports the path it sees.
+id: cmd-alter-procedure.search-path-doc-example
+title: ALTER PROCEDURE SET and RESET search_path change what the procedure sees during CALL
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, set-configuration, search-path, call]
+required_capabilities: [create-procedure, call, guc, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Examples: SET search_path; RESET search_path)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE check_password(IN pw text, INOUT r text) LANGUAGE SQL AS $$ SELECT current_setting('search_path') $$;
+steps:
+  - sql: |
+      CALL check_password('secret', NULL)
+    expect: rows
+    comment: default path, "$user", public
+  - sql: |
+      ALTER PROCEDURE check_password(text) SET search_path = admin, pg_temp
+    expect: ok
+  - sql: |
+      SELECT proconfig FROM pg_proc WHERE proname = 'check_password'
+    expect: rows
+  - sql: |
+      CALL check_password('secret', NULL)
+    expect: rows
+    comment: the procedure runs with admin, pg_temp
+  - sql: |
+      ALTER PROCEDURE check_password(text) RESET search_path
+    expect: ok
+  - sql: |
+      SELECT proconfig IS NULL AS none FROM pg_proc WHERE proname = 'check_password'
+    expect: rows
+    comment: expect true
+  - sql: |
+      CALL check_password('secret', NULL)
+    expect: rows
+    comment: back to the caller's path

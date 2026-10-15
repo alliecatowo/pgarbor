@@ -1,0 +1,45 @@
+# Unknown routine names or argument lists give 42883; an unknown schema qualifier gives 3F000.
+# A matching name with a non-matching argument list is also 42883.
+id: cmd-alter-routine.missing-and-qualified-names
+title: ALTER ROUTINE on unknown names, mismatched argument lists and unknown schemas fails with documented SQLSTATEs
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, errors, function-identity]
+required_capabilities: [create-function, create-schema, alter-function, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: name [ ( argtypes ) ])"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION s1.bar(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER ROUTINE nosuch RENAME TO x
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER ROUTINE nosuch(int) RENAME TO x
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER ROUTINE foo(text) RENAME TO bar
+    expect: error
+    sqlstate: "42883"
+    comment: foo exists, but not with a text argument
+  - sql: |
+      ALTER ROUTINE nosch.foo(integer) RENAME TO x
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER ROUTINE s1.nosuch(int) SET SCHEMA public
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER ROUTINE s1.bar(integer) RENAME TO baz
+    expect: ok
+  - sql: |
+      SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname IN ('public', 's1') ORDER BY 1, 2
+    expect: rows
+    order: ordered

@@ -1,0 +1,27 @@
+# The <-> (FOLLOWED BY) operator needs positions: it never matches a stripped vector.
+id: doc-textsearch-features.followed-by-stripped
+title: FOLLOWED BY matches positional vectors but never stripped ones
+family: doc-textsearch-features
+tier: core
+feature_ids: [followed-by, strip, match-operator, tsquery-phrase]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-manipulate-tsvector"
+steps:
+  - sql: |
+      SELECT to_tsquery('english', 'fat') <-> to_tsquery('english', 'cat | rat') AS q
+    expect: rows
+    order: ordered
+    comment: documented example, rendered with the parenthesised OR group
+  - sql: |
+      SELECT to_tsvector('english', 'fat cats') @@ (to_tsquery('english', 'fat') <-> to_tsquery('english', 'cat')) AS adjacent_hit,
+             to_tsvector('english', 'cats fat') @@ (to_tsquery('english', 'fat') <-> to_tsquery('english', 'cat')) AS reversed_miss
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT strip(to_tsvector('english', 'fat cats')) @@ (to_tsquery('english', 'fat') <-> to_tsquery('english', 'cat')) AS stripped_never_matches,
+             strip(to_tsvector('english', 'fat cats')) @@ (to_tsquery('english', 'fat') && to_tsquery('english', 'cat')) AS stripped_and_matches
+    expect: rows
+    order: ordered
+    comment: plain AND still works on stripped input, FOLLOWED BY does not

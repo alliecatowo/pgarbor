@@ -1,0 +1,45 @@
+# ALTER COLUMN SET STORAGE / SET COMPRESSION: valid methods apply, invalid ones fail, fixed-width types only allow PLAIN.
+id: cmd-alter-materialized-view.storage-and-compression
+title: "ALTER COLUMN SET STORAGE and SET COMPRESSION accept valid values and reject invalid ones"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, storage, compression]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (SET STORAGE / SET COMPRESSION)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_sc_base (id int4, body text);
+  INSERT INTO amv_sc_base VALUES (1, 'x');
+  CREATE MATERIALIZED VIEW amv_sc_mv AS SELECT id, body FROM amv_sc_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_sc_mv ALTER COLUMN body SET STORAGE EXTERNAL
+    expect: ok
+  - sql: |
+      SELECT attstorage FROM pg_attribute WHERE attrelid = 'amv_sc_mv'::regclass AND attname = 'body'
+    expect: rows
+    order: ordered
+    comment: "e means EXTERNAL"
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_sc_mv ALTER COLUMN id SET STORAGE EXTERNAL
+    expect: error
+    sqlstate: "0A000"
+    comment: int4 only supports PLAIN storage
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_sc_mv ALTER COLUMN body SET STORAGE bogus
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_sc_mv ALTER COLUMN body SET COMPRESSION pglz
+    expect: ok
+  - sql: |
+      SELECT attcompression FROM pg_attribute WHERE attrelid = 'amv_sc_mv'::regclass AND attname = 'body'
+    expect: rows
+    order: ordered
+    comment: "p means pglz"
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_sc_mv ALTER COLUMN body SET COMPRESSION bogus
+    expect: error
+    sqlstate: "22023"

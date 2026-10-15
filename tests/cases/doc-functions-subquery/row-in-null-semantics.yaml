@@ -1,0 +1,31 @@
+# Row-constructor IN and NOT IN (row-wise comparison with NULL per member).
+id: doc-functions-subquery.row-in-null-semantics
+title: Row constructor IN and NOT IN combine per-member NULLs as documented
+family: doc-functions-subquery
+tier: core
+feature_ids: [in-subquery, not-in-subquery, row-constructor, null-semantics]
+required_capabilities: [create-table, insert, select, subquery, row-constructor]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (row_constructor IN, row_constructor NOT IN)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+steps:
+  - sql: |
+      SELECT (1, NULL::int) IN (VALUES (1, 2), (1, NULL)) AS f, (1, NULL::int) IN (VALUES (2, 2)) AS g, (1, 2) NOT IN (VALUES (1, 2), (3, NULL)) AS h
+    expect: rows
+    comment: a row with an unknown member and no definite equal row is NULL; an exactly equal row makes IN true
+  - sql: |
+      SELECT (1, NULL::int) NOT IN (VALUES (2, NULL::int)) AS rn1, (1, NULL::int) NOT IN (VALUES (1, 2)) AS rn2
+    expect: rows
+    comment: rows that are definitely unequal on one member are unequal overall, so NOT IN is true
+  - sql: |
+      SELECT (1, 10) IN (SELECT col1, col2 FROM tab1) AS hit, (2, NULL::int) IN (SELECT col1, col2 FROM tab1) AS unknown_row, (9, 9) IN (SELECT col1, col2 FROM tab1) AS miss
+    expect: rows
+    comment: unknown rows with no definite match give NULL
+  - sql: |
+      SELECT (1, 2) IN (SELECT col1, col2 FROM tab1 WHERE col1 > 100) AS empty_in, (1, 2) NOT IN (SELECT col1, col2 FROM tab1 WHERE col1 > 100) AS empty_notin
+    expect: rows
+    comment: empty subquery gives false for IN and true for NOT IN

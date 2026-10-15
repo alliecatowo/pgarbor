@@ -1,0 +1,45 @@
+# ROLLBACK TO SAVEPOINT cancels SET and SET LOCAL executed after the savepoint, but keeps earlier ones.
+id: cmd-set.savepoint-rollback
+title: ROLLBACK TO SAVEPOINT cancels SET and SET LOCAL made after the savepoint
+family: cmd-set
+tier: core
+feature_ids: [set, set-local, savepoints, transactions]
+required_capabilities: [select, guc, savepoints, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/set.sgml#sql-set (Description: canceled by rolling back to a savepoint)"
+sessions: [a]
+steps:
+  - sql: |
+      SET work_mem = '4MB'
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET work_mem = '8MB'
+    expect: ok
+  - sql: |
+      SAVEPOINT s1
+    expect: ok
+  - sql: |
+      SET work_mem = '9MB'; SET LOCAL work_mem = '10MB'
+    expect: ok
+  - sql: |
+      SELECT current_setting('work_mem') AS before_rollback_to
+    expect: rows
+    comment: 10MB
+  - sql: |
+      ROLLBACK TO SAVEPOINT s1
+    expect: ok
+  - sql: |
+      SELECT current_setting('work_mem') AS after_rollback_to
+    expect: rows
+    comment: 8MB, the value set before the savepoint
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_setting('work_mem') AS after_commit
+    expect: rows
+    comment: 8MB

@@ -1,0 +1,48 @@
+# SECURITY DEFINER and EXTERNAL SECURITY INVOKER toggle prosecdef; a second SECURITY option in the
+# same statement is rejected and leaves the setting unchanged.
+id: cmd-alter-procedure.security-definer-toggle
+title: SECURITY DEFINER and SECURITY INVOKER toggle prosecdef; conflicting SECURITY options are rejected
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, security-definer, security-invoker]
+required_capabilities: [create-procedure, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Parameters: EXTERNAL SECURITY INVOKER / DEFINER)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE sec_p(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE sec_p(integer) SECURITY DEFINER
+    expect: ok
+  - sql: |
+      SELECT prosecdef FROM pg_proc WHERE proname = 'sec_p'
+    expect: rows
+    comment: expect true
+  - sql: |
+      ALTER PROCEDURE sec_p(integer) EXTERNAL SECURITY INVOKER
+    expect: ok
+  - sql: |
+      SELECT prosecdef FROM pg_proc WHERE proname = 'sec_p'
+    expect: rows
+    comment: expect false
+  - sql: |
+      ALTER PROCEDURE sec_p(integer) SECURITY DEFINER SECURITY DEFINER
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      ALTER PROCEDURE sec_p(integer) SECURITY INVOKER SECURITY DEFINER
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT prosecdef FROM pg_proc WHERE proname = 'sec_p'
+    expect: rows
+    comment: still false after the rejected statements
+  - sql: |
+      ALTER PROCEDURE sec_p(integer) EXTERNAL SECURITY DEFINER SET search_path = admin, pg_temp
+    expect: ok
+  - sql: |
+      SELECT prosecdef FROM pg_proc WHERE proname = 'sec_p'
+    expect: rows
+    comment: expect true

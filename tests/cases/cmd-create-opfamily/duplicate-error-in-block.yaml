@@ -1,0 +1,36 @@
+# A duplicate CREATE OPERATOR FAMILY inside a transaction block aborts the block; ROLLBACK leaves the original family intact.
+id: cmd-create-opfamily.duplicate-error-in-block
+title: Duplicate family inside a transaction block fails with 42710 and aborts the block
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, errors, transactions, name-uniqueness]
+required_capabilities: [create-operator-family, catalog-introspection, errors, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: same-name rule per index method)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cof_blk USING btree
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY cof_blk USING btree
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT count(*) FROM pg_opfamily WHERE opfname = 'cof_blk'
+    expect: error
+    sqlstate: "25P02"
+    comment: the failed statement puts the block in the aborted state
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opfamily WHERE opfname = 'cof_blk'
+    expect: rows
+    comment: the setup family is still the only one
+  - sql: |
+      DROP OPERATOR FAMILY cof_blk USING btree
+    expect: ok

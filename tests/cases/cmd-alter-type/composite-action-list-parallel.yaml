@@ -1,0 +1,40 @@
+# Several ADD, DROP and ALTER ATTRIBUTE actions in one ALTER TYPE apply together; if any fails, none of them take effect.
+id: cmd-alter-type.composite-action-list-parallel
+title: "Comma-separated ALTER TYPE actions on a composite apply in one command, all or nothing"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, composite-type, alter-attribute-type, action-list]
+required_capabilities: [create-type, alter-type, composite-type, select, order-by]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (ADD ATTRIBUTE, DROP ATTRIBUTE and ALTER ATTRIBUTE actions can be combined into a list of multiple alterations to apply in parallel)"
+sessions: [a]
+setup: |
+  CREATE TYPE compfoo AS (f1 int, f2 text);
+steps:
+  - sql: |
+      ALTER TYPE compfoo ALTER ATTRIBUTE f1 TYPE text, ADD ATTRIBUTE f4 int, DROP ATTRIBUTE f2
+    expect: ok
+    comment: documented list form, three actions in one command
+  - sql: |
+      SELECT ROW('7', 9)::compfoo
+    expect: rows
+    comment: the converted f1 accepts text input
+  - sql: |
+      SELECT attname, format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'compfoo'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TYPE compfoo ALTER ATTRIBUTE f4 SET DATA TYPE bigint
+    expect: ok
+    comment: SET DATA is an optional keyword
+  - sql: |
+      ALTER TYPE compfoo ADD ATTRIBUTE f5 int, DROP ATTRIBUTE nosuch
+    expect: error
+    sqlstate: "42703"
+    comment: the failing second action rolls back the first
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'compfoo'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: f5 was not added

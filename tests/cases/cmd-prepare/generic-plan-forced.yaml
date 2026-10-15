@@ -1,0 +1,37 @@
+# plan_cache_mode = force_generic_plan: every execution uses the generic plan, counted in pg_prepared_statements.
+id: cmd-prepare.generic-plan-forced
+title: force_generic_plan makes every EXECUTE use the generic plan
+family: cmd-prepare
+tier: extended
+feature_ids: [prepare, execute, plan-cache-mode, generic-plan, prepared-statements]
+required_capabilities: [create-table, select, prepared-statements, guc, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/prepare.sgml#sql-prepare-notes (generic and custom plans, plan_cache_mode)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (a int, b text)
+steps:
+  - sql: |
+      SET plan_cache_mode = force_generic_plan
+    expect: ok
+  - sql: |
+      PREPARE g (int) AS SELECT count(*) FROM foo WHERE a = $1
+    expect: ok
+  - sql: |
+      EXECUTE g(1)
+    expect: rows
+  - sql: |
+      EXECUTE g(2)
+    expect: rows
+  - sql: |
+      EXECUTE g(3)
+    expect: rows
+  - sql: |
+      SELECT name, generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'g'
+    expect: rows
+    order: ordered
+    comment: three generic executions and no custom plans
+  - sql: |
+      RESET plan_cache_mode
+    expect: ok

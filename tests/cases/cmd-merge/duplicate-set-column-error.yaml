@@ -1,0 +1,30 @@
+# A column may not be named twice in one UPDATE SET list; the statement fails without partial effect.
+id: cmd-merge.duplicate-set-column-error
+title: MERGE rejects a column assigned twice in one UPDATE SET list with no partial effect
+family: cmd-merge
+tier: core
+feature_ids: [merge, update, syntax-restriction, errors]
+required_capabilities: [create-table, insert, select, update, merge]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (merge_update: column names may not be specified more than once)"
+setup: |
+  CREATE TABLE tgt (id integer PRIMARY KEY, a integer);
+  CREATE TABLE src (id integer, v integer);
+  INSERT INTO tgt VALUES (1, 10);
+  INSERT INTO src VALUES (1, 5);
+steps:
+  - sql: |
+      MERGE INTO tgt t
+      USING src s
+      ON t.id = s.id
+      WHEN MATCHED THEN
+        UPDATE SET a = 1, a = 2
+    expect: error
+    sqlstate: "42601"
+    comment: multiple assignments to same column "a"
+  - sql: |
+      SELECT id, a FROM tgt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect (1,10) unchanged

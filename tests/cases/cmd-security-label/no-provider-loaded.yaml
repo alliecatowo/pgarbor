@@ -1,0 +1,32 @@
+# With no label provider loaded, SECURITY LABEL fails with 22023 for IS 'label' and IS NULL alike, and leaves no label rows behind.
+id: cmd-security-label.no-provider-loaded
+title: SECURITY LABEL without any loaded provider raises 22023 and stores nothing
+family: cmd-security-label
+tier: core
+feature_ids: [security-label, security-label-provider, security-label-null]
+required_capabilities: [security-label, create-table, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-description; ref/security_label.sgml#sql-security-label-params-provider"
+sessions: [a]
+setup: |
+  CREATE TABLE sl_items (id int4 PRIMARY KEY, label text);
+  INSERT INTO sl_items VALUES (1, 'a'), (2, 'b');
+steps:
+  - sql: |
+      SECURITY LABEL ON TABLE sl_items IS 'system_u:object_r:sepgsql_table_t:s0'
+    expect: error
+    sqlstate: "22023"
+    comment: provider may be omitted only when exactly one provider is loaded; zero loaded is an error
+  - sql: |
+      SECURITY LABEL ON TABLE sl_items IS NULL
+    expect: error
+    sqlstate: "22023"
+    comment: NULL drops a label, but the provider check still runs first
+  - sql: |
+      SELECT count(*) AS label_rows FROM pg_seclabels
+    expect: rows
+  - sql: |
+      SELECT id, label FROM sl_items ORDER BY id
+    expect: rows
+    order: ordered

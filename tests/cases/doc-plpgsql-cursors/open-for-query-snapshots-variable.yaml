@@ -1,0 +1,30 @@
+# OPEN FOR query substitutes PL/pgSQL variables at OPEN time; later assignments do not affect the cursor.
+id: doc-plpgsql-cursors.open-for-query-snapshots-variable
+title: OPEN FOR query captures variable values at OPEN time
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, open-for-query, variable-substitution]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION open_then_change_var() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c refcursor;
+    v int := 1;
+    r text;
+  BEGIN
+    OPEN c FOR SELECT name FROM items WHERE grp = v ORDER BY id;
+    v := 2;
+    FETCH c INTO r;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT open_then_change_var()
+    expect: rows
+    comment: the query was bound to grp = 1 at OPEN, so the first row is from group 1

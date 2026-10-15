@@ -1,0 +1,53 @@
+# Documented JSON_QUERY: wrapper modes, quote handling, RETURNING types, and ON EMPTY / ON ERROR options.
+id: doc-functions-json.sql-json-json-query
+title: JSON_QUERY wrapper, quote, RETURNING and ON EMPTY/ON ERROR behavior
+family: doc-functions-json
+tier: core
+feature_ids: [sql-json-query-functions, json-query, json-wrapper, json-quotes, json-on-empty, json-on-error]
+required_capabilities: [select, jsonb, jsonpath, json-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-sqljson-query (JSON_QUERY)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT JSON_QUERY(jsonb '[1,[2,3],null]', 'lax $[*][$off]' PASSING 1 AS off WITH CONDITIONAL WRAPPER) AS documented_cond_wrap,
+             JSON_QUERY(jsonb '{"a": "[1, 2]"}', 'lax $.a' OMIT QUOTES) AS omit_quotes
+    expect: rows
+    comment: "documented examples"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '{"a": "x"}', 'lax $.a') AS default_string_quoted,
+             JSON_QUERY(jsonb '{"a": "x"}', 'lax $.a' KEEP QUOTES) AS keep_quotes,
+             JSON_QUERY(jsonb '{"a": "x"}', 'lax $.a' OMIT QUOTES) AS omit_quotes_scalar
+    expect: rows
+    comment: "a scalar string is quoted by default"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '{"a": [1,2]}', 'lax $.a' WITH WRAPPER) AS uncond_wrap,
+             JSON_QUERY(jsonb '{"a": [1,2]}', 'lax $.a' WITH UNCONDITIONAL WRAPPER) AS uncond_explicit,
+             JSON_QUERY(jsonb '{"a": [1,2]}', 'lax $.a' WITHOUT WRAPPER) AS no_wrap_single
+    expect: rows
+    comment: "WITH WRAPPER means unconditional; a single item is returned as-is without WRAPPER"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '{"a": [1,2]}', 'lax $.a[*]' WITHOUT WRAPPER ERROR ON ERROR) AS multi_no_wrap
+    expect: error
+    sqlstate: "22034"
+    comment: "documented: multiple results with WITHOUT WRAPPER is an error"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '{"a": 1, "b": 2}', 'lax $.a[*]' WITH CONDITIONAL WRAPPER) AS conditional_one,
+             JSON_QUERY(jsonb '{"a": 1}', 'lax $.zz') AS empty_default_null,
+             JSON_QUERY(jsonb '{"a": 1}', 'lax $.zz' EMPTY ARRAY ON EMPTY) AS empty_array,
+             JSON_QUERY(jsonb '{"a": 1}', 'lax $.zz' EMPTY OBJECT ON EMPTY) AS empty_object
+    expect: rows
+  - sql: |
+      SELECT JSON_QUERY(jsonb '{"a": 1}', 'lax $.zz' ERROR ON EMPTY) AS empty_error
+    expect: error
+    sqlstate: "22035"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '{"a": "[1, 2]"}', 'lax $.a' RETURNING int[] OMIT QUOTES ERROR ON ERROR) AS bad_array_literal
+    expect: error
+    sqlstate: "22P02"
+    comment: "documented: the text cannot be coerced to int[], the error is malformed array literal"
+  - sql: |
+      SELECT JSON_QUERY(jsonb '{"a": null}', 'lax $.a') AS json_null_returned
+    expect: rows
+    comment: "JSON_QUERY returns a JSON null as the JSON value null, unlike JSON_VALUE"

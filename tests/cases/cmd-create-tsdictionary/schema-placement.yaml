@@ -1,0 +1,32 @@
+# A dictionary is created in the schema named in the command, else in the current schema; the same name may exist in two schemas.
+id: cmd-create-tsdictionary.schema-placement
+title: "Dictionary lands in the named or current schema; same name allowed in two schemas"
+family: cmd-create-tsdictionary
+tier: core
+feature_ids: [create-text-search-dictionary, schema-qualified-name, search-path]
+required_capabilities: [create-text-search-dictionary, text-search, create-schema, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsdictionary.sgml#sql-createtsdictionary (Description; Parameters: name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA tsd_a;
+  CREATE SCHEMA tsd_b;
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY tsd_a.same_name (TEMPLATE = simple)
+    expect: ok
+  - sql: |
+      SET search_path = tsd_b, public;
+      CREATE TEXT SEARCH DICTIONARY same_name (TEMPLATE = simple);
+      SET search_path = public
+    expect: ok
+    comment: unqualified name goes to the first schema on search_path
+  - sql: |
+      SELECT n.nspname, d.dictname FROM pg_ts_dict d JOIN pg_namespace n ON n.oid = d.dictnamespace WHERE d.dictname = 'same_name' ORDER BY n.nspname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ts_lexize('tsd_a.same_name', 'Word'), ts_lexize('tsd_b.same_name', 'Word')
+    expect: rows
+    comment: schema-qualified lookup reaches each definition

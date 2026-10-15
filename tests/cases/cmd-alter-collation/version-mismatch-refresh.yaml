@@ -1,0 +1,31 @@
+# Quarantined: the documented version-mismatch flow needs the OS collation version to change, which an isolated database cannot do.
+id: cmd-alter-collation.version-mismatch-refresh
+title: "REFRESH VERSION clears a recorded collation version mismatch"
+family: cmd-alter-collation
+tier: extended
+feature_ids: [alter-collation, refresh-version, collation-version, icu-collation]
+required_capabilities: [create-collation, alter-collation, icu-provider, catalog-introspection, pg-describe-object, catalog-writes]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_collation.sgml#sql-altercollation-notes (version mismatch warning and mismatch query)"
+quarantine:
+  reason: "Simulates an OS collation version change by UPDATE of pg_collation.collversion. The oracle allows it, but PGArbor exposes no user catalog writes, and a single isolated database cannot change the real library version. Revisit when a catalog-write or fixture-injection capability exists."
+sessions: [a]
+setup: |
+  CREATE COLLATION cmd_vm (provider = icu, locale = 'und-x-icu');
+  UPDATE pg_collation SET collversion = '1.2.3.4' WHERE collname = 'cmd_vm';
+steps:
+  - sql: |
+      SELECT count(*) FROM pg_depend d JOIN pg_collation c
+        ON refclassid = 'pg_collation'::regclass AND refobjid = c.oid
+        WHERE c.collversion <> pg_collation_actual_version(c.oid)
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER COLLATION cmd_vm REFRESH VERSION
+    expect: ok
+    comment: NOTICE "changing version from 1.2.3.4 to ..."; the stored version is replaced with the actual one
+  - sql: |
+      SELECT count(*) FROM pg_collation WHERE collname = 'cmd_vm' AND collversion IS NOT DISTINCT FROM pg_collation_actual_version(oid)
+    expect: rows
+    order: ordered

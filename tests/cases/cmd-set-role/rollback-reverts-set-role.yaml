@@ -1,0 +1,50 @@
+# SET ROLE is transactional: a rolled-back transaction reverts it, while a committed one keeps it.
+id: cmd-set-role.rollback-reverts-set-role
+title: SET ROLE inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-set-role
+tier: core
+feature_ids: [set-role, transactions, rollback, commit]
+required_capabilities: [roles, set-role, transactions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#compatibility (SET ROLE is allowed inside a transaction in PostgreSQL)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_rb_r
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET ROLE sr_rb_r
+    expect: ok
+  - sql: |
+      SELECT current_user = 'sr_rb_r' AS in_tx
+    expect: rows
+    order: ordered
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT current_user = session_user AS rolled_back
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET ROLE sr_rb_r
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_user = 'sr_rb_r' AS committed
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP ROLE sr_rb_r
+    expect: ok

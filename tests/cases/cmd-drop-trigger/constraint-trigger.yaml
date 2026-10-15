@@ -1,0 +1,52 @@
+# A constraint trigger is an ordinary trigger for DROP TRIGGER: once dropped, its deferred firing at COMMIT no longer happens.
+id: cmd-drop-trigger.constraint-trigger
+title: "DROP TRIGGER drops a deferrable constraint trigger so that it no longer fires at COMMIT"
+family: cmd-drop-trigger
+tier: extended
+feature_ids: [drop-trigger, constraint-triggers, deferred-constraints, triggers, transactions]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, constraints, transactions, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger; doc/src/sgml/ref/create_trigger.sgml (CONSTRAINT, DEFERRABLE)"
+sessions: [a]
+setup: |
+  CREATE TABLE trg_log (tg text);
+  CREATE FUNCTION ct_tg() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME);
+    RETURN NULL;
+  END
+  $$;
+  CREATE TABLE t (id int4);
+  CREATE CONSTRAINT TRIGGER ct AFTER INSERT ON t DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ct_tg();
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: the deferred constraint trigger fires at commit
+  - sql: |
+      SELECT count(*) AS n FROM trg_log
+    expect: rows
+  - sql: |
+      DROP TRIGGER ct ON t
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: no constraint trigger remains to fire
+  - sql: |
+      SELECT count(*) AS n FROM trg_log
+    expect: rows
+    comment: the count is unchanged after the drop

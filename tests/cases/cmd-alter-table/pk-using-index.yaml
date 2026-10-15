@@ -1,0 +1,44 @@
+# The documented recreate-primary-key recipe: build a unique index concurrently, then swap it in with ADD CONSTRAINT ... USING INDEX.
+id: cmd-alter-table.pk-using-index
+title: "ADD PRIMARY KEY USING INDEX swaps in a prebuilt unique index; a second primary key is refused"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, primary-key, using-index, create-index-concurrently, errors]
+required_capabilities: [create-table, create-index, alter-table, insert, select, constraints, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: recreate a primary key without blocking updates)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (dist_id int4 NOT NULL, zipcode text);
+  ALTER TABLE distributors ADD PRIMARY KEY (dist_id);
+  INSERT INTO distributors VALUES (1, '12345'), (2, '54321');
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX CONCURRENTLY dist_id_temp_idx ON distributors (dist_id)
+    expect: ok
+  - sql: |
+      ALTER TABLE distributors DROP CONSTRAINT distributors_pkey, ADD CONSTRAINT distributors_pkey PRIMARY KEY USING INDEX dist_id_temp_idx
+    expect: notice
+    comment: the index is renamed to distributors_pkey
+  - sql: |
+      SELECT conname, contype FROM pg_constraint WHERE conrelid = 'distributors'::regclass AND contype = 'p' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'distributors' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE distributors ADD PRIMARY KEY (zipcode)
+    expect: error
+    sqlstate: "42P16"
+    comment: a table can have only one primary key
+  - sql: |
+      INSERT INTO distributors VALUES (NULL, '00000')
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      SELECT dist_id, zipcode FROM distributors ORDER BY dist_id
+    expect: rows
+    order: ordered

@@ -1,0 +1,46 @@
+# RENAME COLUMN and RENAME share a form (COLUMN is optional); duplicate target is 42701, unknown source is 42703.
+id: cmd-alter-view.rename-column-forms
+title: "ALTER VIEW RENAME [COLUMN] renames view columns and rejects duplicates and unknown columns"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, rename-column, error-handling]
+required_capabilities: [create-table, insert, select, create-view, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (RENAME [ COLUMN ] column_name TO new_column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_rc (a int4, b int4);
+  INSERT INTO av_rc VALUES (1, 2);
+  CREATE VIEW av_rcv AS SELECT a, b FROM av_rc;
+steps:
+  - sql: |
+      ALTER VIEW av_rcv RENAME COLUMN a TO x
+    expect: ok
+  - sql: |
+      ALTER VIEW av_rcv RENAME b TO y
+    expect: ok
+    comment: the COLUMN keyword is optional
+  - sql: |
+      SELECT x, y FROM av_rcv ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM av_rcv
+    expect: error
+    sqlstate: "42703"
+    comment: the old column name no longer exists in the view
+  - sql: |
+      ALTER VIEW av_rcv RENAME COLUMN x TO y
+    expect: error
+    sqlstate: "42701"
+    comment: y is already a column of the view
+  - sql: |
+      ALTER VIEW av_rcv RENAME COLUMN nosuch TO z
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      SELECT a, b FROM av_rc ORDER BY a
+    expect: rows
+    order: ordered
+    comment: renaming view columns does not touch the base table

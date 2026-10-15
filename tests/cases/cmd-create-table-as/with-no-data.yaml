@@ -1,0 +1,42 @@
+# WITH NO DATA creates the structure only: zero rows, same column names and types as the query.
+id: cmd-create-table-as.with-no-data
+title: WITH NO DATA creates an empty table with the query's column names and types
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, with-no-data]
+required_capabilities: [create-table-as, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (WITH [ NO ] DATA)"
+sessions: [a]
+setup: |
+  CREATE TABLE src (k int4, v numeric(8,2), label varchar(10));
+  INSERT INTO src VALUES (1, 1.50, 'a'), (2, 2.25, 'b');
+steps:
+  - sql: |
+      CREATE TABLE src_empty AS SELECT k, v, label FROM src WITH NO DATA
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM src_empty
+    expect: rows
+    comment: zero rows despite the query matching two
+  - sql: |
+      SELECT a.attname, format_type(a.atttypid, a.atttypmod) AS typ
+      FROM pg_attribute a WHERE a.attrelid = 'src_empty'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+      ORDER BY a.attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO src_empty VALUES (9, 9.99, 'z')
+    expect: ok
+  - sql: |
+      SELECT k, v, label FROM src_empty ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE src_default AS SELECT k FROM src
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM src_default
+    expect: rows
+    comment: default is WITH DATA

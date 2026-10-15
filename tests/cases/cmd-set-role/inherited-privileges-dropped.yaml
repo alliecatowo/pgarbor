@@ -1,0 +1,69 @@
+# SET ROLE drops inherited privileges of the session user unless the target role itself holds them; SET ROLE does not restrict later SET ROLE targets.
+id: cmd-set-role.inherited-privileges-dropped
+title: SET ROLE to a role without the admin privilege drops inherited table access, and RESET ROLE restores it
+family: cmd-set-role
+tier: core
+feature_ids: [set-role, inherit, role-membership, privileges, select, errors]
+required_capabilities: [roles, set-role, grant, session-authorization, tables, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#notes (WITH INHERIT TRUE: SET ROLE effectively drops all privileges except those the target role directly possesses or inherits)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_inh_mem LOGIN;
+  CREATE ROLE sr_inh_admin;
+  CREATE ROLE sr_inh_low;
+  GRANT sr_inh_admin TO sr_inh_mem WITH INHERIT TRUE, SET TRUE;
+  GRANT sr_inh_low TO sr_inh_mem WITH INHERIT TRUE, SET TRUE;
+  CREATE TABLE sr_inh_admin_tbl (id int4);
+  CREATE TABLE sr_inh_low_tbl (id int4);
+  ALTER TABLE sr_inh_admin_tbl OWNER TO sr_inh_admin;
+  ALTER TABLE sr_inh_low_tbl OWNER TO sr_inh_low;
+  INSERT INTO sr_inh_admin_tbl VALUES (1);
+  INSERT INTO sr_inh_low_tbl VALUES (2)
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION sr_inh_mem
+    expect: ok
+  - sql: |
+      SELECT id FROM sr_inh_admin_tbl
+    expect: rows
+    order: ordered
+    comment: inherited through sr_inh_admin (INHERIT TRUE)
+  - sql: |
+      SET ROLE sr_inh_low
+    expect: ok
+  - sql: |
+      SELECT id FROM sr_inh_low_tbl
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM sr_inh_admin_tbl
+    expect: error
+    sqlstate: "42501"
+    comment: sr_inh_low does not hold sr_inh_admin privileges, so the inherited access is dropped
+  - sql: |
+      SET ROLE sr_inh_admin
+    expect: ok
+    comment: the session user still holds the SET option on sr_inh_admin, so switching to it is allowed
+  - sql: |
+      SELECT id FROM sr_inh_admin_tbl
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id FROM sr_inh_admin_tbl
+    expect: rows
+    order: ordered
+    comment: RESET ROLE returns to the session user with its inherited privileges
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      DROP TABLE sr_inh_admin_tbl, sr_inh_low_tbl
+    expect: ok
+  - sql: |
+      DROP ROLE sr_inh_mem, sr_inh_admin, sr_inh_low
+    expect: ok

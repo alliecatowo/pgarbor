@@ -1,0 +1,31 @@
+# VALUES as a FROM source in UPDATE ... FROM and in a join with a table, with an explicit alias and column list.
+# Documented films/studio example and the employees salary example.
+id: cmd-values.update-from-values-join
+title: VALUES used as a join source in UPDATE FROM and SELECT with an alias and column list
+family: cmd-values
+tier: core
+feature_ids: [values, update, join, from-clause-subquery]
+required_capabilities: [create-table, values, insert, update, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/values.sgml#sql-values (Examples: VALUES in FROM; UPDATE employees ... FROM (VALUES ...))"
+sessions: [a]
+setup: |
+  CREATE TABLE employees (depno int, empname text, sales int, salary numeric(10,0));
+  INSERT INTO employees VALUES (1, 'ann', 250000, 100000), (1, 'bob', 150000, 100000), (2, 'cy', 500000, 100000), (3, 'dee', 500000, 50000);
+  CREATE TABLE films (code text, studio text, kind text);
+  INSERT INTO films VALUES ('F1', 'MGM', 'Horror'), ('F2', 'UA', 'Sci-Fi'), ('F3', 'MGM', 'Sci-Fi'), ('F4', 'UA', 'Sci-Fi');
+steps:
+  - sql: |
+      SELECT f.code FROM films f, (VALUES ('MGM', 'Horror'), ('UA', 'Sci-Fi')) AS t (studio, kind) WHERE f.studio = t.studio AND f.kind = t.kind ORDER BY f.code
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE employees SET salary = salary * v.increase FROM (VALUES (1, 200000, 1.2), (2, 400000, 1.4)) AS v (depno, target, increase) WHERE employees.depno = v.depno AND employees.sales >= v.target
+    expect: ok
+    comment: only rows with sales >= target in matching departments are updated
+  - sql: |
+      SELECT depno, empname, salary FROM employees ORDER BY empname
+    expect: rows
+    order: ordered
+    comment: ann and bob in depno 1 are updated only if sales >= 200000 (ann only); cy in depno 2 updated; dee unmatched

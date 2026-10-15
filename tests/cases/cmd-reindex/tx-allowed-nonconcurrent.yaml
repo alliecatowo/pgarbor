@@ -1,0 +1,30 @@
+# Plain REINDEX INDEX and REINDEX TABLE (with or without TABLESPACE) may run inside a transaction block.
+id: cmd-reindex.tx-allowed-nonconcurrent
+title: Non-concurrent REINDEX INDEX and REINDEX TABLE are allowed inside a transaction block
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-index, reindex-table, transactions]
+required_capabilities: [create-table, create-index, insert, select, reindex, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: INDEX, TABLE; Rebuilding Indexes Concurrently: a regular REINDEX can be performed within a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE tx_t (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX tx_t_v ON tx_t (v);
+  INSERT INTO tx_t VALUES (1, 5), (2, 6);
+steps:
+  - sql: |
+      BEGIN; REINDEX INDEX tx_t_v; REINDEX TABLE tx_t; REINDEX (TABLESPACE pg_default) INDEX tx_t_v; COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, v FROM tx_t WHERE v = 6
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN; REINDEX TABLE tx_t; ROLLBACK
+    expect: ok
+    comment: a rolled-back REINDEX leaves the table usable
+  - sql: |
+      SELECT count(*) AS n FROM tx_t
+    expect: rows

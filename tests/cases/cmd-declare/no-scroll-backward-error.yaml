@@ -1,0 +1,32 @@
+id: cmd-declare.no-scroll-backward-error
+title: NO SCROLL cursor rejects backward fetches
+family: cmd-declare
+tier: core
+feature_ids: [declare-cursor, no-scroll, fetch-backward, errors]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare (Parameters: NO SCROLL; Notes: NO SCROLL disallows backward fetches)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c NO SCROLL CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      FETCH 2 FROM c
+    expect: rows
+    order: ordered
+  - sql: |
+      FETCH BACKWARD 1 FROM c
+    expect: error
+    sqlstate: "55000"
+    comment: backward fetch is disallowed, even though the plan could support it
+  - sql: |
+      ROLLBACK
+    expect: ok

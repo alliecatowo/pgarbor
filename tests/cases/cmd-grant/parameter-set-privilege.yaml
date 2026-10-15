@@ -1,0 +1,56 @@
+# GRANT SET ON PARAMETER lets a non-superuser change a superuser-only setting; unknown parameters fail with 42704.
+id: cmd-grant.parameter-set-privilege
+title: GRANT SET ON PARAMETER allows a role to set a superuser-only parameter and unknown parameters fail with 42704
+family: cmd-grant
+tier: extended
+feature_ids: [grant, configuration-parameters, set, privileges, errors]
+required_capabilities: [roles, set, show, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-objects (SET and ALTER SYSTEM on PARAMETER)"
+sessions: [a]
+notes: ALTER SYSTEM is not exercised because it writes postgresql.auto.conf. log_statement is used because it is superuser-settable by default.
+setup: |
+  CREATE ROLE cgg_prm_r;
+steps:
+  - sql: |
+      SELECT has_parameter_privilege('cgg_prm_r', 'log_statement', 'SET') AS before_grant
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE cgg_prm_r
+    expect: ok
+  - sql: |
+      SET log_statement = 'ddl'
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT SET ON PARAMETER log_statement TO cgg_prm_r
+    expect: ok
+  - sql: |
+      SELECT has_parameter_privilege('cgg_prm_r', 'log_statement', 'SET') AS after_grant
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE cgg_prm_r
+    expect: ok
+  - sql: |
+      SET log_statement = 'ddl'
+    expect: ok
+  - sql: |
+      SHOW log_statement
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      RESET log_statement
+    expect: ok
+  - sql: |
+      GRANT SET ON PARAMETER cgg_no_such_param TO cgg_prm_r
+    expect: error
+    sqlstate: "42704"

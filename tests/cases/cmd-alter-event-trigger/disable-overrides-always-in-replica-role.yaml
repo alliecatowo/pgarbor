@@ -1,0 +1,33 @@
+# DISABLE wins over every replication-role setting: a disabled trigger does not fire even with ALWAYS-style roles.
+id: cmd-alter-event-trigger.disable-overrides-always-in-replica-role
+title: Disabled event trigger does not fire in replica role, even after ENABLE ALWAYS
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard ENABLE ALWAYS
+    expect: ok
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard DISABLE
+    expect: ok
+  - sql: |
+      SET session_replication_role = replica
+    expect: ok
+  - sql: |
+      CREATE TABLE t1 (a int4)
+    expect: ok
+  - sql: |
+      RESET session_replication_role
+    expect: ok
+  - sql: |
+      SELECT evtname, CASE evtenabled WHEN 'O' THEN 'origin' WHEN 'D' THEN 'disabled' WHEN 'R' THEN 'replica' WHEN 'A' THEN 'always' END AS mode FROM pg_event_trigger ORDER BY evtname
+    expect: rows
+    order: ordered

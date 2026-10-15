@@ -1,0 +1,40 @@
+# A FOR UPDATE lock blocks a concurrent UPDATE until commit; with no real update, the blocked UPDATE then proceeds.
+id: doc-explicit-locking.for-update-blocks-update-then-proceeds
+title: Blocked UPDATE proceeds after a FOR UPDATE holder commits without modifying the row
+family: doc-explicit-locking
+tier: core
+feature_ids: [select-for-update, row-locks, update, transactions, multi-session]
+required_capabilities: [create-table, insert, select, update, row-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-rows (FOR UPDATE blocks UPDATE; blocked transaction proceeds after commit unless the row was actually updated)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t WHERE id = 1 FOR UPDATE
+    expect: rows
+  - session: b
+    sql: |
+      UPDATE t SET v = v + 5 WHERE id = 1
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM t WHERE id = 1
+    expect: rows
+    comment: 10 + 5 = 15; the lock holder did not update the row

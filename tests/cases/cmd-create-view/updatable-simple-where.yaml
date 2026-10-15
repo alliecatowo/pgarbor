@@ -1,0 +1,45 @@
+# A simple view with a WHERE clause is automatically updatable; rows may move in and out of the view.
+id: cmd-create-view.updatable-simple-where
+title: Simple filtered view is automatically updatable and rows may leave or be invisible to it
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, updatable-views, where, insert, update, delete]
+required_capabilities: [create-table, insert, update, delete, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview-updatable-views"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy'), (2, 'B', 'Comedy'), (3, 'C', 'Drama'), (4, 'D', 'Comedy');
+steps:
+  - sql: |
+      CREATE VIEW comedy_ids AS SELECT id, kind FROM films WHERE kind = 'Comedy'
+    expect: ok
+  - sql: |
+      UPDATE comedy_ids SET kind = 'Drama' WHERE id = 2
+    expect: ok
+    comment: without CHECK OPTION the updated row may leave the view
+  - sql: |
+      SELECT id, kind FROM comedy_ids ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO comedy_ids (id, kind) VALUES (20, 'Drama') RETURNING id, kind
+    expect: rows
+    comment: an inserted row that the view cannot show is allowed without CHECK OPTION
+  - sql: |
+      SELECT count(*) FROM films WHERE id = 20
+    expect: rows
+  - sql: |
+      DELETE FROM comedy_ids WHERE id = 1
+    expect: ok
+    comment: deletes only the base row visible through the view
+  - sql: |
+      DELETE FROM comedy_ids WHERE id = 3
+    expect: ok
+    comment: id 3 is not visible through the view so nothing is deleted
+  - sql: |
+      SELECT id, kind FROM films ORDER BY id
+    expect: rows
+    order: ordered

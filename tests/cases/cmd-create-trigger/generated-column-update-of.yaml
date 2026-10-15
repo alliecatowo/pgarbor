@@ -1,0 +1,40 @@
+# UPDATE OF listing a generated column fires when a column it depends on is a target of the UPDATE.
+id: cmd-create-trigger.generated-column-update-of
+title: UPDATE OF a generated column fires when the column it depends on is updated
+family: cmd-create-trigger
+tier: extended
+feature_ids: [create-trigger, update-of-column-list, generated-columns, after-trigger]
+required_capabilities: [create-table, insert, update, select, plpgsql, triggers, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER parameters (UPDATE OF lists generated columns depending on an UPDATE target)"
+setup: |
+  CREATE TABLE g (a int, b int GENERATED ALWAYS AS (a * 2) STORED, c int);
+  INSERT INTO g (a, c) VALUES (1, 1);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  CREATE FUNCTION log_g() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ' ' || TG_OP);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER g_b AFTER UPDATE OF b ON g FOR EACH ROW EXECUTE FUNCTION log_g()
+    expect: ok
+  - sql: |
+      UPDATE g SET a = 5
+    expect: ok
+    comment: b is generated from a, so the listed generated column counts as a changed column
+  - sql: |
+      UPDATE g SET c = 7
+    expect: ok
+    comment: c is not listed and b does not depend on c, so the trigger does not fire
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b, c FROM g ORDER BY a
+    expect: rows
+    order: ordered

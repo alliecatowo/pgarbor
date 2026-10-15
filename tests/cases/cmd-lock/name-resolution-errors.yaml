@@ -1,0 +1,45 @@
+# The name is an optionally schema-qualified existing table. An unknown schema and an unknown
+# relation fail with different SQLSTATEs; both abort the transaction.
+id: cmd-lock.name-resolution-errors
+title: Unknown schema (3F000) and unknown table (42P01) errors for LOCK TABLE names
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, schemas, errors]
+required_capabilities: [create-table, create-schema, lock-table, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (Parameters: name)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE SCHEMA lock_ns;
+  CREATE TABLE lock_ns.present_t (a int4);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE lock_ns.present_t IN SHARE MODE
+    expect: ok
+  - sql: |
+      LOCK TABLE no_such_schema.present_t IN SHARE MODE
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+    comment: aborted transaction after the failed LOCK
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE lock_ns.missing_t
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ROLLBACK
+    expect: ok

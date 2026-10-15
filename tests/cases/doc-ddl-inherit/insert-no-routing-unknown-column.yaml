@@ -1,0 +1,30 @@
+# INSERT always targets exactly the named table; it never routes rows to children, and a column that
+# exists only in the child is rejected for the parent.
+id: doc-ddl-inherit.insert-no-routing-unknown-column
+title: INSERT into the parent does not route to the child; child-only column rejected on parent
+family: doc-ddl-inherit
+tier: core
+feature_ids: [inheritance, table-inheritance, insert, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-inherit"
+sessions: [a]
+setup: |
+  CREATE TABLE cities (name text, population float, elevation int);
+  CREATE TABLE capitals (state char(2)) INHERITS (cities);
+steps:
+  - sql: |
+      INSERT INTO cities (name, population, elevation, state) VALUES ('Albany', NULL, NULL, 'NY')
+    expect: error
+    sqlstate: "42703"
+    comment: cities has no column state, so the statement is rejected before any routing
+  - sql: |
+      INSERT INTO cities (name, population, elevation) VALUES ('Albany', NULL, NULL)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM capitals
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM cities
+    expect: rows

@@ -1,0 +1,32 @@
+# Positional arguments may not follow named ones; a repeated argument name is also rejected.
+id: doc-sql-syntax-calling-funcs.named-after-positional-error
+title: Positional argument after named argument and duplicate names are syntax errors
+family: doc-sql-syntax-calling-funcs
+tier: core
+feature_ids: [create-function, function-calls, named-notation, mixed-notation, errors]
+required_capabilities: [create-function, select, default-arguments]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-syntax-calling-funcs-mixed"
+sessions: [a]
+setup: |
+  CREATE FUNCTION concat_lower_or_upper(a text, b text, uppercase boolean DEFAULT false)
+  RETURNS text AS $$
+    SELECT CASE WHEN $3 THEN UPPER($1 || ' ' || $2) ELSE LOWER($1 || ' ' || $2) END;
+  $$ LANGUAGE SQL IMMUTABLE STRICT;
+steps:
+  - sql: |
+      SELECT concat_lower_or_upper(a => 'Hello', 'World') AS r
+    expect: error
+    sqlstate: "42601"
+    comment: named argument cannot precede positional argument
+  - sql: |
+      SELECT concat_lower_or_upper(a => 'x', a => 'y', b => 'z') AS r
+    expect: error
+    sqlstate: "42601"
+    comment: argument name used more than once
+  - sql: |
+      SELECT concat_lower_or_upper('Hello', 'World') AS r
+    expect: rows
+    order: ordered
+    comment: session still usable after errors (autocommit)

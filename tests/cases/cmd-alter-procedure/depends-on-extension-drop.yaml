@@ -1,0 +1,54 @@
+# DEPENDS ON EXTENSION makes a procedure die with the extension, even without CASCADE; NO DEPENDS
+# ON removes the link so the procedure survives; unknown extensions are 42704.
+id: cmd-alter-procedure.depends-on-extension-drop
+title: DEPENDS ON EXTENSION procedures are dropped with the extension; NO DEPENDS ON keeps them
+family: cmd-alter-procedure
+tier: extended
+feature_ids: [alter-procedure, extension-dependency, drop-extension]
+required_capabilities: [create-procedure, extension, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Parameters: extension_name; DEPENDS ON EXTENSION)"
+sessions: [a]
+setup: |
+  CREATE EXTENSION pg_trgm;
+  CREATE EXTENSION citext;
+  CREATE PROCEDURE dx(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+  CREATE PROCEDURE dy(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE dx(integer) DEPENDS ON EXTENSION pg_trgm
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE dx(integer) DEPENDS ON EXTENSION citext
+    expect: ok
+    comment: a procedure may depend on several extensions
+  - sql: |
+      SELECT count(*) AS n FROM pg_depend WHERE objid = 'dx'::regproc AND deptype = 'x'
+    expect: rows
+    comment: expect 2
+  - sql: |
+      DROP EXTENSION citext
+    expect: ok
+    comment: no CASCADE needed; dx is dropped with citext
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'dx'
+    expect: rows
+    comment: expect 0
+  - sql: |
+      ALTER PROCEDURE dy(integer) DEPENDS ON EXTENSION pg_trgm
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE dy(integer) NO DEPENDS ON EXTENSION pg_trgm
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE dy(integer) DEPENDS ON EXTENSION no_such_ext_xyz
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP EXTENSION pg_trgm
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'dy'
+    expect: rows
+    comment: expect 1; the link was removed before the drop

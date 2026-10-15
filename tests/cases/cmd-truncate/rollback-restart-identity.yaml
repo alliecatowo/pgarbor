@@ -1,0 +1,39 @@
+# RESTART IDENTITY is transactional: rolling back restores the sequence position as well as the rows.
+id: cmd-truncate.rollback-restart-identity
+title: "ROLLBACK undoes both the truncation and the identity restart"
+family: cmd-truncate
+tier: core
+feature_ids: [truncate, restart-identity, transactions, rollback, identity, insert, select]
+required_capabilities: [create-table, insert, select, identity, transactions, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#notes (implied ALTER SEQUENCE RESTART is transactional)"
+sessions: [a]
+setup: |
+  CREATE TABLE rr (id int4 GENERATED ALWAYS AS IDENTITY PRIMARY KEY, v text);
+  INSERT INTO rr (v) VALUES ('a'), ('b');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      TRUNCATE rr RESTART IDENTITY
+    expect: ok
+  - sql: |
+      INSERT INTO rr (v) VALUES ('in-txn') RETURNING id
+    expect: rows
+    order: ordered
+    comment: restarted sequence inside the transaction gives 1
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      INSERT INTO rr (v) VALUES ('after') RETURNING id
+    expect: rows
+    order: ordered
+    comment: sequence restart rolled back, so the next value is 3
+  - sql: |
+      SELECT id, v FROM rr ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the original rows are back

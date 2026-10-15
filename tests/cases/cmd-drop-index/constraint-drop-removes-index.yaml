@@ -1,0 +1,31 @@
+# Dropping the constraint is the supported way to remove its backing index; the index goes with it and a later DROP INDEX fails.
+id: cmd-drop-index.constraint-drop-removes-index
+title: Dropping a UNIQUE constraint removes its backing index, so DROP INDEX afterwards reports 42704
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, unique-constraint, alter-table, errors]
+required_capabilities: [create-table, create-index, alter-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (Description and CONCURRENTLY caveat: use the constraint's own drop path)"
+sessions: [a]
+setup: |
+  CREATE TABLE seats (id int4 PRIMARY KEY, code text);
+  ALTER TABLE seats ADD CONSTRAINT seats_code_key UNIQUE (code);
+steps:
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'seats' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE seats DROP CONSTRAINT seats_code_key
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'seats' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: the backing index went away with the constraint
+  - sql: |
+      DROP INDEX seats_code_key
+    expect: error
+    sqlstate: "42704"

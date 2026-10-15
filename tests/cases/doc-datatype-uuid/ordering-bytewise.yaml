@@ -1,0 +1,37 @@
+# uuid ordering compares the 16 bytes; the lowest and highest values bound the domain.
+id: doc-datatype-uuid.ordering-bytewise
+title: uuid ORDER BY is byte-wise and bounded by all-zero and all-f values
+family: doc-datatype-uuid
+tier: core
+feature_ids: [uuid, ordering, comparison-operators, limit]
+required_capabilities: [create-table, insert, select, order-by, comparison-operators, limit]
+provenance:
+  source: hand
+  ref: "PG18 datatype.sgml#datatype-uuid (128-bit quantity); uuid.c uuid_cmp is memcmp over 16 bytes"
+setup: |
+  CREATE TABLE u_ord (id uuid PRIMARY KEY, tag text);
+  INSERT INTO u_ord VALUES
+    ('ffffffff-ffff-ffff-ffff-ffffffffffff', 'max'),
+    ('00000000-0000-0000-0000-000000000000', 'min'),
+    ('7fffffff-ffff-ffff-ffff-ffffffffffff', 'half'),
+    ('80000000-0000-0000-0000-000000000000', 'half_plus'),
+    ('0000000000000000000000000000000f', 'low'),
+    ('{00000000-0000-0000-0000-0000000000f0}', 'low_ish');
+steps:
+  - sql: |
+      SELECT tag, id::text FROM u_ord ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tag FROM u_ord ORDER BY id DESC LIMIT 1
+    expect: rows
+    order: ordered
+    comment: largest value is all-f
+  - sql: |
+      SELECT tag FROM u_ord WHERE id < '80000000-0000-0000-0000-000000000000' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: strict less-than against a boundary value
+  - sql: |
+      SELECT count(*) FILTER (WHERE id >= '7fffffff-ffff-ffff-ffff-ffffffffffff') AS ge_half FROM u_ord
+    expect: rows

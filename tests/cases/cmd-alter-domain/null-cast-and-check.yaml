@@ -1,0 +1,54 @@
+# NULL values bypass CHECK constraints but not NOT NULL; a derived domain keeps its own NOT NULL.
+id: cmd-alter-domain.null-cast-and-check
+title: "NULL passes a CHECK but is refused by NOT NULL, including NOT NULL inherited from a base domain"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, not-null, check-constraint, nested-domain, null-semantics]
+required_capabilities: [create-domain, alter-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain; datatype.sgml#domains"
+sessions: [a]
+setup: |
+  CREATE DOMAIN zipcode AS text CHECK (char_length(VALUE) = 5);
+  CREATE DOMAIN strict_zip AS zipcode NOT NULL;
+steps:
+  - sql: |
+      SELECT NULL::zipcode AS v
+    expect: rows
+    order: ordered
+    comment: a CHECK whose result is NULL passes
+  - sql: |
+      SELECT '1234'::zipcode
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT NULL::strict_zip
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      ALTER DOMAIN zipcode SET NOT NULL
+    expect: ok
+  - sql: |
+      SELECT NULL::zipcode
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      ALTER DOMAIN zipcode DROP NOT NULL
+    expect: ok
+  - sql: |
+      SELECT NULL::zipcode AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT NULL::strict_zip
+    expect: error
+    sqlstate: "23502"
+    comment: strict_zip has its own NOT NULL and still rejects NULL
+  - sql: |
+      ALTER DOMAIN strict_zip DROP NOT NULL
+    expect: ok
+  - sql: |
+      SELECT NULL::strict_zip AS v
+    expect: rows
+    order: ordered

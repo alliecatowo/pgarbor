@@ -1,0 +1,49 @@
+id: cmd-create-materialized-view.with-no-data
+title: WITH NO DATA creates an unpopulated view that errors until REFRESH
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, refresh-materialized-view, no-data]
+required_capabilities: [create-table, insert, select, create-materialized-view, refresh-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (WITH [ NO ] DATA)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv AS SELECT id, v FROM t WITH NO DATA
+    expect: ok
+  - session: a
+    sql: |
+      SELECT matviewname, ispopulated FROM pg_matviews WHERE matviewname = 'mv'
+    expect: rows
+    order: ordered
+    comment: flagged unscannable
+  - session: a
+    sql: |
+      SELECT id, v FROM mv
+    expect: error
+    sqlstate: "55000"
+    comment: object_not_in_prerequisite_state until REFRESH is run
+  - session: a
+    sql: |
+      REFRESH MATERIALIZED VIEW mv
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM mv ORDER BY id
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      INSERT INTO t VALUES (3, 'three')
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM mv
+    expect: rows
+    order: ordered
+    comment: snapshot stays at 2 rows until the next REFRESH

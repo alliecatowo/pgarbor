@@ -1,0 +1,34 @@
+# new_name is a bare identifier: a schema-qualified new name is a syntax error, and the schema of the
+# aggregate is taken from the qualified old name, which must exist there.
+id: cmd-alter-aggregate.rename-new-name-unqualified
+title: "ALTER AGGREGATE RENAME TO takes an unqualified new name and resolves the old name in its schema"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, rename, schemas, errors]
+required_capabilities: [aggregates, create-aggregate, create-function, create-schema, alter-aggregate, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#parameters (new_name, name)"
+setup: |
+  DROP SCHEMA IF EXISTS rq_s CASCADE;
+  CREATE SCHEMA rq_s;
+  CREATE FUNCTION rq_sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE AGGREGATE rq_agg(integer) (sfunc = rq_sf, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      ALTER AGGREGATE rq_agg(integer) RENAME TO rq_s.rq_agg2
+    expect: error
+    sqlstate: "42601"
+    comment: new_name cannot be qualified; use SET SCHEMA to move
+  - sql: |
+      ALTER AGGREGATE rq_s.rq_agg(integer) RENAME TO rq_agg2
+    expect: error
+    sqlstate: "42883"
+    comment: rq_agg lives in public, not rq_s
+  - sql: |
+      ALTER AGGREGATE rq_agg(integer) RENAME TO rq_agg2
+    expect: ok
+  - sql: |
+      SELECT n.nspname, p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname IN ('public', 'rq_s') AND p.proname LIKE 'rq\_agg%' ORDER BY 1, 2
+    expect: rows
+    order: ordered

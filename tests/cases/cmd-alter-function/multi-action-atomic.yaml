@@ -1,0 +1,31 @@
+# A statement with several actions is applied as a unit: when one action is invalid, none of the
+# others take effect.
+id: cmd-alter-function.multi-action-atomic
+title: A failing action in a multi-action ALTER FUNCTION leaves every attribute unchanged
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, volatility, cost, rows, transactions]
+required_capabilities: [create-function, alter-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (synopsis: action [ ... ])"
+sessions: [a]
+setup: |
+  CREATE FUNCTION atom1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION atom1(int) IMMUTABLE COST 5 ROWS 1000
+    expect: error
+    sqlstate: "22023"
+    comment: ROWS is invalid for a non-set-returning function
+  - sql: |
+      SELECT provolatile, procost, prorows FROM pg_proc WHERE proname = 'atom1'
+    expect: rows
+    comment: expect v / 100 / 0; IMMUTABLE and COST were not applied
+  - sql: |
+      ALTER FUNCTION atom1(int) IMMUTABLE COST 5
+    expect: ok
+  - sql: |
+      SELECT provolatile, procost FROM pg_proc WHERE proname = 'atom1'
+    expect: rows
+    comment: expect i / 5

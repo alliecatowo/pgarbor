@@ -1,0 +1,61 @@
+# GIN and GiST indexes stay consistent through INSERT, UPDATE, DELETE and NULLing of a generated tsvector column.
+id: doc-textsearch-indexes.index-dml-maintenance
+title: Text search indexes stay consistent through INSERT, UPDATE and DELETE
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gin-index, gist-index, generated-columns, dml-maintenance, tsvector-match]
+required_capabilities: [create-table, insert, update, delete, select, create-index, gin-index, gist-index, generated-columns, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (indexes are maintained on update; GIN fast update)"
+steps:
+  - sql: |
+      CREATE TABLE msgs (
+        id int4 PRIMARY KEY,
+        body text,
+        tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', body)) STORED
+      )
+    expect: ok
+  - sql: |
+      CREATE INDEX msgs_tsv_gin ON msgs USING GIN (tsv)
+    expect: ok
+  - sql: |
+      CREATE INDEX msgs_tsv_gist ON msgs USING GIST (tsv)
+    expect: ok
+  - sql: |
+      INSERT INTO msgs (id, body) VALUES (1, 'the red fox'), (2, 'blue whale'), (3, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO msgs (id, body) VALUES (4, 'fox news'), (5, 'fox hunt')
+    expect: ok
+  - sql: |
+      SELECT id FROM msgs WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE msgs SET body = 'arctic whale' WHERE id = 1
+    expect: ok
+  - sql: |
+      DELETE FROM msgs WHERE id = 4
+    expect: ok
+  - sql: |
+      SELECT id FROM msgs WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 1 no longer has fox and row 4 is gone
+  - sql: |
+      SELECT id FROM msgs WHERE tsv @@ to_tsquery('english', 'arctic & whale') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE msgs SET body = NULL WHERE id = 5
+    expect: ok
+  - sql: |
+      SELECT id FROM msgs WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL body gives NULL generated vector, so no fox rows remain
+  - sql: |
+      SELECT id FROM msgs WHERE tsv @@ to_tsquery('english', 'whale') ORDER BY id
+    expect: rows
+    order: ordered

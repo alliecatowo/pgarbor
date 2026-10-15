@@ -1,0 +1,45 @@
+# aclitem constructors and inspectors: makeaclitem, aclexplode (PUBLIC as 0), acldefault, aclitem equality and aclcontains.
+id: doc-functions-info.aclitem-make-explode
+title: makeaclitem, aclexplode, acldefault and aclcontains on aclitem values
+family: doc-functions-info
+tier: extended
+feature_ids: [aclitem, makeaclitem, aclexplode, acldefault, privileges]
+required_capabilities: [create-table, select, privileges, aclitem]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (aclitem Functions and Operators)"
+sessions: [a]
+setup: |
+  CREATE TABLE acl_t (a int);
+steps:
+  - sql: |
+      SELECT grantor, grantee, privilege_type, is_grantable
+      FROM aclexplode(ARRAY[makeaclitem(0, 0, 'SELECT, INSERT, UPDATE', true)])
+      ORDER BY privilege_type
+    expect: rows
+    order: ordered
+    comment: documented, each privilege is its own row; grantee 0 is PUBLIC
+  - sql: |
+      SELECT privilege_type
+      FROM aclexplode(ARRAY[makeaclitem(0, 0, 'select ,  insert', false)])
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: privilege names are case-insensitive, whitespace allowed between names
+  - sql: |
+      SELECT count(*) AS default_table_privs
+      FROM aclexplode(acldefault('r', (SELECT relowner FROM pg_class WHERE relname = 'acl_t')))
+    expect: rows
+    comment: default table privileges for the owner; PG18 includes MAINTAIN
+  - sql: |
+      SELECT makeaclitem(0, 0, 'SELECT', false) = makeaclitem(0, 0, 'select', false) AS case_insensitive_eq
+    expect: rows
+  - sql: |
+      SELECT ARRAY[makeaclitem(0, 0, 'SELECT', false)] @> makeaclitem(0, 0, 'SELECT', false) AS contains_self,
+             ARRAY[makeaclitem(0, 0, 'SELECT', false)] @> makeaclitem(0, 0, 'SELECT, INSERT', false) AS contains_more
+    expect: rows
+    comment: documented, the array must hold at least the specified set of privileges
+  - sql: |
+      SELECT makeaclitem(0, 0, 'bogus', false)
+    expect: error
+    sqlstate: "22023"

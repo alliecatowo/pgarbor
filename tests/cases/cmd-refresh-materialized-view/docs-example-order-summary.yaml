@@ -1,0 +1,43 @@
+id: cmd-refresh-materialized-view.docs-example-order-summary
+title: REFRESH MATERIALIZED VIEW replaces stale contents with the defining query result
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, materialized-views, group-by, aggregates]
+required_capabilities: [create-table, insert, select, create-materialized-view, refresh-materialized-view, group-by, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (Examples: order_summary)"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (id int4 PRIMARY KEY, customer text NOT NULL, total numeric(8,2) NOT NULL);
+  INSERT INTO orders VALUES (1, 'acme', 10.00), (2, 'globex', 4.50), (3, 'acme', 2.25);
+  CREATE MATERIALIZED VIEW order_summary AS
+    SELECT customer, count(*) AS n, sum(total) AS total FROM orders GROUP BY customer;
+steps:
+  - sql: |
+      SELECT customer, n, total FROM order_summary ORDER BY customer
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO orders VALUES (4, 'globex', 1.50), (5, 'initech', 99.99)
+    expect: ok
+  - sql: |
+      SELECT customer, n, total FROM order_summary ORDER BY customer
+    expect: rows
+    order: ordered
+    comment: still the snapshot taken at CREATE time
+  - sql: |
+      REFRESH MATERIALIZED VIEW order_summary
+    expect: ok
+  - sql: |
+      SELECT customer, n, total FROM order_summary ORDER BY customer
+    expect: rows
+    order: ordered
+    comment: refreshed; globex 2 rows, initech appears
+  - sql: |
+      REFRESH MATERIALIZED VIEW order_summary WITH DATA
+    expect: ok
+    comment: WITH DATA is the default and gives the same result
+  - sql: |
+      SELECT count(*) FROM order_summary
+    expect: rows

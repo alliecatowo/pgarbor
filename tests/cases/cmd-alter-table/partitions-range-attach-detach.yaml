@@ -1,0 +1,51 @@
+# Range partitions: ATTACH PARTITION rejects overlapping bounds (42P17), rows outside every bound fail (23514), DETACH keeps the detached rows.
+id: cmd-alter-table.partitions-range-attach-detach
+title: "ATTACH and DETACH range partitions: overlap, out-of-range rows, and detach errors"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, partitioning, range-partitions, attach-partition, detach-partition, errors]
+required_capabilities: [create-table, alter-table, insert, select, partitioning, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: ATTACH PARTITION ... FOR VALUES FROM ... TO; DETACH PARTITION)"
+sessions: [a]
+setup: |
+  CREATE TABLE measurement (city_id int4 NOT NULL, logdate date NOT NULL, peaktemp int4) PARTITION BY RANGE (logdate);
+  CREATE TABLE measurement_y2015m12 (city_id int4 NOT NULL, logdate date NOT NULL, peaktemp int4);
+  CREATE TABLE measurement_y2016m07 (city_id int4 NOT NULL, logdate date NOT NULL, peaktemp int4);
+  CREATE TABLE measurement_overlap (city_id int4 NOT NULL, logdate date NOT NULL, peaktemp int4);
+steps:
+  - sql: |
+      ALTER TABLE measurement ATTACH PARTITION measurement_y2015m12 FOR VALUES FROM ('2015-12-01') TO ('2016-01-01')
+    expect: ok
+  - sql: |
+      ALTER TABLE measurement ATTACH PARTITION measurement_y2016m07 FOR VALUES FROM ('2016-07-01') TO ('2016-08-01')
+    expect: ok
+  - sql: |
+      ALTER TABLE measurement ATTACH PARTITION measurement_overlap FOR VALUES FROM ('2016-07-15') TO ('2016-09-01')
+    expect: error
+    sqlstate: "42P17"
+    comment: overlaps measurement_y2016m07
+  - sql: |
+      INSERT INTO measurement VALUES (1, '2016-07-04', 20), (2, '2015-12-31', 5)
+    expect: ok
+  - sql: |
+      INSERT INTO measurement VALUES (3, '2020-01-01', 7)
+    expect: error
+    sqlstate: "23514"
+    comment: no partition accepts the row
+  - sql: |
+      ALTER TABLE measurement DETACH PARTITION measurement_y2015m12
+    expect: ok
+  - sql: |
+      ALTER TABLE measurement DETACH PARTITION measurement_y2015m12
+    expect: error
+    sqlstate: "42P01"
+    comment: no longer a partition of measurement
+  - sql: |
+      SELECT tableoid::regclass::text AS part, city_id FROM measurement ORDER BY city_id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS detached_rows FROM measurement_y2015m12
+    expect: rows

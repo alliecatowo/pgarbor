@@ -1,0 +1,33 @@
+# Documented NOT IN null trap over a table: x NOT IN y is equivalent to NOT (x IN y), and a NULL in the list hides every non-match.
+id: doc-functions-comparisons.not-in-null-trap
+title: NOT IN against a list containing NULL never returns true for a non-matching row
+family: doc-functions-comparisons
+tier: core
+feature_ids: [not-in-list, null-semantics, where-clause]
+required_capabilities: [select, create-table, insert]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/func.sgml#functions-comparisons-not-in"
+setup: |
+  CREATE TABLE nit_src (id int4 PRIMARY KEY, v int4);
+  INSERT INTO nit_src VALUES (1, 10), (2, 20), (3, NULL);
+steps:
+  - sql: |
+      SELECT id FROM nit_src WHERE v NOT IN (10, 30) ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM nit_src WHERE v NOT IN (10, NULL) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a NULL list element makes every non-matching row unknown, so no rows qualify
+  - sql: |
+      SELECT id FROM nit_src WHERE NOT (v IN (10, NULL)) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NOT (x IN y) matches the NOT IN form exactly, including the empty result
+  - sql: |
+      SELECT id FROM nit_src WHERE v IN (10, NULL) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the matching row is still returned, and NULL v is not returned

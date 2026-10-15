@@ -1,0 +1,30 @@
+# Inside a failed transaction block every statement except ROLLBACK/COMMIT is rejected, including LISTEN.
+id: cmd-listen.aborted-transaction-rejects-listen
+title: LISTEN inside an aborted transaction fails and registers nothing
+family: cmd-listen
+tier: core
+feature_ids: [listen, transactions, transaction-abort, pg-listening-channels]
+required_capabilities: [listen-notify, transactions, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 transaction abort semantics applied to ref/listen.sgml#sql-listen"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      LISTEN aborted_ch
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_listening_channels()
+    expect: rows
+    comment: nothing was registered

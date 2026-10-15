@@ -1,0 +1,42 @@
+# Doc example: enum type used as a column type; ordering is declaration order, NULL sorts last.
+id: cmd-create-type.enum-bug-status-doc-example
+title: "Enum type from the docs: declaration-order sort, NULL handling and invalid labels"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, enum-types, create-table, insert, select, errors]
+required_capabilities: [create-type, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype-enum (Examples: bug_status)"
+steps:
+  - sql: |
+      CREATE TYPE bug_status AS ENUM ('new', 'open', 'closed')
+    expect: ok
+  - sql: |
+      CREATE TABLE bug (id serial, description text, status bug_status)
+    expect: ok
+  - sql: |
+      INSERT INTO bug (description, status) VALUES ('a', 'open'), ('b', 'closed'), ('c', NULL), ('d', 'new')
+    expect: ok
+  - sql: |
+      SELECT id, status::text AS status FROM bug ORDER BY status, id
+    expect: rows
+    order: ordered
+    comment: new < open < closed by declaration; NULL sorts last
+  - sql: |
+      SELECT id FROM bug WHERE status < 'open' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT enum_range(NULL::bug_status)::text AS labels
+    expect: rows
+  - sql: |
+      INSERT INTO bug (description, status) VALUES ('e', 'pending')
+    expect: error
+    sqlstate: "22P02"
+    comment: label is not in the enum
+  - sql: |
+      CREATE TYPE bug_status AS ENUM ('x')
+    expect: error
+    sqlstate: "42710"
+    comment: type name already in use

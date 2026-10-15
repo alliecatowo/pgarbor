@@ -1,0 +1,34 @@
+# Identifier rules apply to collation names: unquoted names fold to lower case, quoted names keep their case and are distinct.
+id: cmd-create-collation.identifier-folding
+title: "CREATE COLLATION folds unquoted names and keeps quoted names distinct"
+family: cmd-create-collation
+tier: core
+feature_ids: [create-collation, identifiers, quoting]
+required_capabilities: [create-collation, icu-provider, collate-clause, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-syntax-lexical.html (identifiers and key words); create_collation.sgml#sql-createcollation (name)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE COLLATION Cmd_CC_Fold (provider = icu, locale = 'und')
+    expect: ok
+    comment: unquoted, stored as cmd_cc_fold
+  - sql: |
+      CREATE COLLATION "Cmd_CC_Fold" (provider = icu, locale = 'und')
+    expect: ok
+    comment: quoted, a different name from cmd_cc_fold
+  - sql: |
+      CREATE COLLATION cmd_cc_fold (provider = icu, locale = 'und')
+    expect: error
+    sqlstate: "42710"
+    comment: the unquoted spelling collides with the folded name
+  - sql: |
+      SELECT collname FROM pg_collation WHERE lower(collname) = 'cmd_cc_fold' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 'x' COLLATE "CMD_CC_FOLD"
+    expect: error
+    sqlstate: "42704"
+    comment: upper-case unquoted reference folds to a name that does not exist

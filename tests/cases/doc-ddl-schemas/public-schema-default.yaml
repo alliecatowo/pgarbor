@@ -1,0 +1,28 @@
+# Unqualified objects go into public, public.name is equivalent, and by default everyone has USAGE
+# on public but not CREATE (PostgreSQL 15 and later).
+id: doc-ddl-schemas.public-schema-default
+title: Unqualified CREATE TABLE goes to public; default public privileges are USAGE without CREATE
+family: doc-ddl-schemas
+tier: core
+feature_ids: [public-schema, create-table, schema-privileges, qualified-names]
+required_capabilities: [create-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-public (CREATE TABLE products is equivalent to CREATE TABLE public.products; ddl-schemas-priv)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE products (id int4)
+    expect: ok
+  - sql: |
+      CREATE TABLE public.products_q (id int4)
+    expect: ok
+    comment: the explicit public-qualified form is equivalent
+  - sql: |
+      SELECT schemaname, tablename FROM pg_tables WHERE tablename IN ('products', 'products_q') ORDER BY tablename
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT EXISTS (SELECT 1 FROM aclexplode((SELECT nspacl FROM pg_namespace WHERE nspname = 'public')) a WHERE a.grantee = 0 AND a.privilege_type = 'USAGE') AS public_usage_for_all, EXISTS (SELECT 1 FROM aclexplode((SELECT nspacl FROM pg_namespace WHERE nspname = 'public')) a WHERE a.grantee = 0 AND a.privilege_type = 'CREATE') AS public_create_for_all
+    expect: rows
+    comment: USAGE is granted to PUBLIC on the public schema, CREATE is not

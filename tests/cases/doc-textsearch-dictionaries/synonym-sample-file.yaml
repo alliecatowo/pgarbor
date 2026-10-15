@@ -1,0 +1,40 @@
+# Synonym dictionary over the shipped synonym_sample.syn file: lookups, prefix entries, and to_tsvector/to_tsquery through a configuration.
+id: doc-textsearch-dictionaries.synonym-sample
+title: synonym dictionary maps words, honors prefix entries, and drives tsvector and tsquery
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, synonym-template, text-search-configuration, prefix-match]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Synonym Dictionary)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY syn (template = synonym, synonyms = 'synonym_sample')
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('syn', 'indices') AS prefix_entry,
+             ts_lexize('syn', 'Postgres') AS folded_input,
+             ts_lexize('syn', 'gogle') AS typo_fix,
+             ts_lexize('syn', 'postgresql') AS second_entry,
+             ts_lexize('syn', 'nothing') AS unknown
+    expect: rows
+    comment: the asterisk is dropped on the replacement; input is case-folded; unknown word gives NULL
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tst (copy = simple)
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION tst ALTER MAPPING FOR asciiword WITH syn
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('tst', 'indices') AS doc_vec,
+             to_tsquery('tst', 'indices') AS query_vec
+    expect: rows
+    comment: the prefix marker appears only in the query
+  - sql: |
+      SELECT 'indexes are very useful'::tsvector @@ to_tsquery('tst', 'indices') AS matches
+    expect: rows
+  - sql: |
+      SELECT to_tsvector('tst', 'Postgres GOGLE indices') AS doc_vec
+    expect: rows

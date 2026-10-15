@@ -1,0 +1,31 @@
+# ANALYZE with a column list collects statistics only for the named columns.
+id: cmd-analyze.column-list-subset
+title: "ANALYZE table (column) collects statistics only for the listed column"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, column-list, pg-stats]
+required_capabilities: [create-table, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Parameters: column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_c (id int4, a int, b text);
+  INSERT INTO an_c SELECT g, g % 5, 'x' || (g % 4) FROM generate_series(1, 100) g;
+steps:
+  - sql: |
+      ANALYZE an_c (a)
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_c' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: only a has statistics
+  - sql: |
+      ANALYZE an_c
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_c' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: a full ANALYZE fills in the remaining columns

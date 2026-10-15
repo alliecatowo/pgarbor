@@ -1,0 +1,33 @@
+# Index on a nondeterministic collation: equality under the collation decides uniqueness, so
+# case-only differences conflict, while accent differences at level 2 do not.
+id: doc-indexes-collations.nondeterministic-unique-index
+title: Unique index on a nondeterministic ICU collation rejects case-only duplicates
+family: doc-indexes-collations
+tier: extended
+feature_ids: [indexes, collation, nondeterministic-collation, unique-index, errors]
+required_capabilities: [create-table, insert, select, create-index, collation, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-collations (Indexes and Collations)"
+sessions: [a]
+setup: |
+  CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+  CREATE TABLE t_ci (k text);
+  CREATE UNIQUE INDEX t_ci_u ON t_ci (k COLLATE ci);
+steps:
+  - sql: |
+      INSERT INTO t_ci VALUES ('Apple')
+    expect: ok
+  - sql: |
+      INSERT INTO t_ci VALUES ('apple')
+    expect: error
+    sqlstate: "23505"
+    comment: case-only difference is equal under ci, so the unique index rejects it
+  - sql: |
+      INSERT INTO t_ci VALUES ('Banana'), ('Ápple')
+    expect: ok
+    comment: the accented letter differs at secondary strength, so it is distinct
+  - sql: |
+      SELECT k FROM t_ci ORDER BY k COLLATE ci
+    expect: rows
+    order: ordered

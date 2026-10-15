@@ -1,0 +1,43 @@
+# OWNER TO accepts CURRENT_ROLE, CURRENT_USER, SESSION_USER and an explicit role name.
+id: cmd-alter-statistics.owner-to-role-variants
+title: "ALTER STATISTICS OWNER TO accepts CURRENT_ROLE, CURRENT_USER, SESSION_USER and a role name"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, owner, current-role, session-user]
+required_capabilities: [create-table, alter-statistics, extended-statistics, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (OWNER TO new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE ROLE ast_ov_r;
+  CREATE TABLE ast_ov (a int, b int);
+  CREATE STATISTICS ast_ov_s1 (ndistinct) ON a, b FROM ast_ov;
+steps:
+  - sql: |
+      ALTER STATISTICS ast_ov_s1 OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(stxowner) = current_user FROM pg_statistic_ext WHERE stxname = 'ast_ov_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_ov_s1 OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      ALTER STATISTICS ast_ov_s1 OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      ALTER STATISTICS ast_ov_s1 OWNER TO ast_ov_r
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(stxowner) = 'ast_ov_r' FROM pg_statistic_ext WHERE stxname = 'ast_ov_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_ov_s1 OWNER TO CURRENT_USER
+    expect: ok
+    comment: cleanup so the role can be dropped
+  - sql: |
+      DROP ROLE ast_ov_r
+    expect: ok

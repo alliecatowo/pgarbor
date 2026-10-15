@@ -1,0 +1,28 @@
+# CREATE UNIQUE INDEX fails when existing rows already contain duplicate keys, and no index is left behind.
+id: doc-indexes-unique.create-index-fails-on-existing-duplicates
+title: CREATE UNIQUE INDEX over duplicate data fails with 23505 and creates no index
+family: doc-indexes-unique
+tier: core
+feature_ids: [unique-index, create-index, errors, catalog]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique (index declared unique means equal values are not allowed in multiple rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE dupdata (a int, b text);
+  INSERT INTO dupdata VALUES (1, 'x'), (1, 'y'), (2, 'z')
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX dupdata_a ON dupdata (a)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname = 'dupdata_a'
+    expect: rows
+    order: ordered
+    comment: the failed build leaves no index
+  - sql: |
+      CREATE UNIQUE INDEX dupdata_ab ON dupdata (a, b)
+    expect: ok
+    comment: a multicolumn unique index over the same rows succeeds

@@ -1,0 +1,54 @@
+# jsonpath lax mode suppresses structural errors that strict mode raises; silent option and jsonb_path_match rules.
+id: doc-datatype-json.jsonpath-strict-lax
+title: jsonpath strict versus lax structural errors, silent suppression and jsonb_path_match single-boolean rule
+family: doc-datatype-json
+tier: core
+feature_ids: [jsonpath, jsonpath-strict-lax, jsonpath-silent, jsonpath-match]
+required_capabilities: [select, jsonb, jsonpath, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#datatype-jsonpath (SQL/JSON path modes; jsonpath accessors)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT jsonb_path_query('{"a": 5}', 'strict $.a.b')
+    expect: error
+    sqlstate: "2203A"
+    comment: strict mode - missing member is an error
+  - sql: |
+      SELECT jsonb_path_query('{"a": 5}', 'lax $.a.b') AS lax_missing
+    expect: rows
+    comment: lax mode - missing member yields no items
+  - sql: |
+      SELECT jsonb_path_query('{"a": 5}', 'strict $.a.b', silent => true) AS silenced
+    expect: rows
+    comment: silent suppresses the strict error
+  - sql: |
+      SELECT jsonb_path_query('[1, 2]', 'strict $[5]')
+    expect: error
+    sqlstate: "22033"
+    comment: strict mode - subscript out of bounds
+  - sql: |
+      SELECT jsonb_path_query('[1, 2]', 'lax $[5]') AS lax_oob
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query('{"a": 5}', 'strict $[0]')
+    expect: error
+    sqlstate: "22039"
+    comment: array accessor on an object in strict mode
+  - sql: |
+      SELECT jsonb_path_query('[1, 2]', 'strict $.a')
+    expect: error
+    sqlstate: "2203A"
+  - sql: |
+      SELECT jsonb_path_match('{"a": 1}', '$.a == 1') AS single_bool,
+             jsonb_path_match('{"a": 1}', '$.a == "x"') AS unknown_is_null
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_match('{"a": 1}', '$.a')
+    expect: error
+    sqlstate: "22038"
+    comment: jsonb_path_match requires a single boolean result
+  - sql: |
+      SELECT jsonb_path_exists('{"a": 5}', 'strict $.a ? (@ == 5)') AS exists_strict
+    expect: rows

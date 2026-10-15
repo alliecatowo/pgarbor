@@ -1,0 +1,39 @@
+# END AND CHAIN starts a new block with the isolation level and read-only mode of the block just ended.
+id: cmd-end.and-chain-keeps-characteristics
+title: END AND CHAIN carries isolation level and read-only mode into the next block
+family: cmd-end
+tier: core
+feature_ids: [end, and-chain, isolation-level, read-only, transactions, guc, errors]
+required_capabilities: [create-table, insert, select, transactions, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/end.sgml#sql-end (Parameters: AND CHAIN, same transaction characteristics as the just finished one)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY
+    expect: ok
+  - sql: |
+      END AND CHAIN
+    expect: ok
+    comment: commits the first block and starts a chained one
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso, current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: the chained block reports repeatable read and read only
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "25006"
+    comment: read-only mode is enforced in the chained block
+  - sql: |
+      END
+    expect: ok
+    comment: reports ROLLBACK because the chained block was aborted
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered

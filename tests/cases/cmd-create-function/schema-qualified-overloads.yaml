@@ -1,0 +1,37 @@
+# A function name may be schema-qualified; overloads in a schema are independent of the same name in
+# another schema and of the search_path.
+id: cmd-create-function.schema-qualified-overloads
+title: Schema-qualified CREATE FUNCTION places overloads in that schema and is not found via search_path
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, schema-qualified-name, overloading, search-path]
+required_capabilities: [create-function, create-schema, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-description (schema name); #sql-createfunction-overloading"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA cfs
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cfs.sf(int) RETURNS int LANGUAGE sql AS 'select $1 * 2'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cfs.sf(text) RETURNS text LANGUAGE sql AS 'select $1 || $1'
+    expect: ok
+    comment: different input types in the same schema overload
+  - sql: |
+      SELECT cfs.sf(21) AS int_v, cfs.sf('ab') AS text_v
+    expect: rows
+    comment: 42 and abab
+  - sql: |
+      SELECT n.nspname, pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'sf' ORDER BY 2
+    expect: rows
+    order: ordered
+    comment: two rows, both in cfs, with arguments integer and text
+  - sql: |
+      SELECT sf(1)
+    expect: error
+    sqlstate: "42883"
+    comment: cfs is not on the search_path, so the unqualified name does not resolve

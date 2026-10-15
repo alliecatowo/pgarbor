@@ -1,0 +1,28 @@
+# "MySp" and mysp are two different savepoints. Rolling back to one leaves work done after the other intact.
+id: cmd-savepoint.quoted-and-folded-names-distinct
+title: Quoted "MySp" and unquoted mysp are distinct savepoints with independent rollback targets
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, identifier-case, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-savepoint.html (savepoint_name identifier semantics)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      SAVEPOINT "MySp";
+      INSERT INTO t VALUES (1);
+      SAVEPOINT mysp;
+      INSERT INTO t VALUES (2);
+      ROLLBACK TO SAVEPOINT "MySp";
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: rolling back to "MySp" also discards the newer mysp and its work, leaving nothing

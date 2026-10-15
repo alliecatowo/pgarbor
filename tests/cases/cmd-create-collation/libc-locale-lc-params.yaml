@@ -1,0 +1,43 @@
+# Documented: locale is a shortcut for LC_COLLATE and LC_CTYPE together and the two cannot be mixed.
+id: cmd-create-collation.libc-locale-lc-params
+title: "CREATE COLLATION libc locale shortcut excludes LC_COLLATE and LC_CTYPE and requires both together"
+family: cmd-create-collation
+tier: core
+feature_ids: [create-collation, libc-provider, locale, lc-collate, lc-ctype]
+required_capabilities: [create-collation, libc-provider, collate-clause, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_collation.sgml#sql-createcollation (Parameters: locale, lc_collate, lc_ctype)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE COLLATION cmd_cc_l1 (locale = 'C')
+    expect: ok
+    comment: locale alone is the shortcut for both categories
+  - sql: |
+      CREATE COLLATION cmd_cc_l2 (provider = libc, lc_collate = 'C', lc_ctype = 'C')
+    expect: ok
+  - sql: |
+      CREATE COLLATION cmd_cc_l3 (locale = 'C', lc_collate = 'C')
+    expect: error
+    sqlstate: "42601"
+    comment: locale cannot be combined with LC_COLLATE or LC_CTYPE
+  - sql: |
+      CREATE COLLATION cmd_cc_l4 (lc_collate = 'C')
+    expect: error
+    sqlstate: "42P17"
+    comment: LC_CTYPE must be given with LC_COLLATE
+  - sql: |
+      CREATE COLLATION cmd_cc_l5 (lc_ctype = 'C')
+    expect: error
+    sqlstate: "42P17"
+    comment: LC_COLLATE must be given with LC_CTYPE
+  - sql: |
+      SELECT w FROM (VALUES ('b'), ('B'), ('a')) AS v(w) ORDER BY w COLLATE cmd_cc_l1
+    expect: rows
+    order: ordered
+    comment: the C locale orders by byte value
+  - sql: |
+      SELECT collname, collprovider FROM pg_collation WHERE collname LIKE 'cmd\_cc\_l%' ORDER BY 1
+    expect: rows
+    order: ordered

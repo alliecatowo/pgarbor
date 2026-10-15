@@ -1,0 +1,36 @@
+# GRANT options cannot go to PUBLIC, and a non-superuser may only record GRANTED BY its own current role.
+id: cmd-grant.grant-option-and-grantor-restrictions
+title: WITH GRANT OPTION to PUBLIC fails with 0LP01 and GRANTED BY another role fails with 0A000
+family: cmd-grant
+tier: core
+feature_ids: [grant, grant-option, granted-by, public, errors]
+required_capabilities: [create-table, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-objects (GRANTED BY, grant options not granted to PUBLIC)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_g4_a;
+  CREATE ROLE cgg_g4_b;
+  CREATE TABLE cgg_gt4 (x int4);
+  GRANT SELECT ON cgg_gt4 TO cgg_g4_a WITH GRANT OPTION;
+steps:
+  - sql: |
+      GRANT SELECT ON cgg_gt4 TO PUBLIC WITH GRANT OPTION
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      GRANT SELECT ON cgg_gt4 TO cgg_g4_b GRANTED BY CURRENT_USER
+    expect: ok
+    comment: the grantor must be the current user, which is the bootstrap superuser here
+  - sql: |
+      SET ROLE cgg_g4_a
+    expect: ok
+  - sql: |
+      GRANT SELECT ON cgg_gt4 TO cgg_g4_b GRANTED BY cgg_g4_b
+    expect: error
+    sqlstate: "0A000"
+    comment: a grantor that is not the current user is rejected
+  - sql: |
+      RESET ROLE
+    expect: ok

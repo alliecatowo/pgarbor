@@ -1,0 +1,39 @@
+# Rule names only need to be distinct per table: the same name is reusable on another table, and a schema-qualified table is accepted.
+id: cmd-create-rule.schema-qualified-and-name-scope
+title: Schema-qualified table targets work, rule names are scoped per table, and a missing table fails with undefined_table
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, schemas, rules, errors]
+required_capabilities: [create-table, create-schema, create-rule, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Parameters: table_name optionally schema-qualified; name distinct for the same table)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s;
+  CREATE TABLE s.st (a int4);
+  CREATE TABLE s.slog (a int4);
+  CREATE TABLE tg2 (a int4);
+steps:
+  - sql: |
+      CREATE RULE r_s AS ON INSERT TO s.st DO ALSO INSERT INTO s.slog VALUES (NEW.a)
+    expect: ok
+  - sql: |
+      INSERT INTO s.st VALUES (7)
+    expect: ok
+  - sql: |
+      SELECT a FROM s.slog ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE RULE r_s AS ON INSERT TO tg2 DO INSTEAD NOTHING
+    expect: ok
+    comment: the same rule name is reused on a different table without conflict
+  - sql: |
+      SELECT count(*) AS n FROM pg_rules WHERE rulename = 'r_s'
+    expect: rows
+    comment: one rule per table, two in total
+  - sql: |
+      CREATE RULE r_missing AS ON INSERT TO no_such_table DO INSTEAD NOTHING
+    expect: error
+    sqlstate: "42P01"

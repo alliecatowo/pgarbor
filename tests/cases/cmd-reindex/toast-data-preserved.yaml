@@ -1,0 +1,37 @@
+# REINDEX TABLE also rebuilds the TOAST table index; out-of-line values come back unchanged.
+id: cmd-reindex.toast-data-preserved
+title: REINDEX TABLE rebuilds the TOAST index and leaves out-of-line values unchanged
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-table, reindex-concurrently, toast]
+required_capabilities: [create-table, create-index, insert, select, reindex, reindex-concurrently]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: TABLE: If the table has a secondary TOAST table, that is reindexed as well)"
+sessions: [a]
+setup: |
+  CREATE TABLE big (id int4 PRIMARY KEY, body text);
+  INSERT INTO big SELECT g, repeat(chr(97 + g % 26), 5000) FROM generate_series(1, 20) AS g;
+steps:
+  - sql: |
+      SELECT id, length(body) AS len, md5(body) AS digest FROM big ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS toast_indexes FROM pg_index WHERE indrelid = (SELECT reltoastrelid FROM pg_class WHERE oid = 'big'::regclass)
+    expect: rows
+    comment: the table has one TOAST index before and after
+  - sql: |
+      REINDEX TABLE big
+    expect: ok
+  - sql: |
+      SELECT id, length(body) AS len, md5(body) AS digest FROM big ORDER BY id
+    expect: rows
+    order: ordered
+    comment: values are identical after the rebuild
+  - sql: |
+      REINDEX TABLE CONCURRENTLY big
+    expect: ok
+  - sql: |
+      SELECT count(*) AS toast_indexes FROM pg_index WHERE indrelid = (SELECT reltoastrelid FROM pg_class WHERE oid = 'big'::regclass)
+    expect: rows

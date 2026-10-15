@@ -1,0 +1,34 @@
+# Typical recovery pattern: ROLLBACK TO after a failed statement keeps earlier work and allows the block to commit.
+id: cmd-savepoint.rollback-to-recovers-after-error
+title: ROLLBACK TO a savepoint after a division-by-zero error lets the block continue and commit earlier work
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, errors, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-savepoint.html (Description: restores the transaction state) with sqlstate 22012"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1);
+      SAVEPOINT before_bad
+    expect: ok
+  - sql: |
+      SELECT 1 / 0
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      ROLLBACK TO SAVEPOINT before_bad
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2);
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered

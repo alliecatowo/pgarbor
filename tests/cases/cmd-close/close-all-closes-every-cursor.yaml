@@ -1,0 +1,41 @@
+id: cmd-close.close-all-closes-every-cursor
+title: CLOSE ALL closes every open cursor in the session
+family: cmd-close
+tier: core
+feature_ids: [close, close-all, declare-cursor, pg-cursors]
+required_capabilities: [create-table, insert, select, transactions, cursors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/close.sgml#sql-close (Parameters: ALL)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c1 CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      DECLARE c2 CURSOR FOR SELECT name FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_cursors
+    expect: rows
+    comment: two open cursors before CLOSE ALL
+  - sql: |
+      CLOSE ALL
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_cursors
+    expect: rows
+    comment: no open cursors after CLOSE ALL
+  - sql: |
+      FETCH 1 FROM c2
+    expect: error
+    sqlstate: "34000"
+  - sql: |
+      ROLLBACK
+    expect: ok

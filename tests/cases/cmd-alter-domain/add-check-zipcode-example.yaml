@@ -1,0 +1,41 @@
+# The documented zipcode example: ADD CONSTRAINT ... CHECK is enforced on new values, then DROP CONSTRAINT removes it.
+id: cmd-alter-domain.add-check-zipcode-example
+title: "ADD CONSTRAINT CHECK on a domain enforces new values until DROP CONSTRAINT"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, check-constraint, domain-constraint]
+required_capabilities: [create-domain, alter-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (Examples: add/remove check constraint)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN zipcode AS text;
+  CREATE TABLE mail (id int, zip zipcode);
+  INSERT INTO mail VALUES (1, '12345'), (2, '54321');
+steps:
+  - sql: |
+      ALTER DOMAIN zipcode ADD CONSTRAINT zipchk CHECK (char_length(VALUE) = 5)
+    expect: ok
+  - sql: |
+      INSERT INTO mail VALUES (3, '1234')
+    expect: error
+    sqlstate: "23514"
+    comment: a four-character value violates zipchk
+  - sql: |
+      INSERT INTO mail VALUES (3, '98765')
+    expect: ok
+  - sql: |
+      SELECT id, zip FROM mail ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER DOMAIN zipcode DROP CONSTRAINT zipchk
+    expect: ok
+  - sql: |
+      INSERT INTO mail VALUES (4, '1234')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM mail
+    expect: rows
+    order: ordered

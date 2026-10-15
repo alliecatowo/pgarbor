@@ -1,0 +1,38 @@
+# Documented: pg_lsn +/- numeric adds or subtracts a byte count; the result must stay within 0/0..FFFFFFFF/FFFFFFFF.
+id: doc-datatype-pg-lsn.add-subtract-numeric-bytes
+title: pg_lsn plus or minus numeric moves the LSN by a byte count, rounding fractional counts
+family: doc-datatype-pg-lsn
+tier: core
+feature_ids: [pg-lsn, operators, arithmetic, numeric-operand]
+required_capabilities: [select, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-pg-lsn"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '0/10'::pg_lsn + 16::numeric AS plus_16, '0/10'::pg_lsn - 16::numeric AS minus_16
+    expect: rows
+    comment: hex 10 plus 16 is 0/20; minus 16 is 0/0
+  - sql: |
+      SELECT '16/B374D848'::pg_lsn + 2120::numeric AS plus_2120
+    expect: rows
+    comment: inverse of the subtraction example; crosses no segment boundary
+  - sql: |
+      SELECT '0/10'::pg_lsn + 1000::numeric AS plus_1000
+    expect: rows
+  - sql: |
+      SELECT '0/10'::pg_lsn + 1::int4 AS plus_int4, '0/10'::pg_lsn + (-16)::numeric AS plus_negative
+    expect: rows
+    comment: integer operand is implicitly cast to numeric; negative numeric adds a negative offset
+  - sql: |
+      SELECT '0/10'::pg_lsn + 1.5::numeric AS plus_1_5, '0/10'::pg_lsn + 1.0::numeric AS plus_1_0, '0/10'::pg_lsn + 0.5::numeric AS plus_0_5
+    expect: rows
+    comment: fractional byte counts are rounded half away from zero before the offset is applied; not stated in datatype.sgml, recorded from oracle
+  - sql: |
+      SELECT '0/10'::pg_lsn + 1e3::numeric AS plus_1e3
+    expect: rows
+    comment: scientific-notation numeric literal
+  - sql: |
+      SELECT '0/0'::pg_lsn - 0::numeric AS minus_zero, '0/A'::pg_lsn + 0::numeric AS plus_zero
+    expect: rows

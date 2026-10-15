@@ -1,0 +1,37 @@
+# Naming a role or schema that does not exist fails with 42704 or 3F000 and changes nothing.
+id: cmd-alter-default-privileges.error-missing-role-or-schema
+title: Unknown role or schema names fail with 42704 or 3F000 and write no default entry
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, grant, revoke, roles, schemas, errors]
+required_capabilities: [roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-parameters (target_role, schema_name and role_name must exist)"
+sessions: [a]
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES FOR ROLE adp_no_such_role REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC
+    expect: error
+    sqlstate: "42704"
+    comment: the target role must exist
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_no_such_schema GRANT SELECT ON TABLES TO PUBLIC
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema must exist
+  - sql: |
+      ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO adp_no_such_grantee
+    expect: error
+    sqlstate: "42704"
+    comment: the grantee role must exist
+  - sql: |
+      ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM adp_no_such_grantee
+    expect: error
+    sqlstate: "42704"
+    comment: REVOKE checks the grantee role too
+  - sql: |
+      SELECT count(*) FROM pg_default_acl
+    expect: rows
+    order: multiset
+    comment: no default entry was written

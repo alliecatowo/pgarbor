@@ -1,0 +1,54 @@
+# Aggregate call forms documented in Value Expressions: ALL / DISTINCT / *, FILTER, and ORDER BY inside the argument list.
+id: doc-sql-expressions.aggregate-forms
+title: Aggregate call forms ALL, DISTINCT, star, FILTER and in-call ORDER BY
+family: doc-sql-expressions
+tier: core
+feature_ids: [aggregate-expressions, aggregate-filter-clause, aggregate-order-by, aggregate-distinct]
+required_capabilities: [select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-aggregates"
+sessions: [a]
+setup: |
+  CREATE TABLE agg_src (v int4, k text, s text);
+  INSERT INTO agg_src VALUES (1, 'key0', 'x'), (3, 'key1', 'y'), (NULL, 'key1', NULL), (3, NULL, 'z'), (2, 'key2', 'x');
+steps:
+  - sql: |
+      SELECT count(*) AS n_star, count(v) AS n_col, count(ALL v) AS n_all, count(DISTINCT v) AS n_distinct FROM agg_src
+    expect: rows
+    order: ordered
+    comment: count ignores NULL inputs; count(*) counts every input row
+  - sql: |
+      SELECT count(*) AS unfiltered, count(*) FILTER (WHERE v > 1) AS filtered FROM agg_src
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS unfiltered, count(*) FILTER (WHERE i < 5) AS filtered FROM generate_series(1,10) AS s(i)
+    expect: rows
+    order: ordered
+    comment: the documented FILTER example
+  - sql: |
+      WITH vals (v) AS ( VALUES (1),(3),(4),(3),(2) ) SELECT array_agg(v ORDER BY v DESC) FROM vals
+    expect: rows
+    order: ordered
+    comment: documented ORDER BY inside an aggregate
+  - sql: |
+      WITH vals (v) AS ( VALUES (1),(3),(4),(3),(2) ) SELECT array_agg(DISTINCT v ORDER BY v DESC) FROM vals
+    expect: rows
+    order: ordered
+    comment: with DISTINCT, ORDER BY may only reference the DISTINCT argument
+  - sql: |
+      WITH vals (k, v) AS ( VALUES ('key0','1'), ('key1','3'), ('key1','2') ) SELECT jsonb_object_agg(k, v ORDER BY v) FROM vals
+    expect: rows
+    order: ordered
+    comment: jsonb keeps the last duplicate key, so the in-call order is observable
+  - sql: |
+      SELECT string_agg(k, ',' ORDER BY k) FROM agg_src WHERE k IS NOT NULL
+    expect: rows
+    order: ordered
+    comment: ORDER BY goes after all aggregate arguments
+  - sql: |
+      SELECT string_agg(k ORDER BY k, ',') FROM agg_src
+    expect: error
+    sqlstate: "42883"
+    comment: the documented wrong spelling calls a one-argument aggregate that does not exist for this signature

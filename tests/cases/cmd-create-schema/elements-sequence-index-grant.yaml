@@ -1,0 +1,36 @@
+# Schema elements may be CREATE SEQUENCE, CREATE INDEX (on a table from the same element list) and GRANT.
+# nextval starts at 1; the grant to PUBLIC shows as a SELECT entry with grantee 0 in the table ACL.
+id: cmd-create-schema.elements-sequence-index-grant
+title: CREATE SCHEMA elements for sequence, index and GRANT take effect in the new schema
+family: cmd-create-schema
+tier: core
+feature_ids: [create-schema, create-sequence, create-index, grant, sequence, privileges]
+required_capabilities: [create-schema, create-table, create-index, create-sequence, grant, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_schema.sgml#sql-createschema (Parameters: schema_element lists CREATE SEQUENCE, CREATE INDEX, GRANT)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA s20
+        CREATE SEQUENCE seq20
+        CREATE TABLE t20 (id int4, v int4)
+        CREATE INDEX i20 ON t20 (v)
+        GRANT SELECT ON t20 TO PUBLIC
+    expect: ok
+  - sql: |
+      SELECT nextval('s20.seq20')
+    expect: rows
+  - sql: |
+      SELECT nextval('s20.seq20')
+    expect: rows
+    comment: second value is 2
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE schemaname = 's20' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pg_class c, aclexplode(c.relacl) a
+      WHERE c.oid = 's20.t20'::regclass AND a.grantee = 0 AND a.privilege_type = 'SELECT'
+    expect: rows
+    comment: exactly one SELECT grant to PUBLIC

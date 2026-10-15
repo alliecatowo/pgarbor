@@ -1,0 +1,32 @@
+# A BEFORE DELETE trigger that returns NULL suppresses the row; the command tag counts only the rows actually deleted.
+id: cmd-delete.before-trigger-suppresses-count
+title: BEFORE DELETE trigger suppression makes the DELETE count smaller than the match count
+family: cmd-delete
+tier: extended
+feature_ids: [delete, triggers, before-delete-trigger, plpgsql, create-table, insert, select]
+required_capabilities: [create-table, insert, select, delete, triggers, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#outputs (count may be less than matched rows when a BEFORE DELETE trigger suppresses deletes)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text);
+  INSERT INTO films VALUES (1, 'A'), (2, 'B'), (3, 'C'), (4, 'D');
+  CREATE FUNCTION skip_odd_films() RETURNS trigger AS $$
+  BEGIN
+    IF OLD.id % 2 = 1 THEN
+      RETURN NULL;
+    END IF;
+    RETURN OLD;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER films_before_delete BEFORE DELETE ON films FOR EACH ROW EXECUTE FUNCTION skip_odd_films();
+steps:
+  - sql: |
+      DELETE FROM films
+    expect: ok
+    comment: four rows match, but the trigger skips ids 1 and 3; command tag is DELETE 2
+  - sql: |
+      SELECT id, title FROM films ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,36 @@
+# An unqualified name is looked up along search_path; a statistics object in another schema needs its qualified name.
+id: cmd-drop-statistics.search-path-resolution
+title: Unqualified DROP STATISTICS follows search_path and does not see objects in other schemas
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, search-path, schemas, extended-statistics]
+required_capabilities: [create-table, create-schema, extended-statistics, drop-statistics]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics (name, optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA ds_sp;
+  CREATE TABLE public.ds_sp_t (a int, b int);
+  CREATE STATISTICS public.ds_sp_s ON a, b FROM public.ds_sp_t;
+steps:
+  - sql: |
+      SET search_path = ds_sp
+    expect: ok
+  - sql: |
+      DROP STATISTICS ds_sp_s
+    expect: error
+    sqlstate: "42704"
+    comment: public.ds_sp_s is not visible through search_path = ds_sp
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_sp_s
+    expect: notice
+  - sql: |
+      DROP STATISTICS public.ds_sp_s
+    expect: ok
+  - sql: |
+      RESET search_path
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxname = 'ds_sp_s'
+    expect: rows

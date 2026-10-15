@@ -1,0 +1,59 @@
+# The owner change is transactional: ROLLBACK restores the previous owner, COMMIT keeps the new one.
+id: cmd-alter-large-object.rollback-and-commit
+title: Owner change inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, transactions]
+required_capabilities: [large-objects, roles, catalog-introspection, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_txn_one
+    expect: ok
+  - sql: |
+      CREATE ROLE cmd_alo_txn_two
+    expect: ok
+  - sql: |
+      SELECT lo_create(930901)
+    expect: rows
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930901 OWNER TO cmd_alo_txn_one
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930901
+    expect: rows
+    comment: visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930901
+    expect: rows
+    comment: rolled back, so postgres again
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930901 OWNER TO cmd_alo_txn_two
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930901
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(930901)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_txn_one
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_alo_txn_two
+    expect: ok

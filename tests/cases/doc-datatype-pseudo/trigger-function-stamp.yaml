@@ -1,0 +1,31 @@
+# A trigger function is declared to return trigger and runs only as a trigger; its effects are visible in the table (datatype.sgml#datatype-pseudotypes-table, "trigger").
+id: doc-datatype-pseudo.trigger-function-stamp
+title: Trigger function returning trigger modifies rows on insert and update
+family: doc-datatype-pseudo
+tier: core
+feature_ids: [pseudo-types, trigger-function, triggers, plpgsql]
+required_capabilities: [create-table, insert, update, triggers, plpgsql, select]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-pseudotypes-table"
+sessions: [a]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, name text, updated_by text);
+  CREATE FUNCTION stamp() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.name := upper(NEW.name); NEW.updated_by := 'trg'; RETURN NEW; END $$;
+  CREATE TRIGGER acct_stamp BEFORE INSERT OR UPDATE ON acct FOR EACH ROW EXECUTE FUNCTION stamp()
+steps:
+  - sql: |
+      INSERT INTO acct VALUES (1, 'ann', NULL), (2, 'bob', NULL)
+    expect: ok
+  - sql: |
+      UPDATE acct SET id = id WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT id, name, updated_by FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT stamp()
+    expect: error
+    sqlstate: "0A000"
+    comment: trigger functions can only be called as triggers

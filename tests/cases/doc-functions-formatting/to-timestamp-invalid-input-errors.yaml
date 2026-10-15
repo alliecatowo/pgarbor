@@ -1,0 +1,62 @@
+# Malformed or out-of-range input to the formatting parsers fails with documented SQLSTATEs.
+id: doc-functions-formatting.to-timestamp-invalid-input-errors
+title: Invalid input to to_date, to_timestamp and to_number raises the expected SQLSTATEs
+family: doc-functions-formatting
+tier: core
+feature_ids: [to-timestamp, to-date, to-number, error-handling, invalid-datetime-format]
+required_capabilities: [select, date-type, timestamptz-type, numeric-type]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-formatting-datetime (FX and separator errors, four-digit year restriction, ISO mixing rule)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_timestamp('2000  JUN', 'FXYYYY MON')
+    expect: error
+    sqlstate: "22007"
+    comment: FX expects exactly one blank between year and month
+  - sql: |
+      SELECT to_timestamp('2000//JUN', 'YYYY/MON')
+    expect: error
+    sqlstate: "22007"
+    comment: more separators in the input than in the template
+  - sql: |
+      SELECT to_timestamp('2000/JUN', 'FXYYYY  MON')
+    expect: error
+    sqlstate: "22007"
+    comment: the template's second space consumes the J
+  - sql: |
+      SELECT to_date('200001130', 'YYYYMMDD')
+    expect: error
+    sqlstate: "22008"
+    comment: YYYY reads four digits, so the trailing digits leave an out-of-range date
+  - sql: |
+      SELECT to_date('2006-42-4', 'IYYY-MM-DD')
+    expect: error
+    sqlstate: "22007"
+    comment: mixing ISO week-numbering fields with Gregorian month and day is rejected
+  - sql: |
+      SELECT to_timestamp('2000-13-01', 'YYYY-MM-DD')
+    expect: error
+    sqlstate: "22008"
+  - sql: |
+      SELECT to_date('2000-02-30', 'YYYY-MM-DD')
+    expect: error
+    sqlstate: "22008"
+  - sql: |
+      SELECT to_timestamp('x2000', 'YYYY')
+    expect: error
+    sqlstate: "22007"
+  - sql: |
+      SELECT to_timestamp('2000 JUN 01 25:00', 'YYYY MON DD HH24:MI')
+    expect: error
+    sqlstate: "22008"
+  - sql: |
+      SELECT to_number('abc', '999')
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT to_number('12', 'RN')
+    expect: error
+    sqlstate: "22P02"
+    comment: RN input must be a Roman numeral in standard form

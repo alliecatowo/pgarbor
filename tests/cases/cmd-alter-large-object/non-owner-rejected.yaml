@@ -1,0 +1,44 @@
+# Only the owner (or a superuser) may ALTER a large object; a non-owner also cannot read it, and ownership is unchanged.
+id: cmd-alter-large-object.non-owner-rejected
+title: Non-owner ALTER LARGE OBJECT fails with insufficient_privilege and leaves the owner unchanged
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, errors, large-objects]
+required_capabilities: [large-objects, roles, catalog-introspection, select, set-role]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_nonown
+    expect: ok
+  - sql: |
+      SELECT lo_create(930401)
+    expect: rows
+  - sql: |
+      SET ROLE cmd_alo_nonown
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930401 OWNER TO cmd_alo_nonown
+    expect: error
+    sqlstate: "42501"
+    comment: must be owner of large object
+  - sql: |
+      SELECT lo_get(930401)
+    expect: error
+    sqlstate: "42501"
+    comment: a non-owner without a grant cannot read the object either
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930401
+    expect: rows
+    comment: still owned by postgres
+  - sql: |
+      SELECT lo_unlink(930401)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_nonown
+    expect: ok

@@ -1,0 +1,38 @@
+# Inside a failed transaction block UNLISTEN is rejected like any other command, so the registration survives.
+id: cmd-unlisten.aborted-transaction-rejected
+title: UNLISTEN inside an aborted transaction fails and leaves the registration in place
+family: cmd-unlisten
+tier: core
+feature_ids: [unlisten, transactions, transaction-abort, pg-listening-channels]
+required_capabilities: [listen-notify, transactions, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 transaction abort semantics applied to ref/unlisten.sgml#sql-unlisten"
+sessions: [a]
+steps:
+  - sql: |
+      LISTEN keep_x
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      UNLISTEN keep_x
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      UNLISTEN *
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT pg_listening_channels() AS ch ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: keep_x is still registered

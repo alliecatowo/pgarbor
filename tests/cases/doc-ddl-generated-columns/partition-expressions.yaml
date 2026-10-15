@@ -1,0 +1,52 @@
+# Generated columns cannot be partition keys. A stored generated column on a partition is
+# computed with that partition's expression, and attach rules require matching generation status.
+id: doc-ddl-generated-columns.partition-expressions
+title: Partition-level generation expressions apply to rows stored in each partition; mismatches are rejected
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, partitioning, stored-generated-columns]
+required_capabilities: [create-table, insert, select, alter-table, partitioning, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE pt (x int, g int GENERATED ALWAYS AS (x * 3) STORED) PARTITION BY RANGE (x);
+  CREATE TABLE pt_p1 PARTITION OF pt FOR VALUES FROM (0) TO (10);
+  CREATE TABLE pt_p2 PARTITION OF pt (g GENERATED ALWAYS AS (x * 7) STORED) FOR VALUES FROM (10) TO (20);
+  CREATE TABLE pt_p3 (x int, g int GENERATED ALWAYS AS (x * 9) STORED);
+  ALTER TABLE pt ATTACH PARTITION pt_p3 FOR VALUES FROM (20) TO (30)
+steps:
+  - sql: |
+      INSERT INTO pt (x) VALUES (1), (12), (25)
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, x, g FROM pt ORDER BY x
+    expect: rows
+    order: ordered
+    comment: each row uses the expression of the partition it is physically stored in (3x, 7x, 9x)
+  - sql: |
+      SELECT x, g FROM pt_p2
+    expect: rows
+    order: multiset
+  - sql: |
+      CREATE TABLE pk_range (x int, g int GENERATED ALWAYS AS (x + 1) STORED) PARTITION BY RANGE (g)
+    expect: error
+    sqlstate: "42P17"
+    comment: a generated column cannot be part of a partition key
+  - sql: |
+      CREATE TABLE pt_p4 (x int, g int)
+    expect: ok
+  - sql: |
+      ALTER TABLE pt ATTACH PARTITION pt_p4 FOR VALUES FROM (30) TO (40)
+    expect: error
+    sqlstate: "42804"
+    comment: a plain child column cannot attach under a generated parent column
+  - sql: |
+      CREATE TABLE pt_p5 (x int, g int GENERATED ALWAYS AS (x * 7) VIRTUAL)
+    expect: ok
+  - sql: |
+      ALTER TABLE pt ATTACH PARTITION pt_p5 FOR VALUES FROM (40) TO (50)
+    expect: error
+    sqlstate: "42804"
+    comment: the generation kind must match, so a virtual child cannot attach under a stored parent

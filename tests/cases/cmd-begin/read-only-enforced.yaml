@@ -1,0 +1,38 @@
+# READ ONLY blocks writes for the rest of the transaction; reads still work and ROLLBACK ends the block.
+id: cmd-begin.read-only-enforced
+title: BEGIN READ ONLY rejects a write with 25006 and the block must be rolled back
+family: cmd-begin
+tier: core
+feature_ids: [begin, read-only, transaction-modes, errors, insert]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/begin.sgml#sql-begin (synopsis: READ WRITE | READ ONLY)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - sql: |
+      BEGIN READ ONLY
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: error
+    sqlstate: "25006"
+    comment: cannot execute INSERT in a read-only transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the failed read-only insert left no row and the write outside the block works

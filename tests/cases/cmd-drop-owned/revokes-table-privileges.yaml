@@ -1,0 +1,39 @@
+# Privileges granted to the role on objects owned by others are revoked; the objects themselves are untouched.
+id: cmd-drop-owned.revokes-table-privileges
+title: "DROP OWNED revokes table privileges granted to the role on another owner's table"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, privileges, grant, revoke]
+required_capabilities: [roles, drop-role, privileges, grant, create-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-description (privileges granted to the given roles are revoked)"
+sessions: [a]
+setup: |
+  CREATE ROLE dpv_r;
+  CREATE TABLE dpv_t (id int4, v text);
+  INSERT INTO dpv_t VALUES (1, 'a');
+  GRANT SELECT, INSERT ON dpv_t TO dpv_r;
+steps:
+  - sql: |
+      SELECT has_table_privilege('dpv_r', 'dpv_t', 'SELECT') AS sel, has_table_privilege('dpv_r', 'dpv_t', 'INSERT') AS ins
+    expect: rows
+    order: ordered
+    comment: both privileges are held before the drop
+  - sql: |
+      DROP OWNED BY dpv_r
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('dpv_r', 'dpv_t', 'SELECT') AS sel, has_table_privilege('dpv_r', 'dpv_t', 'INSERT') AS ins
+    expect: rows
+    order: ordered
+    comment: both privileges are revoked
+  - sql: |
+      SELECT id, v FROM dpv_t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the table itself still exists and keeps its rows
+  - sql: |
+      DROP ROLE dpv_r
+    expect: ok
+    comment: with no owned objects and no privileges left, the role can be dropped

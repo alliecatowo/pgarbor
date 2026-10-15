@@ -1,0 +1,36 @@
+# VALIDATOR must take one oid argument; its return value is ignored.
+id: cmd-create-language.validator-signature
+title: VALIDATOR must accept an oid argument, and a non-void validator return value is accepted and ignored
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, validator, error-handling]
+required_capabilities: [create-language, create-function-sql, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Parameters: VALIDATOR valfunction, 'must take one argument of type oid')"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cl_v_text(text) RETURNS int LANGUAGE sql AS 'select 1';
+  CREATE FUNCTION cl_v_oid_int(oid) RETURNS int LANGUAGE sql AS 'select 1';
+steps:
+  - sql: |
+      CREATE LANGUAGE cl_v_wrongarg HANDLER plpgsql_call_handler VALIDATOR cl_v_text
+    expect: error
+    sqlstate: "42883"
+    comment: the lookup is for a function taking oid, so cl_v_text(oid) does not exist
+  - sql: |
+      CREATE LANGUAGE cl_v_wrongfn HANDLER plpgsql_call_handler VALIDATOR plpgsql_inline_handler
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE LANGUAGE cl_v_ret HANDLER plpgsql_call_handler VALIDATOR cl_v_oid_int
+    expect: ok
+    comment: documented return value is ignored, so a non-void validator is accepted
+  - sql: |
+      CREATE FUNCTION cl_v_target() RETURNS int LANGUAGE cl_v_ret AS 'anything'
+    expect: ok
+    comment: the validator runs for this body and its result is discarded
+  - sql: |
+      SELECT lanvalidator::regproc AS validator FROM pg_language WHERE lanname = 'cl_v_ret'
+    expect: rows
+    order: ordered

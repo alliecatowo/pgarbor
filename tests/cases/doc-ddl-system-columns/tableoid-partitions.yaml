@@ -1,0 +1,28 @@
+# Rows routed through a partitioned parent report the leaf partition in tableoid.
+id: doc-ddl-system-columns.tableoid-partitions
+title: tableoid reports the leaf partition that stores each row
+family: doc-ddl-system-columns
+tier: core
+feature_ids: [system-columns, tableoid, partitioning]
+required_capabilities: [create-table, insert, select, partitioning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-system-columns (tableoid handy for queries on partitioned tables)"
+setup: |
+  CREATE TABLE ptn (k int4, v text) PARTITION BY RANGE (k);
+  CREATE TABLE ptn1 PARTITION OF ptn FOR VALUES FROM (0) TO (10);
+  CREATE TABLE ptn2 PARTITION OF ptn FOR VALUES FROM (10) TO (20);
+  INSERT INTO ptn VALUES (5, 'a'), (15, 'b'), (7, 'c');
+steps:
+  - sql: |
+      SELECT tableoid::regclass::text AS part, k, v FROM ptn ORDER BY k
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tableoid::regclass::text AS part FROM ptn WHERE k = 15
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM ptn WHERE tableoid = 'ptn1'::regclass
+    expect: rows
+    order: ordered

@@ -1,0 +1,45 @@
+# The documented order_items policy: RESTRICT on the product side, CASCADE on the order side.
+id: doc-ddl-constraints.foreign-key-on-delete-restrict-cascade
+title: ON DELETE RESTRICT blocks deleting a referenced product while ON DELETE CASCADE removes order items
+family: doc-ddl-constraints
+tier: core
+feature_ids: [foreign-keys, foreign-key-actions, primary-keys, insert, delete, select]
+required_capabilities: [create-table, constraints, foreign-keys, foreign-key-actions, primary-key, insert, delete, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Foreign Keys, CASCADE and RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text, price numeric);
+  CREATE TABLE orders (order_id integer PRIMARY KEY, shipping_address text);
+  CREATE TABLE order_items (
+      product_no integer REFERENCES products ON DELETE RESTRICT,
+      order_id integer REFERENCES orders ON DELETE CASCADE,
+      quantity integer,
+      PRIMARY KEY (product_no, order_id)
+  );
+  INSERT INTO products VALUES (1, 'p', 1.0), (2, 'q', 2.0);
+  INSERT INTO orders VALUES (10, 'addr 1'), (11, 'addr 2');
+  INSERT INTO order_items VALUES (1, 10, 2), (2, 10, 1), (2, 11, 4)
+steps:
+  - sql: |
+      DELETE FROM products WHERE product_no = 1
+    expect: error
+    sqlstate: "23503"
+    comment: RESTRICT refuses to delete a product still referenced by order_items
+  - sql: |
+      DELETE FROM orders WHERE order_id = 10
+    expect: ok
+    comment: CASCADE removes the order items of order 10
+  - sql: |
+      SELECT product_no, order_id, quantity FROM order_items ORDER BY product_no, order_id
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM products WHERE product_no = 1
+    expect: ok
+    comment: no order items reference product 1 any more
+  - sql: |
+      SELECT product_no, name FROM products ORDER BY product_no
+    expect: rows
+    order: ordered

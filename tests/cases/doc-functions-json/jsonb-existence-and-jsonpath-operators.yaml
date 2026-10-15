@@ -1,0 +1,45 @@
+# Documented jsonb containment, existence (? ?| ?&) and jsonpath match operators (@? @@), including NULL and suppressed-error behavior.
+id: doc-functions-json.jsonb-existence-and-jsonpath-operators
+title: jsonb containment, existence, and jsonpath match operators including documented NULL behavior
+family: doc-functions-json
+tier: core
+feature_ids: [jsonb-containment, jsonb-existence, jsonpath-match-operators]
+required_capabilities: [select, jsonb, jsonpath]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-processing (Additional jsonb Operators table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '{"a":1, "b":2}'::jsonb @> '{"b":2}'::jsonb AS contains,
+             '{"b":2}'::jsonb <@ '{"a":1, "b":2}'::jsonb AS contained_by,
+             '["a", "b"]'::jsonb @> '"a"'::jsonb AS scalar_in_array,
+             '[1,[2]]'::jsonb @> '[[2]]'::jsonb AS nested_array_contains
+    expect: rows
+  - sql: |
+      SELECT '{"a":1, "b":2}'::jsonb ? 'b' AS key_exists,
+             '["a", "b", "c"]'::jsonb ? 'b' AS elem_exists,
+             '"a"'::jsonb ? 'a' AS scalar_string_exists,
+             '{"a":1, "b":2, "c":3}'::jsonb ?| array['b', 'd'] AS any_of,
+             '{"a":1, "b":2, "c":3}'::jsonb ?& array['a', 'd'] AS all_of,
+             '["a", "b", "c"]'::jsonb ?& array['a', 'b'] AS all_of_elems
+    expect: rows
+    comment: "a bare scalar string is not a container; the documented examples come first"
+  - sql: |
+      SELECT '{"a":1}'::jsonb ?| array[]::text[] AS any_of_empty,
+             '{"a":1}'::jsonb ?& array[]::text[] AS all_of_empty
+    expect: rows
+    comment: "empty array: ?| is false, ?& is true (vacuous truth)"
+  - sql: |
+      SELECT '{"a":[1,2,3,4,5]}'::jsonb @? '$.a[*] ? (@ > 2)' AS path_has_item,
+             '{"a":[1,2,3,4,5]}'::jsonb @? '$.zz' AS path_no_item
+    expect: rows
+  - sql: |
+      SELECT '{"a":[1,2,3,4,5]}'::jsonb @@ '$.a[*] > 2' AS predicate_true_on_any,
+             '{"a":[1,2]}'::jsonb @@ '$.a[*]' AS non_boolean_result_is_null
+    expect: rows
+    comment: "documented: @@ returns NULL when the path result is not a single boolean"
+  - sql: |
+      SELECT '{"a":1}'::jsonb @? 'strict $.b' AS suppressed_structural_error
+    expect: rows
+    comment: "documented: @? suppresses missing-member errors, so the result is NULL instead of an error"

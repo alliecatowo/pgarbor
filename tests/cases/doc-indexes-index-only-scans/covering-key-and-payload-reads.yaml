@@ -1,0 +1,33 @@
+# Documented: an index on (x, y) answers queries that reference only x and y; a query touching z still returns correct rows (it just needs the heap).
+id: doc-indexes-index-only-scans.covering-key-and-payload-reads
+title: Queries over the indexed columns and over a heap-only column return the same rows regardless of access path
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [index-only-scan, covering-index, multicolumn-index]
+required_capabilities: [create-table, create-index, insert, select, multicolumn-index]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (SELECT x, y FROM tab WHERE x = 'key'; SELECT x FROM tab WHERE x = 'key' AND y < 42; and the heap-only variants)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab (x text, y int, z text);
+  CREATE INDEX tab_x_y ON tab (x, y);
+  INSERT INTO tab VALUES ('key', 1, 'a'), ('key', 50, 'b'), ('key', 41, 'c'), ('other', 1, 'd');
+steps:
+  - sql: |
+      SELECT x, y FROM tab WHERE x = 'key' ORDER BY y
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x FROM tab WHERE x = 'key' AND y < 42 ORDER BY y
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x, z FROM tab WHERE x = 'key' ORDER BY z
+    expect: rows
+    order: ordered
+    comment: references z, which the index does not store, so this query cannot be index-only but must still return the same rows
+  - sql: |
+      SELECT x FROM tab WHERE x = 'key' AND z < 'c' ORDER BY z
+    expect: rows
+    order: ordered

@@ -1,0 +1,40 @@
+# ON COMMIT PRESERVE ROWS (default), DELETE ROWS and DROP on temporary tables created by CREATE TABLE AS.
+id: cmd-create-table-as.on-commit-temp-behaviors
+title: Temporary CREATE TABLE AS honors ON COMMIT PRESERVE ROWS, DELETE ROWS and DROP
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, temp-table, on-commit]
+required_capabilities: [create-table-as, create-table, temp-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (ON COMMIT)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE t_preserve AS SELECT g AS n FROM generate_series(1, 3) g
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE t_delete ON COMMIT DELETE ROWS AS SELECT g AS n FROM generate_series(1, 3) g
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE t_drop ON COMMIT DROP AS SELECT g AS n FROM generate_series(1, 3) g
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t_preserve
+    expect: rows
+    comment: PRESERVE ROWS is the default, so rows survive commit
+  - sql: |
+      SELECT count(*) FROM t_delete
+    expect: rows
+    comment: DELETE ROWS empties the table at commit
+  - sql: |
+      SELECT count(*) FROM t_drop
+    expect: error
+    sqlstate: "42P01"
+    comment: DROP removes the table at commit

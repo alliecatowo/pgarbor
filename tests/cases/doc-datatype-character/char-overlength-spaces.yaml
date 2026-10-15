@@ -1,0 +1,35 @@
+# character(n): only excess spaces are tolerated on assignment; shorter values are space-padded; the empty string becomes all spaces.
+id: doc-datatype-character.char-overlength-spaces
+title: character(2) accepts excess trailing spaces, pads short values, and rejects non-space overflow
+family: doc-datatype-character
+tier: core
+feature_ids: [character-type, char-n, blank-padding, string-data-truncation, null-semantics]
+required_capabilities: [create-table, insert, select, errors, null-semantics]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-character (character(n), storage of shorter strings and space-only truncation)"
+sessions: [a]
+setup: |
+  CREATE TABLE c2 (k int4 PRIMARY KEY, v character(2))
+steps:
+  - sql: |
+      INSERT INTO c2 VALUES (1, 'ab   ')
+    expect: ok
+    comment: excess trailing spaces are truncated, the value is 'ab'
+  - sql: |
+      INSERT INTO c2 VALUES (2, 'abc  ')
+    expect: error
+    sqlstate: "22001"
+    comment: a non-space character beyond n is an error even if spaces follow it
+  - sql: |
+      INSERT INTO c2 VALUES (3, 'a'), (4, ''), (5, NULL)
+    expect: ok
+  - sql: |
+      SELECT k, '[' || v || ']' AS bracketed, char_length(v) AS cl, octet_length(v) AS ol FROM c2 ORDER BY k
+    expect: rows
+    order: ordered
+    comment: "empty string is stored as two spaces (octet_length 2, char_length 0); NULL stays NULL"
+  - sql: |
+      SELECT 'hello'::char(3) AS c3
+    expect: rows
+    comment: explicit cast truncates to 'hel'

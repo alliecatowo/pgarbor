@@ -1,0 +1,27 @@
+# Frequency and base_frequency are fractions in [0, 1] and the MCV frequencies cover the sample.
+id: doc-functions-statistics.mcv-items-frequency-bounds
+title: MCV frequencies lie in [0,1] and total 1 over the listed items
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, analyze, aggregates]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE qb (a int, b text, c boolean);
+  ALTER TABLE qb SET (autovacuum_enabled = false);
+  INSERT INTO qb SELECT i % 4, CASE WHEN i % 5 = 0 THEN 'a,b' WHEN i % 5 = 1 THEN 'say "hi"' WHEN i % 5 = 2 THEN ' lead' WHEN i % 5 = 3 THEN 'NULL' ELSE NULL END, i % 2 = 0 FROM generate_series(1, 200) g(i);
+  INSERT INTO qb VALUES (NULL, NULL, NULL), (NULL, 'NULL', NULL);
+  CREATE STATISTICS qb_mcv (mcv) ON a, b, c FROM qb;
+  CREATE STATISTICS qb_expr (mcv) ON (a + 1), c FROM qb;
+steps:
+  - sql: |
+      ANALYZE qb
+    expect: ok
+  - sql: |
+      SELECT stxname, count(*) AS items, round(sum(frequency)::numeric, 4) AS total, bool_and(frequency BETWEEN 0 AND 1) AS freq_ok, bool_and(base_frequency BETWEEN 0 AND 1) AS base_ok, bool_and(frequency > 0) AS freq_positive FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname IN ('qb_mcv', 'qb_expr') GROUP BY stxname ORDER BY stxname
+    expect: rows
+    order: ordered
+    comment: totals are rounded to avoid depending on the last float digit

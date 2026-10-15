@@ -1,0 +1,32 @@
+# Documented MCV example, scaled down: perfectly correlated columns get an MCV list whose entries include the valid (1,1) combination.
+id: cmd-create-statistics.mcv-correlated-example
+title: MCV statistics on perfectly correlated columns are built and queries return exact counts
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, mcv-kind, most-common-values]
+required_capabilities: [create-table, insert, extended-statistics, catalog-introspection, analyze, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics-examples (MCV example t2)"
+sessions: [a]
+setup: |
+  CREATE TABLE t2 (a int, b int);
+  INSERT INTO t2 SELECT mod(i, 100), mod(i, 100) FROM generate_series(1, 1000) s(i);
+steps:
+  - sql: |
+      CREATE STATISTICS s2 (mcv) ON a, b FROM t2
+    expect: ok
+  - sql: |
+      ANALYZE t2
+    expect: ok
+  - sql: |
+      SELECT statistics_name, (most_common_vals IS NOT NULL) AS has_mcv, (most_common_freqs IS NOT NULL) AS has_freqs FROM pg_stats_ext WHERE statistics_name = 's2'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM t2 WHERE a = 1 AND b = 1
+    expect: rows
+    comment: valid combination, present in the MCV list
+  - sql: |
+      SELECT count(*) FROM t2 WHERE a = 1 AND b = 2
+    expect: rows
+    comment: invalid combination, absent from the data

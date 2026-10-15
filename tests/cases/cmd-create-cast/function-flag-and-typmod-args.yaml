@@ -1,0 +1,40 @@
+# A three-argument cast function receives the typmod (-1 for int4) and an explicit flag; NULL reaches a non-STRICT function.
+id: cmd-create-cast.function-flag-and-typmod-args
+title: "Cast function receives the explicit flag and typmod, and NULL input reaches a non-STRICT function"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, cast-function, explicit-cast, assignment-cast]
+required_capabilities: [create-cast, create-function-sql, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-parameters (cast implementation function arguments)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ffl_txt_to_int(text, int4, bool) RETURNS int4 LANGUAGE sql AS $$
+    SELECT CASE WHEN $3 THEN 10 ELSE 20 END + CASE WHEN $2 = -1 THEN 1 ELSE 0 END
+  $$;
+  CREATE TABLE ffl_t (i int4);
+steps:
+  - sql: |
+      CREATE CAST (text AS int4) WITH FUNCTION ffl_txt_to_int(text, int4, bool) AS ASSIGNMENT
+    expect: ok
+  - sql: |
+      SELECT CAST('x'::text AS int4) AS explicit_cast, 'x'::text::int4 AS double_colon
+    expect: rows
+    comment: explicit flag is true and the typmod is -1 for int4, giving 10 + 1
+  - sql: |
+      INSERT INTO ffl_t SELECT 'x'::text
+    expect: ok
+    comment: assignment context passes the explicit flag as false, giving 20 + 1
+  - sql: |
+      INSERT INTO ffl_t VALUES ('5')
+    expect: ok
+    comment: an untyped literal goes through the type input function, not the cast
+  - sql: |
+      SELECT i FROM ffl_t ORDER BY i
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT CAST(NULL::text AS int4) AS null_in
+    expect: rows
+    comment: the function is not STRICT, so it is called with NULL and takes the explicit branch

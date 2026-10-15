@@ -1,0 +1,35 @@
+# GRANT on a LARGE OBJECT gives per-object SELECT and UPDATE; naming a missing large object fails with 42704.
+id: cmd-grant.large-object-privileges
+title: GRANT SELECT and UPDATE ON LARGE OBJECT is visible through has_largeobject_privilege and missing objects fail with 42704
+family: cmd-grant
+tier: extended
+feature_ids: [grant, large-objects, privileges, errors]
+required_capabilities: [large-objects, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant (ON LARGE OBJECT loid)"
+sessions: [a]
+notes: The large object uses an explicit user OID so the case does not depend on OID allocation.
+setup: |
+  CREATE ROLE cgg_lo_r;
+  SELECT lo_create(90101)
+steps:
+  - sql: |
+      GRANT SELECT ON LARGE OBJECT 90101 TO cgg_lo_r
+    expect: ok
+  - sql: |
+      SELECT has_largeobject_privilege('cgg_lo_r', 90101, 'SELECT') AS sel,
+             has_largeobject_privilege('cgg_lo_r', 90101, 'UPDATE') AS upd
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT UPDATE ON LARGE OBJECT 90101 TO cgg_lo_r
+    expect: ok
+  - sql: |
+      SELECT has_largeobject_privilege('cgg_lo_r', 90101, 'UPDATE') AS upd
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT SELECT ON LARGE OBJECT 90999 TO cgg_lo_r
+    expect: error
+    sqlstate: "42704"

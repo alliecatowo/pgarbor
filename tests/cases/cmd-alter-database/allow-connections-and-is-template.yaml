@@ -1,0 +1,37 @@
+# IS_TEMPLATE toggles on the current database; ALLOW_CONNECTIONS false is refused for the database the session is using.
+id: cmd-alter-database.allow-connections-and-is-template
+title: ALTER DATABASE IS_TEMPLATE toggles and ALLOW_CONNECTIONS false on the current database
+family: cmd-alter-database
+tier: core
+feature_ids: [alter-database, is-template, allow-connections, errors]
+required_capabilities: [plpgsql, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_database.sgml#sql-alterdatabase (Parameters: allowconn, istemplate)"
+sessions: [a]
+notes: "IS_TEMPLATE is restored to false before the case ends so the case database can be dropped."
+steps:
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I IS_TEMPLATE true', current_database()); END $$;
+    expect: ok
+  - sql: |
+      SELECT datistemplate FROM pg_database WHERE datname = current_database()
+    expect: rows
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I IS_TEMPLATE false', current_database()); END $$;
+    expect: ok
+  - sql: |
+      SELECT datistemplate FROM pg_database WHERE datname = current_database()
+    expect: rows
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I ALLOW_CONNECTIONS false', current_database()); END $$;
+    expect: error
+    sqlstate: "22023"
+    compare_message: false
+    comment: connections cannot be disallowed for the database the session is connected to
+  - sql: |
+      SELECT datallowconn FROM pg_database WHERE datname = current_database()
+    expect: rows
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I ALLOW_CONNECTIONS true', current_database()); END $$;
+    expect: ok

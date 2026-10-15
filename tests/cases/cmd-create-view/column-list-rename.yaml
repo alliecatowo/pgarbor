@@ -1,0 +1,35 @@
+# The optional column name list renames view columns; it may be shorter than the query but not longer.
+id: cmd-create-view.column-list-rename
+title: View column name list renames output columns and rejects more names than columns
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, column-list, select]
+required_capabilities: [select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview (parameter column_name)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE VIEW labeled (a, b) AS SELECT 1 AS x, 'two' AS y
+    expect: ok
+  - sql: |
+      SELECT a, b FROM labeled
+    expect: rows
+  - sql: |
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'labeled' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE VIEW fewer (a) AS SELECT 1, 2
+    expect: ok
+    comment: a shorter name list is allowed and the remaining column keeps its deduced name
+  - sql: |
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'fewer' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE VIEW toomany (a, b, c) AS SELECT 1, 2
+    expect: error
+    sqlstate: "42601"
+    comment: more column names than query columns is a syntax error

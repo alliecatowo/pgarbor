@@ -1,0 +1,34 @@
+# Documentation says AND CHAIN starts a transaction with the same characteristics, but after an error the chained block gets the defaults. The oracle recording is authoritative.
+id: cmd-rollback.and-chain-after-error-defaults
+title: ROLLBACK AND CHAIN after an error starts the next block with default characteristics
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, and-chain, isolation-level, read-only, errors, transactions, guc]
+required_capabilities: [select, transactions, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback-chain (characteristics carried over; compare with observed behavior after an error)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY
+    expect: ok
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+    comment: the block is now aborted
+  - sql: |
+      ROLLBACK AND CHAIN
+    expect: ok
+    comment: ends the aborted block and starts a new one
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso, current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: observed read committed and read write, not serializable and read only
+  - sql: |
+      ROLLBACK
+    expect: ok
+notes: >
+  Differential target: an implementation that follows the sentence in the documentation (characteristics carried over) will diverge from the oracle here. Do not change the expectation to match the documentation; the recorded oracle output decides.

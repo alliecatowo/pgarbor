@@ -1,0 +1,51 @@
+# REASSIGN OWNED also covers schemas, functions and types owned by the old role, not only relations.
+id: cmd-reassign-owned.schema-function-type-reassigned
+title: "REASSIGN OWNED BY moves a schema, a function and an enum type to the new owner"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, ownership, schemas, functions, types]
+required_capabilities: [roles, create-schema, create-type, create-function-sql, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-description"
+sessions: [a]
+setup: |
+  CREATE ROLE ro2_old;
+  CREATE ROLE ro2_new;
+  CREATE SCHEMA ro2_s;
+  CREATE TABLE ro2_s.ro2_t (a int4);
+  CREATE FUNCTION ro2_f(int4) RETURNS int4 LANGUAGE sql AS 'SELECT $1 + 1';
+  CREATE TYPE ro2_e AS ENUM ('lo', 'hi');
+  ALTER SCHEMA ro2_s OWNER TO ro2_old;
+  ALTER TABLE ro2_s.ro2_t OWNER TO ro2_old;
+  ALTER FUNCTION ro2_f(int4) OWNER TO ro2_old;
+  ALTER TYPE ro2_e OWNER TO ro2_old;
+steps:
+  - sql: |
+      SELECT 'schema' AS kind, nspname AS name, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'ro2_s'
+      UNION ALL SELECT 'function', proname, pg_get_userbyid(proowner) FROM pg_proc WHERE proname = 'ro2_f'
+      UNION ALL SELECT 'type', typname, pg_get_userbyid(typowner) FROM pg_type WHERE typname = 'ro2_e'
+      UNION ALL SELECT 'table', relname, pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'ro2_t'
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      REASSIGN OWNED BY ro2_old TO ro2_new
+    expect: ok
+  - sql: |
+      SELECT 'schema' AS kind, nspname AS name, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'ro2_s'
+      UNION ALL SELECT 'function', proname, pg_get_userbyid(proowner) FROM pg_proc WHERE proname = 'ro2_f'
+      UNION ALL SELECT 'type', typname, pg_get_userbyid(typowner) FROM pg_type WHERE typname = 'ro2_e'
+      UNION ALL SELECT 'table', relname, pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'ro2_t'
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: all four objects now belong to ro2_new
+  - sql: |
+      SELECT ro2_f(41) AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP OWNED BY ro2_new; DROP ROLE ro2_old; DROP ROLE ro2_new
+    expect: ok
+    comment: cleanup

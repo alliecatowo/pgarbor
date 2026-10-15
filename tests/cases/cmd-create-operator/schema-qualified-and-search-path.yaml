@@ -1,0 +1,52 @@
+# An operator name may be schema-qualified; an unqualified name goes to the current schema (first existing search_path entry).
+# OPERATOR(schema.op) is needed to reference a qualified operator in COMMUTATOR.
+id: cmd-create-operator.schema-qualified-and-search-path
+title: "Schema-qualified operator names, the current-schema default, and OPERATOR() in COMMUTATOR"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, schemas, search-path, commutator]
+required_capabilities: [create-operator, create-function-sql, create-schema, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#parameters (name, com_op OPERATOR() syntax)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cco_sch;
+  CREATE FUNCTION cco_sch.cco_lt8(int8, int8) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR cco_sch.@!@ (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_sch.cco_lt8)
+    expect: ok
+  - sql: |
+      SELECT n.nspname, o.oprname
+      FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace
+      WHERE o.oprname = '@!@'
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 1 OPERATOR(cco_sch.@!@) 2 AS qualified_call
+    expect: rows
+  - sql: |
+      SELECT 1 @!@ 2
+    expect: error
+    sqlstate: "42883"
+    comment: cco_sch is not on the search path, so the bare name does not resolve
+  - sql: |
+      SET search_path = cco_sch, public
+    expect: ok
+  - sql: |
+      CREATE OPERATOR ^*^ (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_sch.cco_lt8, COMMUTATOR = OPERATOR(cco_sch.@!@))
+    expect: ok
+  - sql: |
+      SELECT n.nspname AS schema_name, o.oprname AS name, c.oprname AS commutator_name, cn.nspname AS commutator_schema
+      FROM pg_operator o
+      JOIN pg_namespace n ON n.oid = o.oprnamespace
+      JOIN pg_operator c ON c.oid = o.oprcom
+      JOIN pg_namespace cn ON cn.oid = c.oprnamespace
+      WHERE o.oprname = '^*^'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 1 ^*^ 2 AS unqualified_call
+    expect: rows

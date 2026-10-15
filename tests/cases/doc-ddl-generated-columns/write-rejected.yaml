@@ -1,0 +1,34 @@
+# A generated column cannot be written directly: a non-DEFAULT value in INSERT or UPDATE is
+# rejected with 428C9, while DEFAULT is accepted and the value is recomputed.
+id: doc-ddl-generated-columns.write-rejected
+title: Explicit values for generated columns are rejected in INSERT and UPDATE, DEFAULT is accepted
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, insert, update, default-keyword]
+required_capabilities: [create-table, insert, update, select, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE w (id int PRIMARY KEY, x int, g int GENERATED ALWAYS AS (x + 1) STORED);
+  INSERT INTO w (id, x, g) VALUES (1, 5, DEFAULT)
+steps:
+  - sql: |
+      INSERT INTO w (id, x, g) VALUES (2, 1, 99)
+    expect: error
+    sqlstate: "428C9"
+    comment: explicit value for a generated column
+  - sql: |
+      UPDATE w SET g = 9 WHERE id = 1
+    expect: error
+    sqlstate: "428C9"
+    comment: only DEFAULT may be assigned to a generated column in UPDATE
+  - sql: |
+      UPDATE w SET x = 7, g = DEFAULT WHERE id = 1 RETURNING id, x, g
+    expect: rows
+    comment: DEFAULT is accepted and the generated value is recomputed from the new x
+  - sql: |
+      SELECT id, x, g FROM w ORDER BY id
+    expect: rows
+    order: ordered

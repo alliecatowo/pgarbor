@@ -1,0 +1,71 @@
+id: cmd-fetch.fetch-unknown-or-rolled-back-cursor
+title: FETCH of an undeclared, rolled-back, or quoted-name cursor fails with 34000; unquoted names fold to lower case
+family: cmd-fetch
+tier: core
+feature_ids: [fetch, cursor-name, identifier-case-folding, rollback]
+required_capabilities: [transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/fetch.sgml#sql-fetch (Parameters: cursor_name); ref/declare.sgml"
+sessions: [a]
+steps:
+  - sql: |
+      FETCH NEXT FROM nope
+    expect: error
+    sqlstate: "34000"
+    comment: no such cursor
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE Cur CURSOR FOR SELECT 1 AS x
+    expect: ok
+  - sql: |
+      FETCH FROM CUR
+    expect: rows
+    order: ordered
+    comment: unquoted cursor names fold to lower case, so CUR is cur
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c CURSOR FOR SELECT 1 AS x
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      FETCH FROM c
+    expect: error
+    sqlstate: "34000"
+    comment: a cursor declared in a rolled-back transaction does not exist
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE "Mixed" CURSOR FOR SELECT 2 AS y
+    expect: ok
+  - sql: |
+      FETCH FROM mixed
+    expect: error
+    sqlstate: "34000"
+    comment: the unquoted name mixed folds to lower case and does not match Mixed
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE "Mixed" CURSOR FOR SELECT 2 AS y
+    expect: ok
+  - sql: |
+      FETCH FROM "Mixed"
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok

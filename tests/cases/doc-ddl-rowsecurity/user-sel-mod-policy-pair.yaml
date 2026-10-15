@@ -1,0 +1,59 @@
+# Two policies: FOR SELECT USING (true) plus a default (ALL) policy on user_name = current_user. SELECT is ORed; other commands see only the second.
+id: doc-ddl-rowsecurity.user-sel-mod-policy-pair
+title: "Separate SELECT and modify policies let every user read all rows but change only their own"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, permissive-or, select, insert, update, delete]
+required_capabilities: [create-table, insert, select, update, delete, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: user_sel_policy and user_mod_policy"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr04_u1;
+  CREATE ROLE pgarbor_case_role_dr04_u2;
+  CREATE TABLE users (user_name text PRIMARY KEY, email text);
+  INSERT INTO users VALUES ('pgarbor_case_role_dr04_u1', 'one@example.test'), ('pgarbor_case_role_dr04_u2', 'two@example.test');
+  GRANT SELECT, INSERT, UPDATE, DELETE ON users TO pgarbor_case_role_dr04_u1, pgarbor_case_role_dr04_u2;
+  ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY user_sel_policy ON users FOR SELECT USING (true);
+  CREATE POLICY user_mod_policy ON users USING (user_name = current_user);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr04_u1
+    expect: ok
+  - sql: |
+      SELECT user_name FROM users ORDER BY user_name
+    expect: rows
+    order: ordered
+    comment: the two SELECT policies are ORed, so every row is visible
+  - sql: |
+      UPDATE users SET email = 'changed@example.test' WHERE user_name = 'pgarbor_case_role_dr04_u2'
+    expect: ok
+    comment: UPDATE 0 - only the second policy applies to UPDATE
+  - sql: |
+      UPDATE users SET email = 'changed@example.test' WHERE user_name = 'pgarbor_case_role_dr04_u1'
+    expect: ok
+    comment: UPDATE 1 - own row
+  - sql: |
+      DELETE FROM users WHERE user_name = 'pgarbor_case_role_dr04_u2'
+    expect: ok
+    comment: DELETE 0
+  - sql: |
+      INSERT INTO users VALUES ('pgarbor_case_role_dr04_u2', 'forged@example.test')
+    expect: error
+    sqlstate: "42501"
+    comment: the second policy supplies the WITH CHECK for INSERT
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT user_name, email FROM users ORDER BY user_name
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE users
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr04_u1, pgarbor_case_role_dr04_u2
+    expect: ok

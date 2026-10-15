@@ -1,0 +1,33 @@
+# A BEFORE INSERT trigger can rewrite NEW for each row before it is stored.
+id: doc-ddl-others.trigger-before-insert-plpgsql
+title: BEFORE INSERT row trigger overwrites a derived column for every inserted row
+family: doc-ddl-others
+tier: core
+feature_ids: [triggers, create-trigger, plpgsql, before-insert]
+required_capabilities: [create-table, create-function, plpgsql, triggers, insert, select, multi-row-insert]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-others (Triggers and rewrite rules); ref: sql-createtrigger.html"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int4 PRIMARY KEY, name text, name_upper text);
+  CREATE FUNCTION items_bi() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.name_upper := upper(NEW.name);
+    RETURN NEW;
+  END
+  $$;
+  CREATE TRIGGER items_bi BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION items_bi();
+steps:
+  - sql: |
+      INSERT INTO items VALUES (1, 'widget', NULL), (2, 'gadget', 'IGNORED')
+    expect: ok
+  - sql: |
+      SELECT id, name, name_upper FROM items ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the caller-supplied name_upper is replaced by the trigger
+  - sql: |
+      INSERT INTO items (id, name) VALUES (3, NULL) RETURNING id, name_upper
+    expect: rows
+    comment: upper(NULL) is NULL, so the derived column stays NULL

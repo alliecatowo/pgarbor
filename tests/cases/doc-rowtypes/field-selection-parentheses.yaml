@@ -1,0 +1,34 @@
+# Documented field selection: an unparenthesized composite column reference is read as a table
+# name, so the parentheses around the column are required; table-qualified form too.
+id: doc-rowtypes.field-selection-parentheses
+title: Field selection on composite columns needs parentheses; unparenthesized item.name is a missing FROM entry
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, field-selection, errors]
+required_capabilities: [create-type, create-table, insert, select, composite-types, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-accessing"
+sessions: [a]
+setup: |
+  CREATE TYPE inventory_item AS (name text, supplier_id integer, price numeric);
+  CREATE TABLE on_hand (item inventory_item, count integer);
+  INSERT INTO on_hand VALUES (ROW('fuzzy dice', 42, 1.99), 1000), (ROW('pan', 7, 12.50), 3);
+steps:
+  - sql: |
+      SELECT item.name FROM on_hand WHERE item.price > 9.99
+    expect: error
+    sqlstate: "42P01"
+    comment: item is taken to be a table name
+  - sql: |
+      SELECT (item).name FROM on_hand WHERE (item).price > 9.99
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT (on_hand.item).name, (on_hand.item).price FROM on_hand ORDER BY count
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count, (item).supplier_id FROM on_hand WHERE (on_hand.item).price > 9.99
+    expect: rows
+    order: multiset

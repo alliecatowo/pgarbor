@@ -1,0 +1,30 @@
+# DROP SEQUENCE is transactional: rolling back keeps the sequence with its state, committing removes it.
+id: cmd-drop-sequence.transaction-rollback-and-commit
+title: DROP SEQUENCE inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, transactions, rollback, commit]
+required_capabilities: [sequences, transactions, select, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-dropsequence (DDL in transactions) and transaction-iso"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE r14 START 5;
+steps:
+  - sql: |
+      BEGIN; DROP SEQUENCE r14; ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT nextval('r14')
+    expect: rows
+    order: ordered
+    comment: rollback restored the sequence and its first value 5
+  - sql: |
+      BEGIN; DROP SEQUENCE r14; COMMIT
+    expect: ok
+  - sql: |
+      SELECT nextval('r14')
+    expect: error
+    sqlstate: "42P01"
+    comment: committed drop is permanent

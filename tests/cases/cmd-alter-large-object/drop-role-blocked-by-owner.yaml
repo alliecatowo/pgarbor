@@ -1,0 +1,34 @@
+# A role that owns a large object cannot be dropped until ownership moves away.
+id: cmd-alter-large-object.drop-role-blocked-by-owner
+title: DROP ROLE fails with dependent_objects_still_exist while the role owns a large object
+family: cmd-alter-large-object
+tier: extended
+feature_ids: [alter-large-object, owner, drop-role, dependencies]
+required_capabilities: [large-objects, roles, catalog-introspection, select]
+provenance:
+  source: hand
+  ref: "alter_large_object.sgml: a large object has an owner; DROP ROLE dependency check"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_dep_owner
+    expect: ok
+  - sql: |
+      SELECT lo_create(931001)
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 931001 OWNER TO cmd_alo_dep_owner
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_alo_dep_owner
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      ALTER LARGE OBJECT 931001 OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_alo_dep_owner
+    expect: ok
+  - sql: |
+      SELECT lo_unlink(931001)
+    expect: rows

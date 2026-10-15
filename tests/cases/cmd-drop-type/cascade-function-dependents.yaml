@@ -1,0 +1,41 @@
+# CASCADE drops functions whose signature or return type uses the composite type; RESTRICT refuses while they exist.
+id: cmd-drop-type.cascade-function-dependents
+title: CASCADE drops functions that take or return the type, RESTRICT refuses
+family: cmd-drop-type
+tier: core
+feature_ids: [drop-type, cascade, create-function, create-type]
+required_capabilities: [drop-type, create-type, create-function, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_type.sgml#sql-droptype (CASCADE: functions)"
+sessions: [a]
+setup: |
+  CREATE TYPE fc AS (a int4);
+  CREATE FUNCTION fget(fc) RETURNS int4 LANGUAGE sql AS 'SELECT $1.a';
+  CREATE TYPE rt AS (a int4);
+  CREATE FUNCTION mk() RETURNS rt LANGUAGE sql AS 'SELECT ROW(1)::rt';
+steps:
+  - sql: |
+      DROP TYPE fc
+    expect: error
+    sqlstate: "2BP01"
+    comment: fget(fc) depends on fc
+  - sql: |
+      DROP TYPE fc CASCADE
+    expect: ok
+  - sql: |
+      SELECT to_regprocedure('fget(fc)') IS NULL AS fget_gone
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TYPE rt
+    expect: error
+    sqlstate: "2BP01"
+    comment: mk() returns rt, so it also blocks RESTRICT
+  - sql: |
+      DROP TYPE rt CASCADE
+    expect: ok
+  - sql: |
+      SELECT to_regprocedure('mk()') IS NULL AS mk_gone
+    expect: rows
+    order: ordered

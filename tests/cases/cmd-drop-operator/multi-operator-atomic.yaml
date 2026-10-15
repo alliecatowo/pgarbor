@@ -1,0 +1,36 @@
+# A DROP OPERATOR list is all-or-nothing: when a later entry names a missing operator, the earlier valid entry is not dropped.
+id: cmd-drop-operator.multi-operator-atomic
+title: DROP OPERATOR with a list fails as a whole when one entry is missing
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, multiple-operators, atomicity]
+required_capabilities: [drop-operator, create-operator, create-function-sql, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#synopsis ([, ...] list form)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dmo_pow(integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 10 + $2 $$;
+  CREATE OPERATOR ^ (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dmo_pow);
+steps:
+  - sql: |
+      DROP OPERATOR ^ (integer, integer), ^ (text, text)
+    expect: error
+    sqlstate: "42883"
+    comment: second entry has no matching operator, so the whole statement fails
+  - sql: |
+      SELECT 2 ^ 3 AS still_there
+    expect: rows
+    comment: the first entry was not dropped
+  - sql: |
+      DROP OPERATOR ^ (integer, integer), IF EXISTS ^ (text, text)
+    expect: error
+    sqlstate: "42601"
+    comment: IF EXISTS applies to the whole statement only, placed before the first name
+  - sql: |
+      DROP OPERATOR IF EXISTS ^ (integer, integer), ^ (text, text)
+    expect: notice
+    comment: with IF EXISTS on the statement, the missing entry is a notice and the existing one is dropped
+  - sql: |
+      SELECT count(*) AS left_after FROM pg_operator WHERE oprname = '^' AND oprnamespace = 'public'::regnamespace
+    expect: rows

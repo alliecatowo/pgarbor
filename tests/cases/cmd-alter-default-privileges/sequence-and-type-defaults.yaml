@@ -1,0 +1,65 @@
+# Defaults for sequences (USAGE via a schema grant) and types (global REVOKE of PUBLIC USAGE); per-schema REVOKE of types does nothing.
+id: cmd-alter-default-privileges.sequence-and-type-defaults
+title: Sequence USAGE default enables nextval for a role and a global type REVOKE removes PUBLIC usage of new types
+family: cmd-alter-default-privileges
+tier: extended
+feature_ids: [alter-default-privileges, sequences, types, usage-privilege, schema-scope, default-acl]
+required_capabilities: [create-schema, sequences, create-type, roles, set-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-description (sequences and types; per-schema defaults only add to global defaults)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_webuser') THEN CREATE ROLE adp_webuser; END IF;
+  END $$;
+  CREATE SCHEMA adp_st;
+  GRANT USAGE ON SCHEMA adp_st TO adp_webuser;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_st GRANT USAGE ON SEQUENCES TO adp_webuser
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE adp_st.sq1
+    expect: ok
+  - sql: |
+      SELECT relname, relacl::text FROM pg_class WHERE relname = 'sq1'
+    expect: rows
+    order: multiset
+    comment: the new sequence carries the webuser USAGE entry
+  - sql: |
+      SET ROLE adp_webuser
+    expect: ok
+  - sql: |
+      SELECT nextval('adp_st.sq1')
+    expect: rows
+    order: multiset
+    comment: USAGE on the sequence is enough for nextval
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_st REVOKE USAGE ON TYPES FROM PUBLIC
+    expect: ok
+    comment: no effect, because per-schema REVOKE cannot remove the global PUBLIC USAGE default
+  - sql: |
+      CREATE TYPE adp_st.e1 AS ENUM ('x')
+    expect: ok
+  - sql: |
+      SELECT has_type_privilege('public', 'adp_st.e1', 'USAGE') AS pub_usage_before
+    expect: rows
+    order: multiset
+    comment: PUBLIC still has USAGE
+  - sql: |
+      ALTER DEFAULT PRIVILEGES REVOKE USAGE ON TYPES FROM PUBLIC
+    expect: ok
+    comment: the global default is removed for every schema
+  - sql: |
+      CREATE TYPE adp_st.e2 AS ENUM ('y')
+    expect: ok
+  - sql: |
+      SELECT t.typname, has_type_privilege('public', t.oid, 'USAGE') AS pub_usage
+      FROM pg_type t WHERE t.typname IN ('e1', 'e2') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: e1 keeps its earlier PUBLIC usage while e2 created after the global REVOKE has none

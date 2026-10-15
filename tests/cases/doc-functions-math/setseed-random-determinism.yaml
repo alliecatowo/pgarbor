@@ -1,0 +1,44 @@
+# setseed makes random() and random_normal() sequences reproducible within a session; random(min, max) stays in range.
+id: doc-functions-math.setseed-random-determinism
+title: setseed reproduces random sequences in the same session and random(min,max) stays in range
+family: doc-functions-math
+tier: extended
+feature_ids: [random, setseed, random-range]
+required_capabilities: [select, numeric, float8, create-table, insert, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-math (Random Functions, setseed)"
+sessions: [a]
+setup: |
+  CREATE TABLE rv (k text NOT NULL, r float8 NOT NULL);
+steps:
+  - sql: |
+      SELECT setseed(0.5)
+    expect: rows
+  - sql: |
+      INSERT INTO rv SELECT 'a', random() FROM generate_series(1, 5)
+    expect: ok
+  - sql: |
+      SELECT setseed(0.5)
+    expect: rows
+  - sql: |
+      INSERT INTO rv SELECT 'b', random() FROM generate_series(1, 5)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS matched FROM rv a JOIN rv b ON a.r = b.r AND a.k = 'a' AND b.k = 'b'
+    expect: rows
+    order: multiset
+    comment: same seed gives the same five values, so all five pairs match
+  - sql: |
+      SELECT count(*) AS in_range FROM generate_series(1, 200) g WHERE random(1, 10) BETWEEN 1 AND 10
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS in_unit FROM generate_series(1, 200) g WHERE random() >= 0.0 AND random() < 1.0
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT setseed(2)
+    expect: error
+    sqlstate: "22023"
+    comment: seed must lie in [-1, 1]

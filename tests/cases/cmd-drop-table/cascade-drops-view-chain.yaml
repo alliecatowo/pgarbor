@@ -1,0 +1,30 @@
+# Documented: CASCADE removes a dependent view, and in turn objects depending on that view.
+id: cmd-drop-table.cascade-drops-view-chain
+title: DROP TABLE CASCADE removes dependent views transitively
+family: cmd-drop-table
+tier: core
+feature_ids: [drop-table, cascade, view-dependency]
+required_capabilities: [create-table, create-view, insert, select, drop-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_table.sgml#sql-droptable (Parameters: CASCADE)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4);
+  INSERT INTO p VALUES (1), (2), (3);
+  CREATE VIEW vw AS SELECT id FROM p;
+  CREATE VIEW v2 AS SELECT id FROM vw WHERE id > 1;
+steps:
+  - sql: |
+      SELECT id FROM v2 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the view chain works before the drop
+  - sql: |
+      DROP TABLE p CASCADE
+    expect: ok
+    comment: notices list the cascaded views
+  - sql: |
+      SELECT to_regclass('p') IS NULL AS p_gone, to_regclass('vw') IS NULL AS vw_gone, to_regclass('v2') IS NULL AS v2_gone
+    expect: rows
+    order: ordered

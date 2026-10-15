@@ -1,0 +1,50 @@
+# pg_partition_tree, pg_partition_root, pg_partition_ancestors on a three-level range partition tree.
+id: doc-functions-admin.partition-tree-walk
+title: Partition tree functions list descendants, roots and ancestors, and return nothing for plain tables
+family: doc-functions-admin
+tier: core
+feature_ids: [partitioning, pg-partition-tree, pg-partition-root, pg-partition-ancestors]
+required_capabilities: [create-table, select, partitioning]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-admin-dbobject (pg_partition_tree, pg_partition_ancestors, pg_partition_root)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE meas (id int, ts int, v int) PARTITION BY RANGE (ts);
+      CREATE TABLE meas_2020 PARTITION OF meas FOR VALUES FROM (0) TO (100) PARTITION BY RANGE (id);
+      CREATE TABLE meas_2020_a PARTITION OF meas_2020 FOR VALUES FROM (0) TO (10);
+      CREATE TABLE meas_2021 PARTITION OF meas FOR VALUES FROM (100) TO (200);
+      CREATE TABLE plain_t (id int)
+    expect: ok
+  - sql: |
+      SELECT relid::regclass::text AS rel, parentrelid::regclass::text AS parent, isleaf, level
+      FROM pg_partition_tree('meas') ORDER BY level, rel
+    expect: rows
+    order: ordered
+    comment: one row per partition including the input at level 0
+  - sql: |
+      SELECT relid::regclass::text AS rel, isleaf, level FROM pg_partition_tree('meas_2020_a')
+    expect: rows
+    comment: a leaf input returns only itself
+  - sql: |
+      SELECT pg_partition_root('meas_2020_a')::text AS from_leaf, pg_partition_root('meas')::text AS from_root,
+             pg_partition_root('plain_t') IS NULL AS from_plain
+    expect: rows
+  - sql: |
+      SELECT r::text AS ancestor FROM pg_partition_ancestors('meas_2020_a') r ORDER BY ancestor
+    expect: rows
+    order: ordered
+    comment: the relation itself and both parents are listed
+  - sql: |
+      SELECT relid::regclass::text FROM pg_partition_tree('plain_t')
+    expect: rows
+    comment: a plain table has no partition tree and returns zero rows
+  - sql: |
+      SELECT pg_size_pretty(sum(pg_relation_size(relid))) AS total_size FROM pg_partition_tree('meas')
+    expect: rows
+    comment: documented pattern for summing partition sizes, empty tables give zero bytes
+  - sql: |
+      SELECT relid FROM pg_partition_tree('nosuch_rel')
+    expect: error
+    sqlstate: "42P01"

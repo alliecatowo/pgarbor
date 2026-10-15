@@ -1,0 +1,75 @@
+# IF / ELSIF / ELSE, ELSEIF spelling, nested IF equivalence, and a NULL condition falling through to ELSE.
+id: doc-plpgsql-control-structures.if-elsif-null-condition
+title: "IF-ELSIF-ELSE and nested IF choose ELSE for NULL conditions; IF-THEN without ELSE skips"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, if, elsif, null-handling, control-flow]
+required_capabilities: [plpgsql, create-function, select, null-handling]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Conditionals: IF-THEN-ELSIF)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION sign_text(number int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE result text;
+  BEGIN
+    IF number = 0 THEN
+      result := 'zero';
+    ELSIF number > 0 THEN
+      result := 'positive';
+    ELSIF number < 0 THEN
+      result := 'negative';
+    ELSE
+      result := 'NULL';
+    END IF;
+    RETURN result;
+  END $$;
+  CREATE FUNCTION sign_elseif(n int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r text;
+  BEGIN
+    IF n = 0 THEN
+      r := 'zero';
+    ELSEIF n > 0 THEN
+      r := 'positive';
+    ELSE
+      r := 'not positive';
+    END IF;
+    RETURN r;
+  END $$;
+  CREATE FUNCTION pretty_sex(s text) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE pretty text;
+  BEGIN
+    IF s = 'm' THEN
+      pretty := 'man';
+    ELSE
+      IF s = 'f' THEN
+        pretty := 'woman';
+      END IF;
+    END IF;
+    RETURN pretty;
+  END $$;
+  CREATE FUNCTION if_no_else(n int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r text := 'untouched';
+  BEGIN
+    IF n > 0 THEN
+      r := 'changed';
+    END IF;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT sign_text(0) AS z, sign_text(5) AS p, sign_text(-5) AS n, sign_text(NULL::int) AS nul
+    expect: rows
+    comment: a NULL condition is not true, so control reaches ELSE
+  - sql: |
+      SELECT sign_elseif(3) AS p, sign_elseif(NULL::int) AS nul
+    expect: rows
+    comment: ELSEIF is accepted as a spelling of ELSIF
+  - sql: |
+      SELECT pretty_sex('m') AS m, pretty_sex('f') AS f, pretty_sex('x') IS NULL AS unset
+    expect: rows
+    comment: nested IF gives the same result as ELSIF, unmatched value leaves the variable NULL
+  - sql: |
+      SELECT if_no_else(NULL::int) AS nul, if_no_else(1) AS pos
+    expect: rows
+    comment: IF-THEN without ELSE skips the body on NULL

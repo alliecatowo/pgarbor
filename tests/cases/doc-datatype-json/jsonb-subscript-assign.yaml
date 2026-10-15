@@ -1,0 +1,42 @@
+# jsonb subscript assignment: NULL and empty containers are created on demand, arrays are null-padded.
+id: doc-datatype-json.jsonb-subscript-assign
+title: jsonb subscript UPDATE creates missing objects and arrays and null-pads arrays as documented
+family: doc-datatype-json
+tier: core
+feature_ids: [jsonb, jsonb-subscripting, jsonb-subscript-assign]
+required_capabilities: [create-table, insert, select, update, jsonb]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#jsonb-subscripting (assignment examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE sa (id int4 PRIMARY KEY, jf jsonb);
+  INSERT INTO sa VALUES
+    (1, NULL), (2, '[]'), (3, '{}'), (4, '[0]'), (6, NULL), (7, '[]');
+steps:
+  - sql: |
+      UPDATE sa SET jf['a'] = '1' WHERE id = 1
+    expect: ok
+    comment: SQL NULL source becomes an empty object first
+  - sql: |
+      UPDATE sa SET jf[0] = '1' WHERE id = 6
+    expect: ok
+    comment: SQL NULL source becomes an empty array for an integer subscript
+  - sql: |
+      UPDATE sa SET jf[2] = '2' WHERE id = 2
+    expect: ok
+    comment: array null-padded up to the index
+  - sql: |
+      UPDATE sa SET jf[2] = '2' WHERE id = 4
+    expect: ok
+  - sql: |
+      UPDATE sa SET jf['a'][0]['b'] = '1' WHERE id = 3
+    expect: ok
+    comment: missing intermediate containers are created
+  - sql: |
+      UPDATE sa SET jf[1]['a'] = '1' WHERE id = 7
+    expect: ok
+  - sql: |
+      SELECT id, jf FROM sa ORDER BY id
+    expect: rows
+    order: ordered

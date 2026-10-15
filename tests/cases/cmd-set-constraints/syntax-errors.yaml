@@ -1,0 +1,52 @@
+# The grammar requires ALL or a name list and exactly one of DEFERRED or IMMEDIATE; anything else is a syntax error (42601).
+id: cmd-set-constraints.syntax-errors
+title: Missing mode, misspelled mode, and trailing comma are syntax errors
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, transactions, errors]
+required_capabilities: [create-table, transactions, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Synopsis: SET CONSTRAINTS { ALL | name [, ...] } { DEFERRED | IMMEDIATE })"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_fk REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      SET CONSTRAINTS c_fk
+    expect: error
+    sqlstate: "42601"
+    comment: the mode keyword is required
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRABLE
+    expect: error
+    sqlstate: "42601"
+    comment: DEFERRABLE is a constraint characteristic, not a mode for SET CONSTRAINTS
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED,
+    expect: error
+    sqlstate: "42601"
+    comment: a trailing comma is not allowed
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+    comment: the well-formed statement is accepted
+  - sql: |
+      ROLLBACK
+    expect: ok

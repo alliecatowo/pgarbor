@@ -1,0 +1,38 @@
+# Nonexistent operator, family, access method or schema-qualified family name each fail with its own SQLSTATE.
+id: cmd-alter-opfamily.missing-objects-errors
+title: Unknown operator, family, access method and family name fail with undefined-object errors
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, errors, name-resolution]
+required_capabilities: [alter-operator-family, create-operator-family, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Parameters: name, index_method, operator_name, function_name)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_miss USING btree;
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_miss USING btree ADD OPERATOR 1 ### (int4, int4)
+    expect: error
+    sqlstate: "42883"
+    comment: operator_name must name an existing operator
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_nosuch USING btree ADD OPERATOR 1 < (int4, int4)
+    expect: error
+    sqlstate: "42704"
+    comment: the family must exist
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_miss USING nosuchmethod ADD OPERATOR 1 < (int4, int4)
+    expect: error
+    sqlstate: "42704"
+    comment: the index method must exist
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_nosuch USING btree RENAME TO cmd_aof_other
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER OPERATOR FAMILY nosuch_schema.cmd_aof_miss USING btree SET SCHEMA public
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema qualifier must exist

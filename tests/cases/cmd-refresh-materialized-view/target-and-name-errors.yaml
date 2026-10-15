@@ -1,0 +1,50 @@
+id: cmd-refresh-materialized-view.target-and-name-errors
+title: REFRESH MATERIALIZED VIEW rejects tables, views, missing names, unknown schemas and malformed syntax
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, error-handling, name-resolution]
+required_capabilities: [create-table, insert, select, create-view, create-materialized-view, refresh-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (name parameter)"
+sessions: [a]
+setup: |
+  CREATE TABLE plain_t (id int4);
+  INSERT INTO plain_t VALUES (1);
+  CREATE VIEW plain_v AS SELECT id FROM plain_t;
+  CREATE MATERIALIZED VIEW real_mv AS SELECT id FROM plain_t;
+steps:
+  - sql: |
+      REFRESH MATERIALIZED VIEW plain_t
+    expect: error
+    sqlstate: "0A000"
+    comment: a base table is not a materialized view
+  - sql: |
+      REFRESH MATERIALIZED VIEW plain_v
+    expect: error
+    sqlstate: "42809"
+    comment: a plain view is not a materialized view
+  - sql: |
+      REFRESH MATERIALIZED VIEW no_such_mv
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      REFRESH MATERIALIZED VIEW no_such_schema.real_mv
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      REFRESH MATERIALIZED VIEW
+    expect: error
+    sqlstate: "42601"
+    comment: name is required
+  - sql: |
+      REFRESH MATERIALIZED VIEW real_mv WITH NO DATA WITH DATA
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      REFRESH MATERIALIZED VIEW real_mv
+    expect: ok
+    comment: the failed statements changed nothing
+  - sql: |
+      SELECT count(*) FROM real_mv
+    expect: rows

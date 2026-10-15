@@ -1,0 +1,40 @@
+# The documented STRICT exception-block pattern: NO_DATA_FOUND and TOO_MANY_ROWS handlers re-raise
+# custom messages with the default raise_exception code P0001; a clean match returns normally.
+id: doc-plpgsql-statements.strict-exception-handler-raise
+title: EXCEPTION handlers for NO_DATA_FOUND and TOO_MANY_ROWS re-raise P0001 messages
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, strict, exception-handling, raise, errors]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-sql-onerow"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('dup', 1), ('dup', 2);
+  CREATE FUNCTION f_find(who text) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE myrec emp;
+  BEGIN
+    SELECT * INTO STRICT myrec FROM emp WHERE empname = who;
+    RETURN myrec.salary::text;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE EXCEPTION 'employee % not found', who;
+    WHEN TOO_MANY_ROWS THEN
+      RAISE EXCEPTION 'employee % not unique', who;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_find('ann') AS salary
+    expect: rows
+  - sql: |
+      SELECT f_find('nobody')
+    expect: error
+    sqlstate: "P0001"
+    comment: message is employee nobody not found
+  - sql: |
+      SELECT f_find('dup')
+    expect: error
+    sqlstate: "P0001"
+    comment: message is employee dup not unique

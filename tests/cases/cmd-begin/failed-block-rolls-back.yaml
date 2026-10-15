@@ -1,0 +1,39 @@
+# An error inside a BEGIN block aborts it; later statements fail until ROLLBACK or COMMIT, and COMMIT then discards everything.
+id: cmd-begin.failed-block-rolls-back
+title: After an error inside BEGIN, COMMIT ends the block as a rollback and discards its writes
+family: cmd-begin
+tier: core
+feature_ids: [begin, commit, transactions, errors, insert]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/begin.sgml#sql-begin (Description: all statements are executed in a single transaction until COMMIT or ROLLBACK)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: error
+    sqlstate: "25P02"
+    comment: current transaction is aborted
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: reports ROLLBACK and not an error
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the pre-existing row remains

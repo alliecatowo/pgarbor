@@ -1,0 +1,68 @@
+# COMMENT ON OPERATOR, OPERATOR CLASS, OPERATOR FAMILY and ACCESS METHOD, including the NONE placeholder for a prefix operator and the documented int4ops example that does not exist.
+id: cmd-comment.operator-opclass-family
+title: COMMENT ON OPERATOR (with NONE for prefix), OPERATOR CLASS, OPERATOR FAMILY and ACCESS METHOD
+family: cmd-comment
+tier: extended
+feature_ids: [comment, comment-operator, comment-operator-class, comment-operator-family, comment-access-method]
+required_capabilities: [comment, create-operator, create-function, sql-functions, operator-classes, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-params-left-type (NONE for missing argument of a prefix operator); ref/comment.sgml#sql-comment-examples (ACCESS METHOD, OPERATOR, OPERATOR CLASS, OPERATOR FAMILY examples)"
+sessions: [a]
+notes: "The PostgreSQL 18 doc example 'COMMENT ON OPERATOR CLASS int4ops USING btree' names a class that does not exist; the real name is int4_ops, so the doc example itself is recorded as a 42704 error."
+steps:
+  - sql: |
+      CREATE FUNCTION cmt_op_fn(text, text) RETURNS text LANGUAGE sql AS 'SELECT $1 || $2'
+    expect: ok
+  - sql: |
+      CREATE OPERATOR ^ (LEFTARG = text, RIGHTARG = text, PROCEDURE = cmt_op_fn)
+    expect: ok
+  - sql: |
+      COMMENT ON OPERATOR ^ (text, text) IS 'Performs intersection of two texts'
+    expect: ok
+  - sql: |
+      COMMENT ON OPERATOR - (NONE, integer) IS 'Unary minus'
+    expect: ok
+  - sql: |
+      SELECT obj_description('^(text,text)'::regoperator, 'pg_operator') AS binary_op,
+             obj_description('-(NONE,integer)'::regoperator, 'pg_operator') AS prefix_op
+    expect: rows
+  - sql: |
+      COMMENT ON OPERATOR CLASS int4_ops USING btree IS '4 byte integer operators for btrees'
+    expect: ok
+  - sql: |
+      COMMENT ON OPERATOR FAMILY integer_ops USING btree IS 'all integer operators for btrees'
+    expect: ok
+  - sql: |
+      SELECT obj_description(c.oid, 'pg_opclass') AS opclass_descr, obj_description(f.oid, 'pg_opfamily') AS family_descr
+      FROM pg_opclass c
+      JOIN pg_opfamily f ON f.oid = c.opcfamily
+      JOIN pg_am a ON a.oid = c.opcmethod
+      WHERE c.opcname = 'int4_ops' AND a.amname = 'btree' AND f.opfname = 'integer_ops'
+    expect: rows
+  - sql: |
+      COMMENT ON ACCESS METHOD gin IS 'GIN index access method'
+    expect: ok
+  - sql: |
+      SELECT obj_description(oid, 'pg_am') AS am_descr FROM pg_am WHERE amname = 'gin'
+    expect: rows
+  - sql: |
+      COMMENT ON OPERATOR ^ (int4, int4) IS 'no integer caret operator is defined'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      COMMENT ON OPERATOR CLASS int4ops USING btree IS 'the documented example name does not exist'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON OPERATOR FAMILY nofam USING btree IS 'no such family'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON OPERATOR CLASS int4_ops USING nosucham IS 'no such access method'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      COMMENT ON ACCESS METHOD nosucham IS 'no such access method'
+    expect: error
+    sqlstate: "42704"

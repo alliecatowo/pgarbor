@@ -1,0 +1,40 @@
+# RENAME TO changes the name (and fails onto an existing name); SET SCHEMA moves the sequence and keeps its state.
+id: cmd-alter-sequence.rename-and-set-schema
+title: "ALTER SEQUENCE RENAME TO and SET SCHEMA move the sequence, keep its position, and reject a name clash"
+family: cmd-alter-sequence
+tier: core
+feature_ids: [alter-sequence, rename-to, set-schema, nextval, errors]
+required_capabilities: [sequences, create-schema, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_sequence.sgml#sql-altersequence (RENAME TO, SET SCHEMA)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE rn_old;
+  CREATE SEQUENCE rn_taken;
+  CREATE SCHEMA rn_schema;
+steps:
+  - sql: |
+      SELECT nextval('rn_old')
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER SEQUENCE rn_old RENAME TO rn_new
+    expect: ok
+  - sql: |
+      ALTER SEQUENCE rn_new RENAME TO rn_taken
+    expect: error
+    sqlstate: "42P07"
+    comment: the target name is already a relation in the schema
+  - sql: |
+      SELECT to_regclass('rn_old') IS NULL AS old_gone
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER SEQUENCE rn_new SET SCHEMA rn_schema
+    expect: ok
+  - sql: |
+      SELECT nextval('rn_schema.rn_new')
+    expect: rows
+    order: ordered
+    comment: the sequence keeps its position (2) after the move

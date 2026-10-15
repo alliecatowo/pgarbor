@@ -1,0 +1,46 @@
+# Check constraints as column constraints, named constraints, and table constraints.
+id: doc-ddl-constraints.check-column-and-table
+title: CHECK constraints as column, named and table constraints reject violating rows
+family: doc-ddl-constraints
+tier: core
+feature_ids: [check-constraints, constraints, insert, select]
+required_capabilities: [create-table, constraints, check-constraint, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Check Constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (
+      product_no integer,
+      name text,
+      price numeric CONSTRAINT positive_price CHECK (price > 0),
+      discounted_price numeric CHECK (discounted_price > 0),
+      CONSTRAINT valid_discount CHECK (price > discounted_price)
+  )
+steps:
+  - sql: |
+      INSERT INTO products VALUES (1, 'widget', 10, 5)
+    expect: ok
+  - sql: |
+      INSERT INTO products VALUES (2, 'free', 0, 1)
+    expect: error
+    sqlstate: "23514"
+    comment: named column check positive_price fails
+  - sql: |
+      INSERT INTO products VALUES (3, 'bad discount', 5, 6)
+    expect: error
+    sqlstate: "23514"
+    comment: named table constraint valid_discount fails
+  - sql: |
+      INSERT INTO products VALUES (4, 'negative discount', 5, -1)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT product_no, name, price, discounted_price FROM products ORDER BY product_no
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE conrelid = 'products'::regclass AND contype = 'c' ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: the unnamed column check gets a system-chosen name; the others keep the given names

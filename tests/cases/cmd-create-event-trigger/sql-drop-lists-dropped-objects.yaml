@@ -1,0 +1,36 @@
+# sql_drop fires after the drop and pg_event_trigger_dropped_objects() reports the table, its row type and its array type.
+id: cmd-create-event-trigger.sql-drop-lists-dropped-objects
+title: sql_drop trigger lists the dropped table together with its implicit row type and array type
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-sql-drop, drop-table]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE TABLE evlog (seq int4 GENERATED ALWAYS AS IDENTITY, evt text, tag text, note text);
+  CREATE FUNCTION log_drop() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  DECLARE r record;
+  BEGIN
+    FOR r IN SELECT object_type, object_identity, schema_name, object_name FROM pg_event_trigger_dropped_objects() LOOP
+      INSERT INTO evlog (evt, tag, note)
+        VALUES (tg_event, tg_tag,
+                r.object_type || '|' || r.object_identity || '|' || coalesce(r.schema_name, '-') || '|' || coalesce(r.object_name, '-'));
+    END LOOP;
+  END; $$;
+  CREATE EVENT TRIGGER s_drop ON sql_drop
+    WHEN TAG IN ('DROP TABLE')
+    EXECUTE FUNCTION log_drop();
+steps:
+  - sql: |
+      CREATE TABLE tt (a int4, b int4)
+    expect: ok
+  - sql: |
+      DROP TABLE tt
+    expect: ok
+  - sql: |
+      SELECT evt, tag, note FROM evlog ORDER BY seq
+    expect: rows
+    order: multiset
+    comment: one row per dropped object; the order of pg_event_trigger_dropped_objects() is not specified

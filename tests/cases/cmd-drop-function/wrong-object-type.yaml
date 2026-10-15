@@ -1,0 +1,45 @@
+# DROP FUNCTION refuses aggregates (42809, hint: use DROP AGGREGATE) and procedures (42809, "is not a
+# function"). Nothing is dropped; the correct commands succeed.
+id: cmd-drop-function.wrong-object-type
+title: DROP FUNCTION rejects aggregates and procedures with 42809
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, aggregates, procedures, object-type-check]
+required_capabilities: [create-aggregate, create-procedure, drop-function, drop-aggregate, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (Description); ref/drop_aggregate.sgml; ref/drop_procedure.sgml"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE AGGREGATE wagg(int) (sfunc = int4pl, stype = int4)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE wproc() LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION wagg(int)
+    expect: error
+    sqlstate: "42809"
+    comment: wagg is an aggregate; hint says to use DROP AGGREGATE
+  - sql: |
+      DROP FUNCTION wproc()
+    expect: error
+    sqlstate: "42809"
+    comment: wproc is a procedure, not a function
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname IN ('wagg', 'wproc')
+    expect: rows
+    order: multiset
+    comment: 2 rows, both still exist
+  - sql: |
+      DROP AGGREGATE wagg(int)
+    expect: ok
+  - sql: |
+      DROP PROCEDURE wproc()
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname IN ('wagg', 'wproc')
+    expect: rows
+    order: multiset
+    comment: 0 rows remain

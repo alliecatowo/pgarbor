@@ -1,0 +1,63 @@
+# Several BEFORE row triggers fire in alphabetical order of name. Each returned row is the input to the
+# next, and a NULL return abandons the operation for that row so later triggers do not fire for it.
+id: doc-trigger-definition.before-chain-order-and-null-abort
+title: BEFORE row triggers chain in name order and a NULL return skips the rest for that row
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, plpgsql, insert, trigger-ordering]
+required_capabilities: [create-table, create-function, insert, select, plpgsql, triggers, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (multiple triggers on the same event: alphabetical order; BEFORE chaining; NULL abandons row)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int, tag text);
+  CREATE TABLE trig_log (seq int GENERATED ALWAYS AS IDENTITY, name text, id int);
+  CREATE FUNCTION trg_a_fn() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (name, id) VALUES (TG_NAME, NEW.id);
+    NEW.tag := NEW.tag || 'a';
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION trg_b_fn() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (name, id) VALUES (TG_NAME, NEW.id);
+    NEW.tag := NEW.tag || 'b';
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION trg_c_fn() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (name, id) VALUES (TG_NAME, NEW.id);
+    IF NEW.id = 2 THEN
+      RETURN NULL;
+    END IF;
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION trg_d_fn() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (name, id) VALUES (TG_NAME, NEW.id);
+    NEW.id := NEW.id * 10;
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  -- Created in reverse order on purpose: firing order follows the name, not creation order.
+  CREATE TRIGGER trg_d BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION trg_d_fn();
+  CREATE TRIGGER trg_c BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION trg_c_fn();
+  CREATE TRIGGER trg_b BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION trg_b_fn();
+  CREATE TRIGGER trg_a BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION trg_a_fn();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 'x'), (2, 'y'), (3, 'z')
+    expect: ok
+    comment: row 2 is abandoned by trg_c, so the count is 2
+  - sql: |
+      SELECT id, tag FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name, id FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered

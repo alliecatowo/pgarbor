@@ -1,0 +1,47 @@
+# OWNER TO (CURRENT_USER, CURRENT_ROLE, SESSION_USER, unknown role) and SET SCHEMA work the same for
+# function, procedure and aggregate; a SET SCHEMA into a schema that already has the signature is 42723.
+id: cmd-alter-routine.owner-and-schema
+title: ALTER ROUTINE OWNER TO and SET SCHEMA apply to every routine kind, with documented conflict errors
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, owner, set-schema, schemas]
+required_capabilities: [create-function, create-procedure, create-aggregate, create-schema, alter-function, aggregates, sql-functions, roles, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: OWNER TO, SET SCHEMA)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION s1.foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT 2';
+  CREATE PROCEDURE pr1(int) LANGUAGE sql AS 'SELECT 1';
+  CREATE AGGREGATE agg1(int) (SFUNC = int4pl, STYPE = int4, INITCOND = '0');
+steps:
+  - sql: |
+      ALTER ROUTINE foo(integer) OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      ALTER ROUTINE pr1(int) OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      ALTER ROUTINE agg1(int) OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      ALTER ROUTINE foo(integer) OWNER TO no_such_role_xyz
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER ROUTINE pr1(int) SET SCHEMA s1
+    expect: ok
+  - sql: |
+      ALTER ROUTINE agg1(int) SET SCHEMA s1
+    expect: ok
+  - sql: |
+      ALTER ROUTINE foo(integer) SET SCHEMA s1
+    expect: error
+    sqlstate: "42723"
+    comment: s1.foo(integer) already exists
+  - sql: |
+      SELECT n.nspname, p.proname, p.prokind, p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) AS owned_by_current FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname IN ('public', 's1') ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered

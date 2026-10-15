@@ -1,0 +1,44 @@
+# GET DIAGNOSTICS PG_CONTEXT lists the current call stack; GET STACKED DIAGNOSTICS PG_EXCEPTION_CONTEXT lists where an error occurred.
+id: doc-plpgsql-control-structures.get-diagnostics-pg-context
+title: "PG_CONTEXT gives the call stack at the current point; PG_EXCEPTION_CONTEXT gives the stack at the error"
+family: doc-plpgsql-control-structures
+tier: extended
+feature_ids: [plpgsql, diagnostics, get-diagnostics, call-stack, exceptions]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Obtaining Execution Location Information)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION inner_ctx() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE stack text;
+  BEGIN
+    GET DIAGNOSTICS stack = PG_CONTEXT;
+    RETURN stack;
+  END $$;
+  CREATE FUNCTION outer_ctx() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN inner_ctx();
+  END $$;
+  CREATE FUNCTION fail_inner() RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN 1 / 0;
+  END $$;
+  CREATE FUNCTION catch_ctx() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE c text;
+  BEGIN
+    PERFORM fail_inner();
+    RETURN 'none';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS c = PG_EXCEPTION_CONTEXT;
+    RETURN c;
+  END $$;
+steps:
+  - sql: |
+      SELECT outer_ctx() AS stack
+    expect: rows
+    comment: first line is the current function at GET DIAGNOSTICS, second is the caller
+  - sql: |
+      SELECT catch_ctx() AS err_stack
+    expect: rows
+    comment: the stack recorded at the error includes the failing expression and the calling functions

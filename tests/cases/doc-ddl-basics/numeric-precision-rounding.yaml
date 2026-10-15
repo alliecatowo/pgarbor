@@ -1,0 +1,31 @@
+# numeric(p,s) stores fractional values rounded to scale s, and rejects values that do not fit precision p.
+id: doc-ddl-basics.numeric-precision-rounding
+title: numeric(4,2) rounds to scale 2 and rejects values beyond its precision
+family: doc-ddl-basics
+tier: core
+feature_ids: [numeric-type, create-table, type-constraints, errors]
+required_capabilities: [create-table, insert, select, errors, order-by, numeric]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-basics (the numeric type can store fractional components, as would be typical of monetary amounts)"
+sessions: [a]
+setup: |
+  CREATE TABLE money_amt (a numeric(4,2))
+steps:
+  - sql: |
+      INSERT INTO money_amt VALUES (1.005), (99.99), (-0.5), (NULL)
+    expect: ok
+  - sql: |
+      SELECT a FROM money_amt ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+    comment: 1.005 rounds half away from zero to 1.01; NULL is allowed
+  - sql: |
+      INSERT INTO money_amt VALUES (100)
+    expect: error
+    sqlstate: "22003"
+    comment: four digits total with scale 2 allows at most 99.99
+  - sql: |
+      SELECT count(*) FROM money_amt WHERE a IS NULL
+    expect: rows
+    order: multiset

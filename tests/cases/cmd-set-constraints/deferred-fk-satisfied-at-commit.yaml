@@ -1,0 +1,36 @@
+# SET CONSTRAINTS DEFERRED postpones a foreign key check to COMMIT, so a child row may precede its parent.
+id: cmd-set-constraints.deferred-fk-satisfied-at-commit
+title: DEFERRED foreign key accepts a child row before its parent and passes at COMMIT
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, foreign-key, transactions, commit]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: DEFERRED constraints are not checked until transaction commit)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_fk REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (1, 10)
+    expect: ok
+    comment: the orphan child row is accepted while the constraint is deferred
+  - sql: |
+      INSERT INTO p VALUES (10)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: the deferred check runs at commit and finds the parent
+  - sql: |
+      SELECT c.id, c.pid, p.id AS parent_id FROM c JOIN p ON p.id = c.pid ORDER BY c.id
+    expect: rows
+    order: ordered

@@ -1,0 +1,59 @@
+# CREATE CONVERSION is transactional: an uncommitted conversion is visible only to its own session, a rolled
+# back one leaves no row and frees its name, and a committed one is visible to other sessions.
+id: cmd-create-conversion.transaction-visibility-and-rollback
+title: CREATE CONVERSION inside a transaction is invisible to other sessions until commit and vanishes on rollback
+family: cmd-create-conversion
+tier: core
+feature_ids: [create-conversion, transactions, mvcc-visibility, rollback]
+required_capabilities: [create-conversion, drop-conversion, transactions, multi-session, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 transactional DDL on pg_conversion; PG18 docs ref/create_conversion.sgml"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      CREATE CONVERSION cc_tx_vis FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) FROM pg_conversion WHERE conname = 'cc_tx_vis'
+    expect: rows
+    comment: own session sees its uncommitted conversion
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_conversion WHERE conname = 'cc_tx_vis'
+    expect: rows
+    comment: other session does not see it before commit
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) FROM pg_conversion WHERE conname = 'cc_tx_vis'
+    expect: rows
+  - session: a
+    sql: |
+      CREATE CONVERSION cc_tx_vis FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+    comment: the name is free again after rollback
+  - session: a
+    sql: |
+      BEGIN; CREATE CONVERSION cc_tx_kept FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8; COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT conname FROM pg_conversion WHERE conname LIKE 'cc_tx_%' ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: both committed conversions are visible to b
+  - session: a
+    sql: |
+      DROP CONVERSION cc_tx_vis;
+      DROP CONVERSION cc_tx_kept
+    expect: ok

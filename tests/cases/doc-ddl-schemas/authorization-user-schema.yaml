@@ -1,0 +1,33 @@
+# CREATE SCHEMA AUTHORIZATION sets the owner; with no name the schema is named after the user and
+# is found first by the default search path ("$user", public).
+id: doc-ddl-schemas.authorization-user-schema
+title: CREATE SCHEMA AUTHORIZATION sets the owner and a nameless schema is named after the user
+family: doc-ddl-schemas
+tier: core
+feature_ids: [create-schema, authorization, user-private-schema, search-path, create-table]
+required_capabilities: [create-schema, create-table, select, errors, catalog-introspection, guc]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-create (CREATE SCHEMA schema_name AUTHORIZATION user_name; omitting the schema name)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA owned_s AUTHORIZATION CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT nspname, pg_get_userbyid(nspowner) = current_user AS owned_by_me FROM pg_namespace WHERE nspname = 'owned_s'
+    expect: rows
+  - sql: |
+      CREATE SCHEMA AUTHORIZATION CURRENT_USER
+    expect: ok
+    comment: no schema name given, so the schema is named after the current user
+  - sql: |
+      SELECT nspname = current_user AS named_after_user FROM pg_namespace WHERE nspname = current_user
+    expect: rows
+  - sql: |
+      CREATE TABLE user_default (id int4)
+    expect: ok
+    comment: $user is first in the default search path, so the table lands in the user's schema
+  - sql: |
+      SELECT schemaname = current_user AS in_user_schema FROM pg_tables WHERE tablename = 'user_default'
+    expect: rows

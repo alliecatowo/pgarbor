@@ -1,0 +1,26 @@
+# Boundary: SET DEFAULT NULL on a view column is not a view default that suppresses the base default; the base default applies.
+id: cmd-alter-view.set-default-null-overrides-base
+title: "ALTER VIEW SET DEFAULT NULL does not suppress the base table default"
+family: cmd-alter-view
+tier: extended
+feature_ids: [alter-view, default-values, null-semantics]
+required_capabilities: [create-table, insert, select, create-view, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (SET DEFAULT: the view's default will therefore take precedence over any default values from underlying relations)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_nb (id int4, c int4 DEFAULT 10);
+  CREATE VIEW av_nbv AS SELECT id, c FROM av_nb;
+steps:
+  - sql: |
+      ALTER VIEW av_nbv ALTER COLUMN c SET DEFAULT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO av_nbv (id) VALUES (1)
+    expect: ok
+    comment: recorded behavior on PG 18.6 - a NULL view default is not substituted, so the base default 10 is stored
+  - sql: |
+      SELECT id, c FROM av_nb ORDER BY id
+    expect: rows
+    order: ordered

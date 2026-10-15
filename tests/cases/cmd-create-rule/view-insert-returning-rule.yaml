@@ -1,0 +1,35 @@
+# An unconditional INSTEAD INSERT rule with RETURNING supplies the view's RETURNING output; RETURNING is ignored when the statement has none.
+id: cmd-create-rule.view-insert-returning-rule
+title: Unconditional INSTEAD INSERT rule with RETURNING serves INSERT RETURNING on a view and is ignored without it
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, insert, returning, views, instead]
+required_capabilities: [create-table, create-view, create-rule, insert, select, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Notes: RETURNING in rules on views; conditional rules may not contain RETURNING)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4, n text);
+  CREATE VIEW vb AS SELECT id, n FROM base;
+steps:
+  - sql: |
+      CREATE RULE vb_ins AS ON INSERT TO vb WHERE NEW.id > 0 DO INSTEAD INSERT INTO base VALUES (NEW.id, NEW.n) RETURNING *
+    expect: error
+    sqlstate: "0A000"
+    comment: RETURNING is only allowed in unconditional INSTEAD rules
+  - sql: |
+      CREATE RULE vb_ins AS ON INSERT TO vb DO INSTEAD INSERT INTO base VALUES (NEW.id, NEW.n) RETURNING id, n
+    expect: ok
+  - sql: |
+      INSERT INTO vb VALUES (5, 'five')
+    expect: ok
+    comment: no RETURNING clause, so the rule's RETURNING is ignored
+  - sql: |
+      INSERT INTO vb VALUES (6, 'six') RETURNING id, n
+    expect: rows
+    comment: the rule's RETURNING list supplies the output row
+  - sql: |
+      SELECT id, n FROM base ORDER BY id
+    expect: rows
+    order: ordered

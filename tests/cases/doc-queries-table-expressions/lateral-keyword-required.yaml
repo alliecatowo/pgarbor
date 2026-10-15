@@ -1,0 +1,27 @@
+# A subquery in FROM cannot reference an earlier FROM item unless it is marked LATERAL.
+id: doc-queries-table-expressions.lateral-keyword-required
+title: Subquery in FROM referencing an earlier item fails without LATERAL and works with it
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [lateral, subquery-in-from, errors]
+required_capabilities: [create-table, insert, select, join]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-lateral"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (id int4, bar_id int4);
+  CREATE TABLE bar (id int4, v text);
+  INSERT INTO foo VALUES (1, 10), (2, 20);
+  INSERT INTO bar VALUES (10, 'x'), (30, 'y');
+steps:
+  - sql: |
+      SELECT * FROM foo, (SELECT * FROM bar WHERE bar.id = foo.bar_id) ss
+    expect: error
+    sqlstate: "42P01"
+    comment: foo is not visible to a non-LATERAL subquery
+  - sql: |
+      SELECT * FROM foo, LATERAL (SELECT * FROM bar WHERE bar.id = foo.bar_id) ss
+    expect: rows
+    order: multiset
+    comment: one row, for foo 1 matching bar 10

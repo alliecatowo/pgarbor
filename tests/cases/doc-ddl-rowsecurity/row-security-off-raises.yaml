@@ -1,0 +1,57 @@
+# With row_security = off, a non-owner whose query is subject to a policy gets an error; the owner does not.
+id: doc-ddl-rowsecurity.row-security-off-raises
+title: "row_security = off raises an error instead of silently filtering"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, guc-row-security, policies, select, errors]
+required_capabilities: [create-table, insert, select, rls, guc, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: row_security configuration parameter set to off throws an error"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr10_u;
+  CREATE TABLE t (id int4, owner text);
+  INSERT INTO t VALUES (1, 'x'), (2, 'y');
+  GRANT SELECT ON t TO pgarbor_case_role_dr10_u;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p ON t FOR SELECT USING (owner = 'x');
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr10_u
+    expect: ok
+  - sql: |
+      SET row_security = off
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: error
+    sqlstate: "42501"
+    comment: the policy would filter row 2, so the query fails instead of silently omitting it
+  - sql: |
+      SET row_security = on
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: with row security on, the filtered result is returned
+  - sql: |
+      SET row_security = off
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: the table owner bypasses row security, so no error is raised
+  - sql: |
+      RESET row_security
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr10_u
+    expect: ok

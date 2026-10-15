@@ -1,0 +1,34 @@
+# The handler's return type must match the access method TYPE: table_am_handler for TABLE, index_am_handler for INDEX.
+id: cmd-create-access-method.handler-return-type-mismatch
+title: Handler return type must match the access method type
+family: cmd-create-access-method
+tier: core
+feature_ids: [create-access-method, handler-function, errors]
+required_capabilities: [create-access-method, table-access-method, index-access-method, errors, create-function-internal]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method (Parameters: handler_function must return table_am_handler for TABLE, index_am_handler for INDEX)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION int_returning_handler(internal) RETURNS int4 LANGUAGE internal AS 'hashhandler';
+steps:
+  - sql: |
+      CREATE ACCESS METHOD x_table TYPE TABLE HANDLER hashhandler
+    expect: error
+    sqlstate: "42809"
+    comment: an index handler cannot back a TABLE access method
+  - sql: |
+      CREATE ACCESS METHOD x_index TYPE INDEX HANDLER heap_tableam_handler
+    expect: error
+    sqlstate: "42809"
+    comment: a table handler cannot back an INDEX access method
+  - sql: |
+      CREATE ACCESS METHOD x_int TYPE INDEX HANDLER int_returning_handler
+    expect: error
+    sqlstate: "42809"
+    comment: a handler returning int4 is not an index_am_handler
+  - sql: |
+      SELECT count(*) FROM pg_am WHERE amname LIKE 'x\_%'
+    expect: rows
+    order: ordered
+    comment: no catalog entry is created by failed definitions

@@ -1,0 +1,36 @@
+# NONE is case-insensitive, and operand types can be spelled by alias or schema-qualified name; all name the same signature.
+id: cmd-drop-operator.none-and-type-spellings
+title: NONE in any case and alias or qualified type names select the same operator signature
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, none-keyword, type-aliases, schema-qualified-names]
+required_capabilities: [drop-operator, create-operator, create-function-sql, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#parameters (left_type | NONE, right_type)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dns_bnot(bit) RETURNS bit LANGUAGE sql IMMUTABLE AS $$ SELECT ~$1 $$;
+  CREATE FUNCTION dns_pow(integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 10 + $2 $$;
+  CREATE OPERATOR public.!~! (RIGHTARG = bit, PROCEDURE = dns_bnot);
+  CREATE OPERATOR public.!^! (LEFTARG = int4, RIGHTARG = int4, PROCEDURE = dns_pow);
+steps:
+  - sql: |
+      SELECT 2 !^! 3 AS before_drop
+    expect: rows
+  - sql: |
+      DROP OPERATOR public.!^! (pg_catalog.int4, INT)
+    expect: ok
+    comment: integer, int and int4 are the same type; qualified spelling of the name is accepted
+  - sql: |
+      DROP OPERATOR public.!~! (None, BIT)
+    expect: ok
+    comment: NONE is case-insensitive
+  - sql: |
+      SELECT count(*) AS left_after FROM pg_operator WHERE oprnamespace = 'public'::regnamespace
+    expect: rows
+  - sql: |
+      DROP OPERATOR public.!~! (NONE, bit)
+    expect: error
+    sqlstate: "42883"
+    comment: the operator is gone, so the same signature no longer matches

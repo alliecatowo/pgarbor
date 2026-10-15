@@ -1,0 +1,32 @@
+# A serial column's sequence is refused by RESTRICT; CASCADE removes only the column default, not the table.
+id: cmd-drop-sequence.serial-owned-sequence
+title: DROP SEQUENCE on a serial column's sequence is refused until CASCADE, which keeps the table
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, serial, dependencies, cascade]
+required_capabilities: [sequences, create-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Parameters: CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE t8 (id serial PRIMARY KEY, v text);
+  INSERT INTO t8 (v) VALUES ('one');
+steps:
+  - sql: |
+      DROP SEQUENCE t8_id_seq
+    expect: error
+    sqlstate: "2BP01"
+    comment: the serial default depends on the sequence
+  - sql: |
+      DROP SEQUENCE t8_id_seq CASCADE
+    expect: ok
+  - sql: |
+      SELECT column_name, column_default FROM information_schema.columns WHERE table_name = 't8' ORDER BY column_name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, v FROM t8 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the existing row keeps its already-assigned id

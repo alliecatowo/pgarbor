@@ -1,0 +1,42 @@
+# RETURNS SETOF and RETURNS TABLE functions return a set of rows, possibly empty; the planner
+# defaults (ROWS 1000 for set-returning, COST 100 for SQL) are recorded in pg_proc.
+id: cmd-create-function.setof-and-table-functions
+title: SETOF and RETURNS TABLE functions return zero or more rows; default COST and ROWS in pg_proc
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, setof, returns-table, cost, rows]
+required_capabilities: [create-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-description (SETOF); Parameters COST and ROWS"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION setf(n int) RETURNS SETOF int LANGUAGE sql
+          AS 'select g from generate_series(1, n) g'
+    expect: ok
+  - sql: |
+      SELECT proname, procost, prorows FROM pg_proc WHERE proname = 'setf'
+    expect: rows
+    comment: procost 100 (SQL default), prorows 1000 (set-returning default)
+  - sql: |
+      SELECT g FROM setf(0) g
+    expect: rows
+    order: ordered
+    comment: zero rows, not a NULL row
+  - sql: |
+      SELECT * FROM setf(3) ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE FUNCTION tbl(n int) RETURNS TABLE(f1 int, f2 text)
+          AS $$ SELECT g, 'v' || g FROM generate_series(1, n) g $$ LANGUAGE sql
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM tbl(0)
+    expect: rows
+    comment: count 0
+  - sql: |
+      SELECT f1, f2 FROM tbl(2) ORDER BY f1
+    expect: rows
+    order: ordered

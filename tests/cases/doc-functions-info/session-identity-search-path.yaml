@@ -1,0 +1,42 @@
+# Session information functions: current_user/session_user aliases, current_schema(s) with search_path edge cases.
+id: doc-functions-info.session-identity-search-path
+title: Session identity aliases and current_schema(s) under search_path changes
+family: doc-functions-info
+tier: core
+feature_ids: [session-info, current-user, search-path, current-schema]
+required_capabilities: [select, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (Session Information Functions)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT current_user = session_user AS same_user,
+             current_user = user AS user_alias_same,
+             current_role = current_user AS role_alias_same,
+             current_catalog = current_database() AS catalog_alias_same,
+             current_schema() AS first_schema,
+             current_schemas(false) AS schemas_plain,
+             current_schemas(true) AS schemas_implicit
+    expect: rows
+    comment: documented aliases; include_implicit=true adds pg_catalog
+  - sql: |
+      SET search_path = nonexist_schema_fi, public
+    expect: ok
+  - sql: |
+      SELECT current_schemas(false) AS schemas_skip_missing, current_schema() AS first_existing
+    expect: rows
+    comment: documented, items that do not correspond to existing schemas are omitted
+  - sql: |
+      SET search_path = ''
+    expect: ok
+  - sql: |
+      SELECT current_schema() IS NULL AS empty_path_null, current_schemas(false) AS empty_list
+    expect: rows
+    comment: documented, current_schema returns NULL when the search path is empty
+  - sql: |
+      RESET search_path
+    expect: ok
+  - sql: |
+      SELECT current_schema AS no_parens, current_schema() AS with_parens
+    expect: rows

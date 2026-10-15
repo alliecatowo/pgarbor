@@ -1,0 +1,27 @@
+# Unquoted identifiers fold to lowercase; a quoted mixed-case rule name needs quotes in DROP RULE too, and table names fold the same way.
+id: cmd-drop-rule.quoted-identifier-case
+title: DROP RULE honors identifier folding and quoting for both the rule name and the table name
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-rule, identifiers]
+required_capabilities: [create-table, create-rule, drop-rule, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (name, table_name); doc/src/sgml/sql.sgml (identifiers)"
+sessions: [a]
+setup: |
+  CREATE TABLE qi (a int4);
+  CREATE RULE "Mixed" AS ON DELETE TO qi DO ALSO SELECT 1;
+steps:
+  - sql: |
+      DROP RULE mixed ON qi
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted mixed folds to lowercase, so it names a different rule
+  - sql: |
+      DROP RULE "Mixed" ON QI
+    expect: ok
+    comment: the table name QI folds to qi, so this finds the rule
+  - sql: |
+      SELECT count(*) FROM pg_rules WHERE tablename = 'qi'
+    expect: rows

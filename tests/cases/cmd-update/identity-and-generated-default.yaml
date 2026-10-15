@@ -1,0 +1,38 @@
+# Identity and generated columns: SET ... = DEFAULT regenerates them, explicit values are rejected.
+id: cmd-update.identity-and-generated-default
+title: SET DEFAULT on identity and generated columns, explicit values rejected with 428C9
+family: cmd-update
+tier: core
+feature_ids: [update, identity-columns, generated-columns, set-default, errors]
+required_capabilities: [create-table, insert, select, update, identity, generated-columns, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (DEFAULT: identity gets a new sequence value; generated column may only be set to DEFAULT)"
+sessions: [a]
+setup: |
+  CREATE TABLE gen_t (id int GENERATED ALWAYS AS IDENTITY, a int, b int GENERATED ALWAYS AS (a * 2) STORED);
+  INSERT INTO gen_t (a) VALUES (1), (2)
+steps:
+  - sql: |
+      UPDATE gen_t SET id = DEFAULT WHERE a = 2
+    expect: ok
+    comment: identity draws the next sequence value, 3
+  - sql: |
+      UPDATE gen_t SET b = DEFAULT WHERE a = 1
+    expect: ok
+    comment: generated column is recomputed from its expression
+  - sql: |
+      UPDATE gen_t SET b = 5 WHERE a = 1
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      UPDATE gen_t SET id = 100 WHERE a = 1
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      UPDATE gen_t SET a = 7, b = DEFAULT WHERE a = 1
+    expect: ok
+  - sql: |
+      SELECT id, a, b FROM gen_t ORDER BY id
+    expect: rows
+    order: ordered

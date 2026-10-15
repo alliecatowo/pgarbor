@@ -1,0 +1,32 @@
+# WITH GRANT OPTION is rejected for PUBLIC, but the same grant without it succeeds.
+id: cmd-alter-default-privileges.grant-with-grant-option-to-public-error
+title: WITH GRANT OPTION to PUBLIC is rejected with 0LP01 and leaves no default behind
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, grant-option, public-role, errors, default-acl]
+required_capabilities: [create-schema, roles, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 aclchk.c merge_acl_with_grant (grant options can only be granted to roles) via ALTER DEFAULT PRIVILEGES synopsis"
+sessions: [a]
+setup: |
+  CREATE SCHEMA adp_pg;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_pg GRANT SELECT ON TABLES TO PUBLIC WITH GRANT OPTION
+    expect: error
+    sqlstate: "0LP01"
+    comment: PUBLIC is not a role that can hold a grant option
+  - sql: |
+      SELECT count(*) FROM pg_default_acl WHERE defaclnamespace = 'adp_pg'::regnamespace
+    expect: rows
+    order: multiset
+    comment: the failed statement left no default entry
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_pg GRANT SELECT ON TABLES TO PUBLIC
+    expect: ok
+  - sql: |
+      SELECT defaclacl::text FROM pg_default_acl WHERE defaclnamespace = 'adp_pg'::regnamespace
+    expect: rows
+    order: multiset
+    comment: the same grant without WITH GRANT OPTION succeeds

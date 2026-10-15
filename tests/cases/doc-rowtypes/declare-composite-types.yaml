@@ -1,0 +1,47 @@
+# Documented composite type example: CREATE TYPE ... AS, a table column of composite type,
+# ROW constructor insert, and a SQL function taking a composite argument and selecting a field.
+id: doc-rowtypes.declare-composite-types
+title: CREATE TYPE AS declares a composite; a table column of that type stores ROW values and a SQL function reads its fields
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, create-type, row-constructor, sql-functions]
+required_capabilities: [create-type, composite-types, create-table, insert, create-function-sql, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-declare"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TYPE complex AS (
+          r       double precision,
+          i       double precision
+      )
+    expect: ok
+  - sql: |
+      CREATE TYPE inventory_item AS (
+          name            text,
+          supplier_id     integer,
+          price           numeric
+      )
+    expect: ok
+  - sql: |
+      CREATE TABLE on_hand (
+          item      inventory_item,
+          count     integer
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO on_hand VALUES (ROW('fuzzy dice', 42, 1.99), 1000)
+    expect: ok
+  - sql: |
+      CREATE FUNCTION price_extension(inventory_item, integer) RETURNS numeric
+      AS 'SELECT $1.price * $2' LANGUAGE SQL
+    expect: ok
+  - sql: |
+      SELECT price_extension(item, 10), count FROM on_hand ORDER BY count
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT item, (item).name, (item).supplier_id, (item).price FROM on_hand
+    expect: rows
+    comment: whole composite column prints in composite text form; fields come back typed

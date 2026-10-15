@@ -1,0 +1,54 @@
+# security_barrier and security_invoker are boolean view options: SET with or without a value, RESET, and bad values.
+id: cmd-alter-view.security-options-set-reset
+title: "ALTER VIEW security_barrier and security_invoker SET, RESET and reject bad values"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, security-barrier, security-invoker, view-options]
+required_capabilities: [create-table, select, create-view, alter-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (security_barrier and security_invoker boolean options)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_so (id int4);
+  CREATE VIEW av_sov AS SELECT id FROM av_so;
+steps:
+  - sql: |
+      ALTER VIEW av_sov SET (security_barrier = true, security_invoker = true)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'av_sov'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER VIEW av_sov RESET (security_barrier, security_invoker)
+    expect: ok
+  - sql: |
+      SELECT reloptions IS NULL AS no_options FROM pg_class WHERE oid = 'av_sov'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER VIEW av_sov SET (security_barrier)
+    expect: ok
+    comment: a boolean option without a value means true
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'av_sov'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER VIEW av_sov SET (security_barrier = 'off')
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'av_sov'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER VIEW av_sov SET (security_barrier = 'maybe')
+    expect: error
+    sqlstate: "22023"
+    comment: not a boolean value
+  - sql: |
+      ALTER VIEW av_sov SET (no_such_option = 1)
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized view option

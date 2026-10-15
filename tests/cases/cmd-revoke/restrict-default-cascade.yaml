@@ -1,0 +1,59 @@
+# RESTRICT is the default: revoking a grant that has dependent grants fails with 2BP01 unless CASCADE is given.
+id: cmd-revoke.restrict-default-cascade
+title: REVOKE without CASCADE fails with dependent privileges; CASCADE removes the dependent grant
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, grant-option, cascade, restrict, dependent-privileges, errors]
+required_capabilities: [create-table, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-description; ref/revoke.sgml#sql-revoke-compatibility (RESTRICT assumed by default)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvd_owner;
+  CREATE ROLE rvd_a;
+  CREATE ROLE rvd_b;
+  CREATE TABLE rvd_t (id int4);
+  INSERT INTO rvd_t VALUES (1);
+  ALTER TABLE rvd_t OWNER TO rvd_owner;
+steps:
+  - sql: |
+      SET ROLE rvd_owner
+    expect: ok
+  - sql: |
+      GRANT SELECT ON rvd_t TO rvd_a WITH GRANT OPTION
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE rvd_a
+    expect: ok
+  - sql: |
+      GRANT SELECT ON rvd_t TO rvd_b
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE rvd_owner
+    expect: ok
+  - sql: |
+      REVOKE SELECT ON rvd_t FROM rvd_a
+    expect: error
+    sqlstate: "2BP01"
+    comment: no CASCADE or RESTRICT given, so RESTRICT applies and rvd_b's grant blocks the revoke
+  - sql: |
+      SELECT has_table_privilege('rvd_a', 'rvd_t', 'SELECT') AS a_sel, has_table_privilege('rvd_b', 'rvd_t', 'SELECT') AS b_sel
+    expect: rows
+    comment: the failed revoke changed nothing
+  - sql: |
+      REVOKE SELECT ON rvd_t FROM rvd_a CASCADE
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('rvd_a', 'rvd_t', 'SELECT') AS a_sel, has_table_privilege('rvd_b', 'rvd_t', 'SELECT') AS b_sel
+    expect: rows
+    comment: both a's grant and the dependent grant to b are removed
+  - sql: |
+      RESET ROLE
+    expect: ok

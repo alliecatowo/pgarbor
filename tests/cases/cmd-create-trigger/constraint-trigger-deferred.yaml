@@ -1,0 +1,63 @@
+# CREATE CONSTRAINT TRIGGER DEFERRABLE INITIALLY DEFERRED: the check runs at COMMIT, or earlier via SET CONSTRAINTS.
+id: cmd-create-trigger.constraint-trigger-deferred
+title: Deferred constraint trigger fires at COMMIT and on SET CONSTRAINTS IMMEDIATE
+family: cmd-create-trigger
+tier: extended
+feature_ids: [create-trigger, constraint-trigger, deferrable, set-constraints, transactions]
+required_capabilities: [create-table, insert, select, plpgsql, triggers, transactions, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER description (CONSTRAINT option, SET CONSTRAINTS, deferred firing)"
+setup: |
+  CREATE TABLE ledger (id int PRIMARY KEY, amt int NOT NULL);
+  CREATE FUNCTION check_positive() RETURNS trigger AS $$
+  BEGIN
+    IF NEW.amt < 0 THEN
+      RAISE EXCEPTION 'negative amount %', NEW.amt USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE CONSTRAINT TRIGGER chk_pos AFTER INSERT OR UPDATE ON ledger DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_positive()
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO ledger VALUES (1, -5)
+    expect: ok
+    comment: the deferred trigger has not run yet
+  - sql: |
+      SELECT count(*) FROM ledger
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23514"
+    comment: the queued check fires at COMMIT and the transaction is rolled back
+  - sql: |
+      SELECT count(*) FROM ledger
+    expect: rows
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO ledger VALUES (2, -1)
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS chk_pos IMMEDIATE
+    expect: error
+    sqlstate: "23514"
+    comment: forces the pending check now
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      INSERT INTO ledger VALUES (3, 7)
+    expect: ok
+  - sql: |
+      SELECT id, amt FROM ledger ORDER BY id
+    expect: rows
+    order: ordered

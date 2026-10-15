@@ -1,0 +1,43 @@
+# IF EXISTS turns every missing piece of the name (trigger, table, schema) into a notice; an existing trigger is dropped silently.
+id: cmd-drop-trigger.if-exists-notices
+title: "DROP TRIGGER IF EXISTS issues a notice for a missing trigger, table, or schema and drops an existing trigger silently"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, if-exists, notices, triggers]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Parameters: IF EXISTS: a notice is issued in this case)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION noop_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TABLE films (id int4, title text);
+  CREATE TRIGGER tg BEFORE INSERT ON films FOR EACH ROW EXECUTE FUNCTION noop_tg();
+steps:
+  - sql: |
+      DROP TRIGGER IF EXISTS nope ON films
+    expect: notice
+    comment: missing trigger on an existing table
+  - sql: |
+      DROP TRIGGER IF EXISTS tg ON nosuchtable
+    expect: notice
+    comment: missing table
+  - sql: |
+      DROP TRIGGER IF EXISTS tg ON nosuchschema.films
+    expect: notice
+    comment: missing schema, reported as a single notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 'films'::regclass AND tgname = 'tg'
+    expect: rows
+    comment: the no-op drops left the existing trigger alone
+  - sql: |
+      DROP TRIGGER IF EXISTS tg ON films
+    expect: ok
+    comment: an existing trigger is dropped with no notice
+  - sql: |
+      DROP TRIGGER IF EXISTS tg ON films
+    expect: notice
+    comment: a second drop of the same name is now a no-op notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 'films'::regclass AND NOT tgisinternal
+    expect: rows

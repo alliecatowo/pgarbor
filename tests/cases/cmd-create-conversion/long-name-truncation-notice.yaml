@@ -1,0 +1,28 @@
+# Identifiers longer than NAMEDATALEN-1 (63 bytes) are truncated with a NOTICE (42622), and the stored name is
+# the first 63 bytes. A second create with the 63-byte spelling is then a duplicate, and DROP uses that spelling.
+id: cmd-create-conversion.long-name-truncation-notice
+title: A conversion name longer than 63 bytes is truncated with a notice
+family: cmd-create-conversion
+tier: extended
+feature_ids: [create-conversion, identifier-length, notices, errors]
+required_capabilities: [create-conversion, drop-conversion, catalog-introspection, notices, errors]
+provenance:
+  source: hand
+  ref: "PG18 identifier truncation (scansup.c truncate_identifier); docs ref/create_conversion.sgml name parameter"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE CONVERSION cc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: notice
+    comment: 70-character name, truncated to 63 with a NOTICE
+  - sql: |
+      SELECT length(conname) AS len, conname FROM pg_conversion WHERE conname LIKE 'cc_xxx%'
+    expect: rows
+  - sql: |
+      CREATE CONVERSION cc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: error
+    sqlstate: "42710"
+    comment: the 63-byte spelling collides with the stored name
+  - sql: |
+      DROP CONVERSION cc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    expect: ok

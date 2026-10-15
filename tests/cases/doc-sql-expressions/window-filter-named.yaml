@@ -1,0 +1,48 @@
+# FILTER on window aggregates, named window references, and the rule that window calls appear only in SELECT or ORDER BY.
+id: doc-sql-expressions.window-filter-named
+title: FILTER on window aggregates, named windows, and window placement errors
+family: doc-sql-expressions
+tier: core
+feature_ids: [window-functions, aggregate-filter-clause, window-named-clause, errors]
+required_capabilities: [select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-window-calls"
+sessions: [a]
+setup: |
+  CREATE TABLE wf (x int4, y int4);
+  INSERT INTO wf VALUES (1, 5), (1, 6), (2, 7), (3, 8);
+steps:
+  - sql: |
+      SELECT x, y, count(*) FILTER (WHERE x > 1) OVER () AS c FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: FILTER applies to window aggregates; the frame still covers all rows
+  - sql: |
+      SELECT x, y, count(*) FILTER (WHERE y > 5) OVER (ORDER BY x, y ROWS UNBOUNDED PRECEDING) AS c FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x, y, count(*) OVER (ORDER BY x, y ROWS 1 PRECEDING) AS c FROM wf ORDER BY x, y
+    expect: rows
+    order: ordered
+    comment: a bare offset is shorthand for BETWEEN offset PRECEDING AND CURRENT ROW
+  - sql: |
+      SELECT x, y, sum(y) OVER w AS s FROM wf WINDOW w AS (ORDER BY x, y ROWS UNBOUNDED PRECEDING) ORDER BY x, y
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x, y, sum(y) OVER (w ORDER BY x) FROM wf WINDOW w AS (ORDER BY x)
+    expect: error
+    sqlstate: "42P20"
+    comment: a copied window may not override its ORDER BY
+  - sql: |
+      SELECT count(DISTINCT x) OVER () FROM wf
+    expect: error
+    sqlstate: "0A000"
+    comment: window function calls do not accept DISTINCT
+  - sql: |
+      SELECT x FROM wf WHERE row_number() OVER (ORDER BY x) = 1
+    expect: error
+    sqlstate: "42P20"
+    comment: window function calls are permitted only in the SELECT list and ORDER BY

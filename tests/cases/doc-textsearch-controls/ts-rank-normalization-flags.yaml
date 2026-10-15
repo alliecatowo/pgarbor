@@ -1,0 +1,30 @@
+# Normalization is a bit mask; each flag divides the rank in a fixed order and can be combined with OR.
+id: doc-textsearch-controls.ts-rank-normalization-flags
+title: ts_rank normalization bit flags alter the rank as documented
+family: doc-textsearch-controls
+tier: core
+feature_ids: [ts-rank, normalization, bit-flags, document-length]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "textsearch.sgml#textsearch-ranking (normalization option bit mask: 0, 1, 2, 8, 16, 32)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT
+        ts_rank(v, q, 0)   AS n0,
+        ts_rank(v, q, 1)   AS n1_log_length,
+        ts_rank(v, q, 2)   AS n2_length,
+        ts_rank(v, q, 8)   AS n8_unique_words,
+        ts_rank(v, q, 16)  AS n16_log_unique,
+        ts_rank(v, q, 32)  AS n32_rank_over_rank_plus_1,
+        ts_rank(v, q, 1|2) AS n3_combined
+      FROM (SELECT to_tsvector('english', 'a fat cat sat on a mat') AS v,
+                   to_tsquery('english', 'cat') AS q) s
+    expect: rows
+    comment: default normalization 0 equals the explicit zero; flags 1 2 apply in listed order
+  - sql: |
+      SELECT ts_rank(to_tsvector('english', 'a fat cat sat on a mat'), to_tsquery('english', 'cat'), 0) =
+             ts_rank(to_tsvector('english', 'a fat cat sat on a mat'), to_tsquery('english', 'cat')) AS default_is_zero
+    expect: rows
+    comment: omitting the normalization argument behaves like 0

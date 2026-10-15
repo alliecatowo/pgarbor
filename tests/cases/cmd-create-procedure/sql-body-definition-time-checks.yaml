@@ -1,0 +1,47 @@
+# SQL bodies are checked when the procedure is defined: unknown relations and syntax errors reject
+# the CREATE, and polymorphic arguments are not allowed in a BEGIN ATOMIC body (but are in a string body).
+id: cmd-create-procedure.sql-body-definition-time-checks
+title: SQL-body procedures are validated at definition; polymorphic BEGIN ATOMIC is rejected
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, begin-atomic, polymorphic-arguments, errors]
+required_capabilities: [create-table, insert, select, create-procedure, call]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (sql_body vs definition)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE tbl (a int)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE ins_bad(a int) LANGUAGE sql BEGIN ATOMIC INSERT INTO nosuch_tbl VALUES (a); END
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      CREATE PROCEDURE ins_syntax(a int) LANGUAGE sql BEGIN ATOMIC INSERT INTO tbl VALUES (a) END
+    expect: error
+    sqlstate: "42601"
+    comment: missing semicolon before END
+  - sql: |
+      CREATE PROCEDURE ins_str_bad(a int) LANGUAGE sql AS 'INSERT INTO nosuch_tbl VALUES ($1)'
+    expect: error
+    sqlstate: "42P01"
+    comment: the SQL string body is also checked at creation
+  - sql: |
+      CREATE PROCEDURE poly_atomic(x anyelement) LANGUAGE sql BEGIN ATOMIC SELECT 1; END
+    expect: error
+    sqlstate: "42P13"
+    comment: sql_body cannot have polymorphic arguments
+  - sql: |
+      CREATE PROCEDURE poly_string(x anyelement) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+    comment: the string-constant form is allowed for polymorphic arguments
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('ins_bad', 'ins_syntax', 'ins_str_bad', 'poly_atomic', 'poly_string') ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM tbl
+    expect: rows
+    comment: no rows were inserted by rejected definitions

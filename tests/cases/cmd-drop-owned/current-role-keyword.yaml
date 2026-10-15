@@ -1,0 +1,35 @@
+# CURRENT_ROLE names the role the session is currently set to with SET ROLE, not the session's login role.
+id: cmd-drop-owned.current-role-keyword
+title: "DROP OWNED BY CURRENT_ROLE drops objects owned by the role set with SET ROLE"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, current-role, set-role]
+required_capabilities: [roles, drop-role, set-role, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-synopsis (CURRENT_ROLE)"
+sessions: [a]
+setup: |
+  CREATE ROLE dcr_o;
+  CREATE TABLE dcr_g1 (a int4);
+  ALTER TABLE dcr_g1 OWNER TO dcr_o;
+  CREATE TABLE dcr_g2 (a int4);
+steps:
+  - sql: |
+      SET ROLE dcr_o
+    expect: ok
+  - sql: |
+      SELECT current_role AS r
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP OWNED BY CURRENT_ROLE
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname IN ('dcr_g1', 'dcr_g2') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the table owned by dcr_o is gone, the table owned by the session user remains

@@ -1,0 +1,56 @@
+# Numeric constants: decimal, exponent and non-decimal forms, underscores, implicit types, malformed forms.
+id: doc-sql-syntax-lexical.constants-numeric
+title: "Numeric constant forms, underscore grouping, implicit types and malformed literals"
+family: doc-sql-syntax-lexical
+tier: core
+feature_ids: [lexical-structure, numeric-constants, integer-literals, underscore-grouping]
+required_capabilities: [select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-syntax-lexical (Numeric Constants)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 42 AS a, 3.5 AS b, 4. AS c, .001 AS d, 5e2 AS e, 1.925e-3 AS f
+    expect: rows
+  - sql: |
+      SELECT 1.0e+3 AS g, 1E3 AS h, 1e-2 AS i, 0.5e1 AS j, 00042 AS k
+    expect: rows
+  - sql: |
+      SELECT 0b100101 AS bin1, 0B10011001 AS bin2, 0o273 AS oct1, 0O755 AS oct2, 0x42f AS hex1, 0XFFFF AS hex2
+    expect: rows
+  - sql: |
+      SELECT 1_500_000_000 AS grouped, 0b10001000_00000000 AS bin_grouped, 0o_1_755 AS oct_grouped,
+             0xFFFF_FFFF AS hex_grouped, 1.618_034 AS dec_grouped
+    expect: rows
+    comment: "underscores have no effect on the value"
+  - sql: |
+      SELECT pg_typeof(42) AS t_int, pg_typeof(2147483648) AS t_bigint, pg_typeof(9223372036854775808) AS t_numeric,
+             pg_typeof(3.5) AS t_dec, pg_typeof(5e2) AS t_exp, pg_typeof(0xFFFFFFFFFFFFFFFF) AS t_hex_big
+    expect: rows
+    comment: "integers take the narrowest of integer, bigint, then numeric; decimal points and exponents are numeric"
+  - sql: |
+      SELECT 1__0
+    expect: error
+    sqlstate: "42601"
+    comment: "underscores may not repeat"
+  - sql: |
+      SELECT 1_
+    expect: error
+    sqlstate: "42601"
+    comment: "an underscore may not end a constant"
+  - sql: |
+      SELECT 1.5_e5
+    expect: error
+    sqlstate: "42601"
+    comment: "an underscore may not be adjacent to the exponent marker"
+  - sql: |
+      SELECT 1.5e
+    expect: error
+    sqlstate: "42601"
+    comment: "the exponent marker needs at least one digit"
+  - sql: |
+      SELECT 1 .5
+    expect: error
+    sqlstate: "42601"
+    comment: "no embedded spaces inside a numeric constant"

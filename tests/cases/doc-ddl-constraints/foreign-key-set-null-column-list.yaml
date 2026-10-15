@@ -1,0 +1,44 @@
+# ON DELETE SET NULL with a column list only nulls the listed column; the tenant_id key column keeps its value.
+id: doc-ddl-constraints.foreign-key-set-null-column-list
+title: ON DELETE SET NULL (column) nulls only the listed foreign-key column
+family: doc-ddl-constraints
+tier: extended
+feature_ids: [foreign-keys, foreign-key-actions, set-null, primary-keys, cascade, insert, delete, select]
+required_capabilities: [create-table, constraints, foreign-keys, foreign-key-actions, primary-key, insert, delete, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Foreign Keys, SET NULL column list)"
+sessions: [a]
+setup: |
+  CREATE TABLE tenants (tenant_id integer PRIMARY KEY);
+  CREATE TABLE users (
+      tenant_id integer REFERENCES tenants ON DELETE CASCADE,
+      user_id integer NOT NULL,
+      PRIMARY KEY (tenant_id, user_id)
+  );
+  CREATE TABLE posts (
+      tenant_id integer REFERENCES tenants ON DELETE CASCADE,
+      post_id integer NOT NULL,
+      author_id integer,
+      PRIMARY KEY (tenant_id, post_id),
+      FOREIGN KEY (tenant_id, author_id) REFERENCES users ON DELETE SET NULL (author_id)
+  );
+  INSERT INTO tenants VALUES (1), (2);
+  INSERT INTO users VALUES (1, 10), (2, 20);
+  INSERT INTO posts VALUES (1, 100, 10), (2, 200, 20)
+steps:
+  - sql: |
+      DELETE FROM users WHERE tenant_id = 1 AND user_id = 10
+    expect: ok
+  - sql: |
+      SELECT tenant_id, post_id, author_id FROM posts ORDER BY tenant_id, post_id
+    expect: rows
+    order: ordered
+    comment: author_id is NULL and tenant_id is kept because it is not in the SET NULL list
+  - sql: |
+      DELETE FROM tenants WHERE tenant_id = 2
+    expect: ok
+    comment: CASCADE removes tenant 2 users and posts
+  - sql: |
+      SELECT count(*) FROM posts
+    expect: rows

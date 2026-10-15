@@ -1,0 +1,49 @@
+# RENAME VALUE changes a label's name but not its sort position, stored rows show the new name, and bad renames are rejected.
+id: cmd-alter-type.enum-rename-value
+title: "RENAME VALUE keeps the sort position and stored rows; missing or duplicate names fail"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, enum-type, enum-rename-value, enum-sort-order]
+required_capabilities: [create-type, alter-type, enum-type, create-table, insert, select, order-by]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (RENAME VALUE; example: ALTER TYPE colors RENAME VALUE 'purple' TO 'mauve')"
+sessions: [a]
+setup: |
+  CREATE TYPE colors AS ENUM ('red', 'purple', 'blue');
+  CREATE TABLE paint (id int PRIMARY KEY, c colors);
+  INSERT INTO paint VALUES (1, 'purple'), (2, 'red');
+steps:
+  - sql: |
+      ALTER TYPE colors RENAME VALUE 'purple' TO 'mauve'
+    expect: ok
+    comment: documented example; purple stays in the middle position
+  - sql: |
+      SELECT v, n FROM unnest(enum_range(NULL::colors)) WITH ORDINALITY AS t(v, n) ORDER BY n
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, c FROM paint ORDER BY id
+    expect: rows
+    order: ordered
+    comment: stored values follow the rename
+  - sql: |
+      SELECT c FROM paint WHERE c > 'red' ORDER BY c
+    expect: rows
+    order: ordered
+    comment: mauve sorts after red and before blue
+  - sql: |
+      SELECT 'purple'::colors
+    expect: error
+    sqlstate: "22P02"
+    comment: the old name no longer exists
+  - sql: |
+      ALTER TYPE colors RENAME VALUE 'nope' TO 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: the existing value must be present
+  - sql: |
+      ALTER TYPE colors RENAME VALUE 'red' TO 'blue'
+    expect: error
+    sqlstate: "42710"
+    comment: the new name must not already exist

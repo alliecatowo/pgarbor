@@ -1,0 +1,37 @@
+id: cmd-move.move-null-rows-and-fetch
+title: MOVE steps over rows containing NULL and empty-string values, and the following FETCH shows them unchanged
+family: cmd-move
+tier: core
+feature_ids: [move, fetch, declare-cursor, nulls, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/move.sgml#sql-move (works exactly like FETCH; FETCH NULL semantics)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text, score numeric(6,2));
+  INSERT INTO t VALUES (1, NULL, 1.5), (2, 'two', NULL), (3, '', 3);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE nc CURSOR FOR SELECT id, name, score FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      MOVE 1 FROM nc
+    expect: ok
+    comment: skips the row with a NULL name
+  - sql: |
+      FETCH 1 FROM nc
+    expect: rows
+    order: ordered
+    comment: row 2 has a NULL score but a non-NULL name
+  - sql: |
+      FETCH 1 FROM nc
+    expect: rows
+    order: ordered
+    comment: row 3 has an empty-string name, which is not NULL
+  - sql: |
+      COMMIT
+    expect: ok

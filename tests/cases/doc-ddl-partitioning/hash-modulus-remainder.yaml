@@ -1,0 +1,39 @@
+# HASH partitioning: each row goes to the partition whose remainder matches hash(key) mod modulus.
+# Every (modulus, remainder) pair may appear once; a duplicate pair is an overlap error.
+id: doc-ddl-partitioning.hash-modulus-remainder
+title: Hash partitions split rows by modulus and remainder, and duplicate pairs are rejected
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, hash-partitioning, partition-bounds, partition-overlap]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Hash Partitioning; CREATE TABLE ... FOR VALUES WITH (MODULUS, REMAINDER))"
+sessions: [a]
+setup: |
+  CREATE TABLE hp (id int, payload text) PARTITION BY HASH (id);
+  CREATE TABLE hp_r0 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 0);
+  CREATE TABLE hp_r1 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+  CREATE TABLE hp_r2 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+  CREATE TABLE hp_r3 PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 3);
+steps:
+  - sql: |
+      INSERT INTO hp SELECT g, 'row' || g FROM generate_series(1, 20) AS g
+    expect: ok
+  - sql: |
+      SELECT count(*) AS total, count(DISTINCT id) AS distinct_ids FROM hp
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tableoid::regclass::text AS part, count(*) FROM hp GROUP BY 1 ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: per-partition counts are fixed by PostgreSQL's hashint4 function
+  - sql: |
+      CREATE TABLE hp_dup PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 0)
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      CREATE TABLE hp_bad_rem PARTITION OF hp FOR VALUES WITH (MODULUS 4, REMAINDER 4)
+    expect: error
+    sqlstate: "42P16"

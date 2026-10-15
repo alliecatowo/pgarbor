@@ -1,0 +1,33 @@
+# A ddl_command_start trigger with a TAG filter blocks only the listed commands; other DDL is unaffected.
+id: cmd-create-event-trigger.abort-blocks-function-and-procedure
+title: TAG filter restricts a blocking trigger to CREATE FUNCTION and CREATE PROCEDURE
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-tag-filter, create-function, create-procedure]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, create-procedure]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE FUNCTION abort_any_command() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  BEGIN RAISE EXCEPTION 'command % is disabled', tg_tag; END; $$;
+  CREATE EVENT TRIGGER abort_routines ON ddl_command_start
+    WHEN TAG IN ('CREATE FUNCTION', 'CREATE PROCEDURE')
+    EXECUTE FUNCTION abort_any_command();
+steps:
+  - sql: |
+      CREATE FUNCTION f_blocked() RETURNS int4 LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: P0001
+  - sql: |
+      CREATE PROCEDURE p_blocked() LANGUAGE sql AS 'SELECT 1'
+    expect: error
+    sqlstate: P0001
+  - sql: |
+      CREATE TABLE t_free (a int4)
+    expect: ok
+    comment: CREATE TABLE is not in the filter list, so it is not blocked
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('f_blocked', 'p_blocked') ORDER BY proname
+    expect: rows
+    order: ordered

@@ -1,0 +1,63 @@
+# Sequence, view, domain, procedure and schema members: each can be added once, a missing view is rejected, and each becomes undroppable.
+id: cmd-alter-extension.add-member-kinds-and-drop-blocks
+title: Sequence, view, domain, procedure and schema members are added once and then block their own DROP
+family: cmd-alter-extension
+tier: core
+feature_ids: [alter-extension, add-member, sequences, views, domains, procedures, schemas, dependencies]
+required_capabilities: [create-extension, create-table, create-view, create-function-sql, create-schema, alter-extension, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (ADD member_object: SEQUENCE, VIEW, DOMAIN, PROCEDURE, SCHEMA)"
+sessions: [a]
+setup: |
+  CREATE EXTENSION hstore;
+  CREATE SEQUENCE sq1;
+  CREATE VIEW v1 AS SELECT 1 AS x;
+  CREATE DOMAIN d1 AS int CHECK (VALUE > 0);
+  CREATE PROCEDURE pr1() LANGUAGE sql AS 'SELECT 1';
+  CREATE SCHEMA s3;
+steps:
+  - sql: |
+      ALTER EXTENSION hstore ADD SEQUENCE sq1
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD VIEW v1
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD DOMAIN d1
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD PROCEDURE pr1()
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD SCHEMA s3
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD VIEW no_such_view
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER EXTENSION hstore ADD PROCEDURE pr1()
+    expect: error
+    sqlstate: "55000"
+    comment: already a member
+  - sql: |
+      DROP SEQUENCE sq1
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP VIEW v1
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP DOMAIN d1
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP PROCEDURE pr1()
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP SCHEMA s3
+    expect: error
+    sqlstate: "2BP01"

@@ -1,0 +1,44 @@
+# Transaction commands are forbidden in cursor loops driven by non-read-only commands (UPDATE ... RETURNING),
+# but the same loop without COMMIT is fine.
+id: doc-plpgsql-transactions.cursor-loop-update-returning-commit-55000
+title: COMMIT inside a loop over UPDATE RETURNING raises 55000; loop without COMMIT succeeds
+family: doc-plpgsql-transactions
+tier: core
+feature_ids: [plpgsql, cursors, update, returning, commit, errors, transaction-management]
+required_capabilities: [create-table, insert, update, select, plpgsql, transactions, errors, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (x int4);
+  INSERT INTO test2 VALUES (1), (2), (3);
+steps:
+  - sql: |
+      DO $$
+      DECLARE
+          r RECORD;
+      BEGIN
+          FOR r IN UPDATE test2 SET x = x RETURNING x LOOP
+              COMMIT;
+          END LOOP;
+      END;
+      $$
+    expect: error
+    sqlstate: "55000"
+  - sql: |
+      DO $$
+      DECLARE
+          r RECORD;
+      BEGIN
+          FOR r IN UPDATE test2 SET x = x + 10 RETURNING x LOOP
+              NULL;
+          END LOOP;
+      END;
+      $$
+    expect: ok
+  - sql: |
+      SELECT x FROM test2 ORDER BY x
+    expect: rows
+    order: ordered
+    comment: the non-COMMIT loop updated all three rows

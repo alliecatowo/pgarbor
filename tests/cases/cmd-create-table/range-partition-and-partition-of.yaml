@@ -1,0 +1,66 @@
+# Range partitioning: PARTITION OF with a column DEFAULT routes rows, a multi-column key with MINVALUE routes low values, and out-of-range rows are rejected.
+id: cmd-create-table.range-partition-and-partition-of
+title: Range-partitioned tables route rows to PARTITION OF children and reject rows outside every range
+family: cmd-create-table
+tier: core
+feature_ids: [create-table, partitioning, range-partitioning, partition-of, column-default]
+required_capabilities: [create-table, insert, select, partitioning, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_table.sgml#sql-createtable-examples (Create a range partitioned table; multiple columns; Create partition of a range partitioned table)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE measurement (
+          logdate         date not null,
+          peaktemp        int,
+          unitsales       int
+      ) PARTITION BY RANGE (logdate)
+    expect: ok
+  - sql: |
+      CREATE TABLE measurement_y2016m07
+          PARTITION OF measurement (
+          unitsales DEFAULT 0
+      ) FOR VALUES FROM ('2016-07-01') TO ('2016-08-01')
+    expect: ok
+  - sql: |
+      INSERT INTO measurement (logdate, peaktemp) VALUES ('2016-07-15', 30), ('2016-07-31', 28)
+    expect: ok
+  - sql: |
+      SELECT logdate, peaktemp, unitsales, tableoid::regclass AS part FROM measurement ORDER BY logdate
+    expect: rows
+    order: ordered
+    comment: unitsales takes the partition column default 0
+  - sql: |
+      INSERT INTO measurement (logdate) VALUES ('2016-08-01')
+    expect: error
+    sqlstate: "23514"
+    comment: TO bound is exclusive, and no partition covers 2016-08-01
+  - sql: |
+      CREATE TABLE measurement_year_month (
+          logdate         date not null,
+          peaktemp        int,
+          unitsales       int
+      ) PARTITION BY RANGE (EXTRACT(YEAR FROM logdate), EXTRACT(MONTH FROM logdate))
+    expect: ok
+  - sql: |
+      CREATE TABLE measurement_ym_older
+          PARTITION OF measurement_year_month
+          FOR VALUES FROM (MINVALUE, MINVALUE) TO (2016, 11);
+      CREATE TABLE measurement_ym_y2016m11
+          PARTITION OF measurement_year_month
+          FOR VALUES FROM (2016, 11) TO (2016, 12)
+    expect: ok
+  - sql: |
+      INSERT INTO measurement_year_month (logdate, peaktemp) VALUES ('2015-03-01', 1), ('2016-11-02', 2)
+    expect: ok
+  - sql: |
+      SELECT logdate, tableoid::regclass AS part FROM measurement_year_month ORDER BY logdate
+    expect: rows
+    order: ordered
+    comment: MINVALUE in the lower bound catches earlier years
+  - sql: |
+      INSERT INTO measurement_year_month (logdate) VALUES ('2017-03-01')
+    expect: error
+    sqlstate: "23514"
+    comment: no partition covers year 2017

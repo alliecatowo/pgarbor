@@ -1,0 +1,55 @@
+# Same name is allowed across index methods and across schemas, but not twice for the same method in one schema.
+id: cmd-create-opfamily.same-name-per-method-and-schema
+title: Name uniqueness is per (schema, index method) pair
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, name-uniqueness, schema-qualified-name, errors]
+required_capabilities: [create-operator-family, create-schema, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: Two operator families in the same schema can have the same name only if they are for different index methods)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cof_same_s
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY cof_dupname USING btree
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY cof_dupname USING hash
+    expect: ok
+    comment: same schema, different index method
+  - sql: |
+      CREATE OPERATOR FAMILY cof_same_s.cof_dupname USING btree
+    expect: ok
+    comment: same method, different schema
+  - sql: |
+      CREATE OPERATOR FAMILY cof_dupname USING btree
+    expect: error
+    sqlstate: "42710"
+    comment: same schema and same method is a duplicate
+  - sql: |
+      CREATE OPERATOR FAMILY cof_same_s.cof_dupname USING hash
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY cof_same_s.cof_dupname USING hash
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT n.nspname, am.amname
+      FROM pg_opfamily f
+      JOIN pg_am am ON am.oid = f.opfmethod
+      JOIN pg_namespace n ON n.oid = f.opfnamespace
+      WHERE f.opfname = 'cof_dupname'
+    expect: rows
+    order: multiset
+    comment: exactly four families, no duplicate rows from the failed statements
+  - sql: |
+      DROP OPERATOR FAMILY cof_dupname USING btree;
+      DROP OPERATOR FAMILY cof_dupname USING hash;
+      DROP OPERATOR FAMILY cof_same_s.cof_dupname USING btree;
+      DROP OPERATOR FAMILY cof_same_s.cof_dupname USING hash
+    expect: ok
+  - sql: |
+      DROP SCHEMA cof_same_s
+    expect: ok

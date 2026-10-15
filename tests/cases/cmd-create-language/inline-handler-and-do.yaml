@@ -1,0 +1,39 @@
+# INLINE supplies the DO-block handler; a language without INLINE cannot run DO.
+id: cmd-create-language.inline-handler-and-do
+title: INLINE handler enables DO blocks, a language without INLINE rejects them with 0A000
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, inline-handler, do-block, error-handling]
+required_capabilities: [create-language, plpgsql, do-block, create-table, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Parameters: INLINE inline_handler)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE LANGUAGE cl_inl_bad HANDLER plpgsql_call_handler INLINE plpgsql_call_handler
+    expect: error
+    sqlstate: "42883"
+    comment: the inline handler must take one argument of type internal
+  - sql: |
+      CREATE LANGUAGE cl_noinline HANDLER plpgsql_call_handler
+    expect: ok
+  - sql: |
+      DO $$ BEGIN CREATE TABLE cl_noinline_t (x int); END $$ LANGUAGE cl_noinline
+    expect: error
+    sqlstate: "0A000"
+    comment: no INLINE handler, so the language does not support anonymous code blocks
+  - sql: |
+      CREATE LANGUAGE cl_inline HANDLER plpgsql_call_handler INLINE plpgsql_inline_handler
+    expect: ok
+  - sql: |
+      DO $$ BEGIN CREATE TABLE cl_inline_t (x int); INSERT INTO cl_inline_t VALUES (5); END $$ LANGUAGE cl_inline
+    expect: ok
+  - sql: |
+      SELECT x FROM cl_inline_t
+    expect: rows
+    order: ordered
+  - sql: |
+      DO $$ BEGIN CREATE TABLE cl_missing_lang_t (x int); END $$ LANGUAGE cl_no_such_language
+    expect: error
+    sqlstate: "42704"

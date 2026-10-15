@@ -1,0 +1,39 @@
+# Dropping an explicit cast removes only the pg_cast entry: the explicit cast fails afterwards, the conversion function survives, and the cast can be redefined.
+id: cmd-drop-cast.explicit-cast-drop-keeps-function
+title: "Dropping an explicit cast removes the conversion but keeps its function"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, create-cast, explicit-cast, cast-function]
+required_capabilities: [create-type, create-cast, create-function-sql, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+setup: |
+  CREATE TYPE ec_m AS (v int);
+  CREATE FUNCTION ec_f(int4) RETURNS ec_m LANGUAGE sql AS $$ SELECT ROW($1)::ec_m $$;
+  CREATE CAST (int4 AS ec_m) WITH FUNCTION ec_f(int4);
+steps:
+  - sql: |
+      SELECT (CAST(7 AS ec_m)).v AS v
+    expect: rows
+  - sql: |
+      DROP CAST (int4 AS ec_m)
+    expect: ok
+  - sql: |
+      SELECT CAST(7 AS ec_m)
+    expect: error
+    sqlstate: "42846"
+    comment: no cast is defined any more, so the explicit conversion is rejected
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'ec_f'
+    expect: rows
+    order: multiset
+    comment: the conversion function itself is not dropped
+  - sql: |
+      CREATE CAST (int4 AS ec_m) WITH FUNCTION ec_f(int4)
+    expect: ok
+    comment: the same pair can be declared again after the drop
+  - sql: |
+      SELECT (CAST(8 AS ec_m)).v AS v
+    expect: rows

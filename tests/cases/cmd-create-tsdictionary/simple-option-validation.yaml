@@ -1,0 +1,44 @@
+# Simple template options: accept takes a Boolean value (quoted or bare-true); bare accept, a non-Boolean accept, or an unknown option are errors.
+id: cmd-create-tsdictionary.simple-option-validation
+title: "Simple template validates option names and accept values"
+family: cmd-create-tsdictionary
+tier: core
+feature_ids: [create-text-search-dictionary, simple-template, accept-option, template-option]
+required_capabilities: [create-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsdictionary.sgml#sql-createtsdictionary (Parameters: option, value)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY acc_quoted (TEMPLATE = simple, accept = 'true')
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('acc_quoted', 'Hello')
+    expect: rows
+    comment: accept = 'true' is the default behavior
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY acc_off (TEMPLATE = simple, accept = 'off')
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('acc_off', 'Hello')
+    expect: rows
+    comment: quoted 'off' is a false Boolean, so the word is declined with NULL
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY acc_bare (TEMPLATE = simple, accept)
+    expect: error
+    sqlstate: "42601"
+    comment: accept without a value is rejected
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY acc_maybe (TEMPLATE = simple, accept = maybe)
+    expect: error
+    sqlstate: "42601"
+    comment: not a Boolean value
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY simple_bogus (TEMPLATE = simple, bogus = x)
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized simple dictionary parameter
+  - sql: |
+      SELECT count(*) FROM pg_ts_dict WHERE dictname IN ('acc_bare', 'acc_maybe', 'simple_bogus')
+    expect: rows

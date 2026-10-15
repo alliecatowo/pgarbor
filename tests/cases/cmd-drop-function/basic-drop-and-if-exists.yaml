@@ -1,0 +1,45 @@
+# DROP FUNCTION removes a function so later calls fail with 42883; a second drop errors;
+# IF EXISTS turns the missing-function error into a notice and the command still succeeds.
+id: cmd-drop-function.basic-drop-and-if-exists
+title: DROP FUNCTION removes a function; IF EXISTS downgrades a missing function to a notice
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, if-exists, create-function, sql-functions]
+required_capabilities: [create-function, drop-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (Description; IF EXISTS parameter)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION bf(int) RETURNS int LANGUAGE sql AS 'select $1 + 1'
+    expect: ok
+  - sql: |
+      SELECT bf(41)
+    expect: rows
+  - sql: |
+      DROP FUNCTION bf(integer)
+    expect: ok
+    comment: int and integer name the same argument type, so this matches bf(int)
+  - sql: |
+      SELECT bf(41)
+    expect: error
+    sqlstate: "42883"
+    comment: the function is gone
+  - sql: |
+      DROP FUNCTION bf(int)
+    expect: error
+    sqlstate: "42883"
+    comment: dropping the same function twice fails without IF EXISTS
+  - sql: |
+      DROP FUNCTION IF EXISTS bf(int)
+    expect: notice
+    comment: IF EXISTS suppresses the error and only issues a notice
+  - sql: |
+      DROP FUNCTION IF EXISTS nosuch()
+    expect: notice
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'bf'
+    expect: rows
+    order: multiset
+    comment: 0 rows of pg_proc remain for bf

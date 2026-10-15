@@ -1,0 +1,29 @@
+# DISABLE can be repeated; the catalog records the mode in pg_event_trigger.evtenabled ('D').
+id: cmd-alter-event-trigger.disable-idempotent-catalog
+title: Repeated DISABLE succeeds and is recorded as disabled in pg_event_trigger
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      SELECT evtname, CASE evtenabled WHEN 'O' THEN 'origin' WHEN 'D' THEN 'disabled' WHEN 'R' THEN 'replica' WHEN 'A' THEN 'always' END AS mode FROM pg_event_trigger ORDER BY evtname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard DISABLE
+    expect: ok
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard DISABLE
+    expect: ok
+    comment: second DISABLE on an already disabled trigger is not an error
+  - sql: |
+      SELECT evtname, CASE evtenabled WHEN 'O' THEN 'origin' WHEN 'D' THEN 'disabled' WHEN 'R' THEN 'replica' WHEN 'A' THEN 'always' END AS mode FROM pg_event_trigger ORDER BY evtname
+    expect: rows
+    order: ordered

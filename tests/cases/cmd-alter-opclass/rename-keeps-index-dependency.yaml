@@ -1,0 +1,39 @@
+# ALTER OPERATOR CLASS ... RENAME TO: the index keeps referencing the operator class by OID, so its definition shows the new name.
+id: cmd-alter-opclass.rename-keeps-index-dependency
+title: "RENAME TO changes the opclass name and an existing index still uses it by OID"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, rename, btree-index, operator-class-dependency]
+required_capabilities: [create-operator-class, alter-operator-class, create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR CLASS aoc_cmd_ops1 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  CREATE TABLE aoc_cmd_t1 (a int4);
+  CREATE INDEX aoc_cmd_t1_a_idx ON aoc_cmd_t1 (a aoc_cmd_ops1);
+  INSERT INTO aoc_cmd_t1 VALUES (3), (1), (2);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_ops1 USING btree RENAME TO aoc_cmd_ops1x
+    expect: ok
+  - sql: |
+      SELECT pg_get_indexdef('aoc_cmd_t1_a_idx'::regclass)
+    expect: rows
+    order: ordered
+    comment: index definition now names the renamed opclass
+  - sql: |
+      SELECT o.opcname FROM pg_index i JOIN pg_opclass o ON o.oid = i.indclass[0] WHERE i.indexrelid = 'aoc_cmd_t1_a_idx'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pg_opclass WHERE opcname = 'aoc_cmd_ops1'
+    expect: rows
+    order: ordered
+    comment: the old name no longer exists
+  - sql: |
+      SELECT a FROM aoc_cmd_t1 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the index-backed data is unchanged

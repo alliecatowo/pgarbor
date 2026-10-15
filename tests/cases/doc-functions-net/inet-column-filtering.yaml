@@ -1,0 +1,58 @@
+# Network functions and operators used on stored inet and cidr columns: filtering, projection and update.
+id: doc-functions-net.inet-column-filtering
+title: Subnet filtering, masklen and network projection, and updates on inet and cidr table columns
+family: doc-functions-net
+tier: core
+feature_ids: [inet-functions, inet-operators, cidr, inet-column, where-clause]
+required_capabilities: [create-table, insert, select, update, inet, cidr]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-net (containment operators and inet functions applied to columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE hosts (id int4 PRIMARY KEY, addr inet NOT NULL, net cidr);
+  INSERT INTO hosts VALUES
+    (1, '192.168.1.5/24', '192.168.1.0/24'),
+    (2, '192.168.2.9/24', '192.168.2.0/24'),
+    (3, '10.0.0.7/8', '10.0.0.0/8'),
+    (4, '2001:db8::5/64', '2001:db8::/64');
+steps:
+  - sql: |
+      SELECT id, host(addr) AS h, masklen(addr) AS ml FROM hosts WHERE addr << inet '192.168.0.0/16' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows 1 and 2 are inside 192.168.0.0/16
+  - sql: |
+      SELECT id, network(addr) AS nw FROM hosts WHERE addr && inet '10.0.0.0/8' OR addr << inet '2001:db8::/32' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: overlap with 10/8, or the IPv6 network strictly inside 2001:db8::/32
+  - sql: |
+      SELECT id, addr FROM hosts WHERE net >>= inet '192.168.1.200' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: cidr column is implicitly cast to inet on the right of >>=
+  - sql: |
+      SELECT id, set_masklen(addr, 16) AS widened FROM hosts ORDER BY id
+    expect: rows
+    order: ordered
+    comment: set_masklen keeps the stored host address and changes only the netmask
+  - sql: |
+      UPDATE hosts SET addr = addr + 1 WHERE id = 1 RETURNING id, host(addr) AS new_host
+    expect: rows
+    order: multiset
+    comment: offset arithmetic on the stored value; the netmask stays at /24
+  - sql: |
+      SELECT id, host(addr) AS h, masklen(addr) AS ml FROM hosts WHERE id = 1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id, addr::cidr AS cast_net, net = addr::cidr AS matches_net FROM hosts ORDER BY id
+    expect: rows
+    order: ordered
+    comment: inet to cidr cast zeroes host bits; rows where net equals the zeroed address match
+  - sql: |
+      INSERT INTO hosts VALUES (5, '192.168.1.5/24', '192.168.1.5/24')
+    expect: error
+    sqlstate: "22P02"
+    comment: a cidr column rejects a value with bits set right of the mask

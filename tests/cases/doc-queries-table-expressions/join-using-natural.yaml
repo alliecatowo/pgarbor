@@ -1,0 +1,54 @@
+# USING merges the shared column into one output column; NATURAL is USING over all shared names;
+# NATURAL JOIN with no common column names behaves like CROSS JOIN.
+id: doc-queries-table-expressions.join-using-natural
+title: USING suppresses duplicate join columns; NATURAL joins on all shared names
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [joins, using, natural-join, from-clause]
+required_capabilities: [create-table, insert, select, join]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-from (Qualified joins: USING, NATURAL)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (num int4, name text);
+  CREATE TABLE t2 (num int4, value text);
+  CREATE TABLE u (z int4);
+  INSERT INTO t1 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+  INSERT INTO t2 VALUES (1, 'xxx'), (3, 'yyy'), (5, 'zzz');
+  INSERT INTO u VALUES (7), (8);
+steps:
+  - sql: |
+      SELECT * FROM t1 INNER JOIN t2 USING (num)
+    expect: rows
+    order: multiset
+    comment: columns are num, name, value; num appears once
+  - sql: |
+      SELECT * FROM t1 NATURAL INNER JOIN t2
+    expect: rows
+    order: multiset
+    comment: same result as USING (num)
+  - sql: |
+      SELECT * FROM t1 NATURAL JOIN t2 ORDER BY num
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM t1 LEFT JOIN t2 USING (num)
+    expect: rows
+    order: multiset
+    comment: num 2 unmatched, value NULL
+  - sql: |
+      SELECT * FROM t1 NATURAL JOIN u
+    expect: rows
+    order: multiset
+    comment: no common column names, so NATURAL JOIN is a cross join (6 rows)
+  - sql: |
+      SELECT count(*) FROM t1 CROSS JOIN u
+    expect: rows
+    order: multiset
+    comment: returns 6
+  - sql: |
+      SELECT t1.num, t2.num AS t2num FROM t1 INNER JOIN t2 USING (num) ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: qualified references to USING columns still resolve to each side

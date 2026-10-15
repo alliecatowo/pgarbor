@@ -1,0 +1,51 @@
+# Base type definition error paths: missing shell, missing or unknown I/O functions, wrong return type, bad alignment.
+id: cmd-create-type.base-type-io-errors
+title: "Base type definition errors: shell requirement, I/O function checks, alignment"
+family: cmd-create-type
+tier: extended
+feature_ids: [create-type, base-types, shell-types, errors]
+required_capabilities: [create-type, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype (Base Types, shell types)"
+steps:
+  - sql: |
+      CREATE TYPE bt_nosh (INPUT = int4in, OUTPUT = int4out, INTERNALLENGTH = 4)
+    expect: error
+    sqlstate: "42710"
+    comment: a base type must first exist as a shell type
+  - sql: |
+      CREATE TYPE bt_sh
+    expect: ok
+  - sql: |
+      CREATE TYPE bt_sh (INPUT = int4in, OUTPUT = int4out, INTERNALLENGTH = 4)
+    expect: error
+    sqlstate: "42P17"
+    comment: int4in returns int4, not the shell type bt_sh
+  - sql: |
+      CREATE TYPE bt_sh2
+    expect: ok
+  - sql: |
+      CREATE TYPE bt_sh2 (OUTPUT = int4out, INTERNALLENGTH = 4)
+    expect: error
+    sqlstate: "42P17"
+    comment: the input function is required
+  - sql: |
+      CREATE TYPE bt_sh3
+    expect: ok
+  - sql: |
+      CREATE TYPE bt_sh3 (INPUT = nosuchfn, OUTPUT = int4out, INTERNALLENGTH = 4)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE TYPE bt_sh4
+    expect: ok
+  - sql: |
+      CREATE TYPE bt_sh4 (INPUT = int4in, OUTPUT = int4out, INTERNALLENGTH = 4, PASSEDBYVALUE, ALIGNMENT = nope)
+    expect: error
+    sqlstate: "22023"
+    comment: alignment must be char, int2, int4 or double
+  - sql: |
+      SELECT typisdefined FROM pg_type WHERE typname = 'bt_sh4'
+    expect: rows
+    comment: the failed definition leaves the shell in place

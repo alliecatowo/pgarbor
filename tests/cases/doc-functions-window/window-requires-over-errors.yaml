@@ -1,0 +1,39 @@
+# Window functions must use OVER; they cannot appear in WHERE.
+id: doc-functions-window.window-requires-over-errors
+title: Window functions without OVER and window functions in WHERE are rejected
+family: doc-functions-window
+tier: core
+feature_ids: [window-functions, over-clause, error-handling]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (window functions must be invoked with OVER)"
+setup: |
+  CREATE TABLE w (id int4 PRIMARY KEY);
+  INSERT INTO w VALUES (1), (2);
+steps:
+  - sql: |
+      SELECT row_number() FROM w
+    expect: error
+    sqlstate: "42809"
+    comment: an OVER clause is required for row_number
+  - sql: |
+      SELECT nth_value(id, 2) FROM w
+    expect: error
+    sqlstate: "42809"
+    comment: an OVER clause is required for nth_value too
+  - sql: |
+      SELECT id FROM w WHERE row_number() OVER () = 1
+    expect: error
+    sqlstate: "42P20"
+    comment: window functions are not allowed in WHERE
+  - sql: |
+      SELECT count(*) FROM w WHERE count(*) OVER () = 2
+    expect: error
+    sqlstate: "42P20"
+    comment: window calls are not allowed in WHERE even when wrapping an aggregate
+  - sql: |
+      SELECT id, row_number() OVER () FROM w ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the correct form succeeds

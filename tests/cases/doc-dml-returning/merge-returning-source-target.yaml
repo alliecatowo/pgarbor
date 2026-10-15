@@ -1,0 +1,28 @@
+# MERGE RETURNING with a qualified target star, source columns and merge_action() reports each action taken.
+id: doc-dml-returning.merge-returning-source-target
+title: MERGE RETURNING reports target rows for inserts and updates, with source columns and merge_action
+family: doc-dml-returning
+tier: extended
+feature_ids: [returning, merge, merge-action, returning-star, upsert]
+required_capabilities: [create-table, insert, select, returning, merge, merge-action]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (MERGE ... RETURNING p.*) and functions.sgml#merge_action"
+sessions: [a]
+setup: |
+  CREATE TABLE tgt (id int4 PRIMARY KEY, v text);
+  CREATE TABLE src (id int4, v text);
+  INSERT INTO tgt VALUES (1, 'old1');
+  INSERT INTO src VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      MERGE INTO tgt t USING src s ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET v = s.v
+        WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v)
+        RETURNING merge_action(), t.*, s.v AS src_v
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id, v FROM tgt ORDER BY id
+    expect: rows
+    order: ordered

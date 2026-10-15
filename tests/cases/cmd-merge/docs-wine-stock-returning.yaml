@@ -1,0 +1,40 @@
+# Documented example: insert new stock, update positive stock, delete wines whose stock reaches zero, RETURNING merge_action() with OLD/NEW.
+id: cmd-merge.docs-wine-stock-returning
+title: MERGE documentation wine-stock example with conditional INSERT/UPDATE/DELETE and RETURNING
+family: cmd-merge
+tier: core
+feature_ids: [merge, returning, merge-action, old-new-alias, when-and-condition]
+required_capabilities: [create-table, insert, select, update, delete, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Examples: wines / wine_stock_changes, RETURNING merge_action(), old, new)"
+setup: |
+  CREATE TABLE wines (winename text PRIMARY KEY, stock integer);
+  CREATE TABLE wine_stock_changes (winename text, stock_delta integer);
+  INSERT INTO wines VALUES ('Chateau Lafite 2003', 20), ('Chateau Mouton Rothschild 2005', 10), ('Chateau Latour 2010', 7);
+  INSERT INTO wine_stock_changes VALUES
+    ('Chateau Lafite 2003', -20),
+    ('Chateau Mouton Rothschild 2005', -5),
+    ('Chateau Latour 2010', -3),
+    ('Chateau Cheval Blanc 2010', 5),
+    ('Chateau Cheval Blanc 2011', 0);
+steps:
+  - sql: |
+      MERGE INTO wines w
+      USING wine_stock_changes s
+      ON s.winename = w.winename
+      WHEN NOT MATCHED AND s.stock_delta > 0 THEN
+        INSERT VALUES(s.winename, s.stock_delta)
+      WHEN MATCHED AND w.stock + s.stock_delta > 0 THEN
+        UPDATE SET stock = w.stock + s.stock_delta
+      WHEN MATCHED THEN
+        DELETE
+      RETURNING merge_action(), w.winename, old.stock AS old_stock, new.stock AS new_stock
+    expect: rows
+    order: multiset
+    comment: expect DELETE Lafite (old 20, new NULL), UPDATE Mouton (10->5), UPDATE Latour (7->4), INSERT Cheval Blanc 2010 (new 5); the 2011 row with delta 0 is neither matched nor inserted
+  - sql: |
+      SELECT winename, stock FROM wines ORDER BY winename
+    expect: rows
+    order: ordered
+    comment: expect Cheval Blanc 2010 = 5, Latour 2010 = 4, Mouton Rothschild 2005 = 5

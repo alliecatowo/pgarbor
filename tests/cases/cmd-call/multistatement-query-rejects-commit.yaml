@@ -1,0 +1,29 @@
+# A simple-Query message holding several statements runs as one implicit transaction block, so a
+# procedure that commits fails with 2D000 and its earlier insert is not kept.
+id: cmd-call.multistatement-query-rejects-commit
+title: Procedure COMMIT inside a multi-statement query fails with 2D000 as an implicit transaction
+family: cmd-call
+tier: core
+feature_ids: [call, procedures, transactions, commit]
+required_capabilities: [create-table, insert, select, create-procedure, call, plpgsql, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/call.sgml#sql-call (Notes: transaction control)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  CREATE PROCEDURE p_tx() LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO t VALUES (9, 'tx');
+    COMMIT;
+    INSERT INTO t VALUES (10, 'after');
+  END $$;
+steps:
+  - sql: |
+      CALL p_tx(); CALL p_tx()
+    expect: error
+    sqlstate: "2D000"
+    comment: the whole query is one transaction block, so CALL is not in its own transaction
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows

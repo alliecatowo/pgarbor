@@ -1,0 +1,69 @@
+# DROP POLICY works with RLS disabled, and disabled RLS ignores existing policies for everyone.
+id: cmd-drop-policy.disable-rls-policies-ignored
+title: "DROP POLICY on a table with RLS disabled, and RLS re-enabled afterwards with no policies"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, policies, rls, alter-table]
+required_capabilities: [create-table, insert, select, rls, roles, privileges, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (Description: ALTER TABLE ... DISABLE ROW LEVEL SECURITY)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_dp_reader2;
+  CREATE TABLE t (id int4, v int4);
+  INSERT INTO t VALUES (1, 1), (2, -1), (3, 5);
+  GRANT SELECT ON t TO pgarbor_case_dp_reader2;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p1 ON t FOR SELECT USING (v > 4);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_dp_reader2
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only row 3 passes p1
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER TABLE t DISABLE ROW LEVEL SECURITY
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: the policy is still defined while RLS is disabled
+  - sql: |
+      SET ROLE pgarbor_case_dp_reader2
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: with RLS disabled every row is visible
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP POLICY p1 ON t
+    expect: ok
+    comment: dropping a policy does not require RLS to be enabled
+  - sql: |
+      ALTER TABLE t ENABLE ROW LEVEL SECURITY
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_dp_reader2
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: RLS is enabled and no policy remains, so zero rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT relrowsecurity FROM pg_class WHERE relname = 't'
+    expect: rows

@@ -1,0 +1,53 @@
+# Index expressions must reference existing columns, contain no subqueries or aggregates, and use only IMMUTABLE functions.
+id: doc-indexes-expressional.expression-index-errors
+title: Invalid index expressions fail with the documented SQLSTATEs and leave no index behind
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, create-index, errors, volatility]
+required_capabilities: [create-table, create-index, errors, functions, plpgsql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional; create_index reference for the IMMUTABLE rule"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, col1 text, ts timestamptz);
+  -- plpgsql on purpose: a LANGUAGE sql STABLE wrapper around lower() is inlined before the
+  -- volatility check, so the index would be accepted. Do not simplify this to LANGUAGE sql.
+  CREATE FUNCTION stable_key(t text) RETURNS text LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN lower(t); END $$;
+steps:
+  - sql: |
+      CREATE INDEX t_bad_col ON t (lower(nope))
+    expect: error
+    sqlstate: "42703"
+    comment: the expression may only reference columns of the table
+  - sql: |
+      CREATE INDEX t_bad_subquery ON t ((SELECT 1))
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE INDEX t_bad_agg ON t ((count(*)))
+    expect: error
+    sqlstate: "42803"
+  - sql: |
+      CREATE INDEX t_bad_now ON t ((now()::text))
+    expect: error
+    sqlstate: "42P17"
+    comment: now() is STABLE, not IMMUTABLE, so the index is refused
+  - sql: |
+      CREATE INDEX t_bad_random ON t (random())
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      CREATE INDEX t_bad_stable_fn ON t (stable_key(col1))
+    expect: error
+    sqlstate: "42P17"
+    comment: a user function must be declared IMMUTABLE
+  - sql: |
+      SELECT count(*) FROM pg_catalog.pg_class WHERE relname LIKE 't_bad%'
+    expect: rows
+    order: multiset
+    comment: none of the failed statements left an index behind
+  - sql: |
+      CREATE INDEX t_bad_now ON t (lower(col1))
+    expect: ok
+    comment: t_bad_now was refused above, so the name is free and a valid expression can take it

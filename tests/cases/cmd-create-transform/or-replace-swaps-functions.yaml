@@ -1,0 +1,33 @@
+# CREATE OR REPLACE TRANSFORM: replacing an existing transform swaps its functions and keeps one row per (type, language).
+id: cmd-create-transform.or-replace-swaps-functions
+title: "CREATE OR REPLACE TRANSFORM swaps the functions of an existing transform and keeps a single catalog row"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, create-or-replace, transform-from-sql, transform-to-sql]
+required_capabilities: [create-transform, create-function, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-description"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ct_from_a(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+  CREATE FUNCTION ct_from_b(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'varchar_support';
+  CREATE FUNCTION ct_to_int(val internal) RETURNS int4 LANGUAGE internal IMMUTABLE STRICT AS 'int4recv';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_from_a(internal), TO SQL WITH FUNCTION ct_to_int(internal))
+    expect: ok
+  - sql: |
+      SELECT trffromsql::regprocedure::text AS from_fn, trftosql::regprocedure::text AS to_fn
+        FROM pg_transform WHERE trftype = 'int4'::regtype
+    expect: rows
+  - sql: |
+      CREATE OR REPLACE TRANSFORM FOR int4 LANGUAGE sql (FROM SQL WITH FUNCTION ct_from_b(internal))
+    expect: ok
+  - sql: |
+      SELECT trffromsql::regprocedure::text AS from_fn, trftosql IS NULL AS to_gone
+        FROM pg_transform WHERE trftype = 'int4'::regtype
+    expect: rows
+  - sql: |
+      SELECT count(*) AS transform_rows FROM pg_transform
+    expect: rows

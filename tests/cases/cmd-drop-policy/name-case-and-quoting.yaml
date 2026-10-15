@@ -1,0 +1,45 @@
+# Unquoted policy names fold to lower case, so only a quoted identifier matches a mixed-case or spaced name.
+id: cmd-drop-policy.name-case-and-quoting
+title: "DROP POLICY matches policy names exactly, folding unquoted names to lower case"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, policies, identifiers, quoting]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (name); doc/src/sgml/sql.sgml (identifiers)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY "P1" ON t USING (v > 0);
+  CREATE POLICY "Mixed Case" ON t USING (v > 1);
+steps:
+  - sql: |
+      DROP POLICY p1 ON t
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted p1 folds to p1, which does not match P1
+  - sql: |
+      DROP POLICY P1 ON t
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted P1 folds to p1 as well
+  - sql: |
+      DROP POLICY "p1" ON t
+    expect: error
+    sqlstate: "42704"
+    comment: quoted lower case does not match the stored P1
+  - sql: |
+      DROP POLICY "P1" ON t
+    expect: ok
+  - sql: |
+      DROP POLICY "Mixed Case" ON t
+    expect: ok
+    comment: quoted names may contain spaces
+  - sql: |
+      SELECT count(*) AS n FROM pg_policies WHERE tablename = 't'
+    expect: rows
+  - sql: |
+      DROP POLICY IF EXISTS "P1" ON t
+    expect: notice
+    comment: already dropped, so IF EXISTS gives a NOTICE

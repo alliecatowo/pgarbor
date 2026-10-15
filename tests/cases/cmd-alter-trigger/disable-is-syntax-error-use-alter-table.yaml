@@ -1,0 +1,46 @@
+# ALTER TRIGGER has no DISABLE or ENABLE; the trigger is switched off with ALTER TABLE ... DISABLE TRIGGER, which suppresses firing.
+id: cmd-alter-trigger.disable-is-syntax-error-use-alter-table
+title: "ALTER TRIGGER rejects DISABLE and ENABLE; ALTER TABLE disables firing"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, alter-table, triggers, errors]
+required_capabilities: [create-table, insert, select, triggers, plpgsql, create-function, alter-table, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (Notes)"
+sessions: [a]
+setup: |
+  CREATE TABLE ath_sink (seq int4 GENERATED ALWAYS AS IDENTITY, tag text);
+  CREATE TABLE emp (id int4, v text);
+  CREATE FUNCTION ath_fire() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO ath_sink(tag) VALUES (TG_NAME); RETURN NEW; END $$;
+  CREATE TRIGGER emp_t AFTER INSERT ON emp FOR EACH ROW EXECUTE FUNCTION ath_fire();
+steps:
+  - sql: |
+      ALTER TRIGGER emp_t ON emp DISABLE
+    expect: error
+    sqlstate: "42601"
+    comment: no enable/disable clause in ALTER TRIGGER
+  - sql: |
+      ALTER TRIGGER emp_t ON emp ENABLE
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      ALTER TABLE emp DISABLE TRIGGER emp_t
+    expect: ok
+  - sql: |
+      INSERT INTO emp VALUES (1, 'a')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM ath_sink
+    expect: rows
+    comment: disabled trigger did not fire
+  - sql: |
+      ALTER TABLE emp ENABLE TRIGGER emp_t
+    expect: ok
+  - sql: |
+      INSERT INTO emp VALUES (2, 'b')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM ath_sink
+    expect: rows
+    comment: re-enabled trigger fires for the second row

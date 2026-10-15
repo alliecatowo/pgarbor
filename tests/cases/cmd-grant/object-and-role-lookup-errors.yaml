@@ -1,0 +1,48 @@
+# Unknown roles and objects fail the whole GRANT statement with the documented lookup SQLSTATEs and leave no partial grant.
+id: cmd-grant.object-and-role-lookup-errors
+title: GRANT naming an unknown role, table, schema, type or function fails with 42704, 42P01, 3F000 or 42883 and grants nothing
+family: cmd-grant
+tier: core
+feature_ids: [grant, errors, roles, privileges]
+required_capabilities: [create-table, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant (role_specification and object names)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_lk_r;
+  CREATE TABLE cgg_lk (a int4);
+steps:
+  - sql: |
+      GRANT SELECT ON cgg_lk TO cgg_nosuchrole
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      GRANT SELECT ON cgg_nosuchtable TO cgg_lk_r
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      GRANT CREATE ON SCHEMA cgg_nosch TO cgg_lk_r
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      GRANT USAGE ON TYPE cgg_nosuchtype TO cgg_lk_r
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      GRANT EXECUTE ON FUNCTION cgg_nofn(int4) TO cgg_lk_r
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      GRANT SELECT ON cgg_lk, cgg_nosuchtable TO cgg_lk_r
+    expect: error
+    sqlstate: "42P01"
+    comment: the statement fails as a whole, so cgg_lk is not granted
+  - sql: |
+      GRANT SELECT ON cgg_lk TO cgg_lk_r, cgg_nosuchrole
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT has_table_privilege('cgg_lk_r', 'cgg_lk', 'SELECT') AS granted
+    expect: rows
+    order: ordered

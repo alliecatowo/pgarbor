@@ -1,0 +1,48 @@
+# Domain names must be unique among types in their schema; the base type must exist and be a valid non-pseudo type.
+id: cmd-create-domain.name-and-base-type-errors
+title: CREATE DOMAIN rejects duplicate type names, unknown base types, pseudo-types, collations on int and redundant NOT NULL
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, type-names, base-type, not-null-constraint]
+required_capabilities: [create-domain, create-table, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (name must be unique among types in its schema)"
+sessions: [a]
+setup: |
+  CREATE TABLE dup_t (x int);
+  CREATE DOMAIN dup1 AS int;
+steps:
+  - sql: |
+      CREATE DOMAIN dup1 AS int
+    expect: error
+    sqlstate: "42710"
+    comment: an existing domain of that name
+  - sql: |
+      CREATE DOMAIN dup_t AS int
+    expect: error
+    sqlstate: "42710"
+    comment: a table's row type already occupies the name
+  - sql: |
+      CREATE DOMAIN dnotype AS no_such_type
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE DOMAIN dvoid AS void
+    expect: error
+    sqlstate: "42804"
+    comment: pseudo-types are not valid base types
+  - sql: |
+      CREATE DOMAIN dpseudo AS record
+    expect: error
+    sqlstate: "42804"
+  - sql: |
+      CREATE DOMAIN dnn2 AS int NOT NULL NOT NULL
+    expect: error
+    sqlstate: "42P17"
+    comment: a repeated NOT NULL is a redundant definition
+  - sql: |
+      SELECT typname FROM pg_type WHERE typname IN ('dnotype', 'dvoid', 'dpseudo', 'dnn2') ORDER BY typname
+    expect: rows
+    order: ordered
+    comment: no failed definition left a type behind

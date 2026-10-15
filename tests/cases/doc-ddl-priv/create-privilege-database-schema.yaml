@@ -1,0 +1,50 @@
+# CREATE on the database allows new schemas; CREATE on a schema allows new objects inside it. Each is checked separately.
+id: doc-ddl-priv.create-privilege-database-schema
+title: CREATE on the database gates CREATE SCHEMA and CREATE on a schema gates CREATE TABLE in it
+family: doc-ddl-priv
+tier: extended
+feature_ids: [create-schema, create-table, grant, privileges, errors]
+required_capabilities: [create-table, create-schema, plpgsql, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (CREATE: for databases allows new schemas; for schemas allows new objects within the schema)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_cs_rw;
+  CREATE SCHEMA cs_s;
+  GRANT USAGE ON SCHEMA cs_s TO ddp_cs_rw;
+steps:
+  - sql: |
+      SET ROLE ddp_cs_rw
+    expect: ok
+  - sql: |
+      CREATE SCHEMA cs_new
+    expect: error
+    sqlstate: "42501"
+    comment: no CREATE privilege on the database yet
+  - sql: |
+      CREATE TABLE cs_s.cs_t (a int4)
+    expect: error
+    sqlstate: "42501"
+    comment: no CREATE privilege on schema cs_s yet
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT CREATE ON SCHEMA cs_s TO ddp_cs_rw
+    expect: ok
+  - sql: |
+      DO $$ BEGIN EXECUTE format('GRANT CREATE ON DATABASE %I TO ddp_cs_rw', current_database()); END $$
+    expect: ok
+  - sql: |
+      SET ROLE ddp_cs_rw
+    expect: ok
+  - sql: |
+      CREATE TABLE cs_s.cs_t (a int4)
+    expect: ok
+  - sql: |
+      CREATE SCHEMA cs_new
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,38 @@
+# The documented btree_gist example: room = equality combined with range overlap in one EXCLUDE
+# constraint, so overlaps are rejected only within the same room.
+id: doc-rangetypes.exclusion-constraint-btree-gist
+title: btree_gist combines scalar equality with range overlap in one exclusion constraint
+family: doc-rangetypes
+tier: extended
+feature_ids: [range-types, exclusion-constraints, btree-gist, create-extension]
+required_capabilities: [range-types, create-extension, create-table, insert, gist-index, exclusion-constraints, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rangetypes.sgml#rangetypes-constraint"
+sessions: [a]
+setup: |
+  CREATE EXTENSION btree_gist;
+steps:
+  - sql: |
+      CREATE TABLE room_reservation (
+          room text,
+          during tsrange,
+          EXCLUDE USING GIST (room WITH =, during WITH &&)
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO room_reservation VALUES ('123A', '[2010-01-01 14:00, 2010-01-01 15:00)')
+    expect: ok
+  - sql: |
+      INSERT INTO room_reservation VALUES ('123A', '[2010-01-01 14:30, 2010-01-01 15:30)')
+    expect: error
+    sqlstate: "23P01"
+    comment: same room and overlapping time is rejected
+  - sql: |
+      INSERT INTO room_reservation VALUES ('123B', '[2010-01-01 14:30, 2010-01-01 15:30)')
+    expect: ok
+    comment: a different room may overlap in time
+  - sql: |
+      SELECT room, during FROM room_reservation ORDER BY room
+    expect: rows
+    order: ordered

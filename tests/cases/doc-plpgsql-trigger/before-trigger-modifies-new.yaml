@@ -1,0 +1,38 @@
+# A BEFORE trigger that returns a modified NEW changes the stored row and what INSERT/UPDATE RETURNING reports.
+id: doc-plpgsql-trigger.before-trigger-modifies-new
+title: BEFORE trigger returning a modified NEW alters the stored and returned row
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, before-triggers, plpgsql, returning, update, insert]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, update, select, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (returning a row value different from NEW alters the row)"
+sessions: [a]
+setup: |
+  CREATE TABLE m (id int, v text, upd_count int NOT NULL DEFAULT 0);
+  CREATE FUNCTION m_touch() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      NEW.v := upper(NEW.v);
+      IF TG_OP = 'UPDATE' THEN
+          NEW.upd_count := OLD.upd_count + 1;
+      END IF;
+      RETURN NEW;
+  END $$;
+  CREATE TRIGGER m_touch BEFORE INSERT OR UPDATE ON m
+      FOR EACH ROW EXECUTE FUNCTION m_touch();
+steps:
+  - sql: |
+      INSERT INTO m (id, v) VALUES (1, 'abc') RETURNING id, v, upd_count
+    expect: rows
+    order: ordered
+    comment: RETURNING shows the trigger-modified NEW
+  - sql: |
+      UPDATE m SET v = 'xyz' WHERE id = 1 RETURNING v, upd_count
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, v, upd_count FROM m ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the stored row carries the modified values

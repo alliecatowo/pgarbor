@@ -1,0 +1,51 @@
+# Quoted identifiers are case-sensitive, so unquoted casefn does not match "CaseFn". A schema-qualified
+# name only finds the function in that schema. A missing schema is 3F000 without IF EXISTS and a notice
+# with it.
+id: cmd-drop-function.quoted-names-and-schemas
+title: Quoted names are case-sensitive; schema-qualified names resolve only in their schema
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, quoted-identifiers, schema-qualified-names, if-exists]
+required_capabilities: [create-function, create-schema, drop-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction-params (name, argtype: optionally schema-qualified)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION "CaseFn"() RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION casefn()
+    expect: error
+    sqlstate: "42883"
+    comment: unquoted casefn folds to casefn, which does not exist
+  - sql: |
+      DROP FUNCTION "CaseFn"()
+    expect: ok
+  - sql: |
+      CREATE SCHEMA ds1
+    expect: ok
+  - sql: |
+      CREATE FUNCTION ds1.qf(int) RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION qf(int)
+    expect: error
+    sqlstate: "42883"
+    comment: qf is not in the search path schema public
+  - sql: |
+      DROP FUNCTION ds1.qf(int)
+    expect: ok
+  - sql: |
+      DROP FUNCTION IF EXISTS ds1.qf(int)
+    expect: notice
+  - sql: |
+      DROP FUNCTION noschema_x.f(int)
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema does not exist
+  - sql: |
+      DROP FUNCTION IF EXISTS noschema_x.f(int)
+    expect: notice
+    comment: with IF EXISTS, a missing schema is only a notice

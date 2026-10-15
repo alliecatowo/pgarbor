@@ -1,0 +1,30 @@
+# SET SCHEMA fails for a missing target schema (3F000) and for a non-relocatable extension such as plpgsql (0A000); a failed move leaves the extension in place.
+id: cmd-alter-extension.set-schema-errors
+title: SET SCHEMA rejects a missing schema and a non-relocatable extension
+family: cmd-alter-extension
+tier: core
+feature_ids: [alter-extension, set-schema, relocatable-extensions, errors]
+required_capabilities: [create-extension, create-schema, alter-extension, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (SET SCHEMA: the extension has to be relocatable)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA utils;
+  CREATE EXTENSION hstore;
+steps:
+  - sql: |
+      ALTER EXTENSION hstore SET SCHEMA nosuch
+    expect: error
+    sqlstate: "3F000"
+    comment: target schema does not exist
+  - sql: |
+      ALTER EXTENSION plpgsql SET SCHEMA utils
+    expect: error
+    sqlstate: "0A000"
+    comment: plpgsql is not relocatable, so SET SCHEMA is not supported
+  - sql: |
+      SELECT e.extname, n.nspname AS extschema FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname IN ('hstore', 'plpgsql') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: both extensions stay in their original schemas

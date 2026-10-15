@@ -1,0 +1,28 @@
+# MERGE with a DELETE action: RETURNING can project old target values, while new target values are NULL.
+id: doc-dml-returning.merge-returning-delete-old-new
+title: MERGE DELETE RETURNING gives old target values and NULL new values
+family: doc-dml-returning
+tier: extended
+feature_ids: [returning, returning-old-new, merge, merge-delete, null-semantics]
+required_capabilities: [create-table, insert, select, returning, returning-old-new, merge]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (In a MERGE, returning old and new target row content)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no int4 PRIMARY KEY, name text);
+  CREATE TABLE new_products (product_no int4 PRIMARY KEY, name text);
+  INSERT INTO products VALUES (1, 'n1'), (3, 'keep');
+  INSERT INTO new_products VALUES (1, 'n1'), (2, 'n2');
+steps:
+  - sql: |
+      MERGE INTO products p USING new_products n ON p.product_no = n.product_no
+        WHEN MATCHED THEN DELETE
+        RETURNING p.product_no, old.name AS oldn, new.name AS newn
+    expect: rows
+    order: multiset
+    comment: only product 1 matches and is deleted; new.name is NULL for the deleted row
+  - sql: |
+      SELECT product_no, name FROM products ORDER BY product_no
+    expect: rows
+    order: ordered

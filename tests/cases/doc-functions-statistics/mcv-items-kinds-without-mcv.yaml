@@ -1,0 +1,28 @@
+# A statistics object without the mcv kind stores no MCV list, so the function yields no rows.
+id: doc-functions-statistics.mcv-items-kinds-without-mcv
+title: Statistics without the mcv kind have a NULL MCV list and no items
+family: doc-functions-statistics
+tier: extended
+feature_ids: [pg-mcv-list-items, ndistinct-statistics, functional-dependencies, analyze]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE qk (a int, d int);
+  ALTER TABLE qk SET (autovacuum_enabled = false);
+  INSERT INTO qk SELECT i % 4, i % 3 FROM generate_series(1, 200) g(i);
+  CREATE STATISTICS qk_nd (ndistinct, dependencies) ON a, d FROM qk;
+steps:
+  - sql: |
+      ANALYZE qk
+    expect: ok
+  - sql: |
+      SELECT stxname, stxkind, stxdmcv IS NULL AS mcv_is_null FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid) ORDER BY stxname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'qk_nd'
+    expect: rows
+    order: ordered

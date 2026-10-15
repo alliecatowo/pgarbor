@@ -1,0 +1,54 @@
+# LANGUAGE rules: a quoted language name is deprecated and requires matching case; unknown languages,
+# a missing language, a missing body, and an internal symbol that does not exist are all rejected.
+id: cmd-create-procedure.language-clause-rules
+title: LANGUAGE clause name matching, missing language or body, and unknown internal symbols
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, language-clause, plpgsql, errors]
+required_capabilities: [create-table, select, create-procedure, call, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (lang_name, definition)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE lang_quoted_lower() LANGUAGE 'sql' AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE lang_quoted_upper() LANGUAGE 'SQL' AS 'SELECT 1'
+    expect: error
+    sqlstate: "42704"
+    comment: quoted language name must match case
+  - sql: |
+      CREATE PROCEDURE lang_unknown() LANGUAGE nosuch AS 'SELECT 1'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE PROCEDURE lang_missing() AS 'SELECT 1'
+    expect: error
+    sqlstate: "42P13"
+    comment: no language specified
+  - sql: |
+      CREATE PROCEDURE body_missing() LANGUAGE sql
+    expect: error
+    sqlstate: "42P13"
+    comment: no function body specified
+  - sql: |
+      CREATE PROCEDURE internal_missing() LANGUAGE internal AS 'no_such_symbol'
+    expect: error
+    sqlstate: "42883"
+    comment: internal language names a built-in symbol that does not exist
+  - sql: |
+      CREATE PROCEDURE lp() LANGUAGE plpgsql AS $$
+      BEGIN
+        NULL;
+      END $$
+    expect: ok
+  - sql: |
+      CALL lp()
+    expect: ok
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('lang_quoted_upper', 'lang_unknown', 'lang_missing', 'body_missing', 'internal_missing') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: rejected definitions leave nothing behind

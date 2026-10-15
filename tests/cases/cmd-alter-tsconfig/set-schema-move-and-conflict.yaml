@@ -1,0 +1,43 @@
+# SET SCHEMA moves a configuration; moving into a schema that already has the name fails, and an unknown target schema fails.
+id: cmd-alter-tsconfig.set-schema-move-and-conflict
+title: "ALTER TEXT SEARCH CONFIGURATION SET SCHEMA moves the object and reports conflicts"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, set-schema, namespace, errors]
+required_capabilities: [create-schema, create-text-search-configuration, alter-text-search-configuration, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA atsc_s;
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config SET SCHEMA atsc_s
+    expect: ok
+  - sql: |
+      SELECT n.nspname, c.cfgname
+        FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace
+       WHERE c.cfgname = 'my_config'
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION atsc_s.my_config SET SCHEMA atsc_nosuch_schema
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION public.my_config (copy = simple)
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION atsc_s.my_config SET SCHEMA public
+    expect: error
+    sqlstate: "42710"
+    comment: public already has a my_config
+  - sql: |
+      SELECT n.nspname, c.cfgname
+        FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace
+       WHERE c.cfgname = 'my_config'
+       ORDER BY 1
+    expect: rows
+    order: ordered

@@ -1,0 +1,33 @@
+# An operator used as a btree operator-class member is a dependency: RESTRICT refuses and CASCADE drops the operator class.
+id: cmd-drop-operator.cascade-operator-class
+title: DROP OPERATOR refuses while a btree operator class uses it, and CASCADE drops the class
+family: cmd-drop-operator
+tier: extended
+feature_ids: [drop-operator, operator-classes, btree, cascade, dependencies]
+required_capabilities: [drop-operator, create-operator, create-function-sql, create-opclass, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#parameters (CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dcl_lt(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR !<! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dcl_lt);
+  CREATE OPERATOR CLASS dcl_opc FOR TYPE integer USING btree AS OPERATOR 1 !<! (integer, integer), FUNCTION 1 btint4cmp(integer, integer);
+steps:
+  - sql: |
+      DROP OPERATOR !<! (integer, integer)
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT count(*) AS opclass_left FROM pg_opclass WHERE opcname = 'dcl_opc'
+    expect: rows
+  - sql: |
+      DROP OPERATOR !<! (integer, integer) CASCADE
+    expect: notice
+    comment: the operator class is dropped as a dependent object
+  - sql: |
+      SELECT count(*) AS opclass_left FROM pg_opclass WHERE opcname = 'dcl_opc'
+    expect: rows
+  - sql: |
+      SELECT count(*) AS op_left FROM pg_operator WHERE oprname = '!<!' AND oprnamespace = 'public'::regnamespace
+    expect: rows

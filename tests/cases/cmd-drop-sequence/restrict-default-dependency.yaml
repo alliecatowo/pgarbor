@@ -1,0 +1,30 @@
+# Default RESTRICT: a column default that calls nextval() on the sequence blocks the drop with 2BP01.
+id: cmd-drop-sequence.restrict-default-dependency
+title: DROP SEQUENCE is refused with 2BP01 while a column default depends on it, with and without RESTRICT
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, restrict, dependencies, column-defaults]
+required_capabilities: [sequences, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Parameters: RESTRICT is the default)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE dseq;
+  CREATE TABLE t6 (id int4 DEFAULT nextval('dseq'), v text);
+steps:
+  - sql: |
+      DROP SEQUENCE dseq
+    expect: error
+    sqlstate: "2BP01"
+    comment: default RESTRICT refuses the drop; DETAIL names the default
+  - sql: |
+      DROP SEQUENCE dseq RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT behaves identically
+  - sql: |
+      INSERT INTO t6 (v) VALUES ('still-live') RETURNING id, v
+    expect: rows
+    order: ordered
+    comment: the sequence and its default are still in place after the refused drops

@@ -1,0 +1,32 @@
+# Configuration and dictionary names may be schema-qualified in ALTER; the search path is not used for the qualified part.
+id: cmd-alter-tsconfig.qualified-names
+title: "ALTER TEXT SEARCH CONFIGURATION accepts schema-qualified configuration and dictionary names"
+family: cmd-alter-tsconfig
+tier: extended
+feature_ids: [alter-text-search-configuration, qualified-names, search-path]
+required_capabilities: [create-schema, create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (name optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA atsc_q;
+  CREATE TEXT SEARCH DICTIONARY atsc_q.dict_q (template = snowball, language = english);
+  CREATE TEXT SEARCH CONFIGURATION atsc_q.cfg_q (copy = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION atsc_q.cfg_q ALTER MAPPING FOR asciiword WITH atsc_q.dict_q
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('atsc_q.cfg_q', 'Running Foxes') AS vec
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_tsvector('atsc_q.cfg_q', 'Running Foxes') = to_tsvector('atsc_q.cfg_q', 'running foxes') AS same
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION atsc_q.cfg_q ALTER MAPPING FOR asciiword WITH dict_q
+    expect: error
+    sqlstate: "42704"
+    comment: unqualified dict_q is not on the search path, so it does not resolve (cfg_q itself is qualified)

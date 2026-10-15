@@ -1,0 +1,34 @@
+# A BEFORE INSERT trigger rewrites NEW; RETURNING reports the row as modified by the trigger.
+id: doc-dml-returning.returning-reflects-before-trigger-row
+title: INSERT RETURNING shows values changed by a BEFORE INSERT trigger
+family: doc-dml-returning
+tier: core
+feature_ids: [returning, insert, triggers, plpgsql, default-values]
+required_capabilities: [create-table, insert, select, returning, triggers, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (if there are triggers on the target table, RETURNING sees the row as modified by the triggers)"
+sessions: [a]
+setup: |
+  CREATE TABLE inv (sku text PRIMARY KEY, qty int4 NOT NULL, note text);
+  CREATE FUNCTION bump() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.qty := NEW.qty * 10;
+    NEW.note := coalesce(NEW.note, '') || '!';
+    RETURN NEW;
+  END
+  $$;
+  CREATE TRIGGER inv_bump BEFORE INSERT ON inv FOR EACH ROW EXECUTE FUNCTION bump();
+steps:
+  - sql: |
+      INSERT INTO inv VALUES ('d', 2, NULL) RETURNING *
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO inv VALUES ('e', 3, 'x') RETURNING qty, note
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT sku, qty, note FROM inv ORDER BY sku
+    expect: rows
+    order: ordered

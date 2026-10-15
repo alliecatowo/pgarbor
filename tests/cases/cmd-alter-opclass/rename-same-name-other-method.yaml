@@ -1,0 +1,32 @@
+# Operator class names are unique per (access method, schema), so a hash opclass can take the name of a btree opclass.
+id: cmd-alter-opclass.rename-same-name-other-method
+title: "RENAME TO succeeds when the name is used only by an opclass for a different access method"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, rename, hash-index, btree-index]
+required_capabilities: [create-operator-class, alter-operator-class, catalog-introspection, hash-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (RENAME TO new_name); doc/src/sgml/indexes-opclass.sgml"
+sessions: [a]
+setup: |
+  CREATE OPERATOR CLASS aoc_cmd_m3 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+  CREATE OPERATOR CLASS aoc_cmd_h3 FOR TYPE int4 USING hash AS OPERATOR 1 =, FUNCTION 1 hashint4(int4);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_h3 USING hash RENAME TO aoc_cmd_m3
+    expect: ok
+    comment: no hash opclass named aoc_cmd_m3 exists yet, so the rename is allowed
+  - sql: |
+      SELECT o.opcname, a.amname FROM pg_opclass o JOIN pg_am a ON a.oid = o.opcmethod WHERE o.opcname = 'aoc_cmd_m3' ORDER BY a.amname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_m3 USING hash RENAME TO aoc_cmd_m3
+    expect: error
+    sqlstate: "42710"
+    comment: same-name rename within the hash method is rejected
+  - sql: |
+      SELECT o.opcname, a.amname FROM pg_opclass o JOIN pg_am a ON a.oid = o.opcmethod WHERE o.opcname = 'aoc_cmd_m3' ORDER BY a.amname
+    expect: rows
+    order: ordered

@@ -1,0 +1,29 @@
+# A WARNING is delivered before an error, and the error rolls back the writes made in the same block.
+id: doc-plpgsql-errors-and-messages.raise-warning-then-error
+title: A RAISE WARNING is delivered before a RAISE EXCEPTION, and the exception discards the block's writes
+family: doc-plpgsql-errors-and-messages
+tier: core
+feature_ids: [plpgsql, raise, warnings, transactions, errors]
+required_capabilities: [plpgsql, create-table, insert, select, errors, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-errors-and-messages"
+sessions: [a]
+setup: |
+  CREATE TABLE audit_log (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      DO $$
+      BEGIN
+        INSERT INTO audit_log VALUES (1);
+        RAISE WARNING 'about to fail';
+        RAISE EXCEPTION 'boom' USING ERRCODE = '22012';
+      END $$
+    expect: error
+    sqlstate: "22012"
+    comment: the warning is reported ahead of the error; the insert is rolled back with the failed statement
+  - sql: |
+      SELECT count(*) AS n FROM audit_log
+    expect: rows
+    order: ordered
+    comment: no row survives the aborted DO block

@@ -1,0 +1,45 @@
+# VALIDATOR runs when a function is created in its language; without a validator, bodies are not checked at creation.
+id: cmd-create-language.validator-syntax-check
+title: VALIDATOR rejects bad bodies at CREATE FUNCTION, while languages without it accept them and check_function_bodies=off skips it
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, validator, create-function-sql, error-handling]
+required_capabilities: [create-language, create-function-sql, plpgsql, guc, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Parameters: VALIDATOR valfunction)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE LANGUAGE cl_chk HANDLER plpgsql_call_handler VALIDATOR plpgsql_validator
+    expect: ok
+  - sql: |
+      CREATE LANGUAGE cl_nochk HANDLER plpgsql_call_handler
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cl_bad_syntax() RETURNS int LANGUAGE cl_chk AS 'this is not plpgsql at all'
+    expect: error
+    sqlstate: "42601"
+    comment: the validator reports the syntax error at creation time
+  - sql: |
+      CREATE FUNCTION cl_bad_expr() RETURNS int LANGUAGE cl_chk AS $$ BEGIN RETURN 1 +; END $$
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT to_regproc('cl_bad_syntax') IS NULL AS not_created
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE FUNCTION cl_unchecked_nochk() RETURNS int LANGUAGE cl_nochk AS 'this is not plpgsql at all'
+    expect: ok
+    comment: no validator is configured, so the body is not checked when the function is created
+  - sql: |
+      SET check_function_bodies = off
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cl_unchecked_guc() RETURNS int LANGUAGE cl_chk AS 'this is not plpgsql at all'
+    expect: ok
+    comment: check_function_bodies = off skips the validator
+  - sql: |
+      RESET check_function_bodies
+    expect: ok

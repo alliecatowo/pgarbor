@@ -1,0 +1,40 @@
+# Aggregates and empty results through CREATE TABLE AS: NULL sums, zero counts, and a WHERE-false query still defines columns.
+id: cmd-create-table-as.aggregate-and-empty-results
+title: CREATE TABLE AS over aggregates keeps NULL and zero semantics; an empty query yields a typed empty table
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, aggregates, null-semantics, group-by]
+required_capabilities: [create-table-as, create-table, insert, select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (query semantics; evaluated once)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales (region text, amt numeric(8,2));
+  INSERT INTO sales VALUES ('east', 10.00), ('east', NULL), ('west', NULL), ('west', NULL);
+steps:
+  - sql: |
+      CREATE TABLE region_totals AS
+        SELECT region, count(*) AS rows_seen, count(amt) AS non_null, sum(amt) AS total
+        FROM sales GROUP BY region
+    expect: ok
+  - sql: |
+      SELECT region, rows_seen, non_null, total FROM region_totals ORDER BY region
+    expect: rows
+    order: ordered
+    comment: sum over only NULLs is NULL; count(*) counts NULL rows
+  - sql: |
+      CREATE TABLE no_match AS
+        SELECT region, sum(amt) AS total FROM sales WHERE false GROUP BY region
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM no_match
+    expect: rows
+    comment: zero rows
+  - sql: |
+      CREATE TABLE no_group AS SELECT count(*) AS n, sum(amt) AS s FROM sales WHERE false
+    expect: ok
+  - sql: |
+      SELECT n, s FROM no_group
+    expect: rows
+    comment: ungrouped aggregate over no rows yields one row with 0 and NULL

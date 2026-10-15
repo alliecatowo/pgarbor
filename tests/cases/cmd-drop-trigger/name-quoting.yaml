@@ -1,0 +1,38 @@
+# Unquoted identifiers fold to lower case for both trigger and table names; double quotes preserve case.
+id: cmd-drop-trigger.name-quoting
+title: "DROP TRIGGER folds unquoted trigger and table names to lower case and matches quoted mixed-case names exactly"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, identifiers, quoting, triggers]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Parameters: name, table_name)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION noop_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TABLE "Films" (id int4);
+  CREATE TRIGGER "MixedCase" BEFORE INSERT ON "Films" FOR EACH ROW EXECUTE FUNCTION noop_tg();
+  CREATE TRIGGER lowercase_tg BEFORE INSERT ON "Films" FOR EACH ROW EXECUTE FUNCTION noop_tg();
+steps:
+  - sql: |
+      DROP TRIGGER MixedCase ON "Films"
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted MixedCase folds to mixedcase, which does not exist
+  - sql: |
+      DROP TRIGGER "MixedCase" ON Films
+    expect: error
+    sqlstate: "42P01"
+    comment: unquoted Films folds to films, which does not exist
+  - sql: |
+      DROP TRIGGER "MixedCase" ON "Films"
+    expect: ok
+    comment: the exact quoted names match
+  - sql: |
+      DROP TRIGGER LOWERCASE_TG ON "Films"
+    expect: ok
+    comment: unquoted trigger name folds to lowercase_tg, which exists
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = '"Films"'::regclass AND NOT tgisinternal
+    expect: rows

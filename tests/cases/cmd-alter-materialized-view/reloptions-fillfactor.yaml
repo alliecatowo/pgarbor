@@ -1,0 +1,40 @@
+# SET / RESET storage parameters on a materialized view: fillfactor range boundaries and unknown parameters.
+id: cmd-alter-materialized-view.reloptions-fillfactor
+title: "SET and RESET storage parameters: fillfactor bounds and unknown parameter"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, storage-parameters, fillfactor]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (SET ( storage_parameter ) / RESET)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_rl_base (id int4);
+  INSERT INTO amv_rl_base VALUES (1);
+  CREATE MATERIALIZED VIEW amv_rl_mv AS SELECT id FROM amv_rl_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rl_mv SET (fillfactor = 50)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'amv_rl_mv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rl_mv SET (fillfactor = 5)
+    expect: error
+    sqlstate: "22023"
+    comment: fillfactor must be between 10 and 100
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rl_mv SET (bogus = 1)
+    expect: error
+    sqlstate: "22023"
+    comment: unknown storage parameter
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rl_mv RESET (fillfactor)
+    expect: ok
+  - sql: |
+      SELECT reloptions IS NULL AS no_options FROM pg_class WHERE oid = 'amv_rl_mv'::regclass
+    expect: rows
+    order: ordered

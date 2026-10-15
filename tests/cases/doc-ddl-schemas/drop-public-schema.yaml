@@ -1,0 +1,37 @@
+# The public schema can be dropped; then unqualified creation has no target schema until another
+# schema is put on the search path.
+id: doc-ddl-schemas.drop-public-schema
+title: Dropping public leaves unqualified CREATE TABLE with no target until a schema is on the path
+family: doc-ddl-schemas
+tier: core
+feature_ids: [public-schema, drop-schema, search-path, create-table, errors]
+required_capabilities: [create-schema, create-table, select, errors, guc, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-public (There is nothing special about the public schema except that it exists by default. It can be dropped, too.)"
+sessions: [a]
+steps:
+  - sql: |
+      DROP SCHEMA public
+    expect: ok
+    comment: public is empty in a fresh database, so it can be dropped
+  - sql: |
+      SELECT to_regnamespace('public') IS NULL AS public_gone
+    expect: rows
+  - sql: |
+      CREATE TABLE after_drop (id int4)
+    expect: error
+    sqlstate: "3F000"
+    comment: no schema on the default path exists to hold the new table
+  - sql: |
+      CREATE SCHEMA app
+    expect: ok
+  - sql: |
+      SET search_path TO app
+    expect: ok
+  - sql: |
+      CREATE TABLE in_app (id int4)
+    expect: ok
+  - sql: |
+      SELECT schemaname FROM pg_tables WHERE tablename = 'in_app'
+    expect: rows

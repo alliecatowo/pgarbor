@@ -1,0 +1,32 @@
+# ICU rules are accepted only by the ICU provider; malformed rules are rejected by ICU.
+id: cmd-create-collation.rules-provider-restriction
+title: "CREATE COLLATION rules is refused for libc and builtin and malformed ICU rules fail"
+family: cmd-create-collation
+tier: extended
+feature_ids: [create-collation, icu-rules, libc-provider, builtin-provider]
+required_capabilities: [create-collation, icu-provider, libc-provider, builtin-provider, icu-rules]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_collation.sgml#sql-createcollation (Parameters: rules, supported for ICU only)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE COLLATION cmd_cc_rbad (provider = icu, locale = 'und', rules = '&V << ')
+    expect: error
+    sqlstate: "22023"
+    comment: ICU cannot open the collator with unparsable rules
+  - sql: |
+      CREATE COLLATION cmd_cc_rlibc (provider = libc, locale = 'C', rules = '&V << w')
+    expect: error
+    sqlstate: "42P17"
+    comment: rules are ICU only
+  - sql: |
+      CREATE COLLATION cmd_cc_rbuiltin (provider = builtin, locale = 'C', rules = '&V << w')
+    expect: error
+    sqlstate: "42P17"
+    comment: rules are ICU only, builtin provider refuses them too
+  - sql: |
+      SELECT count(*) FROM pg_collation WHERE collname LIKE 'cmd\_cc\_r%'
+    expect: rows
+    order: ordered
+    comment: none of the refused collations was created

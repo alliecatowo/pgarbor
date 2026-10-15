@@ -1,0 +1,31 @@
+# VALUES is most commonly used as the data source for INSERT: a multi-row VALUES list directly, and INSERT ... SELECT
+# from a VALUES subquery. Unknown-typed literals in an all-literal column resolve to text (UNION rules), so an
+# integer target needs an explicit cast or an integer-typed value.
+id: doc-queries-values.insert-from-values
+title: INSERT takes a multi-row VALUES list directly and via a VALUES subquery, with UNION-rule typing of literals
+family: doc-queries-values
+tier: core
+feature_ids: [values, insert, insert-select, type-resolution]
+required_capabilities: [values, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-values (VALUES most commonly used in INSERT; types via UNION rules)"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int4, label text, qty int4)
+steps:
+  - sql: |
+      INSERT INTO items VALUES (1, 'apple', 3), (2, 'pear', 7)
+    expect: ok
+  - sql: |
+      INSERT INTO items (id, label, qty) SELECT column1, column2, column3 FROM (VALUES (3, 'fig', '12'), (4, 'kiwi', NULL)) AS v
+    expect: error
+    sqlstate: "42804"
+    comment: column3 is all unknown literals plus NULL, so it resolves to text and is not assignable to int4
+  - sql: |
+      INSERT INTO items (id, label, qty) SELECT column1, column2, column3 FROM (VALUES (3, 'fig', 12::int4), (4, 'kiwi', NULL::int4)) AS v
+    expect: ok
+  - sql: |
+      SELECT id, label, qty FROM items ORDER BY id
+    expect: rows
+    order: ordered

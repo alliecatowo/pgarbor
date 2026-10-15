@@ -1,0 +1,33 @@
+id: cmd-create-materialized-view.if-not-exists
+title: IF NOT EXISTS emits a notice and keeps the existing view, while plain CREATE fails
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, if-not-exists]
+required_capabilities: [create-table, insert, select, create-materialized-view, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (IF NOT EXISTS)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (1), (2);
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv AS SELECT count(*) AS n FROM t
+    expect: ok
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW IF NOT EXISTS mv AS SELECT 99 AS n
+    expect: notice
+    comment: notice 'relation "mv" already exists, skipping'; new definition is not applied
+  - session: a
+    sql: |
+      SELECT n FROM mv
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv AS SELECT 1 AS n
+    expect: error
+    sqlstate: "42P07"

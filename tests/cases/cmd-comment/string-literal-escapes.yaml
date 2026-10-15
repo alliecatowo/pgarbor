@@ -1,0 +1,71 @@
+# The comment text is a plain string literal: quotes, backslashes, escape strings, Unicode escapes, dollar quoting and long text all round-trip exactly, and surrounding whitespace is kept.
+id: cmd-comment.string-literal-escapes
+title: COMMENT ON stores string literal forms (doubled quotes, E'' escapes, U&'' escapes, dollar quotes) verbatim
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-string-literal, string-escapes, unicode-escapes]
+required_capabilities: [comment, create-table, catalog-introspection, select, strings]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-params-string-literal (the new comment contents, written as a string literal)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE cmd_esc (id int4)
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS 'It''s a ''quoted'' table'
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_esc'::regclass, 'pg_class') AS descr, length(obj_description('cmd_esc'::regclass, 'pg_class')) AS chars
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS E'line1\nline2\ttab'
+    expect: ok
+  - sql: |
+      SELECT replace(replace(obj_description('cmd_esc'::regclass, 'pg_class'), E'\n', '<NL>'), E'\t', '<TAB>') AS descr, length(obj_description('cmd_esc'::regclass, 'pg_class')) AS chars
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS E'\\'
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_esc'::regclass, 'pg_class') AS descr, length(obj_description('cmd_esc'::regclass, 'pg_class')) AS chars
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS U&'caf\00e9 \2603'
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_esc'::regclass, 'pg_class') AS descr, length(obj_description('cmd_esc'::regclass, 'pg_class')) AS chars, octet_length(obj_description('cmd_esc'::regclass, 'pg_class')) AS bytes
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS 'naïve ☃'
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_esc'::regclass, 'pg_class') AS descr, length(obj_description('cmd_esc'::regclass, 'pg_class')) AS chars, octet_length(obj_description('cmd_esc'::regclass, 'pg_class')) AS bytes
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS $$dollar 'quoted' -- not a comment; ok$$
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_esc'::regclass, 'pg_class') AS descr
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS 'a; -- still text'
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_esc'::regclass, 'pg_class') AS descr, length(obj_description('cmd_esc'::regclass, 'pg_class')) AS chars
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_esc IS '   padded   '
+    expect: ok
+  - sql: |
+      SELECT '[' || obj_description('cmd_esc'::regclass, 'pg_class') || ']' AS bracketed
+    expect: rows
+    comment: leading and trailing spaces are preserved, not trimmed
+  - sql: |
+      DO $$ BEGIN EXECUTE 'COMMENT ON TABLE cmd_esc IS ' || quote_literal(repeat('x', 1000)); END $$
+    expect: ok
+  - sql: |
+      SELECT length(obj_description('cmd_esc'::regclass, 'pg_class')) AS chars
+    expect: rows
+    comment: a long comment is stored in full

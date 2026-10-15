@@ -1,0 +1,43 @@
+# bit_and, bit_or and bit_xor over bit strings and integers, any_value, and the bit-string length error.
+id: doc-functions-aggregate.bit-any-value
+title: Bitwise aggregates over bit strings and integers, any_value, and mismatched bit string lengths
+family: doc-functions-aggregate
+tier: core
+feature_ids: [bit-and, bit-or, bit-xor, any-value, bit-string-aggregates]
+required_capabilities: [select, aggregates, bit-string, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (bit_and, bit_or, bit_xor, any_value)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT bit_and(x) AS a, bit_or(x) AS o, bit_xor(x) AS x2
+      FROM (VALUES (B'1100'), (B'1010')) v(x)
+    expect: rows
+    comment: bitwise operations on equal-length bit strings
+  - sql: |
+      SELECT bit_and(x) AS a, bit_or(x) AS o, bit_xor(x) AS x2
+      FROM (VALUES (12), (10), (NULL)) v(x)
+    expect: rows
+    comment: integer inputs, NULL ignored; 12&10=8, 12|10=14, 12#10=6
+  - sql: |
+      SELECT bit_and(x) AS a FROM (VALUES (1::int2), (NULL)) v(x)
+    expect: rows
+    comment: a single non-null smallint input is returned unchanged
+  - sql: |
+      SELECT bit_xor(x) AS x2 FROM (SELECT 1 AS x WHERE false) v
+    expect: rows
+    comment: no input rows gives NULL
+  - sql: |
+      SELECT any_value(x) IN (7, 8) AS in_set FROM (VALUES (NULL::int), (7), (8)) v(x)
+    expect: rows
+    comment: any_value returns some non-null input; the exact choice is unspecified, so the test checks membership
+  - sql: |
+      SELECT any_value(x) AS av FROM (VALUES (NULL::int)) v(x)
+    expect: rows
+    comment: only NULL inputs gives NULL
+  - sql: |
+      SELECT bit_and(x) FROM (VALUES (B'1100'), (B'10')) v(x)
+    expect: error
+    sqlstate: "22026"
+    comment: bit strings of different lengths cannot be combined

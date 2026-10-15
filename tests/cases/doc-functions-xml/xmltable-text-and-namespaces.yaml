@@ -1,0 +1,43 @@
+# XMLTABLE doc examples for text-node concatenation with whitespace, comments and processing instructions, and for XMLNAMESPACES prefix mapping.
+id: doc-functions-xml.xmltable-text-and-namespaces
+title: XMLTABLE concatenates text nodes per the docs and resolves XMLNAMESPACES prefixes
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, xmltable, xmlnamespaces, text-node-concatenation, xml-namespaces]
+required_capabilities: [xml, select, create-table]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-processing-xml-xmltable (text() concatenation and XMLNAMESPACES examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE xmlelements AS SELECT
+  xml $$
+    <root>
+     <element>  Hello<!-- xyxxz -->2a2<?aaaaa?> <!--x-->  bbb<x>xxx</x>CC  </element>
+    </root>
+  $$ AS data;
+steps:
+  - sql: |
+      SELECT xmltable.*
+        FROM xmlelements, XMLTABLE('/root' PASSING data COLUMNS element text)
+    expect: rows
+    comment: doc example; comments and processing instructions are dropped and the text nodes are concatenated
+  - sql: |
+      WITH xmlns_data(data) AS (VALUES ('
+      <example xmlns="http://example.com/myns" xmlns:B="http://example.com/b">
+       <item foo="1" B:bar="2"/>
+       <item foo="3" B:bar="4"/>
+       <item foo="4" B:bar="5"/>
+      </example>'::xml)
+      )
+      SELECT xmltable.*
+        FROM XMLTABLE(XMLNAMESPACES('http://example.com/myns' AS x,
+                                    'http://example.com/b' AS "B"),
+                      '/x:example/x:item'
+                      PASSING (SELECT data FROM xmlns_data)
+                      COLUMNS foo int PATH '@foo',
+                              bar int PATH '@B:bar')
+       ORDER BY foo
+    expect: rows
+    order: ordered
+    comment: doc example; prefixes x and B are resolved through XMLNAMESPACES

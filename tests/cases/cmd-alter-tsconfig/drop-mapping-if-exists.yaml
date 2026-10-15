@@ -1,0 +1,34 @@
+# DROP MAPPING: without IF EXISTS a missing mapping is an error; with IF EXISTS it is only a NOTICE and the rest of the list still applies.
+id: cmd-alter-tsconfig.drop-mapping-if-exists
+title: "DROP MAPPING IF EXISTS skips missing token types with a notice"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, drop-mapping, if-exists, notice]
+required_capabilities: [create-text-search-configuration, alter-text-search-configuration, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (DROP MAPPING errors unless IF EXISTS appears)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+  ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING FOR asciiword;
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING FOR asciiword
+    expect: error
+    sqlstate: "42704"
+    comment: asciiword was dropped in setup, so there is no mapping left
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING IF EXISTS FOR asciiword
+    expect: notice
+    comment: NOTICE "mapping for token type asciiword does not exist, skipping"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING IF EXISTS FOR word, blank
+    expect: notice
+    comment: word has a copied mapping and is dropped; blank never had one, so only a notice
+  - sql: |
+      SELECT count(*) AS remaining
+        FROM pg_ts_config_map
+       WHERE mapcfg = 'my_config'::regconfig AND maptokentype IN (1, 2)
+    expect: rows
+    order: multiset

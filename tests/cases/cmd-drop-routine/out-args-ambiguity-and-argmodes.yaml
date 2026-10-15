@@ -1,0 +1,38 @@
+# Omitting argmodes can match two procedures and must fail; explicit argmodes and input-only lists pick one.
+id: cmd-drop-routine.out-args-ambiguity-and-argmodes
+title: "DROP ROUTINE reports ambiguity when argmodes are omitted and two procedures match"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, drop-procedure, out-arguments, argmodes, overloading]
+required_capabilities: [create-procedure, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-notes (potentially ambiguous example)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE am(IN target_schema text, OUT results text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE am(IN target_schema text, IN options text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP ROUTINE am(text, text)
+    expect: error
+    sqlstate: "42725"
+    comment: the all-types lookup finds the OUT procedure and the input-only lookup finds the other, so it is ambiguous
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'am'
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP ROUTINE am(IN text)
+    expect: ok
+    comment: a one-argument input list matches only the procedure with an OUT argument
+  - sql: |
+      DROP ROUTINE am(IN text, IN text)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'am'
+    expect: rows
+    order: multiset

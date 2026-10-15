@@ -1,0 +1,44 @@
+# A conversion name must be unique within its schema (42710). The same name may be reused in another
+# schema, and quoted names are case-sensitive, so "CC_DUPNAME" is distinct from cc_dupname.
+id: cmd-create-conversion.duplicate-name-per-schema
+title: Conversion names are unique per schema and case-sensitive when quoted
+family: cmd-create-conversion
+tier: core
+feature_ids: [create-conversion, name-uniqueness, quoted-identifiers, errors]
+required_capabilities: [create-conversion, drop-conversion, create-schema, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_conversion.sgml#sql-createconversion (name parameter: must be unique within a schema)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE CONVERSION cc_dupname FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_dupname FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      CREATE SCHEMA cc_dn_s
+    expect: ok
+  - sql: |
+      CREATE CONVERSION cc_dn_s.cc_dupname FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+    comment: same name, different schema
+  - sql: |
+      CREATE CONVERSION "CC_DUPNAME" FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+    comment: quoted identifier is case-sensitive
+  - sql: |
+      SELECT c.conname, n.nspname
+      FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE c.conname IN ('cc_dupname', 'CC_DUPNAME')
+      ORDER BY n.nspname, c.conname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP CONVERSION cc_dupname;
+      DROP CONVERSION cc_dn_s.cc_dupname;
+      DROP CONVERSION "CC_DUPNAME";
+      DROP SCHEMA cc_dn_s
+    expect: ok

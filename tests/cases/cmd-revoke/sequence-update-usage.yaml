@@ -1,0 +1,37 @@
+# REVOKE UPDATE ON SEQUENCE removes setval access while USAGE (nextval) and SELECT remain.
+id: cmd-revoke.sequence-update-usage
+title: REVOKE UPDATE on a sequence blocks setval but keeps nextval through USAGE
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, sequence, usage-privilege, update-privilege, errors]
+required_capabilities: [create-table, select, roles, sequence, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke (REVOKE ... ON SEQUENCE sequence_name, privileges USAGE SELECT UPDATE)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvs_sequ;
+  CREATE SEQUENCE rvs_seq;
+  GRANT USAGE, SELECT, UPDATE ON SEQUENCE rvs_seq TO rvs_sequ;
+steps:
+  - sql: |
+      REVOKE UPDATE ON SEQUENCE rvs_seq FROM rvs_sequ
+    expect: ok
+  - sql: |
+      SELECT has_sequence_privilege('rvs_sequ', 'rvs_seq', 'UPDATE') AS upd, has_sequence_privilege('rvs_sequ', 'rvs_seq', 'USAGE') AS usg, has_sequence_privilege('rvs_sequ', 'rvs_seq', 'SELECT') AS sel
+    expect: rows
+  - sql: |
+      SET ROLE rvs_sequ
+    expect: ok
+  - sql: |
+      SELECT nextval('rvs_seq')
+    expect: rows
+    comment: nextval needs USAGE, which is still held
+  - sql: |
+      SELECT setval('rvs_seq', 100)
+    expect: error
+    sqlstate: "42501"
+    comment: setval needs UPDATE, which was revoked
+  - sql: |
+      RESET ROLE
+    expect: ok

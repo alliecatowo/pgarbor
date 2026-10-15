@@ -1,0 +1,40 @@
+# A scalar or row sub-SELECT yielding no rows assigns NULL; yielding more than one row is an error.
+id: cmd-update.subselect-no-rows-null-and-multirow-error
+title: Sub-SELECT assignment gives NULL on zero rows and fails with 21000 on multiple rows
+family: cmd-update
+tier: core
+feature_ids: [update, subselect, row-assignment, errors]
+required_capabilities: [create-table, insert, select, update, subqueries, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (sub-SELECT: no rows => NULL; must yield no more than one row)"
+sessions: [a]
+setup: |
+  CREATE TABLE t_scalar (id int, v int);
+  INSERT INTO t_scalar VALUES (1, 0), (2, 0), (3, 0);
+  CREATE TABLE src (id int, val int);
+  INSERT INTO src VALUES (1, 10), (1, 20);
+  CREATE TABLE t_row (id int, a int, b text);
+  INSERT INTO t_row VALUES (1, 0, 'x'), (2, 0, 'y')
+steps:
+  - sql: |
+      UPDATE t_scalar SET v = (SELECT val FROM src WHERE src.id = t_scalar.id) WHERE id = 2
+    expect: ok
+    comment: no matching src row, so v becomes NULL
+  - sql: |
+      UPDATE t_scalar SET v = (SELECT val FROM src WHERE src.id = t_scalar.id) WHERE id = 1
+    expect: error
+    sqlstate: "21000"
+    comment: two matching rows, error, and the row is not changed
+  - sql: |
+      UPDATE t_row SET (a, b) = (SELECT val, 'set' FROM src WHERE src.id = t_row.id AND src.val = 10) WHERE id IN (1, 2)
+    expect: ok
+    comment: id 1 matches one row, id 2 matches none so both columns become NULL
+  - sql: |
+      SELECT id, v FROM t_scalar ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, a, b FROM t_row ORDER BY id
+    expect: rows
+    order: ordered

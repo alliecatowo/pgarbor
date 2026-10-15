@@ -1,0 +1,65 @@
+# Only DEFERRABLE constraints can be set DEFERRED (SQLSTATE 42809); naming a NOT DEFERRABLE one as IMMEDIATE is accepted.
+id: cmd-set-constraints.not-deferrable-error-and-immediate-accepted
+title: SET CONSTRAINTS DEFERRED on a NOT DEFERRABLE constraint fails 42809; IMMEDIATE on it succeeds
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, unique, foreign-key, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, unique-index, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (synopsis and Description: the list must all be deferrable; NOT DEFERRABLE is always IMMEDIATE and is not affected)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_nd REFERENCES p (id) NOT DEFERRABLE);
+  CREATE TABLE u (id int4 CONSTRAINT u_nd UNIQUE NOT DEFERRABLE, v int4 CONSTRAINT u_ck CHECK (v > 0));
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS u_nd DEFERRED
+    expect: error
+    sqlstate: "42809"
+    comment: the transaction is aborted by the error
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_nd, u_nd DEFERRED
+    expect: error
+    sqlstate: "42809"
+    comment: one non-deferrable name in the list fails the whole statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS u_nd, c_nd IMMEDIATE
+    expect: ok
+    comment: IMMEDIATE is always allowed, even for NOT DEFERRABLE constraints
+  - sql: |
+      INSERT INTO u VALUES (1, 1)
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ALL IMMEDIATE
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (1, 77)
+    expect: error
+    sqlstate: "23503"
+    comment: a NOT DEFERRABLE foreign key is checked immediately
+  - sql: |
+      ROLLBACK
+    expect: ok

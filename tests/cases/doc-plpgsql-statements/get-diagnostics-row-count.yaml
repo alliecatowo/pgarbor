@@ -1,0 +1,66 @@
+# GET [CURRENT] DIAGNOSTICS reports ROW_COUNT for INSERT, UPDATE, DELETE and zero-row statements, and
+# PG_ROUTINE_OID identifies the running function.
+id: doc-plpgsql-statements.get-diagnostics-row-count
+title: GET DIAGNOSTICS ROW_COUNT after UPDATE, INSERT ... SELECT, DELETE and zero-row DELETE; PG_ROUTINE_OID
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, get-diagnostics, row-count, found]
+required_capabilities: [plpgsql, create-function, create-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-diagnostics"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('bo', 20), ('cy', 20);
+  CREATE FUNCTION f_diag_update() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n int;
+  BEGIN
+    UPDATE emp SET salary = salary WHERE salary >= 0;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n::text;
+  END $$;
+  CREATE FUNCTION f_diag_insert_select() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n bigint;
+  BEGIN
+    INSERT INTO emp SELECT 'z' || g, g FROM generate_series(1, 4) g;
+    GET CURRENT DIAGNOSTICS n := ROW_COUNT;
+    RETURN n::text;
+  END $$;
+  CREATE FUNCTION f_diag_delete() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n int;
+  BEGIN
+    DELETE FROM emp WHERE empname LIKE 'z%';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n::text;
+  END $$;
+  CREATE FUNCTION f_diag_none() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n int := -1;
+  BEGIN
+    DELETE FROM emp WHERE false;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n::text || ' ' || FOUND::text;
+  END $$;
+  CREATE FUNCTION f_diag_oid() RETURNS boolean LANGUAGE plpgsql AS $$
+  DECLARE o oid;
+  BEGIN
+    GET DIAGNOSTICS o = PG_ROUTINE_OID;
+    RETURN o = 'f_diag_oid'::regproc::oid;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_diag_update() AS updated
+    expect: rows
+  - sql: |
+      SELECT f_diag_insert_select() AS inserted
+    expect: rows
+  - sql: |
+      SELECT f_diag_delete() AS deleted
+    expect: rows
+  - sql: |
+      SELECT f_diag_none() AS zero_rows
+    expect: rows
+    comment: zero affected rows give ROW_COUNT 0 and FOUND false
+  - sql: |
+      SELECT f_diag_oid() AS is_self
+    expect: rows

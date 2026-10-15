@@ -1,0 +1,49 @@
+# COLLATE overrides the collation of an expression; placement rules and conflicting explicit collations are documented errors.
+id: doc-sql-expressions.collate-expression
+title: COLLATE clause ordering, placement on operators, and conflicting explicit collations
+family: doc-sql-expressions
+tier: core
+feature_ids: [collate-expression, text-ordering, errors]
+required_capabilities: [select, insert, create-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-collation"
+sessions: [a]
+setup: |
+  CREATE TABLE ct (a text);
+  INSERT INTO ct VALUES ('b'), ('A'), ('a'), ('B');
+steps:
+  - sql: |
+      SELECT a FROM ct ORDER BY a COLLATE "C"
+    expect: rows
+    order: ordered
+    comment: byte order puts uppercase before lowercase
+  - sql: |
+      SELECT a FROM ct ORDER BY a COLLATE "POSIX" DESC
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a FROM ct WHERE a > 'a' COLLATE "C" ORDER BY a COLLATE "C"
+    expect: rows
+    order: ordered
+    comment: the COLLATE attached to the literal argument governs the comparison
+  - sql: |
+      SELECT a FROM ct WHERE a COLLATE "C" > 'a' ORDER BY a COLLATE "C"
+    expect: rows
+    order: ordered
+    comment: attaching COLLATE to the column instead gives the same result
+  - sql: |
+      SELECT a FROM ct WHERE (a > 'a') COLLATE "C"
+    expect: error
+    sqlstate: "42804"
+    comment: boolean results are not collatable
+  - sql: |
+      SELECT 1 COLLATE "C"
+    expect: error
+    sqlstate: "42804"
+    comment: integer is not a collatable type
+  - sql: |
+      SELECT count(*) FROM ct WHERE a COLLATE "C" = 'a' COLLATE "POSIX"
+    expect: error
+    sqlstate: "42P21"
+    comment: two different explicit collations conflict

@@ -1,0 +1,37 @@
+# The view default overrides the base column default for inserts through the view; DROP DEFAULT on the view exposes the base default again.
+id: cmd-alter-view.default-precedence-drop-default
+title: "View column default takes precedence over base default until DROP DEFAULT"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, default-values, drop-default]
+required_capabilities: [create-table, insert, select, create-view, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (SET/DROP DEFAULT: the view's default will take precedence over any default values from underlying relations)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_pb (id int4, c int4 DEFAULT 10);
+  CREATE VIEW av_pbv AS SELECT id, c FROM av_pb;
+steps:
+  - sql: |
+      ALTER VIEW av_pbv ALTER COLUMN c SET DEFAULT 20
+    expect: ok
+  - sql: |
+      INSERT INTO av_pbv (id) VALUES (1)
+    expect: ok
+    comment: view default 20 wins over base default 10
+  - sql: |
+      ALTER VIEW av_pbv ALTER COLUMN c DROP DEFAULT
+    expect: ok
+  - sql: |
+      INSERT INTO av_pbv (id) VALUES (2)
+    expect: ok
+    comment: no view default, so the base default 10 applies
+  - sql: |
+      INSERT INTO av_pb (id) VALUES (3)
+    expect: ok
+    comment: a direct insert into the base table always uses the base default
+  - sql: |
+      SELECT id, c FROM av_pb ORDER BY id
+    expect: rows
+    order: ordered

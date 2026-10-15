@@ -1,0 +1,26 @@
+# Channel names longer than 63 bytes are truncated, so UNLISTEN with a name that shares the 63-byte prefix removes the registration.
+id: cmd-unlisten.truncated-identifier-matches
+title: UNLISTEN with an over-long name that truncates to the same channel removes the registration
+family: cmd-unlisten
+tier: extended
+feature_ids: [unlisten, identifier-truncation, pg-listening-channels]
+required_capabilities: [listen-notify, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 identifier length rule (NAMEDATALEN 64) applied to ref/unlisten.sgml#sql-unlisten (Parameters: channel is any identifier)"
+sessions: [a]
+steps:
+  - sql: |
+      LISTEN abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789qrstuvwxyz
+    expect: ok
+    compare_message: false
+    comment: a NOTICE reports the truncation
+  - sql: |
+      UNLISTEN abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789qXYZ
+    expect: ok
+    compare_message: false
+    comment: a NOTICE reports the truncation; both names truncate to the same 63 bytes
+  - sql: |
+      SELECT count(*) AS n FROM pg_listening_channels()
+    expect: rows
+    comment: the registration was removed

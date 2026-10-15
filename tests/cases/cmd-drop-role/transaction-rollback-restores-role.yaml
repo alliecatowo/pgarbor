@@ -1,0 +1,36 @@
+# DROP ROLE is transactional: inside a rolled-back transaction the role remains; after a committed transaction it is gone.
+id: cmd-drop-role.transaction-rollback-restores-role
+title: "DROP ROLE inside a transaction is undone by ROLLBACK and kept by COMMIT"
+family: cmd-drop-role
+tier: core
+feature_ids: [drop-role, transactions, rollback]
+required_capabilities: [roles, transactions, select]
+provenance:
+  source: hand
+  ref: "PG18 ref/drop_role.sgml (DROP ROLE is an SQL command usable in a transaction block)"
+sessions: [a]
+setup: |
+  CREATE ROLE drr_tx_a;
+  CREATE ROLE drr_tx_b;
+steps:
+  - sql: |
+      BEGIN;
+      DROP ROLE drr_tx_a;
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS present FROM pg_roles WHERE rolname = 'drr_tx_a'
+    expect: rows
+    comment: the rollback restores drr_tx_a
+  - sql: |
+      BEGIN;
+      DROP ROLE drr_tx_b;
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) AS present FROM pg_roles WHERE rolname = 'drr_tx_b'
+    expect: rows
+    comment: the committed drop is permanent
+  - sql: |
+      DROP ROLE drr_tx_a
+    expect: ok

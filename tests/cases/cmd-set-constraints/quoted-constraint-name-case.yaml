@@ -1,0 +1,41 @@
+# Unquoted constraint names fold to lower case, so a mixed-case name must be quoted in SET CONSTRAINTS.
+id: cmd-set-constraints.quoted-constraint-name-case
+title: A mixed-case constraint name must be double-quoted to match in SET CONSTRAINTS
+family: cmd-set-constraints
+tier: extended
+feature_ids: [set-constraints, deferrable, foreign-key, identifiers, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: each constraint name ... ; Notes: names are matched as identifiers)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE q (id int4 PRIMARY KEY, pid int4 CONSTRAINT "MixedFK" REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS MixedFK DEFERRED
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted MixedFK is folded to mixedfk, which does not exist
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS "MixedFK" DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO q VALUES (1, 50)
+    expect: ok
+  - sql: |
+      INSERT INTO p VALUES (50)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok

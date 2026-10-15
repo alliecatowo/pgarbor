@@ -1,0 +1,29 @@
+# Views depend on each other by OID, so renaming the underlying view keeps the dependent view valid.
+id: cmd-alter-view.rename-dependent-view
+title: "Renaming a view keeps dependent views working"
+family: cmd-alter-view
+tier: extended
+feature_ids: [alter-view, rename, view-dependencies]
+required_capabilities: [create-table, insert, select, create-view, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_dt (a int4);
+  INSERT INTO av_dt VALUES (1), (2);
+  CREATE VIEW av_dep_base AS SELECT a FROM av_dt;
+  CREATE VIEW av_dep AS SELECT a FROM av_dep_base;
+steps:
+  - sql: |
+      ALTER VIEW av_dep_base RENAME TO av_dep_base2
+    expect: ok
+  - sql: |
+      SELECT a FROM av_dep ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the dependent view still resolves through its stored OID reference
+  - sql: |
+      SELECT a FROM av_dep_base
+    expect: error
+    sqlstate: "42P01"

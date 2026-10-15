@@ -1,0 +1,44 @@
+# After dropping an assignment cast, redefining the same pair with another function changes the result; assignment uses the new function, while function resolution still ignores assignment casts.
+id: cmd-drop-cast.assignment-cast-recreate
+title: "Drop and redefine a cast to the same pair with a different function"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, create-cast, assignment-cast, function-resolution]
+required_capabilities: [create-type, create-cast, create-function-sql, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+setup: |
+  CREATE TYPE rc_m AS (v int);
+  CREATE FUNCTION rc_f1(int4) RETURNS rc_m LANGUAGE sql AS $$ SELECT ROW($1 + 1)::rc_m $$;
+  CREATE FUNCTION rc_f2(int4) RETURNS rc_m LANGUAGE sql AS $$ SELECT ROW($1 * 100)::rc_m $$;
+  CREATE FUNCTION rc_take(rc_m) RETURNS text LANGUAGE sql AS $$ SELECT 'got' $$;
+  CREATE TABLE rc_t (m rc_m);
+  CREATE CAST (int4 AS rc_m) WITH FUNCTION rc_f1(int4) AS ASSIGNMENT;
+steps:
+  - sql: |
+      SELECT (CAST(7 AS rc_m)).v AS first_fn
+    expect: rows
+  - sql: |
+      DROP CAST (int4 AS rc_m)
+    expect: ok
+  - sql: |
+      CREATE CAST (int4 AS rc_m) WITH FUNCTION rc_f2(int4) AS ASSIGNMENT
+    expect: ok
+  - sql: |
+      SELECT (CAST(7 AS rc_m)).v AS second_fn
+    expect: rows
+  - sql: |
+      INSERT INTO rc_t SELECT 7
+    expect: ok
+  - sql: |
+      SELECT (m).v AS v FROM rc_t
+    expect: rows
+    order: multiset
+    comment: the assignment used rc_f2, so the stored value is 700
+  - sql: |
+      SELECT rc_take(7) AS explicit_only
+    expect: error
+    sqlstate: "42883"
+    comment: assignment casts are not used by function resolution

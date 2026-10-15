@@ -1,0 +1,32 @@
+# COMMIT AND CHAIN starts the next transaction with the same characteristics as the one just ended.
+id: doc-plpgsql-transactions.commit-and-chain-keeps-isolation
+title: COMMIT AND CHAIN carries the isolation level into the next transaction
+family: doc-plpgsql-transactions
+tier: extended
+feature_ids: [plpgsql, commit-and-chain, isolation-level, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, transactions, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE log (v text);
+steps:
+  - sql: |
+      SET default_transaction_isolation = 'serializable'
+    expect: ok
+    comment: session default, not setup, so the step's own session inherits serializable
+  - sql: |
+      DO $$
+      BEGIN
+          INSERT INTO log VALUES (current_setting('transaction_isolation'));
+          COMMIT AND CHAIN;
+          INSERT INTO log VALUES (current_setting('transaction_isolation'));
+      END;
+      $$
+    expect: ok
+  - sql: |
+      SELECT v FROM log ORDER BY v
+    expect: rows
+    order: multiset
+    comment: both rows report serializable; the chained transaction inherited the characteristics

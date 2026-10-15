@@ -1,0 +1,44 @@
+# CASE uses the same resolution algorithm; the ELSE branch is considered first.
+id: doc-typeconv-union-case.case-result-type
+title: CASE result type resolution, unknown branches and NULL typing
+family: doc-typeconv-union-case
+tier: core
+feature_ids: [case, type-resolution, null-semantics, numeric, errors]
+required_capabilities: [select, case, numeric, null-values]
+provenance:
+  source: pg-docs
+  ref: "typeconv.sgml#typeconv-union-case (UNION, CASE, and Related Constructs; CASE treats ELSE as first input)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT CASE WHEN true THEN 1 ELSE 2.5 END AS v, pg_typeof(CASE WHEN true THEN 1 ELSE 2.5 END) AS t
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT CASE WHEN true THEN 1::int4 ELSE 2.5 END AS v, pg_typeof(CASE WHEN true THEN 1::int4 ELSE 2.5 END) AS t
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT CASE WHEN true THEN 'a' ELSE 'b' END AS v, pg_typeof(CASE WHEN true THEN 'a' ELSE 'b' END) AS t
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT CASE WHEN true THEN 'x' ELSE 1 END
+    expect: error
+    sqlstate: "22P02"
+    comment: resolution happens at parse time; the failed coercion is raised even though the THEN branch is taken
+  - sql: |
+      SELECT CASE WHEN false THEN 'x' ELSE 1 END
+    expect: error
+    sqlstate: "22P02"
+    comment: an untaken branch still participates in type resolution
+  - sql: |
+      SELECT CASE WHEN false THEN 1 END AS v, pg_typeof(CASE WHEN false THEN 1 END) AS t
+    expect: rows
+    order: multiset
+    comment: no ELSE yields NULL of the THEN type
+  - sql: |
+      SELECT pg_typeof(x), x FROM (SELECT CASE WHEN true THEN NULL ELSE NULL END) s(x)
+    expect: rows
+    order: multiset
+    comment: all-unknown NULL branches resolve to text

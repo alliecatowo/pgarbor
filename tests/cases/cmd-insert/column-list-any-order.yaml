@@ -1,0 +1,40 @@
+# The target column list may name columns in any order; unlisted columns take their default or NULL;
+# without a list, VALUES maps to the first N declared columns left to right.
+id: cmd-insert.column-list-any-order
+title: Column list in arbitrary order, omitted columns default to NULL or declared default
+family: cmd-insert
+tier: core
+feature_ids: [insert, column-list, column-defaults]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-insert (Description: target column names, default values)"
+sessions: [a]
+setup: |
+  CREATE TABLE cl (c1 int4, c2 text DEFAULT 'dflt', c3 int4 NOT NULL DEFAULT 99, c4 text);
+steps:
+  - sql: |
+      INSERT INTO cl (c4, c1, c3) VALUES ('four', 1, 3)
+    expect: ok
+    comment: c2 is omitted and gets its declared default
+  - sql: |
+      INSERT INTO cl (c3, c2) VALUES (DEFAULT, 'two')
+    expect: ok
+    comment: c1 and c4 have no default, so they become NULL
+  - sql: |
+      INSERT INTO cl (c1, c2) VALUES (5, 'five')
+    expect: ok
+    comment: c3 is NOT NULL but has a default, so the default 99 is used
+  - sql: |
+      INSERT INTO cl VALUES (7, 'seven', 77)
+    expect: ok
+    comment: no column list, so the first three declared columns are supplied and c4 is NULL
+  - sql: |
+      INSERT INTO cl (c1) VALUES (1, 2)
+    expect: error
+    sqlstate: "42601"
+    comment: VALUES arity must match the column list
+  - sql: |
+      SELECT c1, c2, c3, c4 FROM cl ORDER BY c1 NULLS LAST, c2
+    expect: rows
+    order: ordered

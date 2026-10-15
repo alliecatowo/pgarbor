@@ -1,0 +1,54 @@
+# Documented: index-only scans still check visibility. Uncommitted changes stay invisible to another session, and VACUUM sets the visibility map without changing results.
+id: doc-indexes-index-only-scans.mvcc-covering-read-two-sessions
+title: Covering-index reads reflect MVCC visibility across two sessions, before and after VACUUM
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, mvcc, visibility-map, vacuum]
+required_capabilities: [create-table, create-index, insert, update, delete, select, transactions, multi-session, vacuum]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (index-only scans check the visibility map and fall back to the heap when the bit is not set)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE tab (x text, y text);
+  CREATE INDEX tab_x_y ON tab (x) INCLUDE (y);
+  INSERT INTO tab VALUES ('k', 'v1'), ('j', 'w');
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE tab SET y = 'v2' WHERE x = 'k'
+    expect: ok
+  - session: b
+    sql: |
+      SELECT x, y FROM tab WHERE x = 'k' ORDER BY y
+    expect: rows
+    order: ordered
+    comment: b must still see v1, the committed value
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT x, y FROM tab WHERE x = 'k' ORDER BY y
+    expect: rows
+    order: ordered
+    comment: after commit, b sees v2
+  - session: a
+    sql: |
+      DELETE FROM tab WHERE x = 'j'
+    expect: ok
+  - session: a
+    sql: |
+      VACUUM tab
+    expect: ok
+  - session: b
+    sql: |
+      SELECT x, y FROM tab ORDER BY x
+    expect: rows
+    order: ordered
+    comment: the deleted row stays gone after VACUUM; the covering read returns only k/v2

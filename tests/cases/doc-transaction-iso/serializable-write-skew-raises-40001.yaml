@@ -1,0 +1,57 @@
+# Serializable: the documented mytab example. Two transactions each read a sum the other changes; one commit is refused with 40001.
+id: doc-transaction-iso.serializable-write-skew-raises-40001
+title: SERIALIZABLE write skew across two sums fails one commit with serialization failure
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, serializable, select, insert, aggregates]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#xact-serializable"
+sessions: [a, b]
+setup: |
+  CREATE TABLE mytab (class int4 NOT NULL, value int4 NOT NULL);
+  INSERT INTO mytab VALUES (1, 10), (1, 20), (2, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE
+    expect: ok
+  - session: a
+    sql: |
+      SELECT SUM(value) FROM mytab WHERE class = 1
+    expect: rows
+    comment: "30"
+  - session: b
+    sql: |
+      SELECT SUM(value) FROM mytab WHERE class = 2
+    expect: rows
+    comment: "300"
+  - session: a
+    sql: |
+      INSERT INTO mytab VALUES (2, 30)
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO mytab VALUES (1, 300)
+    expect: ok
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      COMMIT
+    expect: error
+    sqlstate: "40001"
+    comment: could not serialize access due to read/write dependencies among transactions
+  - session: a
+    sql: |
+      SELECT class, value FROM mytab ORDER BY class, value
+    expect: rows
+    order: ordered
+    comment: only a's row (2, 30) was committed

@@ -1,0 +1,53 @@
+# xmlforest and xmlpi examples, NULL handling for both, and the documented xmlpi error for a content value containing ?>.
+id: doc-functions-xml.xmlforest-xmlpi
+title: xmlforest builds element sequences and xmlpi builds processing instructions per the docs
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, xmlforest, xmlpi, null-semantics]
+required_capabilities: [xml, select, create-table, insert, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-producing-xml-xmlforest and functions-producing-xml-xmlpi"
+sessions: [a]
+setup: |
+  CREATE TABLE col_names (table_name text, column_name text);
+  INSERT INTO col_names VALUES ('pg_authid', 'rolname'), ('pg_authid', 'rolsuper');
+steps:
+  - sql: |
+      SELECT xmlforest('abc' AS foo, 123 AS bar)
+    expect: rows
+    comment: doc example
+  - sql: |
+      SELECT xmlforest(table_name, column_name) FROM col_names ORDER BY column_name
+    expect: rows
+    order: ordered
+    comment: doc style, the element name defaults to the column name when the value is a column reference
+  - sql: |
+      SELECT xmlforest(NULL::text AS a, 'b' AS c)
+    expect: rows
+    comment: a NULL content value omits that element
+  - sql: |
+      SELECT xmlforest(NULL::text AS a) IS NULL AS all_null_forest
+    expect: rows
+    comment: a forest whose members are all NULL is an empty result that is still null
+  - sql: |
+      SELECT xmlforest(1 AS "a b")
+    expect: rows
+    comment: an element name that is not a valid XML name is escaped
+  - sql: |
+      SELECT xmlpi(name php, 'echo "hello world";')
+    expect: rows
+    comment: doc example, processing instruction with content
+  - sql: |
+      SELECT xmlpi(name php)
+    expect: rows
+    comment: processing instruction with no content
+  - sql: |
+      SELECT xmlpi(name php, NULL::text) IS NULL AS null_pi
+    expect: rows
+    comment: null content gives a null result
+  - sql: |
+      SELECT xmlpi(name php, 'a?>b')
+    expect: error
+    sqlstate: 2200T
+    comment: content must not contain the sequence ?>

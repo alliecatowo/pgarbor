@@ -1,0 +1,25 @@
+# Only one RETURNING clause may exist among all rules for the same event on a view; the conflict surfaces when RETURNING is used.
+id: cmd-create-rule.error-multiple-returning-rules
+title: Two INSTEAD INSERT rules each with RETURNING make INSERT RETURNING on the view fail with feature_not_supported
+family: cmd-create-rule
+tier: extended
+feature_ids: [create-rule, insert, returning, views, errors]
+required_capabilities: [create-table, create-view, create-rule, insert, returning, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Notes: at most one RETURNING clause among all the rules for the same event)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4, n text);
+  CREATE VIEW vb AS SELECT id, n FROM base;
+  CREATE RULE vb_ins AS ON INSERT TO vb DO INSTEAD INSERT INTO base VALUES (NEW.id, NEW.n) RETURNING id, n;
+steps:
+  - sql: |
+      CREATE RULE vb_ins2 AS ON INSERT TO vb DO INSTEAD INSERT INTO base VALUES (NEW.id + 1, NEW.n) RETURNING id, n
+    expect: ok
+    comment: the second rule is accepted; the conflict only appears when a RETURNING query uses the view
+  - sql: |
+      INSERT INTO vb VALUES (5, 'five') RETURNING id, n
+    expect: error
+    sqlstate: "0A000"
+    comment: more than one RETURNING clause among the rules for INSERT

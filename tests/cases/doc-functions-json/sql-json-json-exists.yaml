@@ -1,0 +1,30 @@
+# Documented JSON_EXISTS: PASSING variables, lax vs strict out-of-range access, and ON ERROR handling.
+id: doc-functions-json.sql-json-json-exists
+title: JSON_EXISTS with PASSING variables and ON ERROR behavior in lax and strict modes
+family: doc-functions-json
+tier: core
+feature_ids: [sql-json-query-functions, json-exists, jsonpath-variables]
+required_capabilities: [select, jsonb, jsonpath]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-sqljson-query (JSON_EXISTS)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT JSON_EXISTS(jsonb '{"key1": [1,2,3]}', 'strict $.key1[*] ? (@ > $x)' PASSING 2 AS x) AS passing_var
+    expect: rows
+    comment: "documented example"
+  - sql: |
+      SELECT JSON_EXISTS(jsonb '{"a": [1,2,3]}', 'lax $.a[5]' ERROR ON ERROR) AS lax_out_of_range,
+             JSON_EXISTS(jsonb '{"a": [1,2,3]}', 'strict $.a[5]') AS strict_default_on_error
+    expect: rows
+    comment: "lax out-of-range is simply no match; the default ON ERROR is FALSE"
+  - sql: |
+      SELECT JSON_EXISTS(jsonb '{"a": [1,2,3]}', 'strict $.a[5]' ERROR ON ERROR) AS strict_error
+    expect: error
+    sqlstate: "22033"
+    comment: "documented: strict out-of-range raises jsonpath array subscript is out of bounds"
+  - sql: |
+      SELECT JSON_EXISTS(jsonb '{"a": [1,2,3]}', 'strict $.a[5]' UNKNOWN ON ERROR) IS NULL AS unknown_is_null,
+             JSON_EXISTS(jsonb '{"a": [1,2,3]}', 'strict $.a[5]' TRUE ON ERROR) AS true_on_error
+    expect: rows

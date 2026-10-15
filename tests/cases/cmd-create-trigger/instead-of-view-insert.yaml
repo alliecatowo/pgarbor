@@ -1,0 +1,50 @@
+# INSTEAD OF INSERT and UPDATE triggers on a view that is not automatically updatable.
+id: cmd-create-trigger.instead-of-view-insert
+title: INSTEAD OF INSERT and UPDATE row triggers redirect view writes to the base table
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, instead-of-trigger, views, row-level-trigger, plpgsql-trigger-function]
+required_capabilities: [create-table, create-view, insert, update, select, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER examples (view_insert INSTEAD OF INSERT ON my_view FOR EACH ROW)"
+setup: |
+  CREATE TABLE base (id int PRIMARY KEY, label text NOT NULL);
+  CREATE VIEW my_view AS SELECT id, label, length(label) AS len FROM base;
+  CREATE FUNCTION view_insert_row() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO base (id, label) VALUES (NEW.id, upper(NEW.label));
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION view_update_row() RETURNS trigger AS $$
+  BEGIN
+    UPDATE base SET label = NEW.label WHERE id = OLD.id;
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER view_insert INSTEAD OF INSERT ON my_view FOR EACH ROW EXECUTE FUNCTION view_insert_row()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER view_update INSTEAD OF UPDATE ON my_view FOR EACH ROW EXECUTE FUNCTION view_update_row()
+    expect: ok
+  - sql: |
+      INSERT INTO my_view (id, label) VALUES (1, 'one'), (2, 'two')
+    expect: ok
+  - sql: |
+      INSERT INTO my_view (id, label) VALUES (3, 'three') RETURNING id, label
+    expect: rows
+    comment: RETURNING reports the NEW row returned by the trigger
+  - sql: |
+      UPDATE my_view SET label = 'uno' WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, label FROM base ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tgname, tgtype & 64 = 64 AS instead_of, tgtype & 1 = 1 AS row_level FROM pg_trigger WHERE tgrelid = 'my_view'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

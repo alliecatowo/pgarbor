@@ -1,0 +1,38 @@
+# SELECT FOR UPDATE locks just the returned rows; an update of another row is not blocked.
+id: doc-applevel-consistency.for-update-locks-only-returned-rows
+title: SELECT FOR UPDATE does not block updates of rows it did not return
+family: doc-applevel-consistency
+tier: core
+feature_ids: [select-for-update, row-locks, read-committed]
+required_capabilities: [create-table, insert, select, update, transactions, row-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, balance FROM acct WHERE id = 1 FOR UPDATE
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      UPDATE acct SET balance = 0 WHERE id = 2
+    expect: ok
+    comment: not blocked, row 2 was not locked
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered

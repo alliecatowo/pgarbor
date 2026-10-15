@@ -1,0 +1,37 @@
+# DEPENDS ON EXTENSION records a deptype 'x' dependency of the routine on the extension; NO DEPENDS
+# removes it. An unknown extension is 42704. plpgsql is used because it is always present.
+id: cmd-alter-routine.depends-on-extension
+title: ALTER ROUTINE DEPENDS ON EXTENSION adds and removes extension dependencies for functions and procedures
+family: cmd-alter-routine
+tier: extended
+feature_ids: [alter-routine, extensions, dependencies]
+required_capabilities: [create-function, create-procedure, alter-function, extension, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: [NO] DEPENDS ON EXTENSION)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE PROCEDURE pr1(int) LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      ALTER ROUTINE foo(integer) DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      ALTER ROUTINE pr1(int) DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_depend WHERE classid = 'pg_proc'::regclass AND refclassid = 'pg_extension'::regclass AND deptype = 'x'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE foo(integer) NO DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_depend WHERE classid = 'pg_proc'::regclass AND refclassid = 'pg_extension'::regclass AND deptype = 'x'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE foo(integer) DEPENDS ON EXTENSION no_such_ext_xyz
+    expect: error
+    sqlstate: "42704"

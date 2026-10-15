@@ -1,0 +1,41 @@
+# ALTER FUNCTION does not accept a procedure, an unknown function, or a qualified name in a
+# missing schema; the procedure is still reachable through ALTER PROCEDURE.
+id: cmd-alter-function.procedure-and-missing
+title: ALTER FUNCTION rejects procedures, unknown names and missing schemas with the documented error classes
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, procedures, function-identity]
+required_capabilities: [create-function, create-procedure, alter-function, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: name; Description)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE pr1() LANGUAGE sql AS 'SELECT 1';
+  CREATE FUNCTION fn1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION pr1() RENAME TO pr2
+    expect: error
+    sqlstate: "42809"
+    comment: pr1() is a procedure, not a function
+  - sql: |
+      ALTER PROCEDURE pr1() RENAME TO pr2
+    expect: ok
+    comment: the procedure is renamed by ALTER PROCEDURE
+  - sql: |
+      ALTER FUNCTION no_such_fn(int) STABLE
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER FUNCTION nosch.fn1(int) RENAME TO fn2
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER FUNCTION fn1 STABLE
+    expect: ok
+    comment: unqualified name is unique in the schema, so no argument list is needed
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('pr2', 'fn1') ORDER BY 1
+    expect: rows
+    order: ordered

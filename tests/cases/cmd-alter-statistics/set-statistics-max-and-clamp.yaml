@@ -1,0 +1,31 @@
+# The documented maximum target is 10000; a larger value is clamped with a warning rather than rejected.
+id: cmd-alter-statistics.set-statistics-max-and-clamp
+title: "ALTER STATISTICS SET STATISTICS accepts 10000 and clamps 10001 with a warning"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, statistics-target, boundary-values, warnings]
+required_capabilities: [create-table, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (range 0 to 10000)"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_mx (a int, b int);
+  CREATE STATISTICS ast_mx_s1 (ndistinct) ON a, b FROM ast_mx;
+steps:
+  - sql: |
+      ALTER STATISTICS ast_mx_s1 SET STATISTICS 10000
+    expect: ok
+  - sql: |
+      SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ast_mx_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_mx_s1 SET STATISTICS 10001
+    expect: ok
+    comment: emits WARNING 22023 lowering statistics target to 10000; the command still succeeds
+  - sql: |
+      SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ast_mx_s1'
+    expect: rows
+    order: ordered
+    comment: stored value is clamped to 10000

@@ -1,0 +1,52 @@
+# DROP COLUMN defaults to RESTRICT (2BP01 while a view depends on the column); CASCADE drops the view; IF EXISTS skips with a notice.
+id: cmd-alter-table.drop-column-restrict-cascade
+title: "DROP COLUMN RESTRICT refuses a view dependency; CASCADE drops the view; IF EXISTS skips"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, drop-column, restrict-cascade, errors]
+required_capabilities: [create-table, create-view, alter-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: DROP COLUMN ... RESTRICT; Description: DROP COLUMN [ IF EXISTS ] ... CASCADE)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (dist_id int4, zipcode text, address text);
+  INSERT INTO distributors VALUES (1, '12345', 'main st'), (2, '54321', 'elm st');
+  CREATE VIEW zips AS SELECT dist_id, zipcode FROM distributors;
+steps:
+  - sql: |
+      ALTER TABLE distributors DROP COLUMN zipcode
+    expect: error
+    sqlstate: "2BP01"
+    comment: RESTRICT is the default; view zips depends on the column
+  - sql: |
+      ALTER TABLE distributors DROP COLUMN address RESTRICT
+    expect: ok
+    comment: no dependents, so RESTRICT succeeds
+  - sql: |
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'distributors' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE distributors DROP COLUMN zipcode CASCADE
+    expect: notice
+    comment: succeeds and drops view zips, reporting a NOTICE
+  - sql: |
+      SELECT count(*) AS views_left FROM pg_views WHERE schemaname = 'public' AND viewname = 'zips'
+    expect: rows
+  - sql: |
+      ALTER TABLE distributors DROP COLUMN zipcode
+    expect: error
+    sqlstate: "42703"
+    comment: the column is already gone
+  - sql: |
+      ALTER TABLE distributors DROP COLUMN IF EXISTS zipcode
+    expect: notice
+    comment: missing column is skipped with a notice
+  - sql: |
+      INSERT INTO distributors (dist_id) VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT dist_id FROM distributors ORDER BY dist_id
+    expect: rows
+    order: ordered

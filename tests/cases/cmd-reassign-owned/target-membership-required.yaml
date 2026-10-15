@@ -1,0 +1,40 @@
+# REASSIGN OWNED requires membership on the target role too. A member of only the source role is refused and nothing moves.
+id: cmd-reassign-owned.target-membership-required
+title: "REASSIGN OWNED is refused when the session lacks membership in the new role"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, role-membership, privileges, errors]
+required_capabilities: [roles, session-authorization, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-notes (requires membership on both the source and the target role)"
+sessions: [a]
+setup: |
+  CREATE ROLE ro8_old;
+  CREATE ROLE ro8_new;
+  CREATE ROLE ro8_nm;
+  GRANT ro8_old TO ro8_nm;
+  CREATE TABLE ro8_t (a int4);
+  ALTER TABLE ro8_t OWNER TO ro8_old;
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION ro8_nm
+    expect: ok
+  - sql: |
+      REASSIGN OWNED BY ro8_old TO ro8_new
+    expect: error
+    sqlstate: "42501"
+    compare_message: false
+    comment: ro8_nm is a member of the source role only
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro8_t'
+    expect: rows
+    order: ordered
+    comment: the refused command changed nothing
+  - sql: |
+      DROP OWNED BY ro8_old; DROP ROLE ro8_nm; DROP ROLE ro8_old; DROP ROLE ro8_new
+    expect: ok
+    comment: cleanup

@@ -1,0 +1,42 @@
+# INDEX_CLEANUP takes AUTO, ON or OFF; other values are syntax errors. Deleted rows are reclaimed in every accepted mode.
+id: cmd-vacuum.index-cleanup-values
+title: "VACUUM INDEX_CLEANUP accepts AUTO, ON and OFF in any case and rejects other values"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, index-cleanup, create-index, errors]
+required_capabilities: [create-table, create-index, insert, delete, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: INDEX_CLEANUP)"
+sessions: [a]
+setup: |
+  CREATE TABLE vic (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX vic_v ON vic (v);
+  INSERT INTO vic SELECT g, g % 3 FROM generate_series(1, 30) g;
+  DELETE FROM vic WHERE id <= 2;
+steps:
+  - sql: |
+      VACUUM (INDEX_CLEANUP AUTO) vic
+    expect: ok
+  - sql: |
+      VACUUM (INDEX_CLEANUP auto) vic
+    expect: ok
+    comment: keyword matching is case-insensitive
+  - sql: |
+      VACUUM (INDEX_CLEANUP ON) vic
+    expect: ok
+  - sql: |
+      VACUUM (INDEX_CLEANUP OFF) vic
+    expect: ok
+  - sql: |
+      VACUUM (FULL, INDEX_CLEANUP OFF) vic
+    expect: ok
+    comment: ignored when FULL is used
+  - sql: |
+      VACUUM (INDEX_CLEANUP 'maybe') vic
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT count(*), sum(id) FROM vic
+    expect: rows
+    order: ordered

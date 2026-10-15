@@ -1,0 +1,32 @@
+# CASCADE on DROP FUNCTION removes the dependent rule as well (notice), after which DROP RULE reports a missing rule.
+id: cmd-drop-rule.cascade-drops-dependent-rule
+title: DROP FUNCTION CASCADE removes a dependent rule, so a later DROP RULE fails with undefined_object
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, drop-function, create-rule, dependencies]
+required_capabilities: [create-table, create-rule, create-function, drop-rule, drop-function, errors]
+provenance:
+  source: pg-regress
+  ref: "src/test/regress/sql/rules.sql (dependent rule removed by DROP FUNCTION CASCADE); doc/src/sgml/ref/drop_rule.sgml#sql-droprule (CASCADE)"
+sessions: [a]
+setup: |
+  CREATE TABLE cas_src (a int4);
+  CREATE TABLE cas_log (a int4);
+  CREATE FUNCTION cas_f(int4) RETURNS int4 LANGUAGE sql AS 'SELECT $1 + 1';
+  CREATE RULE cas_r AS ON INSERT TO cas_src WHERE cas_f(NEW.a) > 0 DO ALSO INSERT INTO cas_log VALUES (cas_f(NEW.a));
+steps:
+  - sql: |
+      DROP FUNCTION cas_f(int4) CASCADE
+    expect: ok
+    comment: emits NOTICE drop cascades to rule cas_r on table cas_src
+  - sql: |
+      DROP RULE cas_r ON cas_src
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      INSERT INTO cas_src VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM cas_log
+    expect: rows
+    comment: no rule copies the row, so the count is 0

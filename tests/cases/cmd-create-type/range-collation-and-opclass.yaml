@@ -1,0 +1,52 @@
+# Range type ordering controlled by COLLATION and SUBTYPE_OPCLASS; invalid subtype and option errors.
+id: cmd-create-type.range-collation-and-opclass
+title: "Range COLLATION and subtype operator class options, plus definition errors"
+family: cmd-create-type
+tier: extended
+feature_ids: [create-type, range-types, collations, operator-classes, select, errors]
+required_capabilities: [create-type, range-types, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype-range (subtype_opclass, collation)"
+steps:
+  - sql: |
+      CREATE TYPE rtext AS RANGE (subtype = text, collation = "C")
+    expect: ok
+  - sql: |
+      SELECT '[B,D)'::rtext < '[a,c)'::rtext AS c_order
+    expect: rows
+    comment: under collation C, uppercase sorts before lowercase
+  - sql: |
+      CREATE TYPE rtext_pat AS RANGE (subtype = text, subtype_opclass = text_pattern_ops, collation = "C")
+    expect: ok
+  - sql: |
+      SELECT '[B,D)'::rtext_pat < '[a,c)'::rtext_pat AS pattern_order
+    expect: rows
+  - sql: |
+      CREATE TYPE rbad_opc AS RANGE (subtype = int4, subtype_opclass = nosuchopc)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TYPE rbad_opc2 AS RANGE (subtype = int4, subtype_opclass = text_pattern_ops)
+    expect: error
+    sqlstate: "42804"
+    comment: operator class is for text, not integer
+  - sql: |
+      CREATE TYPE rbad_sub AS RANGE (subtype = point)
+    expect: error
+    sqlstate: "42704"
+    comment: point has no default btree operator class, so the range cannot order its values
+  - sql: |
+      CREATE TYPE rbad_nosub AS RANGE (subtype = nosuchtype)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TYPE rbad_dup AS RANGE (subtype = text, collation = "C", subtype = int4)
+    expect: error
+    sqlstate: "42601"
+    comment: repeated option
+  - sql: |
+      CREATE TYPE rbad_empty AS RANGE ()
+    expect: error
+    sqlstate: "42601"
+    comment: a range needs a SUBTYPE option

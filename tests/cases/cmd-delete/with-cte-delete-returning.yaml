@@ -1,0 +1,29 @@
+# DELETE may appear in a WITH clause; its RETURNING rows are then read by the outer query.
+id: cmd-delete.with-cte-delete-returning
+title: "Data-modifying WITH: DELETE in a CTE with RETURNING feeds the outer query"
+family: cmd-delete
+tier: core
+feature_ids: [delete, with, returning, cte, create-table, insert, select]
+required_capabilities: [create-table, insert, select, delete, with, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#synopsis (WITH with_query); ref/delete.sgml#compatibility (WITH with DELETE is an extension)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, kind text);
+  CREATE TABLE archive (id int4 PRIMARY KEY, kind text);
+  INSERT INTO films VALUES (1, 'Drama'), (2, 'Musical'), (3, 'Drama');
+steps:
+  - sql: |
+      WITH moved AS (DELETE FROM films WHERE kind = 'Drama' RETURNING id, kind)
+      INSERT INTO archive SELECT id, kind FROM moved
+    expect: ok
+    comment: the CTE deletes films 1 and 3; the outer INSERT archives them
+  - sql: |
+      SELECT id, kind FROM films ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, kind FROM archive ORDER BY id
+    expect: rows
+    order: ordered

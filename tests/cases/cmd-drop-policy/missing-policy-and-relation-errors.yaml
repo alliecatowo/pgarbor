@@ -1,0 +1,49 @@
+# Without IF EXISTS, a missing policy, table, view or schema is an error, and a failed drop changes nothing.
+id: cmd-drop-policy.missing-policy-and-relation-errors
+title: "DROP POLICY without IF EXISTS raises 42704, 42P01 or 3F000 and leaves the policy in place"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, policies, errors]
+required_capabilities: [create-table, select, rls, catalog-introspection, views]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (IF EXISTS, name, table_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE VIEW vw AS SELECT id, v FROM t;
+  CREATE POLICY p1 ON t USING (v > 0);
+steps:
+  - sql: |
+      DROP POLICY nothere ON t
+    expect: error
+    sqlstate: "42704"
+    comment: no policy of that name on the table
+  - sql: |
+      DROP POLICY p1 ON no_such_table
+    expect: error
+    sqlstate: "42P01"
+    comment: the table does not exist
+  - sql: |
+      DROP POLICY p1 ON vw
+    expect: error
+    sqlstate: "42704"
+    comment: the view has no policy named p1
+  - sql: |
+      DROP POLICY p1 ON no_such_schema.t
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema does not exist
+  - sql: |
+      SELECT policyname FROM pg_policies WHERE tablename = 't' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: p1 survived all four failed statements
+  - sql: |
+      DROP POLICY p1 ON t
+    expect: ok
+  - sql: |
+      DROP POLICY p1 ON t
+    expect: error
+    sqlstate: "42704"
+    comment: a second drop without IF EXISTS is an error

@@ -1,0 +1,48 @@
+# A CHECK constraint and an expression index both depend on an operator; CASCADE drops only those and keeps the table and its rows.
+id: cmd-drop-operator.cascade-check-and-index
+title: CASCADE drops CHECK constraints and expression indexes that use the operator, keeping the table
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, cascade, check-constraints, expression-indexes, dependencies]
+required_capabilities: [drop-operator, create-operator, create-function-sql, create-table, create-index, check-constraint, insert, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#parameters (CASCADE drops dependent objects)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dcc_lt(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR !<! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dcc_lt);
+  CREATE TABLE dcc_t (a int CONSTRAINT dcc_pos CHECK (a !<! 100));
+  CREATE INDEX dcc_idx ON dcc_t ((a !<! 5));
+steps:
+  - sql: |
+      DROP OPERATOR !<! (integer, integer)
+    expect: error
+    sqlstate: "2BP01"
+    comment: both the constraint and the index depend on the operator
+  - sql: |
+      INSERT INTO dcc_t VALUES (5)
+    expect: ok
+  - sql: |
+      INSERT INTO dcc_t VALUES (500)
+    expect: error
+    sqlstate: "23514"
+    comment: the CHECK constraint is enforced before the drop
+  - sql: |
+      DROP OPERATOR !<! (integer, integer) CASCADE
+    expect: notice
+    comment: notices name the dropped constraint and index
+  - sql: |
+      INSERT INTO dcc_t VALUES (500)
+    expect: ok
+    comment: the constraint is gone, so the value is accepted
+  - sql: |
+      SELECT a FROM dcc_t ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS constraints_left FROM pg_constraint WHERE conname = 'dcc_pos'
+    expect: rows
+  - sql: |
+      SELECT count(*) AS index_left FROM pg_class WHERE relname = 'dcc_idx'
+    expect: rows

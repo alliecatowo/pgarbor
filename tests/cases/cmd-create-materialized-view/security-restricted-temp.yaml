@@ -1,0 +1,38 @@
+id: cmd-create-materialized-view.security-restricted-temp
+title: Functions that create temporary tables fail inside the security-restricted defining query
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, security-restricted-operation, temp-tables, plpgsql]
+required_capabilities: [create-materialized-view, plpgsql, create-table, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (query)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION make_temp() RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    CREATE TEMP TABLE scratch_tt (x int);
+    RETURN 1;
+  END $$;
+steps:
+  - session: a
+    sql: |
+      SELECT make_temp() AS v
+    expect: rows
+    order: ordered
+    comment: allowed outside a materialized view definition
+  - session: a
+    sql: |
+      DROP TABLE pg_temp.scratch_tt
+    expect: ok
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_tt AS SELECT make_temp() AS v
+    expect: error
+    sqlstate: "42501"
+    comment: cannot create temporary table within security-restricted operation
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname = 'mv_tt'
+    expect: rows
+    order: ordered

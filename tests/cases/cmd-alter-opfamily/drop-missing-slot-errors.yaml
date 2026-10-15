@@ -1,0 +1,39 @@
+# DROP names a slot by strategy/support number and operand types; an empty slot is undefined_object.
+id: cmd-alter-opfamily.drop-missing-slot-errors
+title: DROP of an empty operator or function slot fails with undefined_object and leaves members intact
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, drop-members, errors]
+required_capabilities: [alter-operator-family, create-operator-family, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Notes: the DROP syntax specifies only the slot)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_drop USING btree;
+  ALTER OPERATOR FAMILY cmd_aof_drop USING btree ADD OPERATOR 1 < (int4, int4), FUNCTION 1 btint4cmp(int4, int4);
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_drop USING btree DROP OPERATOR 1 (int8, int8)
+    expect: error
+    sqlstate: "42704"
+    comment: strategy 1 exists only for (int4, int4)
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_drop USING btree DROP OPERATOR 2 (int4, int4)
+    expect: error
+    sqlstate: "42704"
+    comment: strategy 2 is empty
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_drop USING btree DROP FUNCTION 1 (int8, int8)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_drop USING btree DROP OPERATOR 1 (int4, int4), FUNCTION 2 (int4, int4)
+    expect: error
+    sqlstate: "42704"
+    comment: the failing item rolls back the whole DROP, so OPERATOR 1 is still present
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_drop') AS ops,
+             (SELECT count(*) FROM pg_amproc p JOIN pg_opfamily f ON f.oid = p.amprocfamily WHERE f.opfname = 'cmd_aof_drop') AS procs
+    expect: rows
+    comment: expect 1 operator and 1 function

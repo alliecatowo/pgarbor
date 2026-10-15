@@ -1,0 +1,47 @@
+# Each privilege is valid only for particular object types; invalid combinations fail with 0LP01 and change nothing.
+id: cmd-alter-default-privileges.error-invalid-privilege-type
+title: Privileges not valid for an object type are rejected with 0LP01 and no default entry is written
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, grant, privilege-types, errors, default-acl]
+required_capabilities: [create-schema, sequences, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-synopsis (privilege lists per object type)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_webuser') THEN CREATE ROLE adp_webuser; END IF;
+  END $$;
+  CREATE SCHEMA adp_inv;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_inv GRANT EXECUTE ON TABLES TO adp_webuser
+    expect: error
+    sqlstate: "0LP01"
+    comment: EXECUTE belongs to functions, not tables
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_inv GRANT SELECT ON FUNCTIONS TO adp_webuser
+    expect: error
+    sqlstate: "0LP01"
+    comment: SELECT is not a function privilege
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_inv GRANT SELECT ON ROUTINES TO adp_webuser
+    expect: error
+    sqlstate: "0LP01"
+    comment: ROUTINES is the same object type as FUNCTIONS
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_inv GRANT CREATE ON TYPES TO adp_webuser
+    expect: error
+    sqlstate: "0LP01"
+    comment: types accept only USAGE
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_inv GRANT TRUNCATE ON SEQUENCES TO adp_webuser
+    expect: error
+    sqlstate: "0LP01"
+    comment: sequences accept USAGE SELECT UPDATE only
+  - sql: |
+      SELECT count(*) FROM pg_default_acl WHERE defaclnamespace = 'adp_inv'::regnamespace
+    expect: rows
+    order: multiset
+    comment: none of the rejected statements wrote a default entry

@@ -1,0 +1,30 @@
+# A bare unknown literal or NULL cannot fix the polymorphic type; the call fails instead of guessing (datatype.sgml#datatype-pseudotypes-table, extend-types-polymorphic).
+id: doc-datatype-pseudo.polymorphic-unresolvable
+title: Polymorphic arguments given as untyped literals fail to resolve the type
+family: doc-datatype-pseudo
+tier: core
+feature_ids: [pseudo-types, anyelement, anyarray, polymorphic-functions]
+required_capabilities: [create-function-sql, errors]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-pseudotypes-table"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ident(anyelement) RETURNS anyelement LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION fa(anyarray) RETURNS anyelement LANGUAGE sql AS $$ SELECT $1[1] $$
+steps:
+  - sql: |
+      SELECT ident(NULL)
+    expect: error
+    sqlstate: "42804"
+    comment: an untyped NULL gives no type to bind
+  - sql: |
+      SELECT fa('{1,2}')
+    expect: error
+    sqlstate: "42804"
+    comment: an untyped array literal cannot satisfy anyarray
+  - sql: |
+      SELECT fa('{1,2}'::int[]) AS first_elem
+    expect: rows
+    order: ordered
+    comment: an explicit cast fixes the type

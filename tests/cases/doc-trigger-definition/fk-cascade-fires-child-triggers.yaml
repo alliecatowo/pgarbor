@@ -1,0 +1,38 @@
+# Referential actions are performed as ordinary DELETE commands on the referencing table, so row-level
+# triggers on the referencing table fire for the rows removed by ON DELETE CASCADE.
+id: doc-trigger-definition.fk-cascade-fires-child-triggers
+title: ON DELETE CASCADE on a foreign key fires the child table's row-level DELETE triggers
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, foreign-keys, foreign-key-actions, plpgsql, delete]
+required_capabilities: [create-table, create-function, insert, select, delete, plpgsql, triggers, foreign-keys, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (referential actions are performed via ordinary DELETE/UPDATE on the referencing table)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int PRIMARY KEY);
+  CREATE TABLE child (cid int PRIMARY KEY, pid int REFERENCES parent (id) ON DELETE CASCADE);
+  CREATE TABLE child_log (seq int GENERATED ALWAYS AS IDENTITY, cid int);
+  CREATE FUNCTION child_del_fn() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO child_log (cid) VALUES (OLD.cid);
+    RETURN OLD;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER child_bd BEFORE DELETE ON child FOR EACH ROW EXECUTE FUNCTION child_del_fn();
+  INSERT INTO parent VALUES (1), (2);
+  INSERT INTO child VALUES (10, 1), (11, 1), (12, 2);
+steps:
+  - sql: |
+      DELETE FROM parent WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT cid FROM child_log ORDER BY seq
+    expect: rows
+    order: multiset
+    comment: cascade order between the two child rows is not specified, so compare as a multiset
+  - sql: |
+      SELECT cid, pid FROM child ORDER BY cid
+    expect: rows
+    order: ordered

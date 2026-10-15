@@ -1,0 +1,30 @@
+# After a drop, the same name can be created again with a different definition; the old definition is gone.
+id: cmd-drop-materialized-view.recreate-after-drop
+title: Recreating a dropped materialized view name yields the new definition and data only
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, create-materialized-view]
+required_capabilities: [create-table, insert, select, create-materialized-view, drop-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE rc_base (id int4, label text);
+  INSERT INTO rc_base VALUES (1, 'old'), (2, 'old');
+  CREATE MATERIALIZED VIEW rc_mv AS SELECT id, label FROM rc_base;
+steps:
+  - sql: |
+      DROP MATERIALIZED VIEW rc_mv
+    expect: ok
+  - sql: |
+      CREATE MATERIALIZED VIEW rc_mv AS SELECT id * 100 AS id, 'new' AS label FROM rc_base
+    expect: ok
+  - sql: |
+      SELECT id, label FROM rc_mv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS matviews FROM pg_matviews WHERE matviewname = 'rc_mv'
+    expect: rows
+    order: ordered

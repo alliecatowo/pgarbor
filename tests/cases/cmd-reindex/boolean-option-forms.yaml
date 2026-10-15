@@ -1,0 +1,56 @@
+# Each boolean may be written TRUE, ON, 1, FALSE, OFF, 0 or omitted; VERBOSE only prints INFO lines.
+id: cmd-reindex.boolean-option-forms
+title: REINDEX parenthesized options accept every documented boolean spelling and omitted value
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-options, reindex-verbose, reindex-concurrently]
+required_capabilities: [create-table, create-index, insert, select, reindex, reindex-concurrently]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: VERBOSE, CONCURRENTLY, boolean)"
+sessions: [a]
+setup: |
+  CREATE TABLE bo (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX bo_v ON bo (v);
+  INSERT INTO bo VALUES (1, 1), (2, 2);
+  CREATE TEMP TABLE bo_tmp (id int4 PRIMARY KEY);
+  INSERT INTO bo_tmp VALUES (7);
+steps:
+  - sql: |
+      REINDEX (VERBOSE FALSE) INDEX bo_v
+    expect: ok
+    compare_message: false
+  - sql: |
+      REINDEX (CONCURRENTLY 0) TABLE bo
+    expect: ok
+    compare_message: false
+  - sql: |
+      REINDEX (VERBOSE ON, CONCURRENTLY TRUE) TABLE bo
+    expect: ok
+    compare_message: false
+  - sql: |
+      REINDEX (VERBOSE 1) INDEX bo_v
+    expect: ok
+    compare_message: false
+  - sql: |
+      REINDEX (VERBOSE, CONCURRENTLY off) INDEX bo_v
+    expect: ok
+    compare_message: false
+    comment: omitted VERBOSE value means TRUE
+  - sql: |
+      REINDEX (VERBOSE, VERBOSE FALSE) TABLE bo
+    expect: ok
+    compare_message: false
+    comment: a repeated option is accepted
+  - sql: |
+      REINDEX (CONCURRENTLY) TABLE bo_tmp
+    expect: ok
+    comment: temporary tables are always rebuilt non-concurrently, but the option is accepted
+  - sql: |
+      SELECT id, v FROM bo ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM bo_tmp
+    expect: rows
+    order: multiset

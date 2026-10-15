@@ -1,0 +1,41 @@
+# GiST also indexes tsquery columns, queried with containment and equality operators; NULL queries are not matched.
+id: doc-textsearch-indexes.gist-tsquery-column
+title: GiST index on a tsquery column with containment and equality
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gist-index, tsquery-column, tsquery-containment, null-semantics]
+required_capabilities: [create-table, insert, select, create-index, gist-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (column can be of tsvector or tsquery type)"
+steps:
+  - sql: |
+      CREATE TABLE qs (id int4 PRIMARY KEY, q tsquery)
+    expect: ok
+  - sql: |
+      INSERT INTO qs VALUES (1, 'fox & quick'), (2, 'lazy'), (3, NULL), (4, 'fox | dog')
+    expect: ok
+  - sql: |
+      CREATE INDEX qs_gist ON qs USING GIST (q)
+    expect: ok
+  - sql: |
+      SELECT id FROM qs WHERE q @> 'fox'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM qs WHERE q <@ 'fox & quick & brown'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM qs WHERE q = 'lazy'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM qs WHERE q IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM qs WHERE (q @> 'fox'::tsquery) IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a NULL query column gives a NULL containment result

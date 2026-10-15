@@ -1,0 +1,41 @@
+# Non-recursive WITH: an auxiliary aggregate feeds a filter in the primary query.
+id: doc-queries-with.regional-sales-cte
+title: Non-recursive WITH aux statements chained into a filtered primary SELECT
+family: doc-queries-with
+tier: core
+feature_ids: [with-clause, cte, aggregates, subselect]
+required_capabilities: [create-table, insert, select, with, group-by]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-with (SELECT in WITH, regional_sales / top_regions)"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (region text, product text, quantity int, amount numeric);
+  INSERT INTO orders VALUES
+    ('east', 'a', 1, 100), ('east', 'b', 2, 300), ('west', 'a', 5, 50), ('north', 'a', 1, 10);
+steps:
+  - sql: |
+      WITH regional_sales AS (
+          SELECT region, SUM(amount) AS total_sales
+          FROM orders
+          GROUP BY region
+      ), top_regions AS (
+          SELECT region
+          FROM regional_sales
+          WHERE total_sales > (SELECT SUM(total_sales)/10 FROM regional_sales)
+      )
+      SELECT region, product,
+             SUM(quantity) AS product_units,
+             SUM(amount) AS product_sales
+      FROM orders
+      WHERE region IN (SELECT region FROM top_regions)
+      GROUP BY region, product
+      ORDER BY region, product
+    expect: rows
+    order: ordered
+    comment: north falls below one tenth of the total, so only east and west survive
+  - sql: |
+      SELECT region FROM regional_sales
+    expect: error
+    sqlstate: "42P01"
+    comment: an aux statement's name is visible only inside the WITH clause it belongs to

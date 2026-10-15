@@ -1,0 +1,36 @@
+# ROLE and ADMIN clauses: the new membership inherits only if the named role has the role-level INHERIT attribute; ADMIN also sets admin_option.
+id: cmd-create-role.role-clause-inherit-option
+title: ROLE and ADMIN clauses set inherit_option from each member's INHERIT attribute; ADMIN also grants admin_option
+family: cmd-create-role
+tier: core
+feature_ids: [create-role, role-membership, role-clause, admin-clause, inherit]
+required_capabilities: [roles, catalog-introspection, select, role-membership]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_role.sgml#parameters (ROLE, ADMIN); Notes (INHERIT attribute)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE ccr_inh_member
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_noinh_member NOINHERIT
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_noinh_admin NOINHERIT
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_grp ROLE ccr_inh_member, ccr_noinh_member ADMIN ccr_noinh_admin
+    expect: ok
+  - sql: |
+      SELECT r.rolname AS role, m.rolname AS member, am.admin_option, am.inherit_option, am.set_option
+        FROM pg_auth_members am
+        JOIN pg_roles r ON r.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+       WHERE r.rolname = 'ccr_grp'
+       ORDER BY member
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ccr_grp, ccr_inh_member, ccr_noinh_member, ccr_noinh_admin
+    expect: ok

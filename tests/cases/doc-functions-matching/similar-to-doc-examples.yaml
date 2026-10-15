@@ -1,0 +1,35 @@
+# Documented SIMILAR TO examples, the NOT SIMILAR TO duality, and NULL propagation.
+id: doc-functions-matching.similar-to-doc-examples
+title: SIMILAR TO documented examples, full-string matching, and NULL propagation
+family: doc-functions-matching
+tier: core
+feature_ids: [similar-to, sql-regex, pattern-matching, null-semantics]
+required_capabilities: [select, regex]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-similarto-regexp (documented SIMILAR TO examples)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 'abc' SIMILAR TO 'abc' AS e1,
+             'abc' SIMILAR TO 'a' AS e2,
+             'abc' SIMILAR TO '%(b|d)%' AS e3,
+             'abc' SIMILAR TO '(b|c)%' AS e4,
+             '-abc-' SIMILAR TO '%\mabc\M%' AS e5,
+             'xabcy' SIMILAR TO '%\mabc\M%' AS e6
+    expect: rows
+    comment: documented examples; expected true, false, true, false, true, false
+  - sql: |
+      SELECT x.s, x.p,
+             (x.s SIMILAR TO x.p) AS m,
+             (x.s NOT SIMILAR TO x.p) AS nm
+      FROM (VALUES ('abc', 'a|abc'), ('abc', 'ab+c'), ('aaa', 'a{2,3}'), ('', '%'), ('a.c', 'a.c'), ('abc', 'a_c')) AS x(s, p)
+    expect: rows
+    order: multiset
+    comment: period is not a metacharacter in SIMILAR TO, so a.c matches only itself via a literal dot
+  - sql: |
+      SELECT (NULL::text SIMILAR TO 'a') IS NULL AS null_subject_is_null,
+             ('a' SIMILAR TO NULL::text) IS NULL AS null_pattern_is_null,
+             ('a' NOT SIMILAR TO NULL::text) IS NULL AS null_not_similar_is_null
+    expect: rows
+    comment: any NULL operand makes SIMILAR TO return NULL

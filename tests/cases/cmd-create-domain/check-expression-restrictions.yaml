@@ -1,0 +1,32 @@
+# CHECK expressions may not contain subqueries or refer to anything other than VALUE.
+id: cmd-create-domain.check-expression-restrictions
+title: Domain CHECK rejects subqueries and column references, and accepts a VALUE-only expression
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, check-constraint]
+required_capabilities: [create-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (CHECK restrictions)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DOMAIN dchk_sub AS int CHECK (VALUE IN (SELECT 1))
+    expect: error
+    sqlstate: "0A000"
+    comment: subqueries are not allowed in CHECK
+  - sql: |
+      CREATE DOMAIN dchk_col AS int CHECK (other > 0)
+    expect: error
+    sqlstate: "42703"
+    comment: only VALUE may be referenced
+  - sql: |
+      CREATE DOMAIN dchk_ok AS int CHECK (VALUE > 0 AND VALUE < 10)
+    expect: ok
+  - sql: |
+      SELECT 5::dchk_ok AS v
+    expect: rows
+  - sql: |
+      SELECT 10::dchk_ok AS v
+    expect: error
+    sqlstate: "23514"

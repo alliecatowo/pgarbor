@@ -1,0 +1,23 @@
+# When no dictionary recognizes a word its lexemes are NULL, while a stop word gives an empty array.
+id: doc-textsearch-debugging.ts-debug-unrecognized-token-null-lexemes
+title: ts_debug reports NULL lexemes for unrecognized words and an empty array for stop words
+family: doc-textsearch-debugging
+tier: core
+feature_ids: [ts-debug, dictionary-lexemes, stop-words, null-semantics]
+required_capabilities: [create-table, select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-configuration-testing"
+setup: |
+  CREATE TEXT SEARCH DICTIONARY my_stop (TEMPLATE = simple, STOPWORDS = english, ACCEPT = false);
+  CREATE TEXT SEARCH CONFIGURATION public.onlystop ( COPY = pg_catalog.english );
+  ALTER TEXT SEARCH CONFIGURATION public.onlystop ALTER MAPPING FOR asciiword WITH my_stop;
+steps:
+  - sql: |
+      SELECT token, lexemes IS NULL AS unrecognized, lexemes = '{}'::text[] AS stop_word
+      FROM ts_debug('public.onlystop', 'The fat cats') WITH ORDINALITY AS t(alias, description, token, dictionaries, dictionary, lexemes, n)
+      WHERE alias = 'asciiword'
+      ORDER BY n
+    expect: rows
+    order: ordered
+    comment: The is a stop word (empty array); fat and cats are unknown to the only dictionary (NULL)

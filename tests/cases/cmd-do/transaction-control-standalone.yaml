@@ -1,0 +1,23 @@
+# A DO run outside a transaction block may COMMIT; work committed inside the block survives a reconnect.
+id: cmd-do.transaction-control-standalone
+title: DO outside a transaction block can COMMIT mid-block and the committed rows persist
+family: cmd-do
+tier: core
+feature_ids: [do, commit, transactions, plpgsql]
+required_capabilities: [create-table, insert, select, transactions, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "ref/do.sgml#sql-do (Notes: transaction control statements are allowed if DO is executed in its own transaction)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+steps:
+  - sql: |
+      DO $$ BEGIN INSERT INTO t VALUES (1, 'before-commit'); COMMIT; INSERT INTO t VALUES (2, 'after-commit'); END $$
+    expect: ok
+    comment: the first insert is committed by the COMMIT inside the block; the second commits when the block ends
+  - reconnect: true
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

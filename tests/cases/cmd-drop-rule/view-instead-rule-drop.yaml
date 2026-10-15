@@ -1,0 +1,32 @@
+# Dropping an INSTEAD rule on a non-auto-updatable view makes the view read-only again.
+id: cmd-drop-rule.view-instead-rule-drop
+title: DROP RULE removes an INSTEAD INSERT rule on a DISTINCT view, restoring the not-updatable error
+family: cmd-drop-rule
+tier: extended
+feature_ids: [drop-rule, create-rule, create-view, views, insert]
+required_capabilities: [create-table, create-view, create-rule, drop-rule, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule; PG18 errcodes 55000 (cannot insert into view)"
+sessions: [a]
+setup: |
+  CREATE TABLE vi_base (a int4, b text);
+  CREATE VIEW vi_v AS SELECT DISTINCT a, b FROM vi_base;
+  CREATE RULE vi_ins AS ON INSERT TO vi_v DO INSTEAD INSERT INTO vi_base VALUES (NEW.a, NEW.b);
+steps:
+  - sql: |
+      INSERT INTO vi_v VALUES (1, 'one')
+    expect: ok
+  - sql: |
+      DROP RULE vi_ins ON vi_v
+    expect: ok
+  - sql: |
+      INSERT INTO vi_v VALUES (2, 'two')
+    expect: error
+    sqlstate: "55000"
+    comment: DISTINCT views are not automatically updatable and no rule remains
+  - sql: |
+      SELECT a, b FROM vi_base ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only the row inserted while the rule existed is present

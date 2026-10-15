@@ -1,0 +1,33 @@
+# Inheritance: TRUNCATE ONLY parent leaves children alone; TRUNCATE parent * (explicit star) matches the default and recurses.
+id: cmd-truncate.only-vs-star-inheritance
+title: "TRUNCATE ONLY skips inheritance children while the explicit star includes them"
+family: cmd-truncate
+tier: core
+feature_ids: [truncate, only, inheritance, insert, select]
+required_capabilities: [create-table, insert, select, inheritance, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#parameters (name, ONLY and *)"
+sessions: [a]
+setup: |
+  CREATE TABLE cities (name text, population int4);
+  CREATE TABLE capitals (state text) INHERITS (cities);
+  INSERT INTO cities VALUES ('Las Vegas', 500000);
+  INSERT INTO capitals VALUES ('Sacramento', 500000, 'CA');
+steps:
+  - sql: |
+      TRUNCATE ONLY cities
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM cities) AS parent_rows, (SELECT count(*) FROM capitals) AS child_rows
+    expect: rows
+    order: ordered
+    comment: only the parent's own rows were removed
+  - sql: |
+      TRUNCATE cities *
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM cities) AS parent_rows, (SELECT count(*) FROM capitals) AS child_rows
+    expect: rows
+    order: ordered
+    comment: the explicit star includes the child table

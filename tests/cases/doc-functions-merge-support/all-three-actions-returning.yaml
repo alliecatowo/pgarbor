@@ -1,0 +1,33 @@
+# One MERGE with MATCHED UPDATE, NOT MATCHED INSERT and NOT MATCHED BY SOURCE DELETE; each returned row names its action.
+id: doc-functions-merge-support.all-three-actions-returning
+title: merge_action() reports UPDATE, INSERT and DELETE in one MERGE with NOT MATCHED BY SOURCE
+family: doc-functions-merge-support
+tier: core
+feature_ids: [merge, merge-action, returning, update, insert, delete]
+required_capabilities: [create-table, insert, update, delete, select, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-merge-support (merge_action())"
+setup: |
+  CREATE TABLE products (product_id int PRIMARY KEY, in_stock bool, quantity int);
+  CREATE TABLE stock (product_id int, quantity int);
+  INSERT INTO products VALUES (1001, false, 0), (1002, true, 5), (1004, true, 9);
+  INSERT INTO stock VALUES (1001, 50), (1002, 0), (1003, 10);
+steps:
+  - sql: |
+      MERGE INTO products p
+        USING stock s ON p.product_id = s.product_id
+        WHEN MATCHED THEN
+          UPDATE SET quantity = s.quantity
+        WHEN NOT MATCHED THEN
+          INSERT (product_id, in_stock, quantity) VALUES (s.product_id, true, s.quantity)
+        WHEN NOT MATCHED BY SOURCE THEN
+          DELETE
+        RETURNING merge_action() AS action, p.product_id
+    expect: rows
+    order: multiset
+    comment: expect UPDATE 1001, UPDATE 1002, INSERT 1003, DELETE 1004
+  - sql: |
+      SELECT product_id, quantity FROM products ORDER BY product_id
+    expect: rows
+    order: ordered

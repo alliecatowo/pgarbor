@@ -1,0 +1,75 @@
+# After the switch, privileges and object ownership follow the current user. Switching from a non-superuser session to another role works because the authenticated user is a superuser.
+id: cmd-set-session-auth.non-superuser-privileges-and-ownership
+title: Privileges and created-object ownership follow the switched user; a non-superuser session may switch to another role
+family: cmd-set-session-auth
+tier: core
+feature_ids: [set-session-authorization, privileges, table-ownership, grant, superuser-check]
+required_capabilities: [roles, session-authorization, privileges, grant, create-table, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_session_auth.sgml#description (current user identifier is relevant for permission checking)"
+sessions: [a]
+notes: The authenticated user is the superuser, so only switching the current session user (not the authenticated user) is exercised here.
+setup: |
+  CREATE ROLE sa_priv_owner;
+  CREATE ROLE sa_priv_plain;
+  GRANT CREATE ON SCHEMA public TO sa_priv_owner;
+  CREATE TABLE sa_priv_granted (id int4);
+  INSERT INTO sa_priv_granted VALUES (2), (1);
+  GRANT SELECT ON sa_priv_granted TO sa_priv_plain;
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION 'sa_priv_owner'
+    expect: ok
+  - sql: |
+      CREATE TABLE sa_priv_mine (id int4)
+    expect: ok
+  - sql: |
+      SELECT tablename, tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'sa_priv_%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: sa_priv_mine is owned by the switched user, the granted table by the superuser
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION 'sa_priv_plain'
+    expect: ok
+  - sql: |
+      SELECT id FROM sa_priv_granted ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM sa_priv_mine
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SET SESSION AUTHORIZATION 'sa_priv_owner'
+    expect: ok
+    comment: allowed from a non-superuser session because the authenticated user is a superuser
+  - sql: |
+      SELECT SESSION_USER, CURRENT_USER
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM sa_priv_mine ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      DROP TABLE sa_priv_mine
+    expect: ok
+  - sql: |
+      DROP TABLE sa_priv_granted
+    expect: ok
+  - sql: |
+      REVOKE CREATE ON SCHEMA public FROM sa_priv_owner
+    expect: ok
+  - sql: |
+      DROP ROLE sa_priv_owner
+    expect: ok
+  - sql: |
+      DROP ROLE sa_priv_plain
+    expect: ok

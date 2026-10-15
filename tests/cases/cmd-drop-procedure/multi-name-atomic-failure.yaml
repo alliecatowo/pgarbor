@@ -1,0 +1,38 @@
+# A list of names is one command: if any name is missing the whole command fails and drops nothing;
+# with IF EXISTS the missing name is a notice and the rest are dropped.
+id: cmd-drop-procedure.multi-name-atomic-failure
+title: DROP PROCEDURE with several names fails atomically, and IF EXISTS drops the rest
+family: cmd-drop-procedure
+tier: core
+feature_ids: [drop-procedure, create-procedure, drop-if-exists, call]
+required_capabilities: [create-procedure, drop-procedure, call, errors, notice]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure (DROP PROCEDURE name [, ...])"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE pm1() LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE pm2() LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP PROCEDURE pm1, nosuch, pm2
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CALL pm1()
+    expect: ok
+    comment: pm1 survived the failed multi-name drop
+  - sql: |
+      CALL pm2()
+    expect: ok
+  - sql: |
+      DROP PROCEDURE IF EXISTS pm1, nosuch, pm2
+    expect: notice
+    comment: nosuch is noticed, pm1 and pm2 are dropped
+  - sql: |
+      CALL pm2()
+    expect: error
+    sqlstate: "42883"

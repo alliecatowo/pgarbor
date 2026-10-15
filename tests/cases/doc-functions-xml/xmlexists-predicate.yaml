@@ -1,0 +1,49 @@
+# XMLEXISTS evaluates an XPath 1.0 expression against a document: node-set emptiness, non-node-set results, BY REF/VALUE acceptance, NULL and invalid input.
+id: doc-functions-xml.xmlexists-predicate
+title: XMLEXISTS returns documented truth values, accepts BY REF and BY VALUE, and propagates NULL
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, xmlexists, xpath, null-semantics]
+required_capabilities: [xml, select, create-table, insert, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-producing-xml-xmlexists"
+sessions: [a]
+setup: |
+  CREATE TABLE towns (id int4 PRIMARY KEY, doc xml);
+  INSERT INTO towns VALUES
+    (1, '<towns><town>Toronto</town><town>Ottawa</town></towns>'),
+    (2, '<towns><town>Vancouver</town></towns>'),
+    (3, NULL);
+steps:
+  - sql: |
+      SELECT xmlexists('//town[text() = ''Toronto'']' PASSING BY VALUE '<towns><town>Toronto</town><town>Ottawa</town></towns>')
+    expect: rows
+    comment: doc example, true because a matching node exists
+  - sql: |
+      SELECT id, xmlexists('//town[text() = ''Toronto'']' PASSING BY REF doc) AS has_toronto FROM towns ORDER BY id
+    expect: rows
+    order: ordered
+    comment: BY REF is accepted; the NULL document gives a null result
+  - sql: |
+      SELECT id FROM towns WHERE xmlexists('//town[text() = ''Ottawa'']' PASSING doc BY VALUE) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: BY VALUE may follow the document expression
+  - sql: |
+      SELECT xmlexists('1 + 1' PASSING BY VALUE '<a/>') AS numeric_result
+    expect: rows
+    comment: any non-node-set value counts as a match, so a numeric result is true
+  - sql: |
+      SELECT xmlexists('count(//town)' PASSING BY VALUE '<a/>') AS zero_count
+    expect: rows
+    comment: a count of zero is still a non-empty value, so the result is true
+  - sql: |
+      SELECT xmlexists('//town' PASSING BY VALUE '<a/>') AS no_match
+    expect: rows
+    comment: an empty node-set gives false
+  - sql: |
+      SELECT xmlexists('//town' PASSING BY VALUE 'abc')
+    expect: error
+    sqlstate: 2200M
+    comment: a non-null context item must be a well-formed document

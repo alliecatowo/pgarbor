@@ -1,0 +1,37 @@
+# A multi-name list is one statement: if any name is missing, nothing in the list is dropped.
+id: cmd-drop-materialized-view.multi-name-atomic
+title: DROP MATERIALIZED VIEW with several names is all-or-nothing on a missing name
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, multi-object-drop]
+required_capabilities: [create-table, insert, select, create-materialized-view, drop-materialized-view, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (name [, ...])"
+sessions: [a]
+setup: |
+  CREATE TABLE ma_base (id int4);
+  INSERT INTO ma_base VALUES (1), (2);
+  CREATE MATERIALIZED VIEW ma_a AS SELECT id FROM ma_base;
+  CREATE MATERIALIZED VIEW ma_b AS SELECT id * 10 AS id10 FROM ma_base;
+steps:
+  - sql: |
+      DROP MATERIALIZED VIEW ma_a, ma_missing
+    expect: error
+    sqlstate: "42P01"
+    comment: the error for ma_missing aborts the statement before ma_a is dropped
+  - sql: |
+      SELECT to_regclass('ma_a') IS NOT NULL AS a_exists, to_regclass('ma_b') IS NOT NULL AS b_exists
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM ma_a ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP MATERIALIZED VIEW ma_a, ma_b
+    expect: ok
+  - sql: |
+      SELECT to_regclass('ma_a') IS NULL AS a_gone, to_regclass('ma_b') IS NULL AS b_gone
+    expect: rows
+    order: ordered

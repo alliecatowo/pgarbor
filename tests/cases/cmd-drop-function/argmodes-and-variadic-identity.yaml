@@ -1,0 +1,58 @@
+# DROP FUNCTION ignores OUT arguments and argument names; only IN, INOUT and VARIADIC inputs identify
+# the function. VARIADIC is matched by its array type. An OUT argument is not part of the identity,
+# so listing it yields 42883.
+id: cmd-drop-function.argmodes-and-variadic-identity
+title: OUT and argument names are ignored for identity; INOUT and VARIADIC inputs are matched
+family: cmd-drop-function
+tier: extended
+feature_ids: [drop-function, argmodes, out-parameters, inout-parameters, variadic-parameters, argument-names]
+required_capabilities: [create-function, drop-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (argmode and argname parameters)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION am1(IN x int, OUT y int) LANGUAGE sql AS 'select x'
+    expect: ok
+  - sql: |
+      DROP FUNCTION am1(z int)
+    expect: ok
+    comment: argument name z is ignored, and the OUT parameter is not listed
+  - sql: |
+      CREATE FUNCTION am2(INOUT a int) LANGUAGE sql AS 'select a'
+    expect: ok
+  - sql: |
+      DROP FUNCTION am2(int)
+    expect: ok
+    comment: INOUT counts as an input argument
+  - sql: |
+      CREATE FUNCTION am3(OUT a int) LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION am3()
+    expect: ok
+    comment: a function whose only parameter is OUT has an empty identity
+  - sql: |
+      CREATE FUNCTION am4(VARIADIC int[]) RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION am4(VARIADIC integer[])
+    expect: ok
+    comment: VARIADIC int[] is identified by its array type integer[]
+  - sql: |
+      CREATE FUNCTION am5(IN a int, OUT b int) LANGUAGE sql AS 'select a'
+    expect: ok
+  - sql: |
+      DROP FUNCTION am5(int, int)
+    expect: error
+    sqlstate: "42883"
+    comment: the identity is (int) only, so a second argument does not match
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'am5'
+    expect: rows
+    order: multiset
+    comment: 1 row, the failed drop left am5 in place
+  - sql: |
+      DROP FUNCTION am5(int)
+    expect: ok

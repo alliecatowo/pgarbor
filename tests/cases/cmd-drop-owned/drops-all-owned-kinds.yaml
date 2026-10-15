@@ -1,0 +1,57 @@
+# DROP OWNED removes every kind of owned object in the current database: schema with its contents, table with its
+# serial sequence and index, view, standalone sequence, composite type and SQL function. Other owners' objects stay.
+id: cmd-drop-owned.drops-all-owned-kinds
+title: "DROP OWNED removes tables, views, sequences, types, functions, and schemas owned by the role"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, schemas, views, sequences, types, functions]
+required_capabilities: [roles, drop-role, create-table, create-view, create-schema, create-type, create-function-sql, create-sequence, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-description"
+sessions: [a]
+setup: |
+  CREATE ROLE dka_r;
+  CREATE ROLE dka_keep;
+  CREATE SCHEMA dka_sc;
+  CREATE TABLE dka_sc.inner_t (id int4);
+  CREATE TYPE dka_sc.inner_ty AS (a int4);
+  CREATE FUNCTION dka_sc.inner_f() RETURNS int4 LANGUAGE sql AS $$ SELECT 1 $$;
+  ALTER SCHEMA dka_sc OWNER TO dka_r;
+  ALTER TABLE dka_sc.inner_t OWNER TO dka_r;
+  ALTER TYPE dka_sc.inner_ty OWNER TO dka_r;
+  ALTER FUNCTION dka_sc.inner_f() OWNER TO dka_r;
+  CREATE TABLE dka_t (id serial PRIMARY KEY, v int4);
+  ALTER TABLE dka_t OWNER TO dka_r;
+  CREATE VIEW dka_v AS SELECT v FROM dka_t;
+  ALTER VIEW dka_v OWNER TO dka_r;
+  CREATE SEQUENCE dka_seq;
+  ALTER SEQUENCE dka_seq OWNER TO dka_r;
+  CREATE TABLE dka_keep_t (a int4);
+  ALTER TABLE dka_keep_t OWNER TO dka_keep;
+steps:
+  - sql: |
+      SELECT relname, pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname LIKE 'dka%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: every dka object is listed before the drop, with its owner
+  - sql: |
+      DROP OWNED BY dka_r
+    expect: ok
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname LIKE 'dka%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the table, serial sequence, primary key index, view and standalone sequence are gone; dka_keep_t stays
+  - sql: |
+      SELECT count(*) AS schemas FROM pg_namespace WHERE nspname = 'dka_sc'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS types FROM pg_type WHERE typname = 'inner_ty'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS funcs FROM pg_proc WHERE proname = 'inner_f'
+    expect: rows
+    order: multiset

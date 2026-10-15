@@ -1,0 +1,44 @@
+# The documented NOT VALID then VALIDATE CONSTRAINT recipe: existing violations are tolerated until validated, new rows are checked at once.
+id: cmd-alter-table.fk-not-valid-validate
+title: "ADD FOREIGN KEY NOT VALID enforces new rows only; VALIDATE CONSTRAINT fails until the violation is removed"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, foreign-key, not-valid, validate-constraint, errors]
+required_capabilities: [create-table, alter-table, insert, delete, select, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: add a foreign key with the least impact; Notes: NOT VALID)"
+sessions: [a]
+setup: |
+  CREATE TABLE addresses (address text PRIMARY KEY);
+  INSERT INTO addresses VALUES ('1 Main'), ('2 Elm');
+  CREATE TABLE distributors (dist_id int4, address text);
+  INSERT INTO distributors VALUES (1, '1 Main'), (2, '9 Nowhere');
+steps:
+  - sql: |
+      ALTER TABLE distributors ADD CONSTRAINT distfk FOREIGN KEY (address) REFERENCES addresses (address) NOT VALID
+    expect: ok
+    comment: existing row (2, 9 Nowhere) is not checked
+  - sql: |
+      INSERT INTO distributors VALUES (3, '7 Nowhere')
+    expect: error
+    sqlstate: "23503"
+    comment: new rows are enforced immediately
+  - sql: |
+      ALTER TABLE distributors VALIDATE CONSTRAINT distfk
+    expect: error
+    sqlstate: "23503"
+    comment: validation finds the existing violating row
+  - sql: |
+      DELETE FROM distributors WHERE address = '9 Nowhere'
+    expect: ok
+  - sql: |
+      ALTER TABLE distributors VALIDATE CONSTRAINT distfk
+    expect: ok
+  - sql: |
+      SELECT convalidated FROM pg_constraint WHERE conname = 'distfk'
+    expect: rows
+  - sql: |
+      INSERT INTO distributors VALUES (4, '8 Nowhere')
+    expect: error
+    sqlstate: "23503"

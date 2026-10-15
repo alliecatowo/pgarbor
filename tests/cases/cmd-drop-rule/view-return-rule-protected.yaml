@@ -1,0 +1,31 @@
+# A view's _RETURN rule cannot be dropped with DROP RULE (it is required by the view); unquoted _RETURN folds to lowercase and is missing.
+id: cmd-drop-rule.view-return-rule-protected
+title: DROP RULE on a view's _RETURN rule fails with dependent_objects, and the unquoted name is not found
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-view, views, errors]
+required_capabilities: [create-table, create-view, drop-rule, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (rule name, table_name: table or view); PG18 errcodes 2BP01"
+sessions: [a]
+setup: |
+  CREATE TABLE vr_base (a int4, b text);
+  CREATE VIEW vr_v AS SELECT a, b FROM vr_base;
+  INSERT INTO vr_base VALUES (1, 'x');
+steps:
+  - sql: |
+      DROP RULE "_RETURN" ON vr_v
+    expect: error
+    sqlstate: "2BP01"
+    comment: the view's SELECT rule is required by the view
+  - sql: |
+      DROP RULE _RETURN ON vr_v
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted _RETURN folds to _return, which does not exist
+  - sql: |
+      SELECT a, b FROM vr_v
+    expect: rows
+    order: ordered
+    comment: the view still works

@@ -1,0 +1,37 @@
+# Two overloads share a name; ALTER AGGREGATE picks the one whose argument types match, and the other
+# overload keeps its name and behavior.
+id: cmd-alter-aggregate.overloads-by-signature
+title: "ALTER AGGREGATE renames only the overload with the given argument types"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, rename, aggregates, overloads]
+required_capabilities: [aggregates, create-aggregate, create-function, alter-aggregate, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#parameters (aggregate_signature identifies the function)"
+setup: |
+  CREATE FUNCTION ov_sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE FUNCTION ov_txt_sf(int8, text) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + length($2) $$;
+  CREATE AGGREGATE ov_avg(integer) (sfunc = ov_sf, stype = int8, initcond = '0');
+  CREATE AGGREGATE ov_avg(text) (sfunc = ov_txt_sf, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      ALTER AGGREGATE ov_avg(text) RENAME TO ov_txt
+    expect: ok
+  - sql: |
+      SELECT ov_avg(x) FROM generate_series(1, 3) AS g(x)
+    expect: rows
+    comment: the integer overload is untouched
+  - sql: |
+      SELECT ov_txt(s) FROM (VALUES ('ab'), ('cde')) AS v(s)
+    expect: rows
+    comment: the renamed text overload gives 2 plus 3
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname IN ('ov_avg', 'ov_txt') ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER AGGREGATE ov_avg(text) RENAME TO ov_txt2
+    expect: error
+    sqlstate: "42883"
+    comment: the text overload no longer lives under ov_avg

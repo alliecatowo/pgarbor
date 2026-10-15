@@ -1,0 +1,58 @@
+# ALL FUNCTIONS covers functions and aggregates but not procedures; ALL ROUTINES adds procedures; PROCEDURE and FUNCTION keywords reject the wrong kind.
+id: cmd-grant.routine-variants-and-all-routines
+title: GRANT EXECUTE with ALL FUNCTIONS, ALL ROUTINES, ROUTINE, PROCEDURE and FUNCTION keywords covers the documented kinds
+family: cmd-grant
+tier: core
+feature_ids: [grant, execute, functions, procedures, aggregates, routines, errors]
+required_capabilities: [create-function-sql, create-procedure, create-aggregate, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-objects (FUNCTION, PROCEDURE, ROUTINE and ALL ... IN SCHEMA)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_rt_r;
+  CREATE SCHEMA cgg_rt;
+  CREATE FUNCTION cgg_rt.f(int4) RETURNS int4 LANGUAGE sql AS 'SELECT $1 + 1';
+  CREATE PROCEDURE cgg_rt.p(int4) LANGUAGE sql AS 'SELECT $1';
+  CREATE AGGREGATE cgg_rt.agg(int4) (sfunc = int4pl, stype = int4);
+  REVOKE EXECUTE ON ALL ROUTINES IN SCHEMA cgg_rt FROM PUBLIC;
+steps:
+  - sql: |
+      GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA cgg_rt TO cgg_rt_r
+    expect: ok
+  - sql: |
+      SELECT p.proname, p.prokind, has_function_privilege('cgg_rt_r', p.oid, 'EXECUTE') AS can_exec
+        FROM pg_proc p
+       WHERE p.pronamespace = 'cgg_rt'::regnamespace
+       ORDER BY p.proname
+    expect: rows
+    order: ordered
+    comment: the aggregate and the plain function are granted, the procedure is not
+  - sql: |
+      GRANT EXECUTE ON ALL ROUTINES IN SCHEMA cgg_rt TO cgg_rt_r
+    expect: ok
+  - sql: |
+      SELECT p.proname, p.prokind, has_function_privilege('cgg_rt_r', p.oid, 'EXECUTE') AS can_exec
+        FROM pg_proc p
+       WHERE p.pronamespace = 'cgg_rt'::regnamespace
+       ORDER BY p.proname
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT EXECUTE ON PROCEDURE cgg_rt.f(int4) TO cgg_rt_r
+    expect: error
+    sqlstate: "42809"
+    comment: PROCEDURE syntax does not accept a plain function
+  - sql: |
+      GRANT EXECUTE ON FUNCTION cgg_rt.p(int4) TO cgg_rt_r
+    expect: error
+    sqlstate: "42809"
+    comment: FUNCTION syntax does not accept a procedure
+  - sql: |
+      GRANT EXECUTE ON FUNCTION cgg_rt.f(text) TO cgg_rt_r
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      GRANT EXECUTE ON ROUTINE cgg_rt.f TO cgg_rt_r
+    expect: ok
+    comment: without an argument list the name must identify a unique routine

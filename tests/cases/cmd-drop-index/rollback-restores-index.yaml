@@ -1,0 +1,37 @@
+# A plain DROP INDEX inside a transaction is transactional: ROLLBACK restores the index, COMMIT removes it.
+id: cmd-drop-index.rollback-restores-index
+title: DROP INDEX inside a transaction is undone by ROLLBACK and applied by COMMIT
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, transactions, rollback]
+required_capabilities: [create-table, create-index, select, transactions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (CONCURRENTLY caveats: regular DROP INDEX commands can be performed within a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE tickets (id int4 PRIMARY KEY, status text);
+  CREATE INDEX tickets_status_idx ON tickets (status);
+steps:
+  - sql: |
+      BEGIN;
+      DROP INDEX tickets_status_idx;
+      SELECT indexname FROM pg_indexes WHERE tablename = 'tickets' ORDER BY indexname;
+      ROLLBACK
+    expect: ok
+    comment: inside the block the index is already gone
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'tickets' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: after ROLLBACK the index exists again
+  - sql: |
+      BEGIN;
+      DROP INDEX tickets_status_idx;
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'tickets' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: after COMMIT only the primary key index remains

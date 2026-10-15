@@ -1,0 +1,40 @@
+# RETURNING names that do not resolve fail at parse or analysis time with the standard undefined-object SQLSTATEs.
+id: doc-dml-returning.error-returning-unknown-references
+title: RETURNING with unknown columns, relations, qualifiers or functions raises undefined-object errors
+family: doc-dml-returning
+tier: core
+feature_ids: [returning, insert, update, delete, returning-old-new, errors]
+required_capabilities: [create-table, insert, update, delete, select, returning, returning-old-new]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (RETURNING clause contents are the same as a SELECT command's output list)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4, b text);
+  INSERT INTO t VALUES (1, 'x');
+steps:
+  - sql: |
+      INSERT INTO t (a) VALUES (50) RETURNING zz
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column in RETURNING
+  - sql: |
+      INSERT INTO t (a) VALUES (50) RETURNING nosuch.col
+    expect: error
+    sqlstate: 42P01
+    comment: a qualifier that names no FROM-clause entry
+  - sql: |
+      DELETE FROM t WHERE a = 1 RETURNING old.nope
+    expect: error
+    sqlstate: "42703"
+    comment: old.* qualifier with an unknown column
+  - sql: |
+      INSERT INTO t (a) VALUES (61) RETURNING nosuch_fn(a)
+    expect: error
+    sqlstate: "42883"
+    comment: unknown function in RETURNING
+  - sql: |
+      SELECT a, b FROM t ORDER BY a
+    expect: rows
+    order: ordered
+    comment: rejected statements change nothing

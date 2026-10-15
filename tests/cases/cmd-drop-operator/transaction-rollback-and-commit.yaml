@@ -1,0 +1,44 @@
+# DROP OPERATOR is transactional: a rolled-back drop leaves the operator usable, a committed one stays dropped after reconnect.
+id: cmd-drop-operator.transaction-rollback-and-commit
+title: DROP OPERATOR inside a transaction is undone by ROLLBACK and persists after COMMIT and reconnect
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, transactions, rollback, commit]
+required_capabilities: [drop-operator, create-operator, create-function-sql, transactions, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-dropoperator (DROP OPERATOR removes the catalog entry); transactional DDL"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dtx_pow(integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 10 + $2 $$;
+  CREATE OPERATOR !^! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dtx_pow);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP OPERATOR !^! (integer, integer)
+    expect: ok
+  - sql: |
+      SELECT 2 !^! 3 AS inside
+    expect: error
+    sqlstate: "42883"
+    comment: inside the transaction the operator is gone
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT 2 !^! 3 AS after_rollback
+    expect: rows
+    comment: restored with its implementation, 23
+  - sql: |
+      BEGIN; DROP OPERATOR !^! (integer, integer); COMMIT
+    expect: ok
+  - reconnect: true
+  - sql: |
+      SELECT 2 !^! 3 AS after_commit
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT count(*) AS left_after FROM pg_operator WHERE oprname = '!^!' AND oprnamespace = 'public'::regnamespace
+    expect: rows

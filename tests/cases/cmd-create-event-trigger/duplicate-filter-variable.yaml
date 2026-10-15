@@ -1,0 +1,32 @@
+# Each filter variable may appear once; a second TAG condition is rejected even when it names different tags.
+id: cmd-create-event-trigger.duplicate-filter-variable
+title: A second TAG condition in the WHEN clause is rejected as a duplicate filter variable
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-tag-filter]
+required_capabilities: [event-triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE FUNCTION abort_any_command() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  BEGIN RAISE EXCEPTION 'command % is disabled', tg_tag; END; $$;
+steps:
+  - sql: |
+      CREATE EVENT TRIGGER e_dupe ON ddl_command_start
+        WHEN TAG IN ('CREATE TABLE') AND TAG IN ('DROP TABLE')
+        EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: filter variable "tag" specified more than once
+  - sql: |
+      CREATE EVENT TRIGGER e_dupe2 ON ddl_command_start
+        WHEN TAG IN ('CREATE TABLE') AND TAG IN ('CREATE TABLE')
+        EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: identical repeated condition is also a duplicate
+  - sql: |
+      SELECT count(*) AS created FROM pg_event_trigger
+    expect: rows
+    order: ordered

@@ -1,0 +1,44 @@
+# Malformed REINDEX syntax and option values are syntax errors (42601).
+id: cmd-reindex.option-errors
+title: Unknown REINDEX options, non-boolean option values and misplaced CONCURRENTLY are syntax errors
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-options, errors]
+required_capabilities: [create-table, create-index, select, reindex, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Synopsis; Parameters: boolean)"
+sessions: [a]
+setup: |
+  CREATE TABLE oe (id int4 PRIMARY KEY);
+  CREATE INDEX oe_id2 ON oe (id);
+steps:
+  - sql: |
+      REINDEX (BOGUS) TABLE oe
+    expect: error
+    sqlstate: "42601"
+    comment: unrecognized option
+  - sql: |
+      REINDEX (VERBOSE 2) TABLE oe
+    expect: error
+    sqlstate: "42601"
+    comment: VERBOSE needs a boolean, 2 is not one
+  - sql: |
+      REINDEX (CONCURRENTLY 'maybe') TABLE oe
+    expect: error
+    sqlstate: "42601"
+    comment: CONCURRENTLY needs a boolean
+  - sql: |
+      REINDEX TABLE
+    expect: error
+    sqlstate: "42601"
+    comment: the target name is required for TABLE
+  - sql: |
+      REINDEX SCHEMA public CONCURRENTLY
+    expect: error
+    sqlstate: "42601"
+    comment: CONCURRENTLY must come before the schema name
+  - sql: |
+      SELECT count(*) AS n FROM oe
+    expect: rows
+    comment: the table is untouched

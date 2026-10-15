@@ -1,0 +1,42 @@
+# ts_stat aggregates per lexeme: ndoc (documents containing it) and nentry (total occurrences),
+# optionally counting only occurrences whose weight is in the given set.
+id: doc-textsearch-features.ts-stat-word-statistics
+title: ts_stat reports per-lexeme document and occurrence counts, optionally filtered by weight
+family: doc-textsearch-features
+tier: core
+feature_ids: [ts-stat, setweight, tsvector-weights]
+required_capabilities: [create-table, insert, select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-statistics"
+setup: |
+  CREATE TABLE apod (id int4, vector tsvector);
+  INSERT INTO apod VALUES
+    (1, to_tsvector('english', 'the quick brown fox')),
+    (2, setweight(to_tsvector('english', 'quick dogs and foxes'), 'A')),
+    (3, to_tsvector('english', 'fox fox fox'));
+steps:
+  - sql: |
+      SELECT * FROM ts_stat('SELECT vector FROM apod')
+      ORDER BY nentry DESC, ndoc DESC, word
+      LIMIT 10
+    expect: rows
+    order: ordered
+    comment: documented form, top ten lexemes over all weights
+  - sql: |
+      SELECT * FROM ts_stat('SELECT vector FROM apod', 'ab')
+      ORDER BY nentry DESC, ndoc DESC, word
+      LIMIT 10
+    expect: rows
+    order: ordered
+    comment: counts only occurrences with weight A or B
+  - sql: |
+      SELECT * FROM ts_stat('SELECT vector FROM apod', 'c')
+    expect: rows
+    order: multiset
+    comment: no occurrence carries weight C, so the result is empty
+  - sql: |
+      SELECT * FROM ts_stat('SELECT id FROM apod')
+    expect: error
+    sqlstate: "22023"
+    comment: the query must yield exactly one tsvector column

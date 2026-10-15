@@ -1,0 +1,41 @@
+# DROP ROLE revokes memberships in both directions for the target, but the other roles are not dropped or otherwise affected.
+id: cmd-drop-role.membership-revoked-others-kept
+title: "DROP ROLE removes memberships of the target in both directions and leaves the other roles intact"
+family: cmd-drop-role
+tier: core
+feature_ids: [drop-role, role-membership, grant]
+required_capabilities: [roles, grant, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_role.sgml#sql-droprole-description (memberships are not removed first)"
+sessions: [a]
+setup: |
+  CREATE ROLE drr_mem_parent;
+  CREATE ROLE drr_mem_target;
+  CREATE ROLE drr_mem_child;
+  GRANT drr_mem_parent TO drr_mem_target;
+  GRANT drr_mem_target TO drr_mem_child;
+steps:
+  - sql: |
+      SELECT count(*) AS edges FROM pg_auth_members m
+        JOIN pg_roles r ON r.oid = m.roleid
+        WHERE r.rolname LIKE 'drr\_mem\_%'
+    expect: rows
+    comment: two memberships exist before the drop
+  - sql: |
+      DROP ROLE drr_mem_target
+    expect: ok
+  - sql: |
+      SELECT count(*) AS edges FROM pg_auth_members m
+        JOIN pg_roles r ON r.oid = m.roleid
+        WHERE r.rolname LIKE 'drr\_mem\_%'
+    expect: rows
+    comment: both memberships involving the target are gone
+  - sql: |
+      SELECT rolname FROM pg_roles WHERE rolname IN ('drr_mem_parent', 'drr_mem_child') ORDER BY rolname
+    expect: rows
+    order: ordered
+    comment: the other two roles still exist
+  - sql: |
+      DROP ROLE drr_mem_parent, drr_mem_child
+    expect: ok

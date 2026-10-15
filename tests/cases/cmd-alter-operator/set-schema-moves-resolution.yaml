@@ -1,0 +1,35 @@
+# After SET SCHEMA the operator resolves only through its new schema. Schema-qualified calls use the new name,
+# and the old qualified name no longer finds it.
+id: cmd-alter-operator.set-schema-moves-resolution
+title: "ALTER OPERATOR SET SCHEMA moves the operator so only the new qualified name resolves"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, set-schema, namespaces, operator-resolution]
+required_capabilities: [alter-operator, create-operator, create-function-sql, create-schema, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#synopsis (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_mv_eq(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 = $2 $$;
+  CREATE OPERATOR === (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_mv_eq);
+  CREATE SCHEMA cmd_ao_dst2;
+steps:
+  - sql: |
+      ALTER OPERATOR === (int8, int8) SET SCHEMA cmd_ao_dst2
+    expect: ok
+  - sql: |
+      SELECT 2::int8 OPERATOR(cmd_ao_dst2.===) 2::int8 AS equal
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 2::int8 OPERATOR(public.===) 2::int8 AS equal
+    expect: error
+    sqlstate: "42883"
+    comment: the operator no longer lives in public
+  - sql: |
+      SELECT n.nspname AS schema_name
+      FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace
+      WHERE o.oprname = '===' AND o.oprleft = 'int8'::regtype AND o.oprright = 'int8'::regtype
+    expect: rows
+    order: ordered

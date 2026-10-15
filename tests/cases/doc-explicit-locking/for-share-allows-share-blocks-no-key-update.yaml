@@ -1,0 +1,49 @@
+# FOR SHARE locks are shared with each other but conflict with FOR NO KEY UPDATE.
+id: doc-explicit-locking.for-share-allows-share-blocks-no-key-update
+title: Concurrent FOR SHARE locks coexist while FOR NO KEY UPDATE waits for them
+family: doc-explicit-locking
+tier: core
+feature_ids: [select-for-share, row-locks, transactions, multi-session]
+required_capabilities: [create-table, insert, select, row-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-rows (FOR SHARE; conflicting row-level lock table)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t WHERE id = 1 FOR SHARE
+    expect: rows
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM t WHERE id = 1 FOR SHARE
+    expect: rows
+    comment: FOR SHARE does not conflict with FOR SHARE
+  - session: b
+    sql: |
+      SELECT id, v FROM t WHERE id = 1 FOR NO KEY UPDATE
+    async: true
+    expect_blocked: true
+    comment: FOR NO KEY UPDATE conflicts with FOR SHARE
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok

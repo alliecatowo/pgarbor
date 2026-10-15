@@ -1,0 +1,73 @@
+# LOOP with EXIT WHEN, labeled EXIT out of nested loops, EXIT of a labeled BEGIN block, and unlabeled EXIT rejected at creation.
+id: doc-plpgsql-control-structures.loop-exit-labels-and-block
+title: "EXIT WHEN ends a LOOP, labeled EXIT leaves nested loops or a labeled block; unlabeled EXIT in a block is 42601"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, loop, exit, labels, control-flow, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Simple Loops: EXIT)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION first_pair() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE i int; j int; found_text text := 'none';
+  BEGIN
+    <<outer_l>>
+    FOR i IN 1..5 LOOP
+      FOR j IN 1..5 LOOP
+        IF i * j = 12 THEN
+          found_text := i || 'x' || j;
+          EXIT outer_l;
+        END IF;
+      END LOOP;
+    END LOOP;
+    RETURN found_text;
+  END $$;
+  CREATE FUNCTION loop_until(lim int) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE n int := 0;
+  BEGIN
+    LOOP
+      n := n + 1;
+      EXIT WHEN n >= lim;
+    END LOOP;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION block_exit(stocks int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r text := 'start';
+  BEGIN
+    <<ablock>>
+    BEGIN
+      IF stocks > 100000 THEN
+        EXIT ablock;
+      END IF;
+      r := 'computed';
+    END;
+    RETURN r;
+  END $$;
+steps:
+  - sql: |
+      SELECT first_pair() AS found
+    expect: rows
+    comment: labeled EXIT leaves both loops at the first product equal to 12
+  - sql: |
+      SELECT loop_until(3) AS three, loop_until(0) AS zero
+    expect: rows
+    comment: the LOOP body always runs once before EXIT WHEN is tested
+  - sql: |
+      SELECT block_exit(5) AS small, block_exit(200000) AS big
+    expect: rows
+    comment: EXIT of a labeled block skips the rest of the block only
+  - sql: |
+      CREATE FUNCTION bad_exit_in_block() RETURNS int LANGUAGE plpgsql AS $$
+      DECLARE r int := 0;
+      BEGIN
+        BEGIN
+          r := 1;
+          EXIT;
+        END;
+        RETURN r;
+      END $$
+    expect: error
+    sqlstate: "42601"
+    comment: an unlabeled EXIT never matches a BEGIN block and is rejected when the function is created

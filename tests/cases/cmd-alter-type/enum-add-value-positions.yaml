@@ -1,0 +1,41 @@
+# ALTER TYPE ... ADD VALUE places a new label AFTER, BEFORE, or at the end of the sort order; comparisons and ORDER BY follow that order.
+id: cmd-alter-type.enum-add-value-positions
+title: "ADD VALUE with AFTER, BEFORE and default placement sets the enum sort order"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, enum-type, enum-add-value, enum-sort-order]
+required_capabilities: [create-type, alter-type, enum-type, create-table, insert, select, order-by]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (ADD VALUE [ IF NOT EXISTS ] [ BEFORE | AFTER ]; example: ALTER TYPE colors ADD VALUE 'orange' AFTER 'red')"
+sessions: [a]
+setup: |
+  CREATE TYPE colors AS ENUM ('red', 'green', 'blue');
+  CREATE TABLE paint (id int PRIMARY KEY, c colors);
+  INSERT INTO paint VALUES (1, 'red'), (2, NULL), (3, 'blue');
+steps:
+  - sql: |
+      ALTER TYPE colors ADD VALUE 'orange' AFTER 'red'
+    expect: ok
+    comment: documented example; lands between red and green
+  - sql: |
+      ALTER TYPE colors ADD VALUE 'black' BEFORE 'red'
+    expect: ok
+    comment: BEFORE places the label at the start of the order
+  - sql: |
+      ALTER TYPE colors ADD VALUE 'white'
+    expect: ok
+    comment: no placement clause appends to the end of the list
+  - sql: |
+      SELECT v, n FROM unnest(enum_range(NULL::colors)) WITH ORDINALITY AS t(v, n) ORDER BY n
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, c FROM paint ORDER BY c NULLS LAST, id
+    expect: rows
+    order: ordered
+    comment: NULL is not an enum label and sorts last here; stored labels keep their rows
+  - sql: |
+      SELECT 'orange'::colors < 'green'::colors AS orange_before_green, 'white'::colors > 'blue'::colors AS white_after_blue
+    expect: rows
+    comment: comparisons use the new positions, not alphabetical order

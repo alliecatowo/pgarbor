@@ -1,0 +1,49 @@
+# LOCAL checks only the view's own WHERE; CASCADED also checks underlying views. RESET removes the check.
+id: cmd-alter-view.check-option-local-cascaded
+title: "ALTER VIEW check_option local and cascaded differ for stacked views; RESET removes the check"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, check-option, updatable-views, view-options]
+required_capabilities: [create-table, insert, select, create-view, alter-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (SET (check_option): local | cascaded)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_co (id int4, v int4);
+  CREATE VIEW av_co1 AS SELECT id, v FROM av_co WHERE v > 0;
+  CREATE VIEW av_co2 AS SELECT id, v FROM av_co1;
+steps:
+  - sql: |
+      ALTER VIEW av_co2 SET (check_option = cascaded)
+    expect: ok
+  - sql: |
+      INSERT INTO av_co2 VALUES (1, -1)
+    expect: error
+    sqlstate: "44000"
+    comment: cascaded check reaches av_co1's v > 0 condition
+  - sql: |
+      ALTER VIEW av_co2 SET (check_option = local)
+    expect: ok
+  - sql: |
+      INSERT INTO av_co2 VALUES (2, -2)
+    expect: ok
+    comment: local checks only av_co2's own (empty) condition, so the row passes av_co1's condition unchecked
+  - sql: |
+      ALTER VIEW av_co1 SET (check_option = local)
+    expect: ok
+  - sql: |
+      INSERT INTO av_co1 VALUES (3, -3)
+    expect: error
+    sqlstate: "44000"
+  - sql: |
+      ALTER VIEW av_co1 RESET (check_option)
+    expect: ok
+  - sql: |
+      INSERT INTO av_co1 VALUES (4, -4)
+    expect: ok
+    comment: with check_option reset, the row is accepted
+  - sql: |
+      SELECT id, v FROM av_co ORDER BY id
+    expect: rows
+    order: ordered

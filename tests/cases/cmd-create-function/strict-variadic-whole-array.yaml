@@ -1,0 +1,32 @@
+# For a STRICT VARIADIC function, strictness tests the variadic array as a whole. Null elements
+# inside a non-null array still call the function; a NULL array does not.
+id: cmd-create-function.strict-variadic-whole-array
+title: STRICT with VARIADIC checks the whole array for NULL, not its elements
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, strict, variadic]
+required_capabilities: [create-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-notes (STRICT with VARIADIC)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION va(VARIADIC arr int[]) RETURNS int LANGUAGE sql STRICT AS 'select coalesce(array_length($1, 1), 0)'
+    expect: ok
+  - sql: |
+      SELECT va(VARIADIC NULL::int[]) IS NULL AS whole_null
+    expect: rows
+    comment: true; the array as a whole is NULL, so the body is skipped
+  - sql: |
+      SELECT va(VARIADIC ARRAY[1, NULL]) AS elems_null
+    expect: rows
+    comment: 2; the body runs and counts the NULL element
+  - sql: |
+      SELECT va(VARIADIC ARRAY[]::int[]) AS empty
+    expect: rows
+    comment: "0"
+  - sql: |
+      SELECT proisstrict, provariadic FROM pg_proc WHERE proname = 'va'
+    expect: rows
+    comment: proisstrict true; provariadic 23 (int4 element type)

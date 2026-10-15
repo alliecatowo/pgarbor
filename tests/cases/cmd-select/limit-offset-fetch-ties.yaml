@@ -1,0 +1,64 @@
+# LIMIT/OFFSET/FETCH boundaries: ALL and NULL mean no limit, zero and past-end values, WITH TIES, and negative-value errors.
+id: cmd-select.limit-offset-fetch-ties
+title: LIMIT, OFFSET and FETCH boundary values, WITH TIES inclusion, and negative count errors
+family: cmd-select
+tier: core
+feature_ids: [select, limit, offset, fetch-first, with-ties]
+required_capabilities: [create-table, insert, select, order-by, limit]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-limit and ref/select.sgml#sql-limit-and-offset (compatibility)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (n int4);
+  INSERT INTO t VALUES (5), (1), (2), (2), (4);
+steps:
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT ALL
+    expect: rows
+    order: ordered
+    comment: LIMIT ALL returns every row
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT NULL
+    expect: rows
+    order: ordered
+    comment: a NULL limit is the same as no limit
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT 0
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT 2 OFFSET 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT n FROM t ORDER BY n OFFSET 3
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT n FROM t ORDER BY n OFFSET 10
+    expect: rows
+    order: multiset
+    comment: an offset past the end yields no rows and no error
+  - sql: |
+      SELECT n FROM t ORDER BY n FETCH FIRST 2 ROWS ONLY
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT n FROM t ORDER BY n FETCH FIRST 2 ROWS WITH TIES
+    expect: rows
+    order: ordered
+    comment: the second 2 ties with the last row returned, so it is included
+  - sql: |
+      SELECT n FROM t FETCH FIRST 1 ROW WITH TIES
+    expect: error
+    sqlstate: "42601"
+    comment: WITH TIES requires an ORDER BY clause
+  - sql: |
+      SELECT n FROM t ORDER BY n LIMIT -1
+    expect: error
+    sqlstate: "2201W"
+  - sql: |
+      SELECT n FROM t ORDER BY n OFFSET -1
+    expect: error
+    sqlstate: "2201X"

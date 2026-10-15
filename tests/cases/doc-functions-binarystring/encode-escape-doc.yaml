@@ -1,0 +1,38 @@
+# escape format: zero bytes become \nnn, backslashes are doubled, decode rejects a backslash not followed by a backslash or three octal digits.
+id: doc-functions-binarystring.encode-escape-doc
+title: escape encode and decode follow the documented octal and backslash rules
+family: doc-functions-binarystring
+tier: core
+feature_ids: [bytea, encode, decode, escape-format]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-binarystring-encodings (escape format)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT encode('a\000b'::bytea, 'escape')
+    expect: rows
+    comment: zero byte becomes the octal escape \000
+  - sql: |
+      SELECT encode('\x00ff'::bytea, 'escape')
+    expect: rows
+    comment: zero byte and high-bit byte both become octal escapes, \000\377
+  - sql: |
+      SELECT encode('a\\b'::bytea, 'escape')
+    expect: rows
+    comment: a backslash byte is doubled on output
+  - sql: |
+      SELECT decode('a\\b', 'escape')
+    expect: rows
+    comment: a doubled backslash decodes to one backslash byte, \x615c62
+  - sql: |
+      SELECT decode('a\12b', 'escape')
+    expect: error
+    sqlstate: "22P02"
+    comment: a backslash followed by fewer than three octal digits is invalid
+  - sql: |
+      SELECT decode('a\b', 'escape')
+    expect: error
+    sqlstate: "22P02"
+    comment: a lone backslash followed by a non-digit is invalid

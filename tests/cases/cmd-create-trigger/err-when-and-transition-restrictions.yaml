@@ -1,0 +1,64 @@
+# Documented restrictions on WHEN conditions and transition relations, each rejected with its sqlstate.
+id: cmd-create-trigger.err-when-and-transition-restrictions
+title: WHEN conditions and REFERENCING transition relations reject the documented forms
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, when-condition, transition-tables, errors, instead-of-trigger]
+required_capabilities: [create-table, create-view, insert, update, select, plpgsql, triggers, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER parameters (condition, REFERENCING) and Compatibility"
+setup: |
+  CREATE TABLE t (id int, v int);
+  CREATE VIEW vw AS SELECT id FROM t;
+  CREATE FUNCTION trg_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER w1 BEFORE INSERT ON t FOR EACH ROW WHEN (NEW.id = (SELECT 1)) EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "0A000"
+    comment: WHEN conditions cannot contain subqueries
+  - sql: |
+      CREATE TRIGGER w2 AFTER INSERT ON t FOR EACH ROW WHEN (OLD.id > 0) EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42P17"
+    comment: an INSERT trigger cannot reference OLD
+  - sql: |
+      CREATE TRIGGER w3 BEFORE INSERT ON t FOR EACH ROW WHEN (NEW.ctid IS NOT NULL) EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "0A000"
+    comment: a BEFORE trigger WHEN cannot examine NEW system columns
+  - sql: |
+      CREATE TRIGGER w4 INSTEAD OF INSERT ON vw FOR EACH ROW WHEN (true) EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "0A000"
+    comment: INSTEAD OF triggers do not support WHEN
+  - sql: |
+      CREATE TRIGGER w5 BEFORE INSERT ON t FOR EACH STATEMENT WHEN (NEW.id = 1) EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42P17"
+    comment: statement-level WHEN cannot reference column values
+  - sql: |
+      CREATE TRIGGER w6 AFTER UPDATE OF v ON t REFERENCING NEW TABLE AS n FOR EACH STATEMENT EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "0A000"
+    comment: transition tables cannot be combined with a column list
+  - sql: |
+      CREATE TRIGGER w7 AFTER INSERT OR UPDATE ON t REFERENCING NEW TABLE AS n FOR EACH STATEMENT EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "0A000"
+    comment: transition tables require a single event
+  - sql: |
+      CREATE TRIGGER w8 AFTER INSERT ON t REFERENCING OLD TABLE AS o FOR EACH STATEMENT EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42P17"
+    comment: OLD TABLE only for UPDATE or DELETE triggers
+  - sql: |
+      CREATE TRIGGER w9 AFTER INSERT ON t REFERENCING NEW TABLE AS n NEW TABLE AS m FOR EACH STATEMENT EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42P17"
+    comment: NEW TABLE may be specified only once
+  - sql: |
+      SELECT tgname FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

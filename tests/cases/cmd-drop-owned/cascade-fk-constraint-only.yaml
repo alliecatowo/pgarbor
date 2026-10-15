@@ -1,0 +1,43 @@
+# CASCADE drops the dependent foreign key constraint of another owner's table, but not that table itself.
+id: cmd-drop-owned.cascade-fk-constraint-only
+title: "DROP OWNED CASCADE removes a dependent foreign key constraint but keeps the referencing table"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, cascade, foreign-key, dependencies]
+required_capabilities: [roles, drop-role, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-parameters (CASCADE)"
+sessions: [a]
+setup: |
+  CREATE ROLE dro2_owner;
+  CREATE ROLE dro2_other;
+  CREATE TABLE dro2_parent (id int4 PRIMARY KEY);
+  ALTER TABLE dro2_parent OWNER TO dro2_owner;
+  CREATE TABLE dro2_child (id int4 REFERENCES dro2_parent (id));
+  ALTER TABLE dro2_child OWNER TO dro2_other;
+  INSERT INTO dro2_parent VALUES (1), (2);
+  INSERT INTO dro2_child VALUES (1);
+steps:
+  - sql: |
+      DROP OWNED BY dro2_owner CASCADE
+    expect: ok
+    comment: the foreign key constraint on dro2_child is dropped, and dro2_child itself is kept
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname LIKE 'dro2%' AND relkind = 'r' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only the referencing table of the other owner remains
+  - sql: |
+      SELECT count(*) AS fk FROM pg_constraint WHERE contype = 'f' AND conrelid = 'dro2_child'::regclass
+    expect: rows
+    order: multiset
+    comment: no foreign key remains on dro2_child
+  - sql: |
+      INSERT INTO dro2_child VALUES (99)
+    expect: ok
+    comment: without the constraint, values no longer need a matching parent row
+  - sql: |
+      SELECT id FROM dro2_child ORDER BY id
+    expect: rows
+    order: ordered

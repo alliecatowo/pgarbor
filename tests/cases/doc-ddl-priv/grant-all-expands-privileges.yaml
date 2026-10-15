@@ -1,0 +1,37 @@
+# GRANT ALL grants every privilege relevant to the object type; REVOKE ALL removes them again.
+id: doc-ddl-priv.grant-all-expands-privileges
+title: GRANT ALL on a table grants every table privilege and REVOKE ALL removes them
+family: doc-ddl-priv
+tier: core
+feature_ids: [grant, revoke, privileges, select, insert, update, delete, truncate, errors]
+required_capabilities: [create-table, select, roles, errors, truncate]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (writing ALL in place of a specific privilege grants all privileges relevant for the object type)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_ga_admin;
+  CREATE TABLE ga_t (a int4);
+  INSERT INTO ga_t VALUES (1);
+steps:
+  - sql: |
+      GRANT ALL ON ga_t TO ddp_ga_admin
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('ddp_ga_admin', 'ga_t', 'SELECT') AS s, has_table_privilege('ddp_ga_admin', 'ga_t', 'INSERT') AS i, has_table_privilege('ddp_ga_admin', 'ga_t', 'UPDATE') AS u, has_table_privilege('ddp_ga_admin', 'ga_t', 'DELETE') AS d, has_table_privilege('ddp_ga_admin', 'ga_t', 'TRUNCATE') AS tr, has_table_privilege('ddp_ga_admin', 'ga_t', 'REFERENCES') AS ref, has_table_privilege('ddp_ga_admin', 'ga_t', 'TRIGGER') AS trg, has_table_privilege('ddp_ga_admin', 'ga_t', 'MAINTAIN') AS m
+    expect: rows
+    order: multiset
+    comment: every table privilege, including MAINTAIN, is reported as held
+  - sql: |
+      REVOKE ALL ON ga_t FROM ddp_ga_admin
+    expect: ok
+  - sql: |
+      SET ROLE ddp_ga_admin
+    expect: ok
+  - sql: |
+      SELECT a FROM ga_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

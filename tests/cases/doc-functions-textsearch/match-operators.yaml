@@ -1,0 +1,41 @@
+# The @@ match operator in both argument orders, the text-argument form, and non-matching queries.
+id: doc-functions-textsearch.match-operators
+title: tsvector @@ tsquery matches in either order, and text @@ tsquery implicitly calls to_tsvector
+family: doc-functions-textsearch
+tier: core
+feature_ids: [match-operator, to-tsvector, to-tsquery, text-search-match]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-textsearch (Text Search Operators table, @@ rows)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_tsvector('fat cats ate rats') @@ to_tsquery('cat & rat') AS fwd,
+             to_tsquery('cat & rat') @@ to_tsvector('fat cats ate rats') AS rev
+    expect: rows
+    comment: the documented example; both argument orders return true
+  - sql: |
+      SELECT 'fat cats ate rats' @@ to_tsquery('cat & rat') AS text_form
+    expect: rows
+    comment: text @@ tsquery implicitly applies to_tsvector with the default configuration
+  - sql: |
+      SELECT to_tsvector('english', 'fat cats ate rats') @@ to_tsquery('english', 'cat & dog') AS no_match,
+             to_tsvector('english', 'fat cats ate rats') @@ to_tsquery('english', 'cat | dog') AS any_match
+    expect: rows
+  - sql: |
+      SELECT to_tsvector('english', 'Fat Cats') @@ to_tsquery('english', 'CAT') AS case_folded
+    expect: rows
+    comment: lexemes are normalized by the dictionary, so case and stemming do not matter
+  - sql: |
+      SELECT to_tsvector('english', NULL::text) @@ to_tsquery('english', 'cat') AS null_vector,
+             to_tsvector('english', 'cat') @@ NULL::tsquery AS null_query
+    expect: rows
+    comment: a NULL operand makes the match NULL, not false
+  - sql: |
+      SELECT id FROM (VALUES (1, 'the quick brown fox'), (2, 'lazy dogs sleep'), (3, 'foxes run fast')) AS d(id, body)
+      WHERE to_tsvector('english', body) @@ to_tsquery('english', 'fox')
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: stemming makes 'foxes' match 'fox'

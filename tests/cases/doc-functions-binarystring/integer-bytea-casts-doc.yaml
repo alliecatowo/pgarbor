@@ -1,0 +1,42 @@
+# Casts between integers and bytea: two's complement, most significant byte first, with an error when the bytea is too long.
+id: doc-functions-binarystring.integer-bytea-casts-doc
+title: integer to bytea and bytea to integer casts use big-endian two's complement per the docs
+family: doc-functions-binarystring
+tier: core
+feature_ids: [bytea, casts, integer, smallint, bigint]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-binarystring-encodings (integer casts to and from bytea, the Some examples table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT 1234::smallint::bytea
+    expect: rows
+    comment: doc example, \x04d2
+  - sql: |
+      SELECT cast(1234 AS bytea), cast(-1234 AS bytea)
+    expect: rows
+    comment: doc examples, \x000004d2 and \xfffffb2e (4-byte integer, two's complement)
+  - sql: |
+      SELECT '\x8000'::bytea::smallint, '\x8000'::bytea::integer
+    expect: rows
+    comment: doc examples, -32768 and 32768
+  - sql: |
+      SELECT '\x12'::bytea::integer, '\x0012'::bytea::integer
+    expect: rows
+    comment: shorter-than-width bytea is accepted; 18 in both cases
+  - sql: |
+      SELECT '\x1234567890'::bytea::bigint
+    expect: rows
+    comment: five bytes fit in bigint
+  - sql: |
+      SELECT '\x12345678'::bytea::smallint
+    expect: error
+    sqlstate: "22003"
+    comment: bytea longer than the target width is out of range
+  - sql: |
+      SELECT '\x1234567890'::bytea::integer
+    expect: error
+    sqlstate: "22003"
+    comment: five bytes overflow integer

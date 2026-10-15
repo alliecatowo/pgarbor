@@ -1,0 +1,32 @@
+# CREATE STATISTICS only defines the object; the tracked data appears after ANALYZE, so before it the object is listed without data.
+id: cmd-create-statistics.no-stats-data-until-analyze
+title: Statistics definition exists before ANALYZE, but its data is only populated by ANALYZE
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, analyze, catalog-introspection]
+required_capabilities: [create-table, insert, extended-statistics, catalog-introspection, analyze]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Description: tracking data; Notes)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_lazy (a int, b int);
+  INSERT INTO cs_lazy SELECT i % 4, i % 4 FROM generate_series(1, 40) s(i);
+steps:
+  - sql: |
+      CREATE STATISTICS cs_lazy_s ON a, b FROM cs_lazy
+    expect: ok
+  - sql: |
+      SELECT s.stxname, (d.stxoid IS NOT NULL) AS has_data FROM pg_statistic_ext s LEFT JOIN pg_statistic_ext_data d ON d.stxoid = s.oid WHERE s.stxname = 'cs_lazy_s'
+    expect: rows
+    comment: definition is present, no data row yet
+  - sql: |
+      ANALYZE cs_lazy
+    expect: ok
+  - sql: |
+      SELECT s.stxname, (d.stxoid IS NOT NULL) AS has_data FROM pg_statistic_ext s LEFT JOIN pg_statistic_ext_data d ON d.stxoid = s.oid WHERE s.stxname = 'cs_lazy_s'
+    expect: rows
+    comment: ANALYZE populates the data row
+  - sql: |
+      SELECT statistics_name, n_distinct::text FROM pg_stats_ext WHERE statistics_name = 'cs_lazy_s'
+    expect: rows

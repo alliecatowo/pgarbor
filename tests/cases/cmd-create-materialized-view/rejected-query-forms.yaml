@@ -1,0 +1,36 @@
+id: cmd-create-materialized-view.rejected-query-forms
+title: Non-query commands and TEMP materialized views are rejected at parse time
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, errors, temp-tables]
+required_capabilities: [create-table, insert, select, create-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (query, Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_dml AS INSERT INTO t VALUES (1) RETURNING id
+    expect: error
+    sqlstate: "42601"
+    comment: only SELECT, TABLE or VALUES are allowed
+  - session: a
+    sql: |
+      CREATE TEMP MATERIALIZED VIEW mv_temp AS SELECT 1 AS one
+    expect: error
+    sqlstate: "42601"
+    comment: no temporary materialized views
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname IN ('mv_dml', 'mv_temp')
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: rejected INSERT did not run

@@ -1,0 +1,39 @@
+# Negative scale rounds left of the decimal point; scale larger than precision allows only fractions.
+id: doc-datatype-numeric.numeric-negative-and-excess-scale
+title: Numeric columns with negative scale and with scale greater than precision round and bound as documented
+family: doc-datatype-numeric
+tier: extended
+feature_ids: [numeric, typmod, negative-scale, rounding, errors]
+required_capabilities: [create-table, insert, select, errors, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-numeric-decimal"
+sessions: [a]
+setup: |
+  CREATE TABLE tneg (v numeric(2,-3));
+  CREATE TABLE tsc (v numeric(3,5));
+steps:
+  - sql: |
+      INSERT INTO tneg VALUES (12345), (-99000), (99000), (1499)
+    expect: ok
+  - sql: |
+      SELECT v FROM tneg ORDER BY v
+    expect: rows
+    order: ordered
+    comment: values round to the nearest thousand
+  - sql: |
+      INSERT INTO tneg VALUES (99500)
+    expect: error
+    sqlstate: "22003"
+    comment: rounds to 100000, beyond the 10^5 bound
+  - sql: |
+      INSERT INTO tsc VALUES (0.00999), (-0.00999), (0.000004)
+    expect: ok
+  - sql: |
+      SELECT v FROM tsc ORDER BY v
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO tsc VALUES (0.01)
+    expect: error
+    sqlstate: "22003"

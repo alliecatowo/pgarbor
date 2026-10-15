@@ -1,0 +1,31 @@
+# IF EXISTS is accepted by the grammar but is not in this reference page's synopsis; present object is altered, missing one is skipped with a notice.
+id: cmd-alter-statistics.set-statistics-if-exists
+title: "ALTER STATISTICS IF EXISTS alters a present object and skips a missing one"
+family: cmd-alter-statistics
+tier: extended
+feature_ids: [alter-statistics, if-exists, statistics-target, notices]
+required_capabilities: [create-table, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 gram.y AlterStatisticsStmt (IF EXISTS); not in doc/src/sgml/ref/alter_statistics.sgml synopsis"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_ie (a int, b int);
+  CREATE STATISTICS ast_ie_s1 (ndistinct) ON a, b FROM ast_ie;
+steps:
+  - sql: |
+      ALTER STATISTICS IF EXISTS ast_ie_s1 SET STATISTICS 42
+    expect: ok
+  - sql: |
+      SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ast_ie_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS IF EXISTS ast_ie_nosuch SET STATISTICS 10
+    expect: ok
+    comment: emits NOTICE 00000 statistics object does not exist, skipping
+  - sql: |
+      ALTER STATISTICS ast_ie_nosuch SET STATISTICS 10
+    expect: error
+    sqlstate: "42704"
+    comment: without IF EXISTS the same command errors

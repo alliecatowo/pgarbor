@@ -1,0 +1,26 @@
+# CREATE INDEX CONCURRENTLY works outside a transaction block and leaves a valid, usable index.
+id: cmd-create-index.concurrently-basic
+title: CREATE INDEX CONCURRENTLY outside a transaction builds a valid index with the same results
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, concurrently, index-validity]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Building Indexes Concurrently; Examples: CREATE INDEX CONCURRENTLY sales_quantity_index ON sales_table (quantity))"
+sessions: [a]
+setup: |
+  CREATE TABLE sales_table (id int4 PRIMARY KEY, quantity int4);
+  INSERT INTO sales_table VALUES (1, 10), (2, 20), (3, 10);
+steps:
+  - sql: |
+      CREATE INDEX CONCURRENTLY sales_quantity_index ON sales_table (quantity)
+    expect: ok
+  - sql: |
+      SELECT indisvalid, indisready FROM pg_index WHERE indexrelid = 'sales_quantity_index'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, quantity FROM sales_table WHERE quantity = 10 ORDER BY id
+    expect: rows
+    order: ordered

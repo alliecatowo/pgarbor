@@ -1,0 +1,61 @@
+# Session-level exclusive advisory locks: reentrancy, conflicts with other sessions, blocking acquire
+# that succeeds once the holder releases every level.
+id: doc-functions-admin.advisory-lock-exclusive
+title: Session-level advisory locks are reentrant and block other sessions until fully released
+family: doc-functions-admin
+tier: core
+feature_ids: [advisory-locks, pg-advisory-lock, pg-try-advisory-lock, pg-advisory-unlock]
+required_capabilities: [select, advisory-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-advisory-locks (session-level locks stack; each unlock releases one level)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS first_acquire
+    expect: rows
+  - session: a
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS second_acquire
+    expect: rows
+    comment: the same session may acquire the lock again and stacks a level
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS other_session
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock_shared(7) AS shared_conflicts
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_lock(7)
+    async: true
+    expect_blocked: true
+    comment: blocking acquire waits while session a holds the lock
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(7) AS release_one_level
+    expect: rows
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(7) AS release_last_level
+    expect: rows
+  - session: b
+    wait: true
+    expect: rows
+    comment: b acquires once a has released every level
+  - session: a
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS now_blocked
+    expect: rows
+    comment: a cannot acquire while b holds it
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock(7) AS b_release
+    expect: rows
+  - session: a
+    sql: |
+      SELECT pg_try_advisory_lock(7) AS a_after_release
+    expect: rows

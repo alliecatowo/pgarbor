@@ -1,0 +1,52 @@
+# Documented call stack CALL proc -> SELECT func -> CALL proc3: the innermost procedure cannot control transactions.
+id: doc-plpgsql-transactions.commit-via-select-nested-call-2d000
+title: Procedure with COMMIT called through a function reached by SELECT fails with 2D000
+family: doc-plpgsql-transactions
+tier: core
+feature_ids: [plpgsql, procedures, functions, commit, errors, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, create-procedure, create-function, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (x int4);
+  INSERT INTO test2 VALUES (1), (2), (3);
+  CREATE TABLE test1 (a int4);
+steps:
+  - sql: |
+      CREATE PROCEDURE transaction_test2()
+      LANGUAGE plpgsql
+      AS $$
+      DECLARE
+          r RECORD;
+      BEGIN
+          FOR r IN SELECT * FROM test2 ORDER BY x LOOP
+              INSERT INTO test1 (a) VALUES (r.x);
+              COMMIT;
+          END LOOP;
+      END;
+      $$
+    expect: ok
+  - sql: |
+      CREATE FUNCTION func2() RETURNS int4 LANGUAGE plpgsql AS $$
+      BEGIN
+          CALL transaction_test2();
+          RETURN 1;
+      END
+      $$
+    expect: ok
+  - sql: |
+      DO $$
+      BEGIN
+          PERFORM func2();
+      END;
+      $$
+    expect: error
+    sqlstate: "2D000"
+    comment: DO -> SELECT func2() -> CALL proc3 is a call stack with an intervening SELECT
+  - sql: |
+      SELECT count(*) FROM test1
+    expect: rows
+    order: ordered
+    comment: the failed COMMIT rolled back the first insert; nothing persisted

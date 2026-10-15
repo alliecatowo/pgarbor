@@ -1,0 +1,58 @@
+# Two SERIALIZABLE transactions read the same predicate and write disjoint rows; the second write is canceled with 40001 so the outcome stays serializable.
+id: cmd-set-transaction.serializable-write-skew
+title: SERIALIZABLE write skew is prevented by canceling one transaction with 40001
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, isolation-level, serializable, serialization-failure, update, multi-session]
+required_capabilities: [create-table, insert, update, select, transactions, multi-session, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: SERIALIZABLE: a pattern of reads and writes that could not occur serially causes one transaction to fail with serialization_failure)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE doctors (id int4 PRIMARY KEY, oncall bool NOT NULL);
+  INSERT INTO doctors VALUES (1, true), (2, true);
+steps:
+  - session: b
+    sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE
+    expect: ok
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM doctors WHERE oncall
+    expect: rows
+    order: ordered
+    comment: both transactions see two doctors on call
+  - session: b
+    sql: |
+      SELECT count(*) AS n FROM doctors WHERE oncall
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      UPDATE doctors SET oncall = false WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE doctors SET oncall = false WHERE id = 2
+    expect: error
+    sqlstate: "40001"
+    comment: b is canceled as a pivot during write, since committing both would leave no doctor on call
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, oncall FROM doctors ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only a's update is committed

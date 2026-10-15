@@ -1,0 +1,46 @@
+# ONLY_DATABASE_STATS runs no table work and may not be combined with a table list or any option other than VERBOSE.
+id: cmd-vacuum.only-database-stats
+title: "VACUUM ONLY_DATABASE_STATS stands alone with no table list"
+family: cmd-vacuum
+tier: extended
+feature_ids: [vacuum, database-stats, errors]
+required_capabilities: [create-table, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: ONLY_DATABASE_STATS, SKIP_DATABASE_STATS)"
+sessions: [a]
+setup: |
+  CREATE TABLE vds (id int4);
+  INSERT INTO vds VALUES (1);
+steps:
+  - sql: |
+      VACUUM (ONLY_DATABASE_STATS)
+    expect: ok
+  - sql: |
+      VACUUM (ONLY_DATABASE_STATS, VERBOSE)
+    expect: ok
+    compare_message: false
+    comment: VERBOSE is the one other option allowed
+  - sql: |
+      VACUUM (SKIP_DATABASE_STATS) vds
+    expect: ok
+    comment: the opposite switch is an ordinary option
+  - sql: |
+      VACUUM (ONLY_DATABASE_STATS) vds
+    expect: error
+    sqlstate: "0A000"
+    comment: a table list is not allowed
+  - sql: |
+      VACUUM (ONLY_DATABASE_STATS, FULL) vds
+    expect: error
+    sqlstate: "0A000"
+    comment: other options are not allowed
+  - sql: |
+      VACUUM (ONLY_DATABASE_STATS, SKIP_DATABASE_STATS)
+    expect: error
+    sqlstate: "0A000"
+    comment: the two database-stats switches are mutually exclusive with each other
+  - sql: |
+      SELECT count(*) FROM vds
+    expect: rows
+    order: ordered

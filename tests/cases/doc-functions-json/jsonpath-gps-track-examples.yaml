@@ -1,0 +1,73 @@
+# Documented GPS track examples from the SQL/JSON path section: accessors, wildcards, filters (including nested and sequential), size(), lax vs strict, and predicate checks.
+id: doc-functions-json.jsonpath-gps-track-examples
+title: documented GPS track jsonpath examples covering accessors, filters, size() and lax/strict modes
+family: doc-functions-json
+tier: core
+feature_ids: [jsonpath-accessors, jsonpath-filters, jsonpath-lax-strict, jsonpath-size, jsonpath-predicate-check]
+required_capabilities: [select, jsonb, jsonpath]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-sqljson-path (SQL/JSON Path Language examples with GPS track data)"
+sessions: [a]
+setup: |
+  CREATE TABLE gps AS SELECT '{
+    "track": {
+      "segments": [
+        {"location": [47.763, 13.4034], "start time": "2018-10-14 10:05:14", "HR": 73},
+        {"location": [47.706, 13.2635], "start time": "2018-10-14 10:39:21", "HR": 135}
+      ]
+    }
+  }'::jsonb AS doc;
+steps:
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments') AS segments FROM gps
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments[*].location') AS loc FROM gps
+    expect: rows
+    order: multiset
+    comment: "[*] visits each element; each segment contributes one location array"
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments[0].location') AS first_loc FROM gps
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments.size()') AS seg_count FROM gps
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments[*].HR ? (@ > 130)') AS hr_high FROM gps
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments[*] ? (@.HR > 130)."start time"') AS start_high FROM gps
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments[*] ? (@.location[1] < 13.4) ? (@.HR > 130)."start time"') AS start_chained FROM gps
+    expect: rows
+    comment: "sequential filters apply one after another"
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments[*] ? (@.location[1] < 13.4).HR ? (@ > 130)') AS hr_nested FROM gps
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track ? (exists(@.segments[*] ? (@.HR > 130))).segments.size()') AS nested_exists FROM gps
+    expect: rows
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments ?(@[*].HR > 130)') AS sql_standard_filter FROM gps
+    expect: rows
+    comment: "SQL-standard filter returns the matching segment object itself"
+  - sql: |
+      SELECT jsonb_path_query(doc, '$.track.segments[*].HR > 130') AS predicate_check FROM gps
+    expect: rows
+    comment: "PostgreSQL extension: a boolean predicate as a path expression yields true"
+  - sql: |
+      SELECT jsonb_path_query(doc, 'lax $.track.segments.location') AS lax_unwrapped FROM gps
+    expect: rows
+    order: multiset
+    comment: "lax mode implicitly unwraps the segments array"
+  - sql: |
+      SELECT jsonb_path_query(doc, 'strict $.track.segments.location') AS strict_no_unwrap FROM gps
+    expect: error
+    sqlstate: "2203A"
+    comment: "documented: strict mode reports the member accessor on an array as an error"
+  - sql: |
+      SELECT jsonb_path_query(doc, 'strict $.track.segments[*].location') AS strict_explicit FROM gps
+    expect: rows
+    order: multiset

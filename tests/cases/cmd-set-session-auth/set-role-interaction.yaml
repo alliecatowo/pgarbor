@@ -1,0 +1,49 @@
+# SET SESSION AUTHORIZATION replaces the current user and clears any SET ROLE; RESET SESSION AUTHORIZATION does the same. session_user is never changed by SET ROLE.
+id: cmd-set-session-auth.set-role-interaction
+title: SET SESSION AUTHORIZATION clears a SET ROLE and resets the current user; SET ROLE never changes session_user
+family: cmd-set-session-auth
+tier: extended
+feature_ids: [set-session-authorization, set-role, session-user, current-user]
+required_capabilities: [roles, session-authorization, set-role, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_session_auth.sgml#description (current user may be changed by SET ROLE)"
+sessions: [a]
+setup: |
+  CREATE ROLE sa_role_a;
+  CREATE ROLE sa_role_b;
+steps:
+  - sql: |
+      SET ROLE 'sa_role_a'
+    expect: ok
+  - sql: |
+      SELECT SESSION_USER = CURRENT_USER AS role_differs_from_session
+    expect: rows
+    order: ordered
+    comment: session_user stays the authenticated user, current_user is sa_role_a
+  - sql: |
+      SET SESSION AUTHORIZATION 'sa_role_b'
+    expect: ok
+  - sql: |
+      SELECT SESSION_USER, CURRENT_USER
+    expect: rows
+    order: ordered
+    comment: the SET ROLE is cleared by the session authorization change
+  - sql: |
+      SET ROLE 'sa_role_a'
+    expect: error
+    sqlstate: "42501"
+    comment: sa_role_b is not a member of sa_role_a, so the role change is denied
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT SESSION_USER = CURRENT_USER AS restored
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE sa_role_a
+    expect: ok
+  - sql: |
+      DROP ROLE sa_role_b
+    expect: ok

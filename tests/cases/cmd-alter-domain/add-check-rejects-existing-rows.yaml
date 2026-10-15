@@ -1,0 +1,30 @@
+# ADD CONSTRAINT without NOT VALID checks stored data; one violating row aborts the command and nothing is added.
+id: cmd-alter-domain.add-check-rejects-existing-rows
+title: "ADD CONSTRAINT fails when stored column values violate it, and the constraint is not created"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, check-constraint, domain-constraint]
+required_capabilities: [create-domain, alter-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (ADD domain_constraint)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN zipcode AS text;
+  CREATE TABLE mail (id int, zip zipcode);
+  INSERT INTO mail VALUES (1, '12345'), (2, '1234');
+steps:
+  - sql: |
+      ALTER DOMAIN zipcode ADD CONSTRAINT zipchk CHECK (char_length(VALUE) = 5)
+    expect: error
+    sqlstate: "23514"
+    comment: row 2 holds a four-character value
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE contypid = 'zipcode'::regtype ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: no constraint was recorded
+  - sql: |
+      INSERT INTO mail VALUES (3, '1234')
+    expect: ok
+    comment: the rejected constraint does not block inserts

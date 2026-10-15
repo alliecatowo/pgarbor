@@ -1,0 +1,34 @@
+# ALTER RULE on a rule that does not exist, a table that does not exist, or a rule that lives on a different table fails.
+id: cmd-alter-rule.errors-missing-rule-or-table
+title: ALTER RULE fails with undefined_object or undefined_table for missing rules and tables
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, rules, errors]
+required_capabilities: [create-table, create-rule, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 alter_rule.sgml#parameters (name must be an existing rule); errcodes 42704, 42P01"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4);
+  CREATE TABLE dept (id int4);
+  CREATE RULE r_emp AS ON INSERT TO emp DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      ALTER RULE no_such_rule ON emp RENAME TO r_new
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER RULE r_emp ON no_such_table RENAME TO r_new
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER RULE r_emp ON dept RENAME TO r_new
+    expect: error
+    sqlstate: "42704"
+    comment: r_emp is defined on emp, so it is not found on dept
+  - sql: |
+      SELECT tablename, rulename FROM pg_rules WHERE schemaname = 'public' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: every failed rename left the original rule in place

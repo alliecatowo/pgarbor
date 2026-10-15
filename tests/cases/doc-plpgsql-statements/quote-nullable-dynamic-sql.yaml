@@ -1,0 +1,49 @@
+# Dynamic SQL quoting with quote_nullable, quote_literal, format %L and IS NOT DISTINCT FROM: NULL values
+# produce NULL literals, '= NULL' never matches, and IS NOT DISTINCT FROM matches the NULL key.
+id: doc-plpgsql-statements.quote-nullable-dynamic-sql
+title: quote_nullable and format %L keep NULL values in dynamic UPDATEs; IS NOT DISTINCT FROM matches NULL keys
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, execute, quote-functions, format, null-handling, is-not-distinct-from]
+required_capabilities: [plpgsql, create-function, create-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-quote-literal-example"
+sessions: [a]
+setup: |
+  CREATE TABLE tbl (key text, col text);
+  INSERT INTO tbl VALUES ('k', 'old'), (NULL, 'nullkey');
+  CREATE FUNCTION f_update_quoted(colname text, newvalue text, keyvalue text) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE n int;
+  BEGIN
+    EXECUTE 'UPDATE tbl SET ' || quote_ident(colname) || ' = ' || quote_nullable(newvalue)
+            || ' WHERE key = ' || quote_nullable(keyvalue);
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION f_update_null_safe(newvalue text, keyvalue text) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE n int;
+  BEGIN
+    EXECUTE format('UPDATE tbl SET col = %L WHERE key IS NOT DISTINCT FROM %L', newvalue, keyvalue);
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_update_quoted('col', 'new', 'k') AS updated_k
+    expect: rows
+  - sql: |
+      SELECT f_update_quoted('col', 'lost', NULL) AS updated_null_key
+    expect: rows
+    comment: quote_nullable(NULL) yields the unquoted NULL keyword, so key = NULL matches no row
+  - sql: |
+      SELECT f_update_null_safe('fixed', NULL) AS updated_null_safe
+    expect: rows
+    comment: IS NOT DISTINCT FROM treats the NULL key as an ordinary value
+  - sql: |
+      SELECT key, col FROM tbl ORDER BY key
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT quote_literal(NULL::text) IS NULL AS ql_null, quote_nullable(NULL::text) AS qn_null, quote_nullable('a''b') AS qn_quoted, format('%L', NULL::text) AS fmt_null
+    expect: rows

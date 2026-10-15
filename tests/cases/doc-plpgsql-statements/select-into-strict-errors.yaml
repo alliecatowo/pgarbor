@@ -1,0 +1,36 @@
+# SELECT INTO STRICT requires exactly one row: zero rows raise NO_DATA_FOUND (P0002), more than one
+# raise TOO_MANY_ROWS (P0003), and a successful STRICT fetch sets FOUND true.
+id: doc-plpgsql-statements.select-into-strict-errors
+title: SELECT INTO STRICT raises P0002 for no rows and P0003 for several rows, and sets FOUND on success
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, select-into, strict, found, errors]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-sql-onerow"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('bo', 20), ('cy', 20);
+  CREATE FUNCTION f_strict(p int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n text;
+  BEGIN
+    SELECT empname INTO STRICT n FROM emp WHERE salary = p;
+    RETURN n || ' ' || FOUND::text;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_strict(10) AS one_row
+    expect: rows
+    comment: exactly one row assigns the target and sets FOUND true
+  - sql: |
+      SELECT f_strict(20) AS many_rows
+    expect: error
+    sqlstate: "P0003"
+    comment: TOO_MANY_ROWS
+  - sql: |
+      SELECT f_strict(99) AS no_rows
+    expect: error
+    sqlstate: "P0002"
+    comment: NO_DATA_FOUND

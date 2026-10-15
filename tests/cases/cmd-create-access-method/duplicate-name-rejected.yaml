@@ -1,0 +1,39 @@
+# Access method names are unique across the database, across both TABLE and INDEX types, including built-in names.
+id: cmd-create-access-method.duplicate-name-rejected
+title: Access method names must be unique, including against built-in heap and hash
+family: cmd-create-access-method
+tier: core
+feature_ids: [create-access-method, unique-names, errors]
+required_capabilities: [create-access-method, table-access-method, index-access-method, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method (Description: The access method name must be unique within the database)"
+sessions: [a]
+setup: |
+  CREATE ACCESS METHOD myam TYPE TABLE HANDLER heap_tableam_handler;
+steps:
+  - sql: |
+      CREATE ACCESS METHOD myam TYPE TABLE HANDLER heap_tableam_handler
+    expect: error
+    sqlstate: "42710"
+    comment: same name and type as an existing custom access method
+  - sql: |
+      CREATE ACCESS METHOD myam TYPE INDEX HANDLER hashhandler
+    expect: error
+    sqlstate: "42710"
+    comment: uniqueness is not per type
+  - sql: |
+      CREATE ACCESS METHOD heap TYPE TABLE HANDLER heap_tableam_handler
+    expect: error
+    sqlstate: "42710"
+    comment: built-in table access method name
+  - sql: |
+      CREATE ACCESS METHOD hash TYPE INDEX HANDLER hashhandler
+    expect: error
+    sqlstate: "42710"
+    comment: built-in index access method name
+  - sql: |
+      SELECT amname, amtype FROM pg_am WHERE amname IN ('myam', 'heap', 'hash') ORDER BY amname
+    expect: rows
+    order: ordered
+    comment: rejected statements leave the catalog unchanged

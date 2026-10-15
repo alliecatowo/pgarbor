@@ -1,0 +1,39 @@
+# The transaction_isolation parameter behaves like SET TRANSACTION ISOLATION LEVEL, including the rule that it cannot change after the first query.
+id: cmd-set-transaction.guc-transaction-isolation
+title: SET transaction_isolation inside a block works until a query has run, then fails with 25001
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, isolation-level, guc, errors]
+required_capabilities: [transactions, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Notes: transaction_isolation acts the same as the SET TRANSACTION option, with the same restrictions)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET transaction_isolation = 'repeatable read'
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 1 AS one
+    expect: rows
+    order: ordered
+  - sql: |
+      SET transaction_isolation = 'serializable'
+    expect: error
+    sqlstate: "25001"
+    comment: same restriction as SET TRANSACTION ISOLATION LEVEL
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: the rolled-back block leaves the session default in place

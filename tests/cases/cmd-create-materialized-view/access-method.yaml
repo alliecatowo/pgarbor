@@ -1,0 +1,36 @@
+id: cmd-create-materialized-view.access-method
+title: USING selects a table access method; the default is heap; index methods are rejected
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, table-access-method]
+required_capabilities: [create-materialized-view, table-access-method, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (USING method)"
+sessions: [a]
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_heap USING heap AS SELECT 1 AS one
+    expect: ok
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_default AS SELECT 2 AS two
+    expect: ok
+  - session: a
+    sql: |
+      SELECT c.relname, a.amname FROM pg_class c JOIN pg_am a ON a.oid = c.relam
+      WHERE c.relname IN ('mv_heap', 'mv_default') ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_btree USING btree AS SELECT 3 AS three
+    expect: error
+    sqlstate: "55000"
+    comment: index access method is not of type TABLE
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_nosuch USING no_such_am AS SELECT 4 AS four
+    expect: error
+    sqlstate: "42704"

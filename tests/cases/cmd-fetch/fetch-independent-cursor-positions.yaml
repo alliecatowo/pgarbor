@@ -1,0 +1,51 @@
+id: cmd-fetch.fetch-independent-cursor-positions
+title: Two cursors in one transaction keep independent positions and directions
+family: cmd-fetch
+tier: core
+feature_ids: [fetch, multiple-cursors, scroll-cursor, order-by-desc]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: hand
+  ref: "PG18 ref/fetch.sgml#sql-fetch; ref/declare.sgml#sql-declare"
+sessions: [a]
+setup: |
+  CREATE TABLE nums (n int4 PRIMARY KEY);
+  INSERT INTO nums VALUES (1), (2), (3), (4), (5);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE asc_c SCROLL CURSOR FOR SELECT n FROM nums ORDER BY n
+    expect: ok
+  - sql: |
+      DECLARE desc_c SCROLL CURSOR FOR SELECT n FROM nums ORDER BY n DESC
+    expect: ok
+  - sql: |
+      FETCH 2 FROM asc_c
+    expect: rows
+    order: ordered
+    comment: rows 1, 2
+  - sql: |
+      FETCH 3 FROM desc_c
+    expect: rows
+    order: ordered
+    comment: rows 5, 4, 3
+  - sql: |
+      FETCH NEXT FROM asc_c
+    expect: rows
+    order: ordered
+    comment: asc_c continues from row 2, so row 3
+  - sql: |
+      FETCH PRIOR FROM desc_c
+    expect: rows
+    order: ordered
+    comment: desc_c backs up one row from row 3
+  - sql: |
+      FETCH FIRST FROM desc_c
+    expect: rows
+    order: ordered
+    comment: first row in descending order, row 5
+  - sql: |
+      COMMIT
+    expect: ok

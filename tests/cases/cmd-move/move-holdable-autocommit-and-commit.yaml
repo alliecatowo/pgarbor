@@ -1,0 +1,40 @@
+id: cmd-move.move-holdable-autocommit-and-commit
+title: A WITH HOLD cursor can be moved in autocommit and in a later transaction, keeping its position across COMMIT
+family: cmd-move
+tier: extended
+feature_ids: [move, fetch, declare-cursor, with-hold, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/move.sgml#sql-move (direction parameters identical to FETCH); ref/declare.sgml#sql-declare (WITH HOLD)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four'), (5, 'five'), (6, 'six'), (7, 'seven');
+steps:
+  - sql: |
+      DECLARE hc CURSOR WITH HOLD FOR SELECT id FROM t ORDER BY id
+    expect: ok
+    comment: WITH HOLD cursors may be declared outside a transaction block
+  - sql: |
+      MOVE 2 IN hc
+    expect: ok
+    comment: autocommit MOVE on a held cursor
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      MOVE 1 FROM hc
+    expect: ok
+    comment: skips row 3
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      FETCH 1 FROM hc
+    expect: rows
+    order: ordered
+    comment: the held cursor survived COMMIT at position after row 3, so this is row 4
+  - sql: |
+      CLOSE hc
+    expect: ok

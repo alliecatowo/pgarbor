@@ -1,0 +1,35 @@
+# Building a unique partial index fails only if duplicates exist inside its predicate; duplicates outside it do not block the build.
+id: doc-indexes-partial.error-unique-build-duplicates
+title: CREATE UNIQUE partial index on existing data fails only for duplicates inside the predicate
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, unique-index, create-index, boolean-type, errors]
+required_capabilities: [create-table, create-index, unique-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex3 (enforces uniqueness among rows that satisfy the predicate)"
+sessions: [a]
+setup: |
+  CREATE TABLE dupidx (subject text, success boolean);
+  INSERT INTO dupidx VALUES ('a', false), ('a', NULL), ('a', false);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX dupidx_u ON dupidx (subject) WHERE success
+    expect: ok
+    comment: no row satisfies success, so the existing duplicates are outside the index
+  - sql: |
+      INSERT INTO dupidx VALUES ('a', true)
+    expect: ok
+  - sql: |
+      INSERT INTO dupidx VALUES ('a', true)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      CREATE UNIQUE INDEX dupidx_u2 ON dupidx (subject) WHERE subject IS NOT NULL
+    expect: error
+    sqlstate: "23505"
+    comment: the existing duplicates of 'a' all satisfy this predicate, so the build fails
+  - sql: |
+      SELECT subject, success, count(*) AS n FROM dupidx GROUP BY subject, success ORDER BY success NULLS LAST, subject
+    expect: rows
+    order: ordered

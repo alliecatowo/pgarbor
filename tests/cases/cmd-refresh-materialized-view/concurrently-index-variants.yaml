@@ -1,0 +1,51 @@
+id: cmd-refresh-materialized-view.concurrently-index-variants
+title: CONCURRENTLY requires a plain unique index covering all rows; expression, partial, and non-unique indexes do not qualify
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, refresh-concurrently, unique-index, expression-index, partial-index]
+required_capabilities: [create-table, insert, select, create-index, create-materialized-view, refresh-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (CONCURRENTLY: unique index requirements)"
+sessions: [a]
+setup: |
+  CREATE TABLE people (id int4 PRIMARY KEY, email text NOT NULL);
+  INSERT INTO people VALUES (1, 'Ann@example.com'), (2, 'bob@example.com'), (3, 'Cy@example.com');
+  CREATE MATERIALIZED VIEW mv_plain AS SELECT id, email FROM people;
+  CREATE MATERIALIZED VIEW mv_nonunique AS SELECT id, email FROM people;
+  CREATE INDEX ON mv_nonunique (id);
+  CREATE MATERIALIZED VIEW mv_expr AS SELECT id, email FROM people;
+  CREATE UNIQUE INDEX ON mv_expr ((lower(email)));
+  CREATE MATERIALIZED VIEW mv_partial AS SELECT id, email FROM people;
+  CREATE UNIQUE INDEX ON mv_partial (id) WHERE id > 0;
+  CREATE MATERIALIZED VIEW mv_unique AS SELECT id, email FROM people;
+  CREATE UNIQUE INDEX ON mv_unique (id);
+steps:
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_plain
+    expect: error
+    sqlstate: "55000"
+    comment: no index at all
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nonunique
+    expect: error
+    sqlstate: "55000"
+    comment: a non-unique index does not qualify
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_expr
+    expect: error
+    sqlstate: "55000"
+    comment: unique expression index does not qualify
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_partial
+    expect: error
+    sqlstate: "55000"
+    comment: unique index with a WHERE clause does not qualify
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_unique
+    expect: ok
+    comment: unique index on plain column covering all rows qualifies
+  - sql: |
+      SELECT id, email FROM mv_unique ORDER BY id
+    expect: rows
+    order: ordered

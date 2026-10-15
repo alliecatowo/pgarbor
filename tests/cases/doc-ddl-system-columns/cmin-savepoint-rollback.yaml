@@ -1,0 +1,28 @@
+# Rolling back to a savepoint does not reuse command identifiers: cmin keeps increasing.
+id: doc-ddl-system-columns.cmin-savepoint-rollback
+title: cmin keeps counting commands undone by ROLLBACK TO SAVEPOINT
+family: doc-ddl-system-columns
+tier: core
+feature_ids: [system-columns, cmin, savepoints, transactions]
+required_capabilities: [create-table, insert, select, savepoints, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-system-columns (cmin: command identifier within the inserting transaction; only commands that modify contents consume one)"
+setup: |
+  CREATE TABLE t (id int4, v text);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1, 'a');
+      SAVEPOINT s;
+      INSERT INTO t VALUES (2, 'b');
+      ROLLBACK TO SAVEPOINT s;
+      INSERT INTO t VALUES (3, 'c');
+      SELECT id, cmin FROM t ORDER BY id;
+      COMMIT
+    expect: ok
+    comment: row 2 was rolled back, but row 3 has cmin 2 because the rolled-back insert consumed command 1
+  - sql: |
+      SELECT id, cmin FROM t ORDER BY id
+    expect: rows
+    order: ordered

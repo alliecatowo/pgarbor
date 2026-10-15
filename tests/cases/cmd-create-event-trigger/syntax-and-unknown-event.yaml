@@ -1,0 +1,39 @@
+# The grammar requires ON event and EXECUTE FUNCTION name(); IF NOT EXISTS is not part of the syntax and event names must be known.
+id: cmd-create-event-trigger.syntax-and-unknown-event
+title: Unknown event name, missing EXECUTE clause, arguments in the call and IF NOT EXISTS are rejected
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-syntax]
+required_capabilities: [event-triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE FUNCTION abort_any_command() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  BEGIN RAISE EXCEPTION 'command % is disabled', tg_tag; END; $$;
+steps:
+  - sql: |
+      CREATE EVENT TRIGGER e_unknown ON bogus_event EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: unrecognized event name
+  - sql: |
+      CREATE EVENT TRIGGER e_noexec ON ddl_command_start
+    expect: error
+    sqlstate: "42601"
+    comment: the EXECUTE clause is required
+  - sql: |
+      CREATE EVENT TRIGGER e_noparen ON ddl_command_start EXECUTE FUNCTION abort_any_command
+    expect: error
+    sqlstate: "42601"
+    comment: the synopsis requires the empty parentheses after the function name
+  - sql: |
+      CREATE EVENT TRIGGER e_args ON ddl_command_start EXECUTE FUNCTION abort_any_command(1)
+    expect: error
+    sqlstate: "42601"
+    comment: the called function takes no arguments in the syntax
+  - sql: |
+      CREATE EVENT TRIGGER IF NOT EXISTS e_ine ON ddl_command_start EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: IF NOT EXISTS is not supported by CREATE EVENT TRIGGER

@@ -1,0 +1,37 @@
+# Stored MCV items reflect the last ANALYZE: data changes are invisible until the table is analyzed again.
+id: doc-functions-statistics.mcv-items-reanalyze-after-changes
+title: MCV items stay stale until ANALYZE and then reflect the changed data
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, analyze, delete, insert]
+required_capabilities: [create-table, insert, analyze, delete, extended-statistics, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE r (a int, b int);
+  ALTER TABLE r SET (autovacuum_enabled = false);
+  INSERT INTO r SELECT i % 3, 1 FROM generate_series(1, 90) g(i);
+  CREATE STATISTICS r_mcv (mcv) ON a, b FROM r;
+  ANALYZE r;
+steps:
+  - sql: |
+      DELETE FROM r WHERE a = 0
+    expect: ok
+  - sql: |
+      INSERT INTO r SELECT 9, 1 FROM generate_series(1, 60)
+    expect: ok
+  - sql: |
+      SELECT m.values, round(m.frequency::numeric, 4) AS freq FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'r_mcv' ORDER BY m.values::text
+    expect: rows
+    order: ordered
+    comment: still the pre-change items, the statistics were not refreshed
+  - sql: |
+      ANALYZE r
+    expect: ok
+  - sql: |
+      SELECT m.values, round(m.frequency::numeric, 4) AS freq FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'r_mcv' ORDER BY m.values::text
+    expect: rows
+    order: ordered
+    comment: after ANALYZE the deleted value is gone and the new value 9 is present

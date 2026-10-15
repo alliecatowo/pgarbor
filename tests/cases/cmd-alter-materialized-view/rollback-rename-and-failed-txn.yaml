@@ -1,0 +1,47 @@
+# ALTER MATERIALIZED VIEW is transactional: a rolled-back RENAME leaves the old name; a failed ALTER aborts the transaction.
+id: cmd-alter-materialized-view.rollback-rename-and-failed-txn
+title: "ALTER MATERIALIZED VIEW inside a transaction rolls back cleanly and a failed ALTER aborts it"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, transactions, rename]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view, transactions]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (DDL executes as a normal statement inside a transaction)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_tx_base (id int4);
+  INSERT INTO amv_tx_base VALUES (1);
+  CREATE MATERIALIZED VIEW amv_tx_mv AS SELECT id FROM amv_tx_base;
+steps:
+  - sql: |
+      BEGIN;
+      ALTER MATERIALIZED VIEW amv_tx_mv RENAME TO amv_tx_new;
+      SELECT matviewname FROM pg_matviews WHERE matviewname LIKE 'amv_tx%' ORDER BY 1;
+      ROLLBACK
+    expect: any
+    comment: rename is visible inside the transaction (SELECT returns rows mid-script)
+  - sql: |
+      SELECT matviewname FROM pg_matviews WHERE matviewname LIKE 'amv_tx%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: after rollback the original name is back
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_tx_mv RENAME COLUMN nosuch TO other
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      SELECT id FROM amv_tx_mv
+    expect: error
+    sqlstate: "25P02"
+    comment: transaction is in the aborted state after the failed ALTER
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id FROM amv_tx_mv
+    expect: rows
+    order: ordered

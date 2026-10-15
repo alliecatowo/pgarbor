@@ -1,0 +1,47 @@
+# DROP COLLATION is transactional: a rolled-back drop leaves the collation usable; a committed drop is final.
+id: cmd-drop-collation.transaction-rollback-commit
+title: "DROP COLLATION inside a transaction is undone by ROLLBACK and persists after COMMIT"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, transactions, rollback, commit]
+required_capabilities: [create-collation, drop-collation, icu-provider, transactions, collate-clause, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs drop_collation.sgml#sql-dropcollation; sql-rollback.html"
+sessions: [a]
+setup: |
+  CREATE COLLATION dc_tx (provider = icu, locale = 'de-DE');
+  CREATE COLLATION dc_tc (provider = icu, locale = 'de-DE');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP COLLATION dc_tx
+    expect: ok
+  - sql: |
+      SELECT 'a' COLLATE dc_tx
+    expect: error
+    sqlstate: "42704"
+    comment: the drop is visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT 'a' COLLATE dc_tx = 'a' COLLATE dc_tx AS same
+    expect: rows
+    order: ordered
+    comment: rolled back, so the collation resolves again
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP COLLATION dc_tc
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_collation WHERE collname = 'dc_tc'
+    expect: rows
+    order: ordered

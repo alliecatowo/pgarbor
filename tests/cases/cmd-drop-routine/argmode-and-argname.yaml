@@ -1,0 +1,41 @@
+# Argument names are ignored, and VARIADIC and plain argument lists identify different functions.
+id: cmd-drop-routine.argmode-and-argname
+title: "DROP ROUTINE ignores argument names and distinguishes VARIADIC from plain arguments"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, argmodes, variadic-functions]
+required_capabilities: [create-function, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-parameters (argmode, argname); drop_routine.sgml"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION nm(x int) RETURNS int LANGUAGE sql AS 'SELECT $1'
+    expect: ok
+  - sql: |
+      DROP ROUTINE nm(y int)
+    expect: ok
+    comment: the argument name is not part of the identity
+  - sql: |
+      CREATE FUNCTION vf(a int, b int) RETURNS int LANGUAGE sql AS 'SELECT $1 + $2'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION vf(VARIADIC int[]) RETURNS int LANGUAGE sql AS 'SELECT 0'
+    expect: ok
+  - sql: |
+      DROP ROUTINE vf(VARIADIC int[])
+    expect: ok
+    comment: the VARIADIC overload is removed and the two-argument overload survives
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'vf'
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP ROUTINE vf(a int, b int)
+    expect: ok
+  - sql: |
+      DROP ROUTINE nm(int)
+    expect: error
+    sqlstate: "42883"
+    comment: nm was already dropped above

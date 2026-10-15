@@ -1,0 +1,39 @@
+# DROP FUNCTION requires ownership of the function. Checking this needs a second, non-owner role, and
+# CREATE ROLE is cluster-wide, so it cannot be isolated to the fresh single-database case. Quarantined
+# until the oracle can run role-scoped cases; the steps state the intent.
+id: cmd-drop-function.owner-required
+title: Only the owner may drop a function (42501)
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, privileges, ownership]
+required_capabilities: [create-function, drop-function, create-role, set-role, roles]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (Description: user must be the owner)"
+quarantine:
+  reason: needs a second role; CREATE ROLE is a cluster-wide side effect and cannot be isolated to one fresh database
+  since: "2026-10-15"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION own1() RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      CREATE ROLE drop_fn_nonowner
+    expect: ok
+  - sql: |
+      SET ROLE drop_fn_nonowner
+    expect: ok
+  - sql: |
+      DROP FUNCTION own1()
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP FUNCTION own1()
+    expect: ok
+  - sql: |
+      DROP ROLE drop_fn_nonowner
+    expect: ok

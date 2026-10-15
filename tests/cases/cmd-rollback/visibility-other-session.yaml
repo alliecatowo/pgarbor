@@ -1,0 +1,42 @@
+# Uncommitted rows are never visible to another session, and a rolled-back row frees its primary key for others.
+id: cmd-rollback.visibility-other-session
+title: Rolled-back rows are invisible to another session and free their key
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, insert, transactions, read-committed, unique-constraint]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback (Description: updates made by the transaction are discarded)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, who text NOT NULL);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO t VALUES (1, 'a')
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: session b cannot see the uncommitted row
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (1, 'b')
+    expect: ok
+    comment: the key is free again, so this does not block or conflict
+  - session: b
+    sql: |
+      SELECT id, who FROM t ORDER BY id
+    expect: rows
+    order: ordered

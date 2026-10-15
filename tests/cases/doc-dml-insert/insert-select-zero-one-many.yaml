@@ -1,0 +1,46 @@
+# Documented: INSERT ... SELECT may insert no rows, one row, or many rows, depending on the query result.
+id: doc-dml-insert.insert-select-zero-one-many
+title: INSERT ... SELECT inserts zero, one or many rows according to the query
+family: doc-dml-insert
+tier: core
+feature_ids: [insert, insert-select, where]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-insert (It is also possible to insert the result of a query (which might be no rows, one row, or many rows))"
+sessions: [a]
+setup: |
+  CREATE TABLE new_products (product_no int, name text, price numeric, release_date text);
+  INSERT INTO new_products VALUES
+      (10, 'Gouda', 4.25, 'today'),
+      (11, 'Brie', 6.00, 'today'),
+      (12, 'Old Cheddar', 3.10, 'last year');
+steps:
+  - sql: |
+      CREATE TABLE products (product_no int, name text, price numeric)
+    expect: ok
+  - sql: |
+      INSERT INTO products (product_no, name, price)
+        SELECT product_no, name, price FROM new_products
+          WHERE release_date = 'never'
+    expect: ok
+    comment: zero matching rows inserts nothing and is not an error
+  - sql: |
+      SELECT count(*) AS n FROM products
+    expect: rows
+  - sql: |
+      INSERT INTO products (product_no, name, price)
+        SELECT product_no, name, price FROM new_products
+          WHERE release_date = 'last year'
+    expect: ok
+    comment: one matching row
+  - sql: |
+      INSERT INTO products (product_no, name, price)
+        SELECT product_no, name, price FROM new_products
+          WHERE release_date = 'today'
+    expect: ok
+    comment: many matching rows
+  - sql: |
+      SELECT product_no, name, price FROM products ORDER BY product_no
+    expect: rows
+    order: ordered

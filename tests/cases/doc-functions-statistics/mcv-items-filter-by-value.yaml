@@ -1,0 +1,26 @@
+# Querying MCV items like a relation: filter on array elements, skip NULL flags, and order results.
+id: doc-functions-statistics.mcv-items-filter-by-value
+title: MCV items can be filtered by array element and nulls flag
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, analyze, array-subscripts]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE qf (a int, b text, c boolean);
+  ALTER TABLE qf SET (autovacuum_enabled = false);
+  INSERT INTO qf SELECT i % 4, CASE WHEN i % 5 = 0 THEN 'a,b' WHEN i % 5 = 1 THEN 'say "hi"' WHEN i % 5 = 2 THEN ' lead' WHEN i % 5 = 3 THEN 'NULL' ELSE NULL END, i % 2 = 0 FROM generate_series(1, 200) g(i);
+  INSERT INTO qf VALUES (NULL, NULL, NULL), (NULL, 'NULL', NULL);
+  CREATE STATISTICS qf_mcv (mcv) ON a, b, c FROM qf;
+steps:
+  - sql: |
+      ANALYZE qf
+    expect: ok
+  - sql: |
+      SELECT m.values[1] AS a_val, m.values[3] AS c_val, round(m.frequency::numeric, 4) AS freq FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'qf_mcv' AND NOT m.nulls[2] AND m.values[2] = 'a,b' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: the array subscript is 1-based; the nulls flag excludes NULL items

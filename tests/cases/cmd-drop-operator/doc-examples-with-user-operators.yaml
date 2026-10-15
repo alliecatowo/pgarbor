@@ -1,0 +1,41 @@
+# The documented examples work once the operators exist in the user schema; the unqualified prefix name still
+# resolves to the pinned pg_catalog operator, so the schema-qualified form is what drops the user one.
+id: cmd-drop-operator.doc-examples-with-user-operators
+title: Documented examples drop user-defined operators, with schema qualification for the prefix operator
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, create-operator, prefix-operators, binary-operators, operator-resolution, search-path]
+required_capabilities: [drop-operator, create-operator, create-function-sql, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#examples (DROP OPERATOR ~ (none, bit), ^ (integer, integer))"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dwo_pow(integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * 10 + $2 $$;
+  CREATE FUNCTION dwo_bnot(bit) RETURNS bit LANGUAGE sql IMMUTABLE AS $$ SELECT ~$1 $$;
+  CREATE OPERATOR ^ (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dwo_pow);
+  CREATE OPERATOR ~ (RIGHTARG = bit, PROCEDURE = dwo_bnot);
+steps:
+  - sql: |
+      SELECT 3 ^ 4 AS power_like
+    expect: rows
+  - sql: |
+      DROP OPERATOR ~ (none, bit)
+    expect: error
+    sqlstate: "2BP01"
+    comment: unqualified name resolves to pg_catalog ~ (none, bit) first on the search path
+  - sql: |
+      SELECT count(*) AS user_bitnot FROM pg_operator WHERE oprname = '~' AND oprnamespace = 'public'::regnamespace
+    expect: rows
+    comment: the refused drop left the user operator in place
+  - sql: |
+      DROP OPERATOR public.~ (none, bit), ^ (integer, integer)
+    expect: ok
+    comment: schema-qualified prefix name plus binary operator, one statement
+  - sql: |
+      SELECT count(*) AS user_ops_left FROM pg_operator WHERE oprnamespace = 'public'::regnamespace
+    expect: rows
+  - sql: |
+      SELECT 3 ^ 4 AS power_like
+    expect: error
+    sqlstate: "42883"

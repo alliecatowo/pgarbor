@@ -1,0 +1,29 @@
+# DROP SEQUENCE refuses a table name with 42809 and points at DROP TABLE; IF EXISTS does not change that.
+id: cmd-drop-sequence.not-a-sequence-error
+title: DROP SEQUENCE on a table fails with 42809 even with IF EXISTS and the table survives
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, errors, object-kinds, if-exists]
+required_capabilities: [sequences, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Description: removes sequence number generators)"
+sessions: [a]
+setup: |
+  CREATE TABLE tbl (id int4 PRIMARY KEY, label text);
+  INSERT INTO tbl VALUES (1, 'a'), (2, 'b');
+steps:
+  - sql: |
+      DROP SEQUENCE tbl
+    expect: error
+    sqlstate: "42809"
+    comment: a table is not a sequence; the hint points to DROP TABLE
+  - sql: |
+      DROP SEQUENCE IF EXISTS tbl
+    expect: error
+    sqlstate: "42809"
+    comment: IF EXISTS only skips names that do not exist, not names of the wrong kind
+  - sql: |
+      SELECT id, label FROM tbl ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,44 @@
+id: cmd-refresh-materialized-view.schema-qualified-refresh
+title: REFRESH accepts a schema-qualified name and otherwise resolves through search_path
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, schemas, search-path]
+required_capabilities: [create-table, insert, select, create-schema, create-materialized-view, refresh-materialized-view, search-path]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (name: optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE TABLE public.base (id int4 PRIMARY KEY, v text);
+  INSERT INTO public.base VALUES (1, 'one');
+  CREATE MATERIALIZED VIEW s1.mv_s AS SELECT id, v FROM public.base;
+steps:
+  - sql: |
+      INSERT INTO public.base VALUES (2, 'two')
+    expect: ok
+  - sql: |
+      REFRESH MATERIALIZED VIEW s1.mv_s
+    expect: ok
+  - sql: |
+      SELECT id, v FROM s1.mv_s ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      REFRESH MATERIALIZED VIEW mv_s
+    expect: error
+    sqlstate: "42P01"
+    comment: not visible through the default search_path
+  - sql: |
+      SET search_path = s1, public
+    expect: ok
+  - sql: |
+      INSERT INTO public.base VALUES (3, 'three')
+    expect: ok
+  - sql: |
+      REFRESH MATERIALIZED VIEW mv_s
+    expect: ok
+    comment: resolves via search_path now
+  - sql: |
+      SELECT count(*) FROM s1.mv_s
+    expect: rows

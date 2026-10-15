@@ -1,0 +1,51 @@
+# An index built with a user-defined default operator class orders and filters rows by that class's operators; NULLs sort last; a non-default class is shown in the index definition.
+id: cmd-create-opclass.index-uses-custom-class
+title: "Indexes built with a custom operator class return rows in the class's order; non-default classes appear in indexdef"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, create-index, btree, order-by, catalog-introspection, select]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Description; Parameters: DEFAULT); doc/src/sgml/indexes.sgml (operator classes)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_eq(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a = ($2).a';
+  CREATE FUNCTION cr_pt_gt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a > ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE OPERATOR = (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_eq);
+  CREATE OPERATOR > (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_gt);
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_ix_ops DEFAULT FOR TYPE cr_pt USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_ix_alt FOR TYPE cr_pt USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      CREATE TABLE cr_ix_t (id int4 PRIMARY KEY, v cr_pt)
+    expect: ok
+  - sql: |
+      INSERT INTO cr_ix_t VALUES (1, ROW(30)::cr_pt), (2, ROW(10)::cr_pt), (3, ROW(20)::cr_pt), (4, NULL)
+    expect: ok
+  - sql: |
+      CREATE INDEX cr_ix_v ON cr_ix_t (v); CREATE INDEX cr_ix_v2 ON cr_ix_t USING btree (v cr_ix_alt)
+    expect: ok
+  - sql: |
+      SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'cr_ix_t' AND indexname LIKE 'cr_ix_v%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the default class is omitted from indexdef; the non-default one is shown
+  - sql: |
+      SELECT id FROM cr_ix_t ORDER BY v, id
+    expect: rows
+    order: ordered
+    comment: ascending by the class's comparison; the NULL row sorts last
+  - sql: |
+      SELECT id FROM cr_ix_t WHERE v < ROW(25)::cr_pt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the < operator filters out the NULL row

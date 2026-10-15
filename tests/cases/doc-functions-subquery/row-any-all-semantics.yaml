@@ -1,0 +1,32 @@
+# Row-constructor ANY and ALL against VALUES and subqueries, including empty and NULL cases.
+id: doc-functions-subquery.row-any-all-semantics
+title: Row constructor ANY and ALL compare row-wise with the documented NULL and empty rules
+family: doc-functions-subquery
+tier: core
+feature_ids: [any-subquery, all-subquery, row-constructor, null-semantics]
+required_capabilities: [create-table, insert, select, subquery, row-constructor]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (row_constructor operator ANY/ALL)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+steps:
+  - sql: |
+      SELECT (1, 2) < ANY (VALUES (1, 3), (0, 9)) AS ra, (1, 2) < ALL (VALUES (1, 3), (0, 9)) AS rb, (1, 2) = ANY (VALUES (1, NULL::int)) AS rc, (1, 2) = ALL (VALUES (1, NULL::int)) AS rd
+    expect: rows
+    comment: lexicographic row comparison; ANY is true on one true row, ALL false on one false row
+  - sql: |
+      SELECT (1, 2) = ANY (SELECT 1, 2 WHERE false) AS empty_any, (1, 2) = ALL (SELECT 1, 2 WHERE false) AS empty_all
+    expect: rows
+    comment: ANY over empty is false and ALL over empty is true
+  - sql: |
+      SELECT (1, 10) = ANY (SELECT col1, col2 FROM tab1) AS hit, (5, 1) > ALL (SELECT col1, col2 FROM tab1 WHERE col1 < 5 AND col2 IS NOT NULL) AS gall
+    expect: rows
+    comment: the second member is decided by the first, so every row compares as less
+  - sql: |
+      SELECT col1 FROM tab1 WHERE (col1, col2) = ANY (VALUES (2, 20), (3, NULL::int)) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: the row (3, NULL) compares NULL and is excluded; (2, 20) passes

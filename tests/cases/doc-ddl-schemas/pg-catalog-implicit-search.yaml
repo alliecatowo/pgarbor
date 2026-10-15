@@ -1,0 +1,39 @@
+# pg_catalog is searched implicitly before the path, so built-in functions and the documented
+# OPERATOR(pg_catalog.+) form work even when the path does not name it.
+id: doc-ddl-schemas.pg-catalog-implicit-search
+title: pg_catalog is searched first unless named later on the path, and OPERATOR(pg_catalog.op) works
+family: doc-ddl-schemas
+tier: core
+feature_ids: [search-path, system-catalog-schema, create-function-sql, operators]
+required_capabilities: [create-schema, create-function-sql, select, errors, guc, operators]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-catalog (pg_catalog is always effectively part of the search path; SELECT 3 OPERATOR(pg_catalog.+) 4)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA ff2
+    expect: ok
+  - sql: |
+      SELECT 3 OPERATOR(pg_catalog.+) 4 AS sum_qualified
+    expect: rows
+  - sql: |
+      CREATE FUNCTION ff2.abs(int) RETURNS int LANGUAGE sql AS 'SELECT 99'
+    expect: ok
+  - sql: |
+      SET search_path TO ff2
+    expect: ok
+  - sql: |
+      SELECT abs(-3) AS builtin_first, ff2.abs(-3) AS user_qualified
+    expect: rows
+    comment: pg_catalog is implicitly searched before ff2, so the built-in abs wins
+  - sql: |
+      SET search_path TO ff2, pg_catalog
+    expect: ok
+  - sql: |
+      SELECT abs(-3) AS user_wins_when_catalog_is_last
+    expect: rows
+    comment: naming pg_catalog explicitly at the end lets the user-defined name override it
+  - sql: |
+      SELECT 3 OPERATOR(pg_catalog.*) 4 AS product
+    expect: rows

@@ -1,0 +1,30 @@
+# RENAME TO fails when the target name is already used in the schema, including the object's own name.
+id: cmd-alter-statistics.rename-conflicts
+title: "ALTER STATISTICS RENAME TO rejects a name already used in the schema"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, rename-statistics, name-conflicts]
+required_capabilities: [create-table, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_rc (a int, b int, c text);
+  CREATE STATISTICS ast_rc_s1 (ndistinct) ON a, b FROM ast_rc;
+  CREATE STATISTICS ast_rc_s2 (ndistinct) ON a, c FROM ast_rc;
+steps:
+  - sql: |
+      ALTER STATISTICS ast_rc_s1 RENAME TO ast_rc_s2
+    expect: error
+    sqlstate: "42710"
+    comment: another statistics object in public already has the name
+  - sql: |
+      ALTER STATISTICS ast_rc_s1 RENAME TO ast_rc_s1
+    expect: error
+    sqlstate: "42710"
+    comment: renaming to the object's own name is reported as a conflict
+  - sql: |
+      SELECT stxname FROM pg_statistic_ext ORDER BY 1
+    expect: rows
+    order: ordered

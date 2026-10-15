@@ -1,0 +1,35 @@
+# By default two NULLs are not equal for UNIQUE, so duplicate NULLs are allowed; NULLS DISTINCT is the explicit default.
+id: doc-ddl-constraints.unique-nulls-distinct-default
+title: UNIQUE allows multiple NULLs by default and with explicit NULLS DISTINCT
+family: doc-ddl-constraints
+tier: core
+feature_ids: [unique-constraints, null-semantics, insert, select]
+required_capabilities: [create-table, constraints, unique-constraints, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Unique Constraints, null value with unique constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer UNIQUE, name text, price numeric);
+  CREATE TABLE products_nd (product_no integer UNIQUE NULLS DISTINCT, name text)
+steps:
+  - sql: |
+      INSERT INTO products VALUES (NULL, 'a', 1), (NULL, 'b', 2)
+    expect: ok
+    comment: two NULLs in the unique column are not considered equal
+  - sql: |
+      INSERT INTO products VALUES (1, 'c', 3)
+    expect: ok
+  - sql: |
+      INSERT INTO products VALUES (1, 'd', 4)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO products VALUES (NULL, 'e', 5)
+    expect: ok
+  - sql: |
+      INSERT INTO products_nd VALUES (NULL, 'x'), (NULL, 'y')
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM products WHERE product_no IS NULL
+    expect: rows

@@ -1,0 +1,36 @@
+# Adding an existing enum label is an error unless IF NOT EXISTS is given, which only issues a notice and leaves the order unchanged.
+id: cmd-alter-type.enum-add-value-if-not-exists
+title: "ADD VALUE of an existing label errors, IF NOT EXISTS skips it with a notice"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, enum-type, enum-add-value, if-not-exists]
+required_capabilities: [create-type, alter-type, enum-type, select, order-by]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (ADD VALUE [ IF NOT EXISTS ]: a notice is issued but no other action is taken)"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok');
+steps:
+  - sql: |
+      ALTER TYPE mood ADD VALUE 'ok'
+    expect: error
+    sqlstate: "42710"
+    comment: without IF NOT EXISTS the duplicate label is an error
+  - sql: |
+      ALTER TYPE mood ADD VALUE IF NOT EXISTS 'ok' BEFORE 'sad'
+    expect: notice
+    comment: the existing label is kept where it is; BEFORE is ignored
+  - sql: |
+      SELECT v, n FROM unnest(enum_range(NULL::mood)) WITH ORDINALITY AS t(v, n) ORDER BY n
+    expect: rows
+    order: ordered
+    comment: order is still sad, ok
+  - sql: |
+      ALTER TYPE mood ADD VALUE IF NOT EXISTS 'happy' BEFORE 'ok'
+    expect: ok
+  - sql: |
+      SELECT v, n FROM unnest(enum_range(NULL::mood)) WITH ORDINALITY AS t(v, n) ORDER BY n
+    expect: rows
+    order: ordered
+    comment: happy is inserted before ok, after sad

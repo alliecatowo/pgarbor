@@ -1,0 +1,38 @@
+# CREATE OR REPLACE VIEW may append columns but may not drop or rename existing view columns.
+id: doc-ddl-others.view-replace-columns
+title: CREATE OR REPLACE VIEW appends columns; dropping or renaming a column is rejected
+family: doc-ddl-others
+tier: core
+feature_ids: [views, create-view, replace-view, errors]
+required_capabilities: [create-table, create-view, insert, select, views, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-others (Views); ref: sql-createview.html"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4 PRIMARY KEY, label text, qty int4);
+  INSERT INTO base VALUES (1, 'a', 2), (2, 'b', NULL);
+  CREATE VIEW v AS SELECT id, label FROM base;
+steps:
+  - sql: |
+      CREATE OR REPLACE VIEW v AS SELECT id, label, qty FROM base
+    expect: ok
+  - sql: |
+      SELECT id, label, qty FROM v ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OR REPLACE VIEW v AS SELECT id FROM base
+    expect: error
+    sqlstate: "42P16"
+    comment: dropping an existing view column is rejected
+  - sql: |
+      CREATE OR REPLACE VIEW v AS SELECT id AS key, label, qty FROM base
+    expect: error
+    sqlstate: "42P16"
+    comment: renaming an existing view column is rejected
+  - sql: |
+      SELECT id, label, qty FROM v ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the failed replacements leave the view unchanged

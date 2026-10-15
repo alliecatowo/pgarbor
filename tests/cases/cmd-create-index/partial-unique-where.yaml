@@ -1,0 +1,36 @@
+# WHERE with UNIQUE builds a partial unique index: uniqueness is enforced only over rows matching the predicate.
+id: cmd-create-index.partial-unique-where
+title: Partial unique index enforces uniqueness only for rows matching its predicate
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, partial-index, unique-index, boolean]
+required_capabilities: [create-table, create-index, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Description: partial index; WHERE with UNIQUE to enforce uniqueness over a subset of a table)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, flag bool);
+  INSERT INTO films VALUES (1, 'Jim Story', true), (2, 'Jim Story', false);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX f_partial ON films (title) WHERE flag
+    expect: ok
+    comment: the existing duplicate lies outside the predicate, so the build succeeds
+  - sql: |
+      INSERT INTO films VALUES (3, 'Jim Story', false)
+    expect: ok
+    comment: predicate is false for the new row, so it is not indexed
+  - sql: |
+      INSERT INTO films VALUES (4, 'Jim Story', true)
+    expect: error
+    sqlstate: "23505"
+    comment: predicate is true and the key duplicates an indexed row
+  - sql: |
+      SELECT indpred IS NOT NULL AS partial, indisunique FROM pg_index WHERE indexrelid = 'f_partial'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM films ORDER BY id
+    expect: rows
+    order: ordered

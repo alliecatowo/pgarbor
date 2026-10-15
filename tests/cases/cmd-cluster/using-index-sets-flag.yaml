@@ -1,0 +1,32 @@
+# CLUSTER USING physically reorders the table and records the named index as the clustered index.
+id: cmd-cluster.using-index-sets-flag
+title: CLUSTER USING records the named index as the clustered index
+family: cmd-cluster
+tier: core
+feature_ids: [cluster, cluster-using, indexes]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/cluster.sgml#sql-cluster (Description; Examples: Cluster the table employees on the basis of its index)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4, name text);
+  CREATE INDEX t_v ON t (v);
+  INSERT INTO t VALUES (1, 30, 'c'), (2, 10, 'a'), (3, 20, 'b');
+steps:
+  - sql: |
+      CLUSTER t USING t_v
+    expect: ok
+  - sql: |
+      SELECT i.indexrelid::regclass::text AS idx, i.indisclustered AS clustered
+      FROM pg_index i
+      WHERE i.indrelid = 't'::regclass
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: t_v is clustered and t_pkey is not
+  - sql: |
+      SELECT id, v, name FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: CLUSTER does not change the data, only its physical order

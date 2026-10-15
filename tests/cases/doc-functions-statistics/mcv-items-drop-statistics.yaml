@@ -1,0 +1,30 @@
+# Dropping the statistics object removes its stored MCV list from the catalogs.
+id: doc-functions-statistics.mcv-items-drop-statistics
+title: Dropping an MCV statistics object removes its items
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, drop-statistics, analyze]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table, drop-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE qd (a int, b text, c boolean);
+  ALTER TABLE qd SET (autovacuum_enabled = false);
+  INSERT INTO qd SELECT i % 4, CASE WHEN i % 5 = 0 THEN 'a,b' ELSE 'z' END, i % 2 = 0 FROM generate_series(1, 200) g(i);
+  CREATE STATISTICS qd_mcv (mcv) ON a, b, c FROM qd;
+  ANALYZE qd;
+steps:
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'qd_mcv'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP STATISTICS qd_mcv
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'qd_mcv'
+    expect: rows
+    order: ordered
+    comment: the object is gone, so the join is empty

@@ -1,0 +1,42 @@
+# The docs say ALTER ROUTINE works "independent of whether foo is an aggregate, function, or
+# procedure". One rename per kind, each then called (or, for the procedure, CALLed) under the new name.
+id: cmd-alter-routine.rename-all-kinds
+title: ALTER ROUTINE RENAME TO renames a function, a procedure and an aggregate alike
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, rename, aggregates, procedures]
+required_capabilities: [create-function, create-procedure, create-aggregate, alter-function, aggregates, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Description; Examples: note on aggregate/function/procedure)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1 * 2';
+  CREATE PROCEDURE pr1(int) LANGUAGE sql AS 'SELECT 1';
+  CREATE AGGREGATE agg1(int) (SFUNC = int4pl, STYPE = int4, INITCOND = '0');
+steps:
+  - sql: |
+      ALTER ROUTINE foo(integer) RENAME TO foobar
+    expect: ok
+  - sql: |
+      ALTER ROUTINE pr1(int) RENAME TO pr2
+    expect: ok
+  - sql: |
+      ALTER ROUTINE agg1(int) RENAME TO agg2
+    expect: ok
+  - sql: |
+      SELECT foobar(4) AS f
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT agg2(v) AS total FROM (VALUES (1), (2), (3)) AS t(v)
+    expect: rows
+    order: ordered
+  - sql: |
+      CALL pr2(1)
+    expect: ok
+  - sql: |
+      SELECT proname, prokind FROM pg_proc WHERE proname IN ('foo', 'foobar', 'pr1', 'pr2', 'agg1', 'agg2') AND pronamespace = 'public'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: prokind f, p and a stay the same across the renames; old names are gone

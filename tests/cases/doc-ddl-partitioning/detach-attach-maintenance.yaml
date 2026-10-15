@@ -1,0 +1,67 @@
+# Partition maintenance: DETACH turns a partition into a standalone table that keeps its rows; ATTACH
+# of a table whose rows violate the bounds is rejected; a matching CHECK constraint is the documented
+# way to attach without a validation scan (and the scan is skipped, so the check still gives the same result).
+id: doc-ddl-partitioning.detach-attach-maintenance
+title: Detach a partition to keep its rows, then attach new tables with and without violating rows
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, detach-partition, attach-partition, partition-maintenance]
+required_capabilities: [create-table, insert, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning-maintenance (DETACH PARTITION, ATTACH PARTITION, CHECK constraint before attach)"
+sessions: [a]
+setup: |
+  CREATE TABLE mt (id int, logdate date NOT NULL) PARTITION BY RANGE (logdate);
+  CREATE TABLE mt_2006m02 PARTITION OF mt FOR VALUES FROM ('2006-02-01') TO ('2006-03-01');
+  CREATE TABLE mt_2006m03 PARTITION OF mt FOR VALUES FROM ('2006-03-01') TO ('2006-04-01');
+  INSERT INTO mt VALUES (1, '2006-02-15'), (2, '2006-03-15');
+steps:
+  - sql: |
+      ALTER TABLE mt DETACH PARTITION mt_2006m02
+    expect: ok
+  - sql: |
+      SELECT count(*) AS parent_rows FROM mt
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, logdate FROM mt_2006m02 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the detached table keeps its rows
+  - sql: |
+      CREATE TABLE mt_2006m04 (LIKE mt INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+    expect: ok
+  - sql: |
+      ALTER TABLE mt_2006m04 ADD CONSTRAINT mt_2006m04_chk CHECK (logdate >= DATE '2006-04-01' AND logdate < DATE '2006-05-01')
+    expect: ok
+  - sql: |
+      INSERT INTO mt_2006m04 VALUES (3, '2006-04-20')
+    expect: ok
+  - sql: |
+      ALTER TABLE mt ATTACH PARTITION mt_2006m04 FOR VALUES FROM ('2006-04-01') TO ('2006-05-01')
+    expect: ok
+  - sql: |
+      CREATE TABLE mt_bad (id int, logdate date NOT NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO mt_bad VALUES (4, '2006-06-01')
+    expect: ok
+  - sql: |
+      ALTER TABLE mt ATTACH PARTITION mt_bad FOR VALUES FROM ('2006-06-01') TO ('2006-07-01')
+    expect: ok
+    comment: row 4 is in range; bounds are satisfied
+  - sql: |
+      CREATE TABLE mt_bad2 (id int, logdate date NOT NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO mt_bad2 VALUES (5, '2007-01-01')
+    expect: ok
+  - sql: |
+      ALTER TABLE mt ATTACH PARTITION mt_bad2 FOR VALUES FROM ('2006-08-01') TO ('2006-09-01')
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT count(*) AS parent_rows FROM mt
+    expect: rows
+    order: ordered

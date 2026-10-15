@@ -1,0 +1,36 @@
+# LIMIT applies after grouping and ordering, so it picks the top groups. A WITH query can feed it.
+id: doc-queries-limit.limit-after-aggregate-topn
+title: LIMIT after GROUP BY and ORDER BY on an aggregate selects top groups
+family: doc-queries-limit
+tier: core
+feature_ids: [limit, offset, group-by, aggregates, with-queries, order-by]
+required_capabilities: [create-table, insert, select, group-by, cte]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-with-select (top sales regions example) and #queries-limit"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (region text NOT NULL, product text NOT NULL, amount int4 NOT NULL);
+  INSERT INTO orders VALUES
+    ('north', 'widget', 100), ('north', 'gadget', 50),
+    ('south', 'widget', 300), ('south', 'gadget', 25),
+    ('east', 'widget', 200), ('west', 'gadget', 10);
+steps:
+  - sql: |
+      SELECT region, sum(amount) AS total FROM orders GROUP BY region ORDER BY total DESC LIMIT 2
+    expect: rows
+    order: ordered
+  - sql: |
+      WITH regional AS (
+        SELECT region, sum(amount) AS total FROM orders GROUP BY region
+      )
+      SELECT region FROM regional ORDER BY total DESC LIMIT 1 OFFSET 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS groups_kept FROM (
+        SELECT region FROM orders GROUP BY region LIMIT 3
+      ) AS s
+    expect: rows
+    order: ordered
+    comment: four regions exist, so the limit keeps exactly three groups

@@ -1,0 +1,36 @@
+# Doc example: a second index with COLLATE "y" supports "y" comparisons. Both indexes are listed
+# by pg_indexes and the definition shows the collation only where it differs from the column's.
+id: doc-indexes-collations.second-index-per-collation
+title: Second index created with COLLATE "y" alongside the column-collation index
+family: doc-indexes-collations
+tier: core
+feature_ids: [indexes, collation, explicit-collate, catalog-introspection]
+required_capabilities: [create-table, insert, select, create-index, collation, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-collations (Indexes and Collations)"
+sessions: [a]
+setup: |
+  CREATE COLLATION "x" FROM "C";
+  CREATE COLLATION "y" (provider = icu, locale = 'und');
+  CREATE TABLE test1c (id integer, content varchar COLLATE "x");
+  INSERT INTO test1c VALUES (1, 'b'), (2, 'B'), (3, 'a'), (4, 'A'), (5, 'c');
+  CREATE INDEX test1c_content_index ON test1c (content);
+steps:
+  - sql: |
+      CREATE INDEX test1c_content_y_index ON test1c (content COLLATE "y")
+    expect: ok
+  - sql: |
+      SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'test1c' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: the y index records COLLATE y in its definition; the column-collation index does not
+  - sql: |
+      SELECT content FROM test1c WHERE content > 'a' COLLATE "y" ORDER BY content COLLATE "y"
+    expect: rows
+    order: ordered
+    comment: results are the same whichever index the planner picks
+  - sql: |
+      SELECT content FROM test1c WHERE content > 'a' ORDER BY content
+    expect: rows
+    order: ordered

@@ -1,0 +1,44 @@
+# A plain DROP INDEX takes ACCESS EXCLUSIVE on the table, so it waits for an open reader and then completes.
+id: cmd-drop-index.blocking-access-exclusive
+title: Plain DROP INDEX blocks behind an open reader of the table until that reader commits
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, locks, transactions, multi-session]
+required_capabilities: [create-table, create-index, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (Parameters: CONCURRENTLY: a normal DROP INDEX acquires an ACCESS EXCLUSIVE lock on the table, blocking other accesses)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE jobs (id int4 PRIMARY KEY, state text);
+  CREATE INDEX jobs_state_idx ON jobs (state);
+  INSERT INTO jobs VALUES (1, 'new'), (2, 'done');
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, state FROM jobs ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      DROP INDEX jobs_state_idx
+    async: true
+    expect_blocked: true
+    comment: needs ACCESS EXCLUSIVE, which conflicts with a's ACCESS SHARE from the open transaction
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+  - session: a
+    sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'jobs' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: the drop completed once the reader released its lock

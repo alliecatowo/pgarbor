@@ -1,0 +1,26 @@
+# Documented example: ALTER DATABASE test SET enable_indexscan TO off, applied to the case database.
+# The database default applies to sessions started afterwards, not to the session that set it.
+id: cmd-alter-database.doc-example-disable-indexscan
+title: ALTER DATABASE SET enable_indexscan becomes the default for new sessions
+family: cmd-alter-database
+tier: core
+feature_ids: [alter-database, guc-database-default, session-defaults]
+required_capabilities: [guc, plpgsql, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_database.sgml#sql-alterdatabase (Examples; Description, session defaults)"
+sessions: [a]
+steps:
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET enable_indexscan TO off', current_database()); END $$;
+    expect: ok
+    comment: the documented example, aimed at the current database since the case database name is not fixed
+  - sql: |
+      SELECT cardinality(s.setconfig) AS n, s.setconfig AS cfg FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = current_database()
+    expect: rows
+    comment: exactly one database-level setting is stored
+  - reconnect: true
+  - sql: |
+      SELECT current_setting('enable_indexscan') AS enable_indexscan
+    expect: rows
+    comment: a new session starts with the database-level default

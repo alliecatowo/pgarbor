@@ -1,0 +1,39 @@
+# Exclusion-constraint indexes cannot be rebuilt concurrently; a table-level CONCURRENTLY skips them with a warning.
+id: cmd-reindex.exclusion-concurrently
+title: Exclusion constraint indexes are skipped by REINDEX TABLE CONCURRENTLY and rejected when named
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-concurrently, exclusion-constraints, errors]
+required_capabilities: [create-table, create-index, insert, select, reindex, reindex-concurrently, exclusion-constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex-concurrently (indexes for exclusion constraints cannot be reindexed concurrently)"
+sessions: [a]
+setup: |
+  CREATE TABLE ex (a int4, b int4, EXCLUDE USING btree (a WITH =));
+  CREATE INDEX ex_b ON ex (b);
+  INSERT INTO ex VALUES (1, 1);
+steps:
+  - sql: |
+      REINDEX INDEX CONCURRENTLY ex_a_excl
+    expect: error
+    sqlstate: "0A000"
+    comment: naming the exclusion index directly is an error
+  - sql: |
+      REINDEX TABLE CONCURRENTLY ex
+    expect: ok
+    compare_message: false
+    comment: the exclusion index is skipped with a warning and the rest is rebuilt
+  - sql: |
+      REINDEX INDEX ex_a_excl
+    expect: ok
+    comment: a non-concurrent rebuild of the exclusion index is allowed
+  - sql: |
+      INSERT INTO ex VALUES (1, 2)
+    expect: error
+    sqlstate: "23P01"
+    comment: the exclusion constraint still holds after the rebuild
+  - sql: |
+      SELECT a, b FROM ex ORDER BY a
+    expect: rows
+    order: ordered

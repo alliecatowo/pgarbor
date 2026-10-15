@@ -1,0 +1,30 @@
+# For temporary tables DROP INDEX is always non-concurrent, so the CONCURRENTLY form also succeeds there.
+id: cmd-drop-index.temp-table-index
+title: DROP INDEX CONCURRENTLY on a temporary table index succeeds without concurrency restrictions
+family: cmd-drop-index
+tier: extended
+feature_ids: [drop-index, concurrently, temporary-tables]
+required_capabilities: [temp-tables, create-table, create-index, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (Parameters: CONCURRENTLY; For temporary tables, DROP INDEX is always non-concurrent)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEMP TABLE scratch_t (x int4, y int4);
+      CREATE INDEX scratch_x ON scratch_t (x);
+      INSERT INTO scratch_t VALUES (1, 2), (3, 4)
+    expect: ok
+  - sql: |
+      DROP INDEX CONCURRENTLY scratch_x
+    expect: ok
+    comment: no concurrency is needed for a temp table so the request is honored
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'scratch_t' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP INDEX scratch_x
+    expect: error
+    sqlstate: "42704"
+    comment: the index is already gone

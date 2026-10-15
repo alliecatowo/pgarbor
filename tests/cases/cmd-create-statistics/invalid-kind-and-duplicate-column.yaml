@@ -1,0 +1,32 @@
+# Unknown statistics kinds are a syntax-level error; naming the same column twice is a duplicate-column error.
+id: cmd-create-statistics.invalid-kind-and-duplicate-column
+title: Unknown statistics kind and duplicate column in the definition are rejected
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, statistics-kind, argument-validation]
+required_capabilities: [create-table, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Parameters: statistics_kind)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_kind (a int, b int, c int);
+steps:
+  - sql: |
+      CREATE STATISTICS cs_kind_s1 (foo) ON a, b FROM cs_kind
+    expect: error
+    sqlstate: "42601"
+    comment: only ndistinct, dependencies and mcv are valid kinds
+  - sql: |
+      CREATE STATISTICS cs_kind_s2 (ndistinct, dependencies, mcv) ON a, a FROM cs_kind
+    expect: error
+    sqlstate: "42701"
+    comment: the same column listed twice is a duplicate column name in the definition
+  - sql: |
+      CREATE STATISTICS cs_kind_s3 (ndistinct) ON a, b, b FROM cs_kind
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      SELECT stxname FROM pg_statistic_ext ORDER BY stxname
+    expect: rows
+    order: ordered

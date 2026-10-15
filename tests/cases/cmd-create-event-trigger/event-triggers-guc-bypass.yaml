@@ -1,0 +1,51 @@
+# event_triggers = false suppresses firing in the session, and the blocked DDL can then be dropped.
+id: cmd-create-event-trigger.event-triggers-guc-bypass
+title: With event_triggers off a blocking trigger does not fire, and DROP EVENT TRIGGER then succeeds
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, drop-event-trigger, guc]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger-notes"
+setup: |
+  CREATE FUNCTION abort_any_command() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  BEGIN RAISE EXCEPTION 'command % is disabled', tg_tag; END; $$;
+  CREATE EVENT TRIGGER abort_ddl ON ddl_command_start EXECUTE FUNCTION abort_any_command();
+steps:
+  - sql: |
+      CREATE TABLE t_before (a int4)
+    expect: error
+    sqlstate: P0001
+  - sql: |
+      SET event_triggers = false
+    expect: ok
+  - sql: |
+      CREATE TABLE t_guc_off (a int4)
+    expect: ok
+    comment: event triggers are disabled for this session by the GUC
+  - sql: |
+      RESET event_triggers
+    expect: ok
+  - sql: |
+      CREATE TABLE t_after (a int4)
+    expect: error
+    sqlstate: P0001
+    comment: after RESET the trigger fires again
+  - sql: |
+      SET event_triggers = false
+    expect: ok
+  - sql: |
+      DROP EVENT TRIGGER abort_ddl
+    expect: ok
+    comment: the documented recovery path; a DROP is itself DDL and would otherwise be blocked
+  - sql: |
+      RESET event_triggers
+    expect: ok
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_event_trigger
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE t_after (a int4)
+    expect: ok

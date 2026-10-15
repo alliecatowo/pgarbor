@@ -1,0 +1,34 @@
+# DROP TRANSFORM removes the definition; IF EXISTS suppresses the error; the transform can be created again.
+id: cmd-create-transform.drop-and-recreate
+title: "DROP TRANSFORM removes a transform, IF EXISTS on a missing transform only notices, and CREATE can follow"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, drop-transform, if-exists]
+required_capabilities: [create-transform, create-function, create-type, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-notes"
+sessions: [a]
+setup: |
+  CREATE TYPE ct_t AS (a int);
+  CREATE FUNCTION ct_to_t(val internal) RETURNS ct_t LANGUAGE internal IMMUTABLE STRICT AS 'record_recv';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (TO SQL WITH FUNCTION ct_to_t(internal))
+    expect: ok
+  - sql: |
+      DROP TRANSFORM FOR ct_t LANGUAGE sql
+    expect: ok
+  - sql: |
+      DROP TRANSFORM FOR ct_t LANGUAGE sql
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP TRANSFORM IF EXISTS FOR ct_t LANGUAGE sql
+    expect: notice
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (TO SQL WITH FUNCTION ct_to_t(internal))
+    expect: ok
+  - sql: |
+      SELECT count(*) AS transform_rows FROM pg_transform WHERE trftype = 'ct_t'::regtype
+    expect: rows

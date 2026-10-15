@@ -1,0 +1,61 @@
+# SET FROM CURRENT captures the session value at ALTER time; DEFAULT removes the procedure-local
+# setting; RESET ALL clears proconfig. The CALL result shows which value is applied.
+id: cmd-alter-procedure.config-set-reset-runtime
+title: SET, SET DEFAULT, SET FROM CURRENT and RESET ALL control the work_mem a procedure runs with
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, set-configuration, guc, call]
+required_capabilities: [create-procedure, call, guc, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Parameters: configuration_parameter, value; SET FROM CURRENT; RESET ALL)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE cfg_p(INOUT v text) LANGUAGE SQL AS $$ SELECT current_setting('work_mem') $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE cfg_p(text) SET nosuchparam = 1
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER PROCEDURE cfg_p(text) SET work_mem = 'bogus'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER PROCEDURE cfg_p(text) SET work_mem = '1234kB'
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE cfg_p(text) SET work_mem = DEFAULT
+    expect: ok
+    comment: DEFAULT removes the procedure-local setting, same as RESET
+  - sql: |
+      ALTER PROCEDURE cfg_p(text) SET work_mem = '4MB'
+    expect: ok
+  - sql: |
+      SELECT proconfig FROM pg_proc WHERE proname = 'cfg_p'
+    expect: rows
+  - sql: |
+      CALL cfg_p(NULL)
+    expect: rows
+    comment: expect 4MB
+  - sql: |
+      SET work_mem = '2MB'
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE cfg_p(text) SET work_mem FROM CURRENT
+    expect: ok
+    comment: captures the session value 2MB at ALTER time
+  - sql: |
+      RESET work_mem
+    expect: ok
+  - sql: |
+      CALL cfg_p(NULL)
+    expect: rows
+    comment: expect 2MB; the captured value applies even though the session is back to default
+  - sql: |
+      ALTER PROCEDURE cfg_p(text) RESET ALL
+    expect: ok
+  - sql: |
+      SELECT proconfig IS NULL AS none FROM pg_proc WHERE proname = 'cfg_p'
+    expect: rows
+    comment: expect true

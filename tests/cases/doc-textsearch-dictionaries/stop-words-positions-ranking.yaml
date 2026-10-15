@@ -1,0 +1,26 @@
+# Stop words are dropped from tsvectors but keep their positions, which changes ts_rank_cd; a simple configuration keeps them.
+id: doc-textsearch-dictionaries.stopword-positions
+title: stop words leave position gaps in tsvector and change ts_rank_cd
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [stop-words, to-tsvector, ts-rank-cd, text-search-configuration]
+required_capabilities: [text-search, select]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Stop Words)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_tsvector('english', 'in the list of stop words') AS with_gaps,
+             to_tsvector('simple', 'in the list of stop words') AS simple_config
+    expect: rows
+    comment: english drops the stop words but keeps positions 3, 5 and 6; simple keeps every word
+  - sql: |
+      SELECT ts_rank_cd(to_tsvector('english', 'in the list of stop words'), to_tsquery('list & stop')) AS rank_with_gaps,
+             ts_rank_cd(to_tsvector('english', 'list stop words'), to_tsquery('list & stop')) AS rank_adjacent
+    expect: rows
+    comment: the documented values are 0.05 and 0.1
+  - sql: |
+      SELECT to_tsvector('english', 'the') AS only_stop_words, to_tsvector('english', '') AS empty_input
+    expect: rows
+    comment: a string of only stop words, or an empty string, gives an empty tsvector

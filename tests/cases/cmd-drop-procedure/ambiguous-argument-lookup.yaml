@@ -1,0 +1,41 @@
+# With an IN/OUT overload and an IN/IN overload sharing input types, (text, text) matches both lookup
+# readings and fails with 42725; dropping with an explicit argument list resolves it.
+id: cmd-drop-procedure.ambiguous-argument-lookup
+title: Ambiguous argument-list lookup between IN/OUT and IN/IN overloads
+family: cmd-drop-procedure
+tier: core
+feature_ids: [drop-procedure, create-procedure, argmode-lookup, errors]
+required_capabilities: [create-procedure, drop-procedure, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-notes (ambiguity between OUT-inclusive and input-only lookup)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE m6(IN a text, OUT r text) LANGUAGE plpgsql AS $$ BEGIN r := a; END $$
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE m6(IN a text, IN b text) LANGUAGE plpgsql AS $$ BEGIN NULL; END $$
+    expect: ok
+  - sql: |
+      DROP PROCEDURE m6(text, text)
+    expect: error
+    sqlstate: "42725"
+    comment: the (IN, OUT) reading and the (IN, IN) reading each match a different procedure
+  - sql: |
+      SELECT count(*) AS procs FROM pg_proc WHERE proname = 'm6'
+    expect: rows
+    order: multiset
+    comment: nothing was dropped by the ambiguous statement
+  - sql: |
+      DROP PROCEDURE m6(text)
+    expect: ok
+    comment: a single input argument selects only the (IN, OUT) overload
+  - sql: |
+      DROP PROCEDURE m6(text, text)
+    expect: ok
+    comment: with the OUT overload gone, the two-argument form is unique
+  - sql: |
+      SELECT count(*) AS procs FROM pg_proc WHERE proname = 'm6'
+    expect: rows
+    order: multiset

@@ -1,0 +1,42 @@
+# RESTRICT and CASCADE are both accepted when the constraint has no dependent objects; each drop removes only its own CHECK.
+id: cmd-alter-domain.drop-constraint-restrict-cascade
+title: "DROP CONSTRAINT with RESTRICT or CASCADE removes just the named CHECK when nothing depends on it"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, drop-constraint, check-constraint]
+required_capabilities: [create-domain, alter-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (CASCADE; RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN pct AS int;
+steps:
+  - sql: |
+      ALTER DOMAIN pct ADD CONSTRAINT pct_lo CHECK (VALUE >= 0)
+    expect: ok
+  - sql: |
+      ALTER DOMAIN pct ADD CONSTRAINT pct_hi CHECK (VALUE <= 100)
+    expect: ok
+  - sql: |
+      SELECT '101'::pct
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      ALTER DOMAIN pct DROP CONSTRAINT pct_hi RESTRICT
+    expect: ok
+  - sql: |
+      SELECT '101'::pct AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER DOMAIN pct DROP CONSTRAINT pct_lo CASCADE
+    expect: ok
+  - sql: |
+      SELECT '-5'::pct AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM pg_constraint WHERE contypid = 'pct'::regtype
+    expect: rows
+    order: ordered

@@ -1,0 +1,37 @@
+# The WITH clause sets view options that are stored as relation options; an unknown check_option value is rejected.
+id: cmd-create-view.view-options-reloptions
+title: WITH options security_barrier, security_invoker and check_option are stored as relation options
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, view-options, security-barrier, security-invoker, check-option, catalog-introspection]
+required_capabilities: [create-table, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview (WITH view_option_name parameters)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy'), (2, 'B', 'Drama');
+steps:
+  - sql: |
+      CREATE VIEW sb WITH (security_barrier = true) AS SELECT * FROM films
+    expect: ok
+  - sql: |
+      CREATE VIEW si WITH (security_invoker = true) AS SELECT * FROM films
+    expect: ok
+  - sql: |
+      CREATE VIEW co WITH (check_option = local) AS SELECT * FROM films WHERE kind = 'Comedy'
+    expect: ok
+  - sql: |
+      CREATE VIEW sbx WITH (security_barrier) AS SELECT * FROM films
+    expect: ok
+    comment: a boolean option given without a value means true
+  - sql: |
+      CREATE VIEW co2 WITH (check_option = bogus) AS SELECT * FROM films
+    expect: error
+    sqlstate: "22023"
+    comment: check_option accepts only local or cascaded
+  - sql: |
+      SELECT relname, reloptions FROM pg_class WHERE relname IN ('sb', 'si', 'co', 'sbx') ORDER BY relname
+    expect: rows
+    order: ordered

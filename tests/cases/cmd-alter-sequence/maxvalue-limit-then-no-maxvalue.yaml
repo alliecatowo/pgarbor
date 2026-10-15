@@ -1,0 +1,35 @@
+# MAXVALUE caps nextval with an error once reached; NO MAXVALUE restores the data type maximum.
+id: cmd-alter-sequence.maxvalue-limit-then-no-maxvalue
+title: "ALTER SEQUENCE MAXVALUE stops nextval at the limit; NO MAXVALUE removes the cap"
+family: cmd-alter-sequence
+tier: core
+feature_ids: [alter-sequence, maxvalue, nextval, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_sequence.sgml#sql-altersequence (MAXVALUE; NO MAXVALUE)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_max START 1;
+steps:
+  - sql: |
+      ALTER SEQUENCE s_max MAXVALUE 3
+    expect: ok
+  - sql: |
+      SELECT nextval('s_max'), nextval('s_max'), nextval('s_max')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT nextval('s_max')
+    expect: error
+    sqlstate: "2200H"
+    comment: the value 4 exceeds MAXVALUE 3 and NO CYCLE is in force
+  - sql: |
+      ALTER SEQUENCE s_max NO MAXVALUE
+    expect: ok
+    comment: the maximum reverts to the bigint maximum
+  - sql: |
+      SELECT nextval('s_max')
+    expect: rows
+    order: ordered
+    comment: the failed call did not consume a value, so 4 is next

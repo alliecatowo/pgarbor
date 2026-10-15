@@ -1,0 +1,38 @@
+# The FOR clause names a provider; the name is matched exactly (case-sensitive, quoting matters) and an unloaded provider is 22023.
+id: cmd-security-label.for-provider-name
+title: FOR provider names must match a loaded provider exactly
+family: cmd-security-label
+tier: core
+feature_ids: [security-label, security-label-provider, security-label-for]
+required_capabilities: [security-label, create-table, create-role, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-params-provider"
+sessions: [a]
+setup: |
+  CREATE TABLE sl_prov (id int4)
+steps:
+  - sql: |
+      SECURITY LABEL FOR selinux ON TABLE sl_prov IS 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: lowercase selinux is not loaded
+  - sql: |
+      SECURITY LABEL FOR SELinux ON TABLE sl_prov IS 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: provider names are case-sensitive; SELinux is not the registered name
+  - sql: |
+      SECURITY LABEL FOR "selinux" ON TABLE sl_prov IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL FOR bogus ON ROLE postgres IS NULL
+    expect: error
+    sqlstate: "22023"
+    comment: provider check applies to ROLE targets too
+  - sql: |
+      SECURITY LABEL ON TABLE sl_prov IS 'x' FOR selinux
+    expect: error
+    sqlstate: "42601"
+    comment: FOR must precede ON; trailing FOR is a syntax error

@@ -1,0 +1,44 @@
+# The documented example: DROP TRIGGER if_dist_exists ON films removes the trigger and it stops firing.
+id: cmd-drop-trigger.documented-example
+title: "DROP TRIGGER if_dist_exists ON films removes the trigger, and later inserts no longer fire it"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, triggers, plpgsql]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger-examples"
+sessions: [a]
+setup: |
+  CREATE TABLE trg_log (tg text, tbl text);
+  CREATE FUNCTION log_tg() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME, TG_TABLE_NAME);
+    RETURN NEW;
+  END
+  $$;
+  CREATE TABLE films (id int4, title text);
+  CREATE TRIGGER if_dist_exists BEFORE INSERT ON films FOR EACH ROW EXECUTE FUNCTION log_tg();
+steps:
+  - sql: |
+      INSERT INTO films VALUES (1, 'Alien')
+    expect: ok
+    comment: the trigger fires once while it exists
+  - sql: |
+      DROP TRIGGER if_dist_exists ON films
+    expect: ok
+  - sql: |
+      INSERT INTO films VALUES (2, 'Heat')
+    expect: ok
+    comment: no trigger, so nothing is logged for this row
+  - sql: |
+      SELECT tg, tbl FROM trg_log ORDER BY tg, tbl
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 'films'::regclass AND NOT tgisinternal
+    expect: rows
+  - sql: |
+      SELECT id, title FROM films ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,33 @@
+# A view whose expression calls nextval() on the sequence blocks RESTRICT; CASCADE drops the view as well.
+id: cmd-drop-sequence.view-dependency-cascade
+title: DROP SEQUENCE is refused by a dependent view under RESTRICT and CASCADE removes the view
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, cascade, restrict, views, dependencies]
+required_capabilities: [sequences, create-view, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Parameters: CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE vseq;
+  CREATE VIEW vv AS SELECT nextval('vseq') AS n;
+steps:
+  - sql: |
+      DROP SEQUENCE vseq
+    expect: error
+    sqlstate: "2BP01"
+    comment: DETAIL names view vv as the dependent object
+  - sql: |
+      SELECT relname FROM pg_class WHERE relkind = 'v' AND relname = 'vv'
+    expect: rows
+    order: ordered
+    comment: the view is still present after the refused drop
+  - sql: |
+      DROP SEQUENCE vseq CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_views WHERE viewname = 'vv'
+    expect: rows
+    order: ordered
+    comment: CASCADE removed the dependent view

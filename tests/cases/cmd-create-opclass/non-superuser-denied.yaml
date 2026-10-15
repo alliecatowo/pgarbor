@@ -1,0 +1,45 @@
+# Only a superuser may create an operator class, because a bad definition could crash the server; a non-superuser gets 42501 and nothing is created.
+id: cmd-create-opclass.non-superuser-denied
+title: "CREATE OPERATOR CLASS by a non-superuser fails with insufficient_privilege"
+family: cmd-create-opclass
+tier: extended
+feature_ids: [create-operator-class, roles, privileges, errors]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, roles, set-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Description: the creating user must be a superuser)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE ROLE cr_nonsu_cmd NOSUPERUSER;
+steps:
+  - sql: |
+      GRANT CREATE ON SCHEMA public TO cr_nonsu_cmd
+    expect: ok
+    comment: lets the role pass the schema check, so the superuser check is what fails
+  - sql: |
+      SET ROLE cr_nonsu_cmd
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_nonsu_ops FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: error
+    sqlstate: "42501"
+    comment: must be superuser to create an operator class
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opclass WHERE opcname = 'cr_nonsu_ops'
+    expect: rows
+    order: ordered
+    comment: nothing was created
+  - sql: |
+      REVOKE CREATE ON SCHEMA public FROM cr_nonsu_cmd
+    expect: ok
+  - sql: |
+      DROP ROLE cr_nonsu_cmd
+    expect: ok
+    comment: cleanup so the role does not outlive the case

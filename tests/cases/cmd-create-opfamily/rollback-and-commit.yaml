@@ -1,0 +1,45 @@
+# Family creation is transactional: a ROLLBACK removes it, and a COMMIT keeps it.
+id: cmd-create-opfamily.rollback-and-commit
+title: CREATE OPERATOR FAMILY inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, transactions, rollback, commit]
+required_capabilities: [create-operator-family, catalog-introspection, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: creates a new operator family; catalog effects follow normal transaction rules)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY cof_rb USING btree
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opfamily WHERE opfname = 'cof_rb'
+    expect: rows
+    comment: visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opfamily WHERE opfname = 'cof_rb'
+    expect: rows
+    comment: gone after rollback
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY cof_cm USING btree
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_opfamily WHERE opfname = 'cof_cm'
+    expect: rows
+    comment: kept after commit
+  - sql: |
+      DROP OPERATOR FAMILY cof_cm USING btree
+    expect: ok

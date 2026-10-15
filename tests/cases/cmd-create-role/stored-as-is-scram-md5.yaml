@@ -1,0 +1,33 @@
+# A password that is already a SCRAM or MD5 verifier is stored unchanged, regardless of password_encryption.
+id: cmd-create-role.stored-as-is-scram-md5
+title: Pre-encrypted SCRAM and MD5 password strings are stored as given instead of being re-hashed
+family: cmd-create-role
+tier: core
+feature_ids: [create-role, password, password-encryption, scram, md5, dump-restore]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_role.sgml#parameters (PASSWORD: already MD5- or SCRAM-encrypted strings stored as-is)"
+sessions: [a]
+notes: Verifier literals were produced once from the oracle for the password jw8s0F4; SCRAM salt is fixed inside the literal, so the case is deterministic. MD5 emits a WARNING about deprecation.
+steps:
+  - sql: |
+      CREATE ROLE ccr_scram PASSWORD 'SCRAM-SHA-256$4096:a8cUzKFZrw1ncqKmnT1Opw==$JSLxg5b+oNcEdo9lllKNTlXdIn4sTSz102QWSW54+Rg=:W/ryY7UoEbNMVQ0p7XbTEvujUGQtjjdH7J/kdTlwLhk='
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_md5u PASSWORD 'md5c72769227ff3044b59cf2ef9b4084c11'
+    expect: any
+    comment: MD5 password support is deprecated; a WARNING is emitted but the statement succeeds
+  - sql: |
+      SELECT r.rolname,
+             a.rolpassword = 'SCRAM-SHA-256$4096:a8cUzKFZrw1ncqKmnT1Opw==$JSLxg5b+oNcEdo9lllKNTlXdIn4sTSz102QWSW54+Rg=:W/ryY7UoEbNMVQ0p7XbTEvujUGQtjjdH7J/kdTlwLhk=' AS scram_as_is,
+             a.rolpassword = 'md5c72769227ff3044b59cf2ef9b4084c11' AS md5_as_is
+        FROM pg_authid a
+        JOIN pg_roles r ON r.oid = a.oid
+       WHERE r.rolname IN ('ccr_scram', 'ccr_md5u')
+       ORDER BY r.rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ccr_scram, ccr_md5u
+    expect: ok

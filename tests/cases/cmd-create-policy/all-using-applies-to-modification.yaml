@@ -1,0 +1,48 @@
+# With only USING on an ALL policy, the same expression also gates new rows from INSERT and UPDATE.
+id: cmd-create-policy.all-using-applies-to-modification
+title: "ALL policy with only USING gates inserted and updated rows as WITH CHECK"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, insert, update, errors]
+required_capabilities: [create-table, insert, select, update, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy-all"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_all;
+  CREATE TABLE t (id int4, v int4);
+  INSERT INTO t VALUES (1, 5);
+  GRANT SELECT, INSERT, UPDATE ON t TO pgarbor_case_cp_all;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p_all ON t FOR ALL TO pgarbor_case_cp_all USING (v < 10);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_all
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2, 50)
+    expect: error
+    sqlstate: "42501"
+    comment: the USING expression is used as the WITH CHECK expression for inserts
+  - sql: |
+      INSERT INTO t VALUES (2, 5)
+    expect: ok
+  - sql: |
+      UPDATE t SET v = 20 WHERE id = 1
+    expect: error
+    sqlstate: "42501"
+    comment: the updated row would not satisfy USING
+  - sql: |
+      UPDATE t SET v = 8 WHERE id = 1
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t; DROP ROLE pgarbor_case_cp_all
+    expect: ok

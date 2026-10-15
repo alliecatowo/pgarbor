@@ -1,0 +1,36 @@
+# Generated columns are computed after BEFORE triggers run, so a trigger change to a base column
+# shows up in both kinds, while the stored generated column is still NULL inside the trigger.
+id: doc-ddl-generated-columns.before-trigger-timing
+title: BEFORE trigger changes to base columns flow into generated columns, which are NULL inside the trigger
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, triggers, plpgsql, insert]
+required_capabilities: [create-table, insert, select, triggers, create-function, generated-columns, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE bt (id int, a int, s int GENERATED ALWAYS AS (a * 10) STORED, v int GENERATED ALWAYS AS (a * 10) VIRTUAL);
+  CREATE TABLE bt_log (id int, s_was_null boolean);
+  CREATE FUNCTION bt_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO bt_log VALUES (NEW.id, NEW.s IS NULL);
+    NEW.a := NEW.a + 1;
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER bt_b BEFORE INSERT ON bt FOR EACH ROW EXECUTE FUNCTION bt_fn()
+steps:
+  - sql: |
+      INSERT INTO bt (id, a) VALUES (1, 4) RETURNING id, a, s, v
+    expect: rows
+    comment: the trigger raises a to 5 and both generated columns reflect 50
+  - sql: |
+      SELECT id, s_was_null FROM bt_log ORDER BY id
+    expect: rows
+    order: ordered
+    comment: reading the stored generated column in a BEFORE trigger gives NULL, not the computed value
+  - sql: |
+      SELECT id, a, s, v FROM bt
+    expect: rows
+    order: multiset

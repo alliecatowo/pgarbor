@@ -1,0 +1,40 @@
+# tsvector_update_trigger skips NULL input columns but still indexes the other columns; when every input
+# column is NULL the result is the empty tsvector.
+id: doc-functions-trigger.tsvector-trigger-null-columns
+title: tsvector_update_trigger skips NULL input columns and yields an empty tsvector when all are NULL
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, text-search, tsvector, nulls]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, text-search, null-handling]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#builtin-triggers-table (tsvector_update_trigger); textsearch.sgml#textsearch-update-triggers (NULL values will be skipped)"
+sessions: [a]
+setup: |
+  CREATE TABLE nmsg (title text, body text, tsv tsvector);
+  CREATE TRIGGER nmsg_tsv BEFORE INSERT OR UPDATE ON nmsg FOR EACH ROW
+    EXECUTE FUNCTION tsvector_update_trigger(tsv, 'pg_catalog.english', title, body);
+steps:
+  - sql: |
+      INSERT INTO nmsg VALUES ('only title', NULL), (NULL, NULL)
+    expect: ok
+  - sql: |
+      SELECT title, body, tsv FROM nmsg WHERE title IS NOT NULL
+    expect: rows
+    order: multiset
+    comment: NULL body is skipped, so tsv comes from title alone
+  - sql: |
+      SELECT count(*) FROM nmsg WHERE tsv = ''::tsvector
+    expect: rows
+    comment: all-NULL input gives the empty tsvector, expect 1
+  - sql: |
+      UPDATE nmsg SET body = 'changed words' WHERE title = 'only title'
+    expect: ok
+  - sql: |
+      UPDATE nmsg SET title = NULL WHERE title = 'only title'
+    expect: ok
+  - sql: |
+      SELECT body, tsv FROM nmsg WHERE title IS NULL AND body IS NOT NULL
+    expect: rows
+    order: multiset
+    comment: expect tsv 'chang':1 'word':2 from body alone

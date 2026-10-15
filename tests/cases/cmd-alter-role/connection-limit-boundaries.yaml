@@ -1,0 +1,46 @@
+# CONNECTION LIMIT accepts 0 and -1 (unlimited) and refuses values below -1; a refused change leaves the old limit.
+id: cmd-alter-role.connection-limit-boundaries
+title: ALTER ROLE CONNECTION LIMIT boundaries and refused negative values
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, connection-limit, boundary-values, errors]
+required_capabilities: [roles, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-params-superuser (CONNECTION LIMIT connlimit)"
+sessions: [a]
+notes: "Limit 0 would block new connections as this role, so the case never connects as it. It ends at -1."
+steps:
+  - sql: |
+      CREATE ROLE alr_cl
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_cl CONNECTION LIMIT 3
+    expect: ok
+  - sql: |
+      SELECT rolconnlimit FROM pg_roles WHERE rolname = 'alr_cl'
+    expect: rows
+  - sql: |
+      ALTER ROLE alr_cl CONNECTION LIMIT 0
+    expect: ok
+  - sql: |
+      SELECT rolconnlimit FROM pg_roles WHERE rolname = 'alr_cl'
+    expect: rows
+  - sql: |
+      ALTER ROLE alr_cl CONNECTION LIMIT -2
+    expect: error
+    sqlstate: "22023"
+    comment: values below -1 are invalid
+  - sql: |
+      SELECT rolconnlimit FROM pg_roles WHERE rolname = 'alr_cl'
+    expect: rows
+    comment: still 0 after the refused change
+  - sql: |
+      ALTER ROLE alr_cl CONNECTION LIMIT -1
+    expect: ok
+  - sql: |
+      SELECT rolconnlimit FROM pg_roles WHERE rolname = 'alr_cl'
+    expect: rows
+  - sql: |
+      DROP ROLE alr_cl
+    expect: ok

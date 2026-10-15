@@ -1,0 +1,65 @@
+# In a READ ONLY transaction, INSERT into a temporary table is allowed while CREATE and writes to permanent tables are not.
+id: cmd-set-transaction.read-only-temp-table-exception
+title: READ ONLY transactions allow INSERT into temporary tables but not CREATE or permanent writes
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, read-only, temp-tables, errors, insert, create-table]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: COPY FROM and INSERT are disallowed if the table they would write to is not a temporary table; all CREATE, ALTER and DROP commands are disallowed)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - session: a
+    sql: |
+      CREATE TEMP TABLE scratch_t (id int4)
+    expect: ok
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SET TRANSACTION READ ONLY
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO scratch_t VALUES (1)
+    expect: ok
+    comment: documented exception for temporary tables
+  - session: a
+    sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "25006"
+    comment: permanent table is still read only
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SET TRANSACTION READ ONLY
+    expect: ok
+  - session: a
+    sql: |
+      CREATE TABLE u (id int4)
+    expect: error
+    sqlstate: "25006"
+    comment: CREATE is disallowed even for a temporary table
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM scratch_t
+    expect: rows
+    order: ordered
+    comment: the insert from the first read-only block was rolled back

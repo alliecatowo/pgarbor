@@ -1,0 +1,35 @@
+id: cmd-declare.outside-transaction-needs-hold
+title: A non-holdable cursor needs a transaction block, while WITH HOLD works in autocommit
+family: cmd-declare
+tier: core
+feature_ids: [declare-cursor, holdable-cursor, fetch, close]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare-notes (Unless WITH HOLD is specified ... error outside a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+steps:
+  - sql: |
+      DECLARE nh CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: error
+    sqlstate: "25P01"
+    comment: WITHOUT HOLD cursor cannot be declared outside a transaction block
+  - sql: |
+      DECLARE h CURSOR WITH HOLD FOR SELECT id FROM t ORDER BY id
+    expect: ok
+    comment: WITH HOLD is accepted in autocommit mode
+  - sql: |
+      FETCH 1 FROM h
+    expect: rows
+    order: ordered
+  - sql: |
+      CLOSE h
+    expect: ok
+  - sql: |
+      FETCH 1 FROM h
+    expect: error
+    sqlstate: "34000"
+    comment: a closed cursor no longer exists

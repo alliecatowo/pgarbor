@@ -1,0 +1,30 @@
+# With tied sort keys, LIMIT picks an arbitrary subset. Only the multiset of tied key values is fixed, and a unique tiebreaker makes the window deterministic.
+id: doc-queries-limit.ties-need-unique-tiebreaker
+title: Ties on the ORDER BY key fix only the key values; a unique tiebreaker fixes the rows
+family: doc-queries-limit
+tier: core
+feature_ids: [limit, offset, order-by, ties]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-limit (unpredictable subset without a unique ORDER BY)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (k int4 NOT NULL, v int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1, 1), (1, 2), (2, 3), (3, 4), (3, 5), (3, 6), (4, 7);
+steps:
+  - sql: |
+      SELECT k FROM t ORDER BY k LIMIT 3
+    expect: rows
+    order: multiset
+    comment: which tied row survives is unspecified, but the key values 1, 1, 2 are fixed
+  - sql: |
+      SELECT k FROM t ORDER BY k OFFSET 2 LIMIT 2
+    expect: rows
+    order: multiset
+    comment: the keys in this window are 2 and one of the three 3s
+  - sql: |
+      SELECT k, v FROM t ORDER BY k, v OFFSET 1 LIMIT 2
+    expect: rows
+    order: ordered
+    comment: adding the unique column v makes the window deterministic

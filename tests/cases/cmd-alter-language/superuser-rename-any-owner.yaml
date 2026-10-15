@@ -1,0 +1,31 @@
+# A superuser may rename and reassign a language it does not own, since the owner check is "superuser or owner".
+id: cmd-alter-language.superuser-rename-any-owner
+title: A superuser can rename and reassign a language owned by another role
+family: cmd-alter-language
+tier: extended
+feature_ids: [alter-language, rename, owner, roles, superuser]
+required_capabilities: [alter-language, roles, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_language.sgml#sql-alterlanguage (Description: You must be superuser or owner of the language)"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS al_su_owner;
+  CREATE ROLE al_su_owner NOLOGIN;
+  ALTER LANGUAGE plpgsql OWNER TO al_su_owner;
+steps:
+  - sql: |
+      ALTER LANGUAGE plpgsql RENAME TO pl_by_super
+    expect: ok
+    comment: the session is a superuser, so it need not own the language
+  - sql: |
+      SELECT lanname, pg_get_userbyid(lanowner) AS owner FROM pg_language WHERE lanname = 'pl_by_super'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER LANGUAGE pl_by_super OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT lanowner = (SELECT oid FROM pg_roles WHERE rolname = CURRENT_USER) AS reassigned FROM pg_language WHERE lanname = 'pl_by_super'
+    expect: rows
+    order: ordered

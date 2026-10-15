@@ -1,0 +1,37 @@
+# ALTER ... OWNER TO: the old owner's privileges transfer to the new owner along with ownership.
+id: doc-ddl-priv.owner-change-transfers-acl
+title: ALTER TABLE OWNER TO moves the old owner's privileges to the new owner
+family: doc-ddl-priv
+tier: core
+feature_ids: [owner, alter-table, grant, privileges, acl]
+required_capabilities: [create-table, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (ALTER TABLE table_name OWNER TO new_owner; all object privileges of the old owner are transferred)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_ot_old;
+  CREATE ROLE ddp_ot_new;
+  CREATE ROLE ddp_ot_rw;
+  CREATE TABLE ot_t (a int4);
+  ALTER TABLE ot_t OWNER TO ddp_ot_old;
+  GRANT SELECT ON ot_t TO ddp_ot_old WITH GRANT OPTION;
+  GRANT SELECT ON ot_t TO ddp_ot_rw;
+steps:
+  - sql: |
+      SELECT relacl::text FROM pg_class WHERE oid = 'ot_t'::regclass
+    expect: rows
+    order: multiset
+    comment: before the change the old owner holds the ACL entry
+  - sql: |
+      ALTER TABLE ot_t OWNER TO ddp_ot_new
+    expect: ok
+  - sql: |
+      SELECT relacl::text, pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'ot_t'::regclass
+    expect: rows
+    order: multiset
+    comment: the new owner now holds the old owner's entry, and ddp_ot_rw keeps its grant
+  - sql: |
+      SELECT has_table_privilege('ddp_ot_old', 'ot_t', 'SELECT') AS old_sel, has_table_privilege('ddp_ot_new', 'ot_t', 'UPDATE') AS new_upd, has_table_privilege('ddp_ot_rw', 'ot_t', 'SELECT') AS rw_sel
+    expect: rows
+    order: multiset

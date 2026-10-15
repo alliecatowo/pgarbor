@@ -1,0 +1,36 @@
+# A domain declared with COLLATE depends on the collation: RESTRICT refuses, CASCADE drops the domain too.
+id: cmd-drop-collation.restrict-domain-dependent
+title: "DROP COLLATION RESTRICT refuses while a domain depends on it, CASCADE drops the domain"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, domains, restrict, cascade]
+required_capabilities: [create-collation, drop-collation, icu-provider, create-domain, collate-clause, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs drop_collation.sgml#sql-dropcollation (RESTRICT default; CASCADE drops dependent objects)"
+sessions: [a]
+setup: |
+  CREATE COLLATION dc_dr (provider = icu, locale = 'de-DE');
+  CREATE DOMAIN dc_dom AS text COLLATE dc_dr;
+steps:
+  - sql: |
+      DROP COLLATION dc_dr
+    expect: error
+    sqlstate: "2BP01"
+    comment: type dc_dom depends on collation dc_dr
+  - sql: |
+      SELECT count(*) FROM pg_type WHERE typname = 'dc_dom'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP COLLATION dc_dr CASCADE
+    expect: ok
+    compare_message: false
+  - sql: |
+      SELECT count(*) FROM pg_type WHERE typname = 'dc_dom'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pg_collation WHERE collname = 'dc_dr'
+    expect: rows
+    order: ordered

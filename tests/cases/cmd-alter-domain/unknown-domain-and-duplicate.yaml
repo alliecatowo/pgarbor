@@ -1,0 +1,40 @@
+# Errors for unknown domains and duplicate constraint names; the failed commands leave the domain unchanged.
+id: cmd-alter-domain.unknown-domain-and-duplicate
+title: "ALTER DOMAIN on an unknown domain, IF EXISTS misuse and duplicate constraint names raise errors without changes"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, check-constraint, error-handling]
+required_capabilities: [create-domain, alter-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (synopsis; name parameter)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN d1 AS int CONSTRAINT c1 CHECK (VALUE > 0);
+steps:
+  - sql: |
+      ALTER DOMAIN nosuch SET NOT NULL
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER DOMAIN nosuch RENAME TO x
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER DOMAIN nosuch VALIDATE CONSTRAINT c1
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER DOMAIN IF EXISTS nosuch SET NOT NULL
+    expect: error
+    sqlstate: "42601"
+    comment: ALTER DOMAIN has no IF EXISTS form
+  - sql: |
+      ALTER DOMAIN d1 ADD CONSTRAINT c1 CHECK (VALUE > 1)
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT 0::d1
+    expect: error
+    sqlstate: "23514"
+    comment: the original c1 still applies

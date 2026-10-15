@@ -1,0 +1,37 @@
+# Current date/time functions: their result types, same-transaction equalities, and the pg_sleep family returning void. No clock values are compared.
+id: doc-functions-datetime.current-and-sleep-functions
+title: Current date/time functions return documented types and share one transaction time; pg_sleep returns void
+family: doc-functions-datetime
+tier: core
+feature_ids: [current-timestamp, current-date, current-time, localtime, transaction-timestamp, pg-sleep]
+required_capabilities: [select, date-type, timestamp, interval]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime-current (Current Date/Time); functions-datetime-delay (Delaying Execution)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_typeof(now()) AS now_t,
+             pg_typeof(current_date) AS date_t,
+             pg_typeof(current_time) AS time_t,
+             pg_typeof(current_time(2)) AS time_p_t,
+             pg_typeof(localtimestamp(2)) AS localts_t,
+             pg_typeof(localtime) AS localtime_t,
+             pg_typeof(timeofday()) AS timeofday_t,
+             pg_typeof(clock_timestamp()) AS clock_t
+    expect: rows
+    order: multiset
+    comment: now, current_timestamp and clock_timestamp are timestamptz; current_time is timetz; localtimestamp is timestamp; timeofday is text
+  - sql: |
+      SELECT now() = current_timestamp AS now_eq_current,
+             transaction_timestamp() = statement_timestamp() AS txn_eq_stmt,
+             current_date = localtimestamp::date AS date_eq_local,
+             current_time(0) = localtime(0) AS time_eq_local
+    expect: rows
+    order: multiset
+    comment: all four are true within one statement and transaction, so these comparisons are deterministic
+  - sql: |
+      SELECT pg_sleep(0) AS sleep_zero, pg_sleep_for(interval '0') AS sleep_for_zero, pg_typeof(pg_sleep(0)) AS sleep_t
+    expect: rows
+    order: multiset
+    comment: pg_sleep returns void, which the protocol shows as an empty value; zero duration returns immediately

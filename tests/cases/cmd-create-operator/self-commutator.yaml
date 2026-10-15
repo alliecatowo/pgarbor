@@ -1,0 +1,25 @@
+# A self-commutative operator needs no second definition: COMMUTATOR may name the operator being created.
+id: cmd-create-operator.self-commutator
+title: "An operator can name itself as its COMMUTATOR"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, commutator, self-commutative]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#notes (self-commutative operator)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_sym8(int8, int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * $2 + $1 + $2 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR #~# (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cco_sym8, COMMUTATOR = #~#)
+    expect: ok
+  - sql: |
+      SELECT oprname, oprcom = oid AS self_commutator, oprcom::regoperator AS commutator
+      FROM pg_operator WHERE oprname = '#~#' AND oprleft = 'int8'::regtype
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT 2 #~# 3 AS a, 3 #~# 2 AS b
+    expect: rows

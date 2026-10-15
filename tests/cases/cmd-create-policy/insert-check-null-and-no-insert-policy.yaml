@@ -1,0 +1,52 @@
+# A WITH CHECK that evaluates to NULL refuses the row, and with RLS on and no INSERT policy the insert is default-denied.
+id: cmd-create-policy.insert-check-null-and-no-insert-policy
+title: "INSERT refused when WITH CHECK is NULL or when no INSERT policy applies"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, insert, null-semantics, errors]
+required_capabilities: [create-table, insert, select, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy-insert and the Notes on default deny"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_ins;
+  CREATE TABLE t (id int4, v int4);
+  CREATE TABLE r (id int4);
+  GRANT ALL ON t, r TO pgarbor_case_cp_ins;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY c_ins ON t FOR INSERT TO pgarbor_case_cp_ins WITH CHECK (v > 0);
+  ALTER TABLE r ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY r_sel ON r FOR SELECT TO pgarbor_case_cp_ins USING (true);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_ins
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, NULL)
+    expect: error
+    sqlstate: "42501"
+    comment: NULL from the check expression is treated as failure
+  - sql: |
+      INSERT INTO t VALUES (2, 0)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      INSERT INTO t VALUES (3, 1)
+    expect: ok
+  - sql: |
+      INSERT INTO r VALUES (1)
+    expect: error
+    sqlstate: "42501"
+    comment: table r has RLS enabled and no INSERT policy, so the default is deny
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the owner bypasses RLS, so the one accepted row is visible
+  - sql: |
+      DROP TABLE t, r; DROP ROLE pgarbor_case_cp_ins
+    expect: ok

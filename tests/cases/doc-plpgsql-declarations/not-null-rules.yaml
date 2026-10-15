@@ -1,0 +1,46 @@
+# NOT NULL variables need a non-null default at declaration; a NULL default or NULL assignment fails with 22004 at run time.
+id: doc-plpgsql-declarations.not-null-rules
+title: NOT NULL variables require a non-null default; NULL default or assignment raises 22004
+family: doc-plpgsql-declarations
+tier: core
+feature_ids: [plpgsql, not-null, variable-declaration, errors, null-handling]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-declarations-variables (NOT NULL; DEFAULT)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION nn_no_default() RETURNS int LANGUAGE plpgsql AS $$
+      DECLARE n int NOT NULL;
+      BEGIN RETURN 1; END $$
+    expect: error
+    sqlstate: "22004"
+    comment: a NOT NULL variable must have a default value, rejected at CREATE
+  - sql: |
+      CREATE FUNCTION nn_null_default() RETURNS int LANGUAGE plpgsql AS $$
+      DECLARE n int NOT NULL DEFAULT NULL;
+      BEGIN RETURN 1; END $$
+    expect: ok
+  - sql: |
+      SELECT nn_null_default()
+    expect: error
+    sqlstate: "22004"
+    comment: the NULL default is applied on block entry and violates NOT NULL
+  - sql: |
+      CREATE FUNCTION nn_assign_null() RETURNS int LANGUAGE plpgsql AS $$
+      DECLARE n int NOT NULL DEFAULT 1;
+      BEGIN n := NULL; RETURN n; END $$
+    expect: ok
+  - sql: |
+      SELECT nn_assign_null()
+    expect: error
+    sqlstate: "22004"
+  - sql: |
+      CREATE FUNCTION nn_ok() RETURNS int LANGUAGE plpgsql AS $$
+      DECLARE n int NOT NULL DEFAULT 1;
+      BEGIN n := n + 1; RETURN n; END $$
+    expect: ok
+  - sql: |
+      SELECT nn_ok() AS n
+    expect: rows

@@ -1,0 +1,45 @@
+# Generation expressions may not contain subqueries, references to other generated columns,
+# system columns (other than tableoid), or non-immutable functions.
+id: doc-ddl-generated-columns.expression-restrictions
+title: Generation expressions reject subqueries, other generated columns, system columns, and stable functions
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, generation-expression-restrictions]
+required_capabilities: [create-table, generated-columns, create-function-sql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE FUNCTION st_id(int) RETURNS int LANGUAGE sql STABLE AS 'SELECT $1';
+  CREATE TABLE base_ok (x int, g int GENERATED ALWAYS AS (x + 1) STORED)
+steps:
+  - sql: |
+      CREATE TABLE er_subq (x int, g int GENERATED ALWAYS AS ((SELECT 1)) STORED)
+    expect: error
+    sqlstate: "0A000"
+    comment: subqueries are not allowed, even though the rest of the table is valid
+  - sql: |
+      CREATE TABLE er_gen_ref (x int, g int GENERATED ALWAYS AS (x + 1) STORED, h int GENERATED ALWAYS AS (g + 1) STORED)
+    expect: error
+    sqlstate: "42P17"
+    comment: a generation expression may not reference another generated column
+  - sql: |
+      CREATE TABLE er_ctid (x int, g int GENERATED ALWAYS AS (x + length(ctid::text)) STORED)
+    expect: error
+    sqlstate: "42P10"
+    comment: ctid is a system column other than tableoid
+  - sql: |
+      CREATE TABLE er_xmin (x int, g int GENERATED ALWAYS AS (x + length(xmin::text)) VIRTUAL)
+    expect: error
+    sqlstate: "42P10"
+    comment: the same restriction applies to virtual columns
+  - sql: |
+      CREATE TABLE er_stable (x int, g int GENERATED ALWAYS AS (st_id(x)) STORED)
+    expect: error
+    sqlstate: "42P17"
+    comment: a STABLE function is not immutable and is rejected in a generation expression
+  - sql: |
+      CREATE TABLE er_ok (x int, g int GENERATED ALWAYS AS (x * 2) STORED)
+    expect: ok
+    comment: control case showing the rejected forms fail on their own, not because of the table shape

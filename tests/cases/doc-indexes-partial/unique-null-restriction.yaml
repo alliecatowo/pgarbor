@@ -1,0 +1,38 @@
+# Allowing only one NULL in a column with a partial unique index. A plain (col) index does not do this because NULLs are distinct; an expression index on a constant does.
+id: doc-indexes-partial.unique-null-restriction
+title: Unique partial index on a constant expression WHERE col IS NULL permits only one NULL in col
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, unique-index, null-semantics, expression-index, errors]
+required_capabilities: [create-table, create-index, expression-index, unique-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex3 (the IS NULL restriction note)"
+sessions: [a]
+setup: |
+  CREATE TABLE singles (k int, v text);
+  CREATE UNIQUE INDEX singles_one_null ON singles ((1)) WHERE k IS NULL;
+steps:
+  - sql: |
+      INSERT INTO singles VALUES (NULL, 'a'), (1, 'b'), (2, 'c'), (3, 'd')
+    expect: ok
+    comment: the first NULL is accepted; non-NULL rows are outside the index
+  - sql: |
+      INSERT INTO singles VALUES (NULL, 'e')
+    expect: error
+    sqlstate: "23505"
+    comment: the index key is the constant 1 for every NULL row, so a second NULL collides
+  - sql: |
+      INSERT INTO singles VALUES (1, 'f'), (1, 'g')
+    expect: ok
+    comment: repeated non-NULL keys are not constrained by this index
+  - sql: |
+      SELECT k IS NULL AS k_null, count(*) AS n FROM singles GROUP BY 1 ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: one NULL row, five non-NULL rows
+  - sql: |
+      UPDATE singles SET k = NULL WHERE v = 'f'
+    expect: error
+    sqlstate: "23505"
+    comment: updating a row into the restricted state is checked the same way

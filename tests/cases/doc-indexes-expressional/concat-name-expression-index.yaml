@@ -1,0 +1,45 @@
+# Index on (first_name || ' ' || last_name) serves equality on the same expression; NULL inputs give NULL keys.
+id: doc-indexes-expressional.concat-name-expression-index
+title: Index on a concatenation expression serves the documented people_names query shape
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, create-index, text-concatenation, null-semantics]
+required_capabilities: [create-table, create-index, insert, select]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (people_names example)"
+sessions: [a]
+setup: |
+  CREATE TABLE people (id int4 PRIMARY KEY, first_name text, last_name text);
+  INSERT INTO people VALUES (1, 'John', 'Smith'), (2, 'John', 'Smithers'), (3, 'Jane', 'Smith'), (4, 'John', NULL), (5, 'Ann', '');
+  CREATE INDEX people_names ON people ((first_name || ' ' || last_name));
+steps:
+  - sql: |
+      SELECT id FROM people WHERE (first_name || ' ' || last_name) = 'John Smith' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the documented query shape
+  - sql: |
+      SELECT id FROM people WHERE first_name || ' ' || last_name = 'John Smith' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the parentheses in the query are optional; || binds tighter than =
+  - sql: |
+      SELECT id, first_name || ' ' || last_name AS full_name FROM people ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a NULL last_name makes the whole concatenation NULL; an empty string does not
+  - sql: |
+      SELECT id FROM people WHERE (first_name || ' ' || last_name) IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM people WHERE (first_name || ' ' || last_name) LIKE 'John%' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL keys are excluded from LIKE
+  - sql: |
+      SELECT id FROM people WHERE (first_name || ' ' || last_name) = 'Ann '
+    expect: rows
+    order: multiset
+    comment: text is not trimmed, so the trailing space from the empty last name is significant

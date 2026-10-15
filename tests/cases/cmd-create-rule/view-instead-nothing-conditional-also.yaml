@@ -1,0 +1,37 @@
+# The documented updatable-view pattern: an unconditional DO INSTEAD NOTHING rule plus conditional non-INSTEAD rules that add side effects.
+id: cmd-create-rule.view-instead-nothing-conditional-also
+title: Unconditional INSTEAD NOTHING on a view with conditional ALSO rules adds only the matching side effects
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, create-view, instead, also, views, rules]
+required_capabilities: [create-table, create-view, create-rule, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Description: conditional rules with unconditional DO INSTEAD NOTHING)"
+sessions: [a]
+setup: |
+  CREATE TABLE vr (id int4, n text);
+  CREATE TABLE vr_log (id int4);
+  CREATE VIEW vview AS SELECT id, n FROM vr;
+  CREATE RULE v_nothing AS ON INSERT TO vview DO INSTEAD NOTHING;
+  CREATE RULE v_log AS ON INSERT TO vview WHERE NEW.id > 10 DO ALSO INSERT INTO vr_log VALUES (NEW.id);
+steps:
+  - sql: |
+      INSERT INTO vview VALUES (5, 'a'), (20, 'b')
+    expect: ok
+    comment: the view insert is INSTEAD NOTHING, so the base table receives nothing
+  - sql: |
+      SELECT count(*) AS n FROM vr
+    expect: rows
+  - sql: |
+      SELECT id FROM vr_log ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the row satisfying NEW.id > 10 fires the ALSO side effect
+  - sql: |
+      INSERT INTO vview VALUES (NULL, 'n')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM vr_log
+    expect: rows
+    comment: NULL > 10 is unknown, so the conditional rule does not fire and the log is unchanged

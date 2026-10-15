@@ -1,0 +1,41 @@
+# Searched CASE: documented example, ELSE omitted yields NULL, NULL condition is not true,
+# and branch results unify to a common type (integer and numeric -> numeric).
+id: doc-functions-conditional.case-searched
+title: Searched CASE with WHEN chains, omitted ELSE, NULL conditions and common result type
+family: doc-functions-conditional
+tier: core
+feature_ids: [case-expression, searched-case, null-semantics, type-resolution]
+required_capabilities: [select, create-table, insert, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-case (searched CASE example and NULL rules)"
+sessions: [a]
+setup: |
+  CREATE TABLE test (a int4);
+  INSERT INTO test VALUES (1), (2), (3);
+steps:
+  - sql: |
+      SELECT a, CASE WHEN a = 1 THEN 'one' WHEN a = 2 THEN 'two' ELSE 'other' END AS c FROM test ORDER BY a
+    expect: rows
+    order: ordered
+    comment: documented example output one, two, other
+  - sql: |
+      SELECT CASE WHEN false THEN 1 END AS no_else, pg_typeof(CASE WHEN false THEN 1 END)::text AS t
+    expect: rows
+    order: multiset
+    comment: omitted ELSE with no true condition yields NULL, type still integer
+  - sql: |
+      SELECT CASE WHEN NULL THEN 'a' ELSE 'b' END AS null_cond
+    expect: rows
+    order: multiset
+    comment: a NULL condition is not true, so the ELSE branch is taken
+  - sql: |
+      SELECT CASE WHEN true THEN 1 ELSE 2.5 END AS v, pg_typeof(CASE WHEN true THEN 1 ELSE 2.5 END)::text AS t
+    expect: rows
+    order: multiset
+    comment: integer and numeric branches resolve to numeric
+  - sql: |
+      SELECT a, CASE WHEN a IS NULL THEN 'missing' WHEN a > 1 THEN 'big' END AS c FROM (VALUES (NULL::int4), (1), (2)) v(a) ORDER BY a NULLS FIRST
+    expect: rows
+    order: ordered
+    comment: NULL input matches the first arm, 1 matches no arm and yields NULL

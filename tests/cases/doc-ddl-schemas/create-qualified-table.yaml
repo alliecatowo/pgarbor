@@ -1,0 +1,34 @@
+# CREATE SCHEMA plus schema-qualified table names: objects live in the named schema, not public.
+id: doc-ddl-schemas.create-qualified-table
+title: Schema-qualified CREATE TABLE lands in the named schema and is rejected in a missing schema
+family: doc-ddl-schemas
+tier: core
+feature_ids: [create-schema, qualified-names, create-table, insert, select]
+required_capabilities: [create-schema, create-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-create (CREATE SCHEMA myschema; CREATE TABLE myschema.mytable)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA myschema
+    expect: ok
+  - sql: |
+      CREATE TABLE myschema.mytable (id int4 PRIMARY KEY, v text)
+    expect: ok
+  - sql: |
+      INSERT INTO myschema.mytable VALUES (2, 'two'), (1, NULL)
+    expect: ok
+  - sql: |
+      SELECT id, v FROM myschema.mytable ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_regclass('public.mytable') IS NULL AS not_in_public, to_regclass('myschema.mytable') IS NOT NULL AS in_myschema
+    expect: rows
+    comment: the table was created in myschema, not in the public schema
+  - sql: |
+      CREATE TABLE no_such_schema_q.t (id int4)
+    expect: error
+    sqlstate: "3F000"
+    comment: a qualified name whose schema does not exist is an invalid_schema_name error

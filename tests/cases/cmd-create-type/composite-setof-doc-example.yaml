@@ -1,0 +1,47 @@
+# Doc example: composite type used as the SETOF return type of a SQL function over a table.
+id: cmd-create-type.composite-setof-doc-example
+title: "CREATE TYPE composite as SETOF return type of a SQL function"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, composite-types, create-function, select, errors]
+required_capabilities: [create-type, create-table, insert, select, create-function, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype (Examples: compfoo / getfoo)"
+steps:
+  - sql: |
+      CREATE TYPE compfoo AS (f1 int, f2 text)
+    expect: ok
+  - sql: |
+      CREATE TABLE foo (fooid int, fooname text)
+    expect: ok
+  - sql: |
+      INSERT INTO foo VALUES (2, 'two'), (1, 'one'), (3, NULL)
+    expect: ok
+  - sql: |
+      CREATE FUNCTION getfoo() RETURNS SETOF compfoo AS $$
+          SELECT fooid, fooname FROM foo
+      $$ LANGUAGE SQL
+    expect: ok
+  - sql: |
+      SELECT f1, f2 FROM getfoo() ORDER BY f1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT g::text AS txt FROM getfoo() AS g ORDER BY g::text
+    expect: rows
+    order: ordered
+    comment: a NULL field renders as an empty slot in the record text form
+  - sql: |
+      SELECT ROW(1, 'x')::compfoo = ROW(1, 'x')::compfoo AS eq, ROW(1, 'x')::compfoo = ROW(1, 'y')::compfoo AS ne
+    expect: rows
+  - sql: |
+      CREATE TYPE compfoo AS (f1 int, f2 text)
+    expect: error
+    sqlstate: "42710"
+    comment: the type name is already in use
+  - sql: |
+      SELECT f3 FROM getfoo()
+    expect: error
+    sqlstate: "42703"
+    comment: no such column in the composite result

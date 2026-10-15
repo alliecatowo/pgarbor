@@ -1,0 +1,41 @@
+# DO NOTHING skips a source row; the first clause that is true wins, so the later UPDATE is not applied to that row.
+id: cmd-merge.do-nothing-skips-rows
+title: MERGE DO NOTHING skips matched rows and is omitted from RETURNING
+family: cmd-merge
+tier: core
+feature_ids: [merge, do-nothing, returning, when-clause-order]
+required_capabilities: [create-table, insert, select, update, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Description: DO NOTHING; Notes: clause evaluation order)"
+setup: |
+  CREATE TABLE wines (winename text PRIMARY KEY, stock integer);
+  CREATE TABLE new_wine_list (winename text, stock integer);
+  INSERT INTO wines VALUES ('Cheval', 4), ('Lafite', 20), ('Latour', 9);
+  INSERT INTO new_wine_list VALUES ('Latour', 9), ('Cheval', 4), ('Lafite', 20);
+steps:
+  - sql: |
+      MERGE INTO wines w
+      USING new_wine_list s
+      ON s.winename = w.winename
+      WHEN MATCHED AND s.stock = 9 THEN
+        DO NOTHING
+      WHEN MATCHED THEN
+        UPDATE SET stock = 1
+      RETURNING merge_action(), w.winename, w.stock
+    expect: rows
+    order: multiset
+    comment: expect ('UPDATE','Cheval',1) and ('UPDATE','Lafite',1) only; Latour is skipped and not returned
+  - sql: |
+      SELECT winename, stock FROM wines ORDER BY winename
+    expect: rows
+    order: ordered
+    comment: expect Cheval 1, Lafite 1, Latour 9
+  - sql: |
+      MERGE INTO wines w
+      USING new_wine_list s
+      ON s.winename = w.winename
+      WHEN MATCHED THEN
+        DO NOTHING
+    expect: ok
+    comment: expect command tag MERGE 0 since DO NOTHING changes no rows

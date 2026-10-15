@@ -1,0 +1,39 @@
+# In a failed transaction block every statement is refused until ROLLBACK, which then discards the earlier successful work.
+id: cmd-rollback.failed-block-rollback
+title: ROLLBACK ends a failed block and discards its earlier successful work
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, transactions, insert, errors, unique-constraint]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback (Description: rolls back the current transaction)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate key aborts the block
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: error
+    sqlstate: "25P02"
+    comment: current transaction is aborted
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the setup row remains

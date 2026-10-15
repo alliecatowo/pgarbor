@@ -1,0 +1,43 @@
+# Column DEFAULT clauses: nextval() and literal defaults apply through DEFAULT VALUES and the DEFAULT keyword; a named NOT NULL constraint rejects NULL.
+id: cmd-create-table.identity-and-default-values
+title: Column defaults from a sequence and a literal apply on DEFAULT VALUES, and named NOT NULL rejects NULL
+family: cmd-create-table
+tier: core
+feature_ids: [create-table, column-default, sequences, not-null, named-constraints]
+required_capabilities: [create-table, insert, select, sequences, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_table.sgml#sql-createtable-examples (Assign a literal constant default value; Define two NOT NULL column constraints)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE distributors_serial
+steps:
+  - sql: |
+      CREATE TABLE distributors (
+          name      varchar(40) DEFAULT 'Luso Films',
+          did       integer DEFAULT nextval('distributors_serial'),
+          modtime   timestamp DEFAULT current_timestamp
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO distributors DEFAULT VALUES
+    expect: ok
+  - sql: |
+      INSERT INTO distributors (name, did) VALUES (DEFAULT, DEFAULT)
+    expect: ok
+  - sql: |
+      SELECT did, name, modtime IS NOT NULL AS has_modtime FROM distributors ORDER BY did
+    expect: rows
+    order: ordered
+    comment: the timestamp itself varies, so only its nullness is compared
+  - sql: |
+      CREATE TABLE distributors_nn (
+          did     integer CONSTRAINT no_null NOT NULL,
+          name    varchar(40) NOT NULL
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO distributors_nn VALUES (NULL, 'x')
+    expect: error
+    sqlstate: "23502"
+    comment: the named constraint no_null rejects NULL did

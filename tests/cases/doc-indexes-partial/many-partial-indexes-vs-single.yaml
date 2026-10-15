@@ -1,0 +1,43 @@
+# The documented anti-pattern (one partial index per category) gives the same answers as a single multicolumn index; only the plan differs, which is not compared.
+id: doc-indexes-partial.many-partial-indexes-vs-single
+title: One partial index per category returns the same rows as a single composite index
+family: doc-indexes-partial
+tier: extended
+feature_ids: [partial-index, multicolumn-index, create-index, partitioning-alternative]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex4 (Do Not Use Partial Indexes as a Substitute for Partitioning)"
+sessions: [a]
+setup: |
+  CREATE TABLE mytable (category int, data text);
+  INSERT INTO mytable SELECT (i % 4) + 1, 'd' || lpad(i::text, 3, '0') FROM generate_series(1, 40) AS g(i);
+steps:
+  - sql: |
+      CREATE INDEX mytable_cat_1 ON mytable (data) WHERE category = 1;
+      CREATE INDEX mytable_cat_2 ON mytable (data) WHERE category = 2;
+      CREATE INDEX mytable_cat_3 ON mytable (data) WHERE category = 3;
+      CREATE INDEX mytable_cat_4 ON mytable (data) WHERE category = 4
+    expect: ok
+  - sql: |
+      SELECT category, data FROM mytable WHERE category = 2 AND data > 'd020' ORDER BY data
+    expect: rows
+    order: ordered
+    comment: a query that matches one partial predicate
+  - sql: |
+      SELECT category, data FROM mytable WHERE data BETWEEN 'd010' AND 'd015' ORDER BY category, data
+    expect: rows
+    order: ordered
+    comment: a query that matches no predicate; every partial index is inapplicable and the result is still complete
+  - sql: |
+      CREATE INDEX mytable_cat_data ON mytable (category, data)
+    expect: ok
+    comment: the recommended single composite index, category first
+  - sql: |
+      SELECT category, data FROM mytable WHERE category = 2 AND data > 'd020' ORDER BY data
+    expect: rows
+    order: ordered
+    comment: the composite index returns the identical answer
+  - sql: |
+      SELECT count(*) AS n FROM mytable WHERE category IN (1, 3)
+    expect: rows

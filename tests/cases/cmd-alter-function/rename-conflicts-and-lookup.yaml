@@ -1,0 +1,49 @@
+# Rename fails when the name is ambiguous without an argument list, when the target signature
+# already exists, and when the argument list matches no function.
+id: cmd-alter-function.rename-conflicts-and-lookup
+title: RENAME errors for ambiguous name, duplicate target signature, and unknown signature
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, rename, function-identity, overloading]
+required_capabilities: [create-function, alter-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: name, argtype; RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION f(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION f(text) RETURNS text LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION h(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION f RENAME TO k
+    expect: error
+    sqlstate: "42725"
+    comment: name is not unique without an argument list
+  - sql: |
+      ALTER FUNCTION f(int) RENAME TO h
+    expect: error
+    sqlstate: "42723"
+    comment: h(integer) already exists in the schema
+  - sql: |
+      ALTER FUNCTION f(boolean) RENAME TO z
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER FUNCTION f(int, int) RENAME TO z
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      ALTER FUNCTION f(text) RENAME TO f_text
+    expect: ok
+  - sql: |
+      ALTER FUNCTION f RENAME TO k
+    expect: ok
+    comment: after f(text) moved away the bare name is unique, so it resolves to f(integer)
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args
+        FROM pg_proc
+       WHERE pronamespace = 'public'::regnamespace AND proname IN ('k', 'f_text', 'h', 'f')
+       ORDER BY 1, 2
+    expect: rows
+    order: ordered

@@ -1,0 +1,33 @@
+# Documented example: replace a wine list with NOT MATCHED BY TARGET insert, MATCHED update, and NOT MATCHED BY SOURCE delete.
+id: cmd-merge.docs-replace-wine-list
+title: MERGE documentation replacement-list example uses BY TARGET insert and BY SOURCE delete
+family: cmd-merge
+tier: core
+feature_ids: [merge, not-matched-by-target, not-matched-by-source, update, delete, insert]
+required_capabilities: [create-table, insert, select, update, delete, merge]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Examples: wines / new_wine_list, WHEN NOT MATCHED BY TARGET / BY SOURCE)"
+setup: |
+  CREATE TABLE wines (winename text PRIMARY KEY, stock integer);
+  CREATE TABLE new_wine_list (winename text, stock integer);
+  INSERT INTO wines VALUES ('Lafite', 20), ('Latour', 7), ('Old Bottle', 3);
+  INSERT INTO new_wine_list VALUES ('Latour', 9), ('Cheval', 4), ('Lafite', 20);
+steps:
+  - sql: |
+      MERGE INTO wines w
+      USING new_wine_list s
+      ON s.winename = w.winename
+      WHEN NOT MATCHED BY TARGET THEN
+        INSERT VALUES(s.winename, s.stock)
+      WHEN MATCHED AND w.stock != s.stock THEN
+        UPDATE SET stock = s.stock
+      WHEN NOT MATCHED BY SOURCE THEN
+        DELETE
+    expect: ok
+    comment: expect MERGE 3 (insert Cheval, update Latour, delete Old Bottle); Lafite unchanged since stock equal
+  - sql: |
+      SELECT winename, stock FROM wines ORDER BY winename
+    expect: rows
+    order: ordered
+    comment: expect (Cheval,4), (Lafite,20), (Latour,9)

@@ -1,0 +1,50 @@
+id: cmd-fetch.fetch-syntax-and-count-range
+title: FETCH rejects malformed directions and out-of-int4-range counts at parse time; in-range extremes parse
+family: cmd-fetch
+tier: extended
+feature_ids: [fetch, syntax-errors, fetch-count, fetch-absolute]
+required_capabilities: [transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/fetch.sgml#sql-fetch (Synopsis; Parameters: count is a possibly-signed integer constant)"
+sessions: [a]
+notes: |
+  Each statement names a cursor that does not exist. A parse-time failure reports 42601 before any
+  cursor lookup; a statement that parses reports 34000 instead. The -2147483648 case is a syntax error
+  because the literal is parsed as unary minus applied to an out-of-range 2147483648.
+steps:
+  - sql: |
+      FETCH SIDEWAYS nope
+    expect: error
+    sqlstate: "42601"
+    comment: SIDEWAYS is not a direction, so the statement is malformed
+  - sql: |
+      FETCH ABSOLUTE FROM nope
+    expect: error
+    sqlstate: "42601"
+    comment: ABSOLUTE requires a count
+  - sql: |
+      FETCH 'x' FROM nope
+    expect: error
+    sqlstate: "42601"
+    comment: count must be an integer constant, not a string
+  - sql: |
+      FETCH ABSOLUTE 1.5 FROM nope
+    expect: error
+    sqlstate: "42601"
+    comment: count must be an integer
+  - sql: |
+      FETCH 2147483648 FROM nope
+    expect: error
+    sqlstate: "42601"
+    comment: one past the int4 maximum does not parse
+  - sql: |
+      FETCH ABSOLUTE -2147483648 FROM nope
+    expect: error
+    sqlstate: "42601"
+    comment: the most negative int4 does not parse as a signed constant
+  - sql: |
+      FETCH ABSOLUTE 2147483647 FROM nope
+    expect: error
+    sqlstate: "34000"
+    comment: the int4 maximum parses, so the failure is the missing cursor

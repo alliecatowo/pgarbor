@@ -1,0 +1,35 @@
+# WHEN TAG IN (...) fires only for the listed command tags, once per matching command.
+id: cmd-create-event-trigger.tag-filter-fires-listed-tags
+title: ddl_command_start trigger with a two-tag filter fires for CREATE TABLE and DROP TABLE only
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-tag-filter]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, views]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE TABLE evlog (seq int4 GENERATED ALWAYS AS IDENTITY, evt text, tag text);
+  CREATE FUNCTION log_start() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  BEGIN INSERT INTO evlog (evt, tag) VALUES (tg_event, tg_tag); END; $$;
+  CREATE EVENT TRIGGER s_start ON ddl_command_start
+    WHEN TAG IN ('CREATE TABLE', 'DROP TABLE')
+    EXECUTE FUNCTION log_start();
+steps:
+  - sql: |
+      CREATE TABLE tt (a int4)
+    expect: ok
+  - sql: |
+      CREATE VIEW vv AS SELECT 1 AS x
+    expect: ok
+    comment: CREATE VIEW is not in the filter list
+  - sql: |
+      DROP TABLE tt
+    expect: ok
+  - sql: |
+      DROP VIEW vv
+    expect: ok
+  - sql: |
+      SELECT evt, tag FROM evlog ORDER BY seq
+    expect: rows
+    order: ordered

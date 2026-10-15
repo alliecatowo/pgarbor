@@ -1,0 +1,33 @@
+# RENAME TO a taken name fails; ALTER MATERIALIZED VIEW on a plain table is rejected.
+id: cmd-alter-materialized-view.rename-to-existing-and-wrong-relkind
+title: "RENAME TO an existing relation and ALTER MATERIALIZED VIEW on a table both fail"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, rename, error-handling]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (name must be an existing materialized view)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_rx_base (id int4);
+  CREATE MATERIALIZED VIEW amv_rx_one AS SELECT id FROM amv_rx_base;
+  CREATE MATERIALIZED VIEW amv_rx_two AS SELECT id FROM amv_rx_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rx_one RENAME TO amv_rx_two
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rx_base RENAME TO amv_rx_renamed
+    expect: error
+    sqlstate: "42809"
+    comment: amv_rx_base is a plain table, not a materialized view
+  - sql: |
+      SELECT matviewname FROM pg_matviews WHERE matviewname LIKE 'amv_rx%' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname LIKE 'amv_rx%' AND relkind IN ('r', 'm') ORDER BY 1
+    expect: rows
+    order: ordered

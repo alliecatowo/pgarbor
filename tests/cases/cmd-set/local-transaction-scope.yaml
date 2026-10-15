@@ -1,0 +1,38 @@
+# SET LOCAL lasts until the end of the current transaction, whether it commits or rolls back.
+id: cmd-set.local-transaction-scope
+title: SET LOCAL takes effect inside the transaction and is discarded at COMMIT or ROLLBACK
+family: cmd-set
+tier: core
+feature_ids: [set, set-local, transactions]
+required_capabilities: [select, guc, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/set.sgml#sql-set (Description: LOCAL)"
+sessions: [a]
+setup: |
+  CREATE TABLE cmd_set_marker (id int4 PRIMARY KEY)
+steps:
+  - sql: |
+      SET work_mem = '4MB'
+    expect: ok
+  - sql: |
+      BEGIN; SET LOCAL work_mem = '6MB'; SELECT current_setting('work_mem') AS inside; COMMIT
+    expect: ok
+    comment: inside the block the LOCAL value is visible
+  - sql: |
+      SELECT current_setting('work_mem') AS after_commit
+    expect: rows
+    comment: reverts to the session value 4MB after COMMIT
+  - sql: |
+      BEGIN; SET LOCAL work_mem = '7MB'; SELECT current_setting('work_mem') AS inside_rollback; ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT current_setting('work_mem') AS after_rollback
+    expect: rows
+    comment: reverts to 4MB after ROLLBACK
+  - sql: |
+      BEGIN; SET LOCAL work_mem = '8MB'; INSERT INTO cmd_set_marker VALUES (1); COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_setting('work_mem') AS after_dml_commit, (SELECT count(*) FROM cmd_set_marker) AS rows_written
+    expect: rows

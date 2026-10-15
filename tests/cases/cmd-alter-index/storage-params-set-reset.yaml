@@ -1,0 +1,66 @@
+# ALTER INDEX ... SET/RESET storage parameters: docs fillfactor example, comma-separated subcommands, RESET of unknown names is ignored.
+id: cmd-alter-index.storage-params-set-reset
+title: SET and RESET index storage parameters, read back via pg_class.reloptions
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, storage-parameters, fillfactor, reset]
+required_capabilities: [create-table, create-index, alter-index, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (SET/RESET storage_parameter; Examples: change an index's fill factor)"
+sessions: [a]
+setup: |
+  CREATE TABLE measured (x int4, y int4);
+  CREATE INDEX distributors ON measured (x);
+steps:
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'distributors'::regclass
+    expect: rows
+    order: ordered
+    comment: no storage parameters yet, so reloptions is NULL
+  - sql: |
+      ALTER INDEX distributors SET (fillfactor = 75)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'distributors'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      REINDEX INDEX distributors
+    expect: ok
+    comment: docs follow SET with REINDEX; the option stays in place afterwards
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'distributors'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX distributors SET (fillfactor = 60), SET (deduplicate_items = off)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'distributors'::regclass
+    expect: rows
+    order: ordered
+    comment: both options present, in the order they were stored
+  - sql: |
+      SELECT opt FROM pg_class c, unnest(c.reloptions) AS opt WHERE c.oid = 'distributors'::regclass ORDER BY opt
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX distributors RESET (fillfactor)
+    expect: ok
+  - sql: |
+      SELECT opt FROM pg_class c, unnest(c.reloptions) AS opt WHERE c.oid = 'distributors'::regclass ORDER BY opt
+    expect: rows
+    order: ordered
+    comment: only deduplicate_items remains
+  - sql: |
+      ALTER INDEX distributors RESET (fillfactor, no_such_option)
+    expect: ok
+    comment: RESET ignores names that are not valid storage parameters
+  - sql: |
+      ALTER INDEX distributors RESET (deduplicate_items)
+    expect: ok
+  - sql: |
+      SELECT reloptions IS NULL AS no_options FROM pg_class WHERE oid = 'distributors'::regclass
+    expect: rows
+    order: ordered

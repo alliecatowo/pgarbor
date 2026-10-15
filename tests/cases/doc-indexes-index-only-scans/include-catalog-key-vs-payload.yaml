@@ -1,0 +1,35 @@
+# Documented: INCLUDE columns are payload, not part of the search key, and need not have a btree-compatible type.
+id: doc-indexes-index-only-scans.include-catalog-key-vs-payload
+title: INCLUDE columns are stored as non-key attributes and may use types with no btree opclass
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, include-columns, index-catalog]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (CREATE INDEX tab_x_y ON tab(x) INCLUDE (y); column y is not part of the search key and need not be a type the index can handle)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab (x text, y text, z text);
+  CREATE INDEX tab_x_y ON tab (x) INCLUDE (y);
+  CREATE TABLE typed (x int, doc json, shape point);
+  CREATE INDEX typed_x ON typed (x) INCLUDE (doc, shape);
+  INSERT INTO typed VALUES (1, '{"k": "v"}', point(1, 2));
+steps:
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx, indnkeyatts, indnatts FROM pg_index WHERE indrelid = 'tab'::regclass ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: indnkeyatts counts key columns only; indnatts includes the INCLUDE payload
+  - sql: |
+      SELECT pg_get_indexdef('tab_x_y'::regclass)
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_get_indexdef('typed_x'::regclass)
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x, doc->>'k' AS k, shape[0] AS px FROM typed WHERE x = 1
+    expect: rows
+    order: ordered

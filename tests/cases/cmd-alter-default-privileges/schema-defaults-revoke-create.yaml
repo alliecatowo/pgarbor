@@ -1,0 +1,38 @@
+# Documented schema privilege variant: a role's default that revokes CREATE from PUBLIC applies to schemas it creates later.
+id: cmd-alter-default-privileges.schema-defaults-revoke-create
+title: FOR ROLE REVOKE CREATE ON SCHEMAS changes the schemas that role creates later
+family: cmd-alter-default-privileges
+tier: extended
+feature_ids: [alter-default-privileges, schemas, revoke, create-schema, default-acl, privileges]
+required_capabilities: [create-schema, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-synopsis (ON SCHEMAS privileges USAGE and CREATE)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_admin') THEN CREATE ROLE adp_admin; END IF;
+  END $$;
+  DO $$ BEGIN
+    EXECUTE format('GRANT CREATE ON DATABASE %I TO adp_admin', current_database());
+  END $$;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES FOR ROLE adp_admin REVOKE CREATE ON SCHEMAS FROM PUBLIC
+    expect: ok
+  - sql: |
+      SET ROLE adp_admin
+    expect: ok
+  - sql: |
+      CREATE SCHEMA adp_admin_s
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT nspname, has_schema_privilege('public', nspname, 'CREATE') AS pub_create,
+             has_schema_privilege('public', nspname, 'USAGE') AS pub_usage
+      FROM pg_namespace WHERE nspname = 'adp_admin_s'
+    expect: rows
+    order: multiset
+    comment: PUBLIC loses CREATE on the new schema but keeps USAGE

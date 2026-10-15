@@ -1,0 +1,51 @@
+# READ UNCOMMITTED is accepted but behaves as READ COMMITTED: a concurrent uncommitted insert is not visible.
+id: cmd-set-transaction.read-uncommitted-no-dirty-read
+title: READ UNCOMMITTED reports read committed and never sees uncommitted rows
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, isolation-level, read-uncommitted, read-committed, multi-session]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: In PostgreSQL READ UNCOMMITTED is treated as READ COMMITTED)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: reports read committed
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no dirty read of b's uncommitted row 2
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

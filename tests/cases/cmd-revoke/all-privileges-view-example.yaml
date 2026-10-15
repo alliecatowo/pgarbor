@@ -1,0 +1,43 @@
+# Doc example: REVOKE ALL PRIVILEGES ON a view FROM a role removes every privilege that role was granted on it.
+id: cmd-revoke.all-privileges-view-example
+title: REVOKE ALL PRIVILEGES on a view removes all view privileges for the role
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, grant, all-privileges, views, privileges]
+required_capabilities: [create-table, create-view, select, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-examples (Revoke all privileges from user manuel on view kinds)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvk_manuel;
+  CREATE TABLE rvk_base (id int4, kind text);
+  CREATE VIEW rvk_kinds AS SELECT id, kind FROM rvk_base;
+  GRANT ALL PRIVILEGES ON rvk_kinds TO rvk_manuel;
+steps:
+  - sql: |
+      SELECT p, has_table_privilege('rvk_manuel', 'rvk_kinds', p) AS has_priv
+      FROM unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p
+      ORDER BY p
+    expect: rows
+    order: ordered
+    comment: GRANT ALL on a view grants the view-applicable privileges
+  - sql: |
+      REVOKE ALL PRIVILEGES ON rvk_kinds FROM rvk_manuel
+    expect: ok
+  - sql: |
+      SELECT p, has_table_privilege('rvk_manuel', 'rvk_kinds', p) AS has_priv
+      FROM unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p
+      ORDER BY p
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE rvk_manuel
+    expect: ok
+  - sql: |
+      SELECT id, kind FROM rvk_kinds
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,32 @@
+# RESTRICT (default) refuses to drop an enum used by a table column; CASCADE drops the column and keeps the table.
+id: cmd-drop-type.restrict-column-dependency-cascade
+title: RESTRICT refuses a type used by a table column; CASCADE drops the column only
+family: cmd-drop-type
+tier: core
+feature_ids: [drop-type, cascade, restrict, create-table, enum]
+required_capabilities: [drop-type, create-type, create-table, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_type.sgml#sql-droptype (CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('a', 'b');
+  CREATE TABLE tc (k int4, m mood);
+steps:
+  - sql: |
+      DROP TYPE mood
+    expect: error
+    sqlstate: "2BP01"
+    comment: RESTRICT is the default and refuses while column m depends on the type
+  - sql: |
+      DROP TYPE mood RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP TYPE mood CASCADE
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'tc'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: column m is gone, column k and the table remain

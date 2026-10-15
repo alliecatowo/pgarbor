@@ -1,0 +1,41 @@
+# CREATE OR REPLACE VIEW may append columns but may not rename, retype or drop existing view columns.
+id: cmd-create-view.or-replace-column-changes
+title: CREATE OR REPLACE VIEW appends columns but rejects renames, type changes and drops
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, or-replace, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview (CREATE OR REPLACE VIEW description)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy'), (2, 'B', 'Comedy'), (3, 'C', 'Drama'), (4, 'D', 'Comedy');
+steps:
+  - sql: |
+      CREATE VIEW film_titles AS SELECT id, title FROM films
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE VIEW film_titles AS SELECT id, title, kind FROM films
+    expect: ok
+    comment: a new column may be added at the end of the list
+  - sql: |
+      CREATE OR REPLACE VIEW film_titles AS SELECT id AS ident, title, kind FROM films
+    expect: error
+    sqlstate: "42P16"
+    comment: renaming an existing view column is refused
+  - sql: |
+      CREATE OR REPLACE VIEW film_titles AS SELECT id, title::varchar(10) AS title, kind FROM films
+    expect: error
+    sqlstate: "42P16"
+    comment: changing the data type of an existing view column is refused
+  - sql: |
+      CREATE OR REPLACE VIEW film_titles AS SELECT id, title FROM films
+    expect: error
+    sqlstate: "42P16"
+    comment: dropping an existing view column is refused
+  - sql: |
+      SELECT id, title, kind FROM film_titles ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,35 @@
+# Row-level BEFORE UPDATE sees the old version of its own row (OLD values still stored) and not the NEW value.
+id: doc-trigger-datachanges.row-before-update-old-new-values
+title: Row-level BEFORE UPDATE sees the stored old row but not the new value it is writing
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, row-level-triggers, plpgsql, update, visibility]
+required_capabilities: [create-table, insert, select, update, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (the data change causing the trigger to fire is not visible in a row-level BEFORE trigger)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  CREATE FUNCTION own_upd() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('own_old', (SELECT count(*) FROM t WHERE v = OLD.v));
+    INSERT INTO lg(tag, n) VALUES ('own_new', (SELECT count(*) FROM t WHERE v = NEW.v));
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER trg_own_upd BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION own_upd();
+steps:
+  - sql: |
+      UPDATE t SET v = 99 WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT tag, n FROM lg ORDER BY seq
+    expect: rows
+    order: ordered
+    comment: the old value is still visible to the trigger, the new value is not
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

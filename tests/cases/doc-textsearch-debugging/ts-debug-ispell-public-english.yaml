@@ -1,0 +1,28 @@
+# Documented ispell variant: the oracle image has no tsearch_data english.dict/english.affix, so it cannot run here.
+id: doc-textsearch-debugging.ts-debug-ispell-public-english
+title: ts_debug on a public.english configuration with an ispell dictionary in front of english_stem
+family: doc-textsearch-debugging
+tier: extended
+feature_ids: [ts-debug, ispell-template, dictionary-chain, stop-words]
+required_capabilities: [create-table, select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-debugging"
+quarantine:
+  reason: "oracle image lacks /usr/share/postgresql/18/tsearch_data/english.dict and english.affix, so the ispell template cannot load"
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION public.english ( COPY = pg_catalog.english )
+    expect: ok
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY english_ispell ( TEMPLATE = ispell, DictFile = english, AffFile = english, StopWords = english )
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION public.english ALTER MAPPING FOR asciiword WITH english_ispell, english_stem
+    expect: ok
+  - sql: |
+      SELECT alias, token, dictionaries, dictionary, lexemes
+      FROM ts_debug('public.english', 'The Brightest supernovaes') WITH ORDINALITY AS t(alias, description, token, dictionaries, dictionary, lexemes, n)
+      ORDER BY n
+    expect: rows
+    order: ordered

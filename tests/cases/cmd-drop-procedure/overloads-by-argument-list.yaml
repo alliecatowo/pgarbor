@@ -1,0 +1,48 @@
+# Overloads share a name; a bare name is ambiguous, while an argument list selects one overload.
+id: cmd-drop-procedure.overloads-by-argument-list
+title: DROP PROCEDURE selects one overload by argument types and rejects bare names when overloaded
+family: cmd-drop-procedure
+tier: core
+feature_ids: [drop-procedure, create-procedure, overloading, drop-if-exists, call]
+required_capabilities: [create-procedure, call, drop-procedure, plpgsql, errors, notice]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-notes (the argument list can be omitted only for a single procedure)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE ov(a int) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE ov(a text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP PROCEDURE ov
+    expect: error
+    sqlstate: "42725"
+    comment: the bare name matches two procedures
+  - sql: |
+      DROP PROCEDURE ov(text)
+    expect: ok
+  - sql: |
+      DROP PROCEDURE ov
+    expect: ok
+    comment: after the text overload is gone the bare name is unique
+  - sql: |
+      CREATE PROCEDURE ov(a int) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CALL ov(1)
+    expect: ok
+  - sql: |
+      DROP PROCEDURE ov(int)
+    expect: ok
+  - sql: |
+      DROP PROCEDURE ov(int)
+    expect: error
+    sqlstate: "42883"
+    comment: a second drop of the same signature finds nothing
+  - sql: |
+      CALL ov(1)
+    expect: error
+    sqlstate: "42883"

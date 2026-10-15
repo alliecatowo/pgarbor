@@ -1,0 +1,37 @@
+# A rule condition may reference only NEW and OLD and may not contain aggregates; violations fail at CREATE RULE time.
+id: cmd-create-rule.error-condition-aggregate-and-foreign-table
+title: Rule WHERE clause rejects aggregates and references to other tables, and accepts NEW
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, where-clause, errors, new-old]
+required_capabilities: [create-table, create-rule, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Parameters: condition cannot refer to tables except NEW and OLD, and cannot contain aggregate functions)"
+sessions: [a]
+setup: |
+  CREATE TABLE tg (a int4);
+  CREATE TABLE t2 (a int4);
+  INSERT INTO t2 VALUES (1);
+steps:
+  - sql: |
+      CREATE RULE agg_cond AS ON INSERT TO tg WHERE count(*) > 0 DO INSTEAD NOTHING
+    expect: error
+    sqlstate: "42803"
+    comment: aggregate functions are not allowed in the rule condition
+  - sql: |
+      CREATE RULE other_cond AS ON INSERT TO tg WHERE t2.a > 0 DO INSTEAD NOTHING
+    expect: error
+    sqlstate: "42P01"
+    comment: t2 is not in the rule's FROM scope; only NEW and OLD are visible
+  - sql: |
+      CREATE RULE ok_cond AS ON INSERT TO tg WHERE NEW.a > 0 DO INSTEAD NOTHING
+    expect: ok
+  - sql: |
+      INSERT INTO tg VALUES (5), (-5)
+    expect: ok
+  - sql: |
+      SELECT a FROM tg ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the conditional INSTEAD NOTHING rule swallows only the row with NEW.a > 0

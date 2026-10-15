@@ -1,0 +1,36 @@
+# CASCADE and RESTRICT are accepted and have no effect because statistics objects have no dependents.
+id: cmd-drop-statistics.cascade-restrict-no-effect
+title: CASCADE and RESTRICT are accepted and change nothing, with or without IF EXISTS
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, cascade, restrict, drop-if-exists]
+required_capabilities: [create-table, extended-statistics, drop-statistics]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics (Parameters: CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_cr (a int, b int, c int);
+  INSERT INTO ds_cr VALUES (1, 2, 3);
+  CREATE STATISTICS ds_cr_1 ON a, b FROM ds_cr;
+  CREATE STATISTICS ds_cr_2 ON b, c FROM ds_cr;
+steps:
+  - sql: |
+      DROP STATISTICS ds_cr_1 CASCADE
+    expect: ok
+  - sql: |
+      DROP STATISTICS ds_cr_2 RESTRICT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxrelid = 'ds_cr'::regclass
+    expect: rows
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_cr_1 CASCADE
+    expect: notice
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_cr_2 RESTRICT
+    expect: notice
+  - sql: |
+      SELECT a, b, c FROM ds_cr
+    expect: rows
+    order: ordered

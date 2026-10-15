@@ -1,0 +1,50 @@
+# GRANT ... ON ALL TABLES IN SCHEMA covers existing tables and views in that schema only, not tables created later or in other schemas.
+id: cmd-grant.all-tables-in-schema
+title: GRANT ON ALL TABLES IN SCHEMA covers existing tables and views but not later tables or other schemas
+family: cmd-grant
+tier: core
+feature_ids: [grant, all-tables-in-schema, views, privileges, select, errors]
+required_capabilities: [create-table, create-view, insert, select, update, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-objects (ALL TABLES also affects views and foreign tables)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_ats_r;
+  CREATE SCHEMA cgg_ats;
+  CREATE SCHEMA cgg_ats_other;
+  CREATE TABLE cgg_ats.t1 (a int4);
+  CREATE VIEW cgg_ats.v1 AS SELECT 1 AS x;
+  CREATE TABLE cgg_ats_other.t_out (a int4);
+steps:
+  - sql: |
+      GRANT SELECT ON ALL TABLES IN SCHEMA cgg_ats TO cgg_ats_r
+    expect: ok
+  - sql: |
+      SELECT c.relname, c.relkind, has_table_privilege('cgg_ats_r', c.oid, 'SELECT') AS can_select
+        FROM pg_class c
+       WHERE c.relnamespace = 'cgg_ats'::regnamespace AND c.relkind IN ('r', 'v')
+       ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE cgg_ats.t2 (a int4)
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('cgg_ats_r', 'cgg_ats.t2', 'SELECT') AS t2_select,
+             has_table_privilege('cgg_ats_r', 'cgg_ats_other.t_out', 'SELECT') AS other_select
+    expect: rows
+    order: ordered
+    comment: the grant only covers tables that existed when it ran
+  - sql: |
+      GRANT INSERT, UPDATE ON ALL TABLES IN SCHEMA cgg_ats TO cgg_ats_r
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('cgg_ats_r', 'cgg_ats.v1', 'INSERT') AS v1_insert,
+             has_table_privilege('cgg_ats_r', 'cgg_ats.t1', 'UPDATE') AS t1_update
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT SELECT ON ALL TABLES IN SCHEMA cgg_ats_missing TO cgg_ats_r
+    expect: error
+    sqlstate: "3F000"

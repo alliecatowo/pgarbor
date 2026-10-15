@@ -1,0 +1,30 @@
+# SET ROLE cannot run inside a SECURITY DEFINER function; the attempt fails with 42501 and the caller's role is unchanged.
+id: cmd-set-role.security-definer-forbidden
+title: SET ROLE inside a SECURITY DEFINER function fails with 42501
+family: cmd-set-role
+tier: extended
+feature_ids: [set-role, security-definer, functions, plpgsql, errors]
+required_capabilities: [roles, set-role, functions, plpgsql, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#notes (SET ROLE cannot be used within a SECURITY DEFINER function)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_sd_r;
+  CREATE FUNCTION sr_sd_fn() RETURNS text LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE 'SET ROLE sr_sd_r'; RETURN 'changed'; END $$
+steps:
+  - sql: |
+      SELECT sr_sd_fn()
+    expect: error
+    sqlstate: "42501"
+    comment: the nested SET ROLE is rejected inside the security definer context
+  - sql: |
+      SELECT current_user = session_user AS caller_unchanged
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP FUNCTION sr_sd_fn()
+    expect: ok
+  - sql: |
+      DROP ROLE sr_sd_r
+    expect: ok

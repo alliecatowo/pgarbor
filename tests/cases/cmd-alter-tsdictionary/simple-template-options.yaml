@@ -1,0 +1,36 @@
+# Documented: options are template-specific; the simple template accepts only its own parameters.
+id: cmd-alter-tsdictionary.simple-template-options
+title: "The simple template accepts its own Accept option and rejects options from other templates"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, simple-template, template-option, option-removal, errors]
+required_capabilities: [create-text-search-dictionary, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (option: the name of a template-specific option)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY o_dict (TEMPLATE = simple, accept = true);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY o_dict (accept = false)
+    expect: ok
+  - sql: |
+      SELECT dictinitoption FROM pg_ts_dict WHERE dictname = 'o_dict'
+    expect: rows
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY o_dict (language = english)
+    expect: error
+    sqlstate: "22023"
+    comment: language is a snowball option, not a simple one
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY o_dict (accept)
+    expect: ok
+    comment: bare option removal restores the default accept setting
+  - sql: |
+      SELECT dictinitoption FROM pg_ts_dict WHERE dictname = 'o_dict'
+    expect: rows
+  - sql: |
+      SELECT ts_lexize('o_dict', 'Hello')
+    expect: rows
+    comment: default accept behavior lexes the word

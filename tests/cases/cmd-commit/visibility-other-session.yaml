@@ -1,0 +1,55 @@
+# Until COMMIT, another session sees neither the updated row nor a newly created table; after COMMIT it sees both.
+id: cmd-commit.visibility-other-session
+title: COMMIT makes an update and a new table visible to other sessions
+family: cmd-commit
+tier: core
+feature_ids: [commit, transactions, read-committed, create-table, update, multi-session]
+required_capabilities: [create-table, insert, update, select, transactions, multi-session, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/commit.sgml#sql-commit (Description: All changes made by the transaction become visible to others)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE acct SET balance = balance + 10 WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      CREATE TABLE audit (n int4)
+    expect: ok
+  - session: b
+    sql: |
+      SELECT balance FROM acct WHERE id = 1
+    expect: rows
+    order: ordered
+    comment: b sees the committed balance, not a's uncommitted update
+  - session: b
+    sql: |
+      SELECT count(*) FROM audit
+    expect: error
+    sqlstate: "42P01"
+    comment: the new table is not visible to b before COMMIT
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT balance FROM acct WHERE id = 1
+    expect: rows
+    order: ordered
+    comment: sees a's committed update
+  - session: b
+    sql: |
+      SELECT count(*) AS n FROM audit
+    expect: rows
+    order: ordered
+    comment: the table exists and is empty

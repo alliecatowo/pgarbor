@@ -1,0 +1,49 @@
+# suppress_redundant_updates_trigger compares old and new column values as NULL-aware equality:
+# NULL to NULL is no change; NULL to a value and value to NULL are real changes.
+id: doc-functions-trigger.suppress-redundant-updates-null-semantics
+title: suppress_redundant_updates_trigger treats NULL-to-NULL as unchanged and NULL transitions as changes
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, suppress-redundant-updates, update, nulls]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, plpgsql, null-handling]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-trigger (suppress_redundant_updates_trigger: skips updates that do not change the data in the row)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int, n text);
+  CREATE TABLE tlog (k text);
+  CREATE FUNCTION tlog_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO tlog VALUES (TG_OP);
+    RETURN NULL;
+  END
+  $$;
+  CREATE TRIGGER z_min_update BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
+  CREATE TRIGGER t_aft AFTER UPDATE ON t FOR EACH ROW EXECUTE FUNCTION tlog_fn();
+  INSERT INTO t VALUES (1, NULL, NULL), (2, 5, 'x');
+steps:
+  - sql: |
+      UPDATE t SET v = NULL, n = NULL WHERE id = 1
+    expect: ok
+    comment: NULL to NULL is not a change, so the row is skipped
+  - sql: |
+      UPDATE t SET v = 0 WHERE id = 1
+    expect: ok
+    comment: NULL to 0 is a change and is applied
+  - sql: |
+      UPDATE t SET v = NULL WHERE id = 2
+    expect: ok
+    comment: 5 to NULL is a change and is applied
+  - sql: |
+      UPDATE t SET v = NULL, n = 'x' WHERE id = 2
+    expect: ok
+    comment: v is already NULL and n is already 'x', so this is skipped
+  - sql: |
+      SELECT count(*) FROM tlog
+    expect: rows
+    comment: expect exactly 2 AFTER row firings
+  - sql: |
+      SELECT id, v, n FROM t ORDER BY id
+    expect: rows
+    order: ordered

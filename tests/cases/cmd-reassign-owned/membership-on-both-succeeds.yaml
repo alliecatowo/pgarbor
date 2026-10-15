@@ -1,0 +1,37 @@
+# A non-superuser who is a member of both the old and the new role may reassign the old role's objects.
+id: cmd-reassign-owned.membership-on-both-succeeds
+title: "REASSIGN OWNED succeeds for a non-superuser who is a member of both roles"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, role-membership, privileges]
+required_capabilities: [roles, session-authorization, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-notes (requires membership on both the source and the target role)"
+sessions: [a]
+setup: |
+  CREATE ROLE ro10_old;
+  CREATE ROLE ro10_new;
+  CREATE ROLE ro10_mem;
+  GRANT ro10_old TO ro10_mem;
+  GRANT ro10_new TO ro10_mem;
+  CREATE TABLE ro10_t (a int4);
+  ALTER TABLE ro10_t OWNER TO ro10_old;
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION ro10_mem
+    expect: ok
+  - sql: |
+      REASSIGN OWNED BY ro10_old TO ro10_new
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro10_t'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP OWNED BY ro10_new; DROP ROLE ro10_mem; DROP ROLE ro10_old; DROP ROLE ro10_new
+    expect: ok
+    comment: cleanup

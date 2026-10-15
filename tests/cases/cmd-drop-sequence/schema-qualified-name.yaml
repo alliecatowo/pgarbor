@@ -1,0 +1,37 @@
+# The name may be schema-qualified; once dropped, the qualified and IF EXISTS forms behave as for unqualified names.
+id: cmd-drop-sequence.schema-qualified-name
+title: DROP SEQUENCE with a schema-qualified name drops only that schema's sequence and IF EXISTS skips a missing schema
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, schemas, qualified-names, if-exists]
+required_capabilities: [sequences, create-schema, select, errors, notice]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Parameters: name, optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA sch13;
+  CREATE SEQUENCE sch13.q;
+  CREATE SEQUENCE public.q;
+steps:
+  - sql: |
+      DROP SEQUENCE sch13.q
+    expect: ok
+  - sql: |
+      SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'S' AND c.relname = 'q' ORDER BY n.nspname
+    expect: rows
+    order: ordered
+    comment: only public.q remains
+  - sql: |
+      DROP SEQUENCE sch13.q
+    expect: error
+    sqlstate: "42P01"
+    comment: the qualified name is gone
+  - sql: |
+      DROP SEQUENCE IF EXISTS sch13.q
+    expect: notice
+    comment: IF EXISTS also skips a missing name inside an existing schema
+  - sql: |
+      DROP SEQUENCE IF EXISTS noschema_x.q
+    expect: notice
+    comment: a missing schema is also skipped with a notice under IF EXISTS

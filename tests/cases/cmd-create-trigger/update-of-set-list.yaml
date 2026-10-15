@@ -1,0 +1,52 @@
+# UPDATE OF column list: fires when a listed column is a SET target even if its value is unchanged;
+# does not fire for other columns; multi-column lists fire on any listed column; unknown column is rejected.
+id: cmd-create-trigger.update-of-set-list
+title: UPDATE OF column list fires on SET targets regardless of value change
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, update-of-column-list, before-trigger, error-unknown-column]
+required_capabilities: [create-table, insert, update, select, plpgsql, triggers, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER description (column-specific triggers: SET x = x fires)"
+setup: |
+  CREATE TABLE item (id int PRIMARY KEY, price int, qty int, label text);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  INSERT INTO item VALUES (1, 10, 1, 'pen'), (2, 20, 2, 'cup');
+  CREATE FUNCTION log_item() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ' ' || NEW.id);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER price_chk BEFORE UPDATE OF price ON item FOR EACH ROW EXECUTE FUNCTION log_item()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER pq_chk BEFORE UPDATE OF price, qty ON item FOR EACH ROW EXECUTE FUNCTION log_item()
+    expect: ok
+  - sql: |
+      UPDATE item SET price = price WHERE id = 1
+    expect: ok
+    comment: SET price = price names the column, so price_chk fires even though nothing changed
+  - sql: |
+      UPDATE item SET label = 'PEN' WHERE id = 1
+    expect: ok
+    comment: no listed column is a target, so neither trigger fires
+  - sql: |
+      UPDATE item SET qty = qty + 1 WHERE id = 2
+    expect: ok
+    comment: qty is in the list of pq_chk only
+  - sql: |
+      CREATE TRIGGER bad_chk BEFORE UPDATE OF no_such_col ON item FOR EACH ROW EXECUTE FUNCTION log_item()
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tgname FROM pg_trigger WHERE tgrelid = 'item'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

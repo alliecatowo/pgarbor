@@ -1,0 +1,53 @@
+# FAMILY adds a class to an existing operator family of the same index method; an unknown family or a family of another index method fails with 42704; without FAMILY a family named like the class is created.
+id: cmd-create-opclass.family-option-joins-existing-family
+title: "FAMILY joins an existing family; unknown or wrong-method families fail with 42704; default family is named after the class"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, operator-family, btree, hash, catalog-introspection, errors]
+required_capabilities: [create-operator-class, create-operator-family, create-type, create-function, create-operator, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Description: operator families; Parameters: family_name)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_eq(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a = ($2).a';
+  CREATE FUNCTION cr_pt_gt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a > ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE OPERATOR = (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_eq);
+  CREATE OPERATOR > (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_gt);
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY cr_fam USING btree
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_fam_pt FOR TYPE cr_pt USING btree FAMILY cr_fam AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_fam_i8 FOR TYPE int8 USING btree FAMILY cr_fam AS OPERATOR 1 <(int8, int8), OPERATOR 3 =(int8, int8), FUNCTION 1 btint8cmp(int8, int8)
+    expect: ok
+    comment: a second data type can share the family
+  - sql: |
+      SELECT o.opcname, f.opfname, o.opcintype::regtype::text AS intype FROM pg_opclass o JOIN pg_opfamily f ON f.oid = o.opcfamily WHERE f.opfname = 'cr_fam' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OPERATOR CLASS cr_fam_bad FOR TYPE cr_pt USING btree FAMILY cr_nosuch AS OPERATOR 1 <
+    expect: error
+    sqlstate: "42704"
+    comment: no such operator family for btree
+  - sql: |
+      CREATE OPERATOR CLASS cr_fam_hash FOR TYPE cr_pt USING hash FAMILY cr_fam AS OPERATOR 1 =
+    expect: error
+    sqlstate: "42704"
+    comment: cr_fam is a btree family, so it is not visible for hash
+  - sql: |
+      CREATE OPERATOR CLASS cr_nofam FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      SELECT o.opcname, f.opfname FROM pg_opclass o JOIN pg_opfamily f ON f.oid = o.opcfamily WHERE o.opcname = 'cr_nofam'
+    expect: rows
+    order: ordered
+    comment: no FAMILY clause, so the family is named cr_nofam

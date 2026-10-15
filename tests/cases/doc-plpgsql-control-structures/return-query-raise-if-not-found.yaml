@@ -1,0 +1,38 @@
+# RETURN QUERY followed by IF NOT FOUND raises when the query produced no rows (docs flight example).
+id: doc-plpgsql-control-structures.return-query-raise-if-not-found
+title: "RETURN QUERY then IF NOT FOUND raises P0001 when no rows are returned"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, return-query, raise, set-returning-functions, errors]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, set-returning-functions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (RETURN QUERY example get_available_flightid)"
+sessions: [a]
+setup: |
+  CREATE TABLE flight (flightid int PRIMARY KEY, flightdate date NOT NULL);
+  INSERT INTO flight VALUES (101, '2026-03-01'), (102, '2026-03-01'), (103, '2026-03-02');
+  CREATE FUNCTION get_available_flightid(date) RETURNS SETOF integer LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN QUERY SELECT flightid FROM flight
+                  WHERE flightdate >= $1
+                    AND flightdate < ($1 + 1)
+                  ORDER BY flightid;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'No flight at %.', $1;
+    END IF;
+    RETURN;
+  END $$;
+steps:
+  - sql: |
+      SELECT * FROM get_available_flightid(date '2026-03-01')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM get_available_flightid(date '2026-03-03')
+    expect: error
+    sqlstate: "P0001"
+    comment: no rows were returned by RETURN QUERY, so FOUND is false and RAISE EXCEPTION default applies
+  - sql: |
+      SELECT count(*) FROM flight
+    expect: rows

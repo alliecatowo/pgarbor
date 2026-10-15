@@ -1,0 +1,34 @@
+# An MCV statistics object has no MCV data until ANALYZE runs; the function then returns no rows.
+id: doc-functions-statistics.mcv-items-before-analyze-empty
+title: MCV items are empty before ANALYZE and appear after it
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, analyze, extended-statistics]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE stts_pre (a int, b text);
+  ALTER TABLE stts_pre SET (autovacuum_enabled = false);
+  INSERT INTO stts_pre SELECT i % 3, CASE WHEN i % 2 = 0 THEN 'x' ELSE 'y' END FROM generate_series(1, 100) g(i);
+  CREATE STATISTICS stts_pre_mcv (mcv) ON a, b FROM stts_pre;
+steps:
+  - sql: |
+      SELECT stxname, stxdmcv IS NULL AS mcv_is_null FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid) WHERE stxname = 'stts_pre_mcv'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'stts_pre_mcv'
+    expect: rows
+    order: ordered
+    comment: no ANALYZE yet, so stxdmcv is NULL and the set-returning function yields no rows
+  - sql: |
+      ANALYZE stts_pre
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'stts_pre_mcv'
+    expect: rows
+    order: ordered
+    comment: 8 items after ANALYZE

@@ -1,0 +1,39 @@
+# Rewrite rules: DO INSTEAD NOTHING silently discards a DELETE, and a conditional DO ALSO adds a
+# second insert only for rows that satisfy the rule's WHERE clause.
+id: doc-ddl-others.rule-instead-and-also
+title: DO INSTEAD NOTHING suppresses deletes; conditional DO ALSO copies only matching inserts
+family: doc-ddl-others
+tier: extended
+feature_ids: [rules, create-rule, rewrite-rules]
+required_capabilities: [create-table, create-rule, insert, delete, select, rules]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-others (Triggers and rewrite rules); ref: sql-createrule.html"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int4 PRIMARY KEY, name text);
+  INSERT INTO items VALUES (1, 'a'), (2, 'b');
+  CREATE TABLE big_ids (id int4, name text);
+  CREATE RULE items_nodelete AS ON DELETE TO items DO INSTEAD NOTHING;
+  CREATE RULE items_copy_big AS ON INSERT TO items WHERE NEW.id > 100 DO ALSO INSERT INTO big_ids VALUES (NEW.id, NEW.name);
+steps:
+  - sql: |
+      DELETE FROM items
+    expect: ok
+    comment: the rule replaces the DELETE with NOTHING, so the command reports zero rows
+  - sql: |
+      SELECT count(*) AS n FROM items
+    expect: rows
+  - sql: |
+      INSERT INTO items VALUES (200, 'big'), (4, 'small')
+    expect: ok
+  - sql: |
+      SELECT id, name FROM big_ids ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the row with id > 100 is copied
+  - sql: |
+      SELECT id FROM items ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both rows reach the original table regardless of the rule

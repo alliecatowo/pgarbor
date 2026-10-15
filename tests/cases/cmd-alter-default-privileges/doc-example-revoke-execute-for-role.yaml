@@ -1,0 +1,44 @@
+# Documented example: remove the PUBLIC EXECUTE default for functions created by one role.
+id: cmd-alter-default-privileges.doc-example-revoke-execute-for-role
+title: FOR ROLE REVOKE EXECUTE FROM PUBLIC removes execute only for functions that role creates
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, revoke, execute-privilege, functions, default-acl]
+required_capabilities: [create-schema, create-function, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-examples (ALTER DEFAULT PRIVILEGES FOR ROLE admin REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_admin') THEN CREATE ROLE adp_admin; END IF;
+  END $$;
+  CREATE SCHEMA adp_fn;
+  GRANT USAGE, CREATE ON SCHEMA adp_fn TO adp_admin;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES FOR ROLE adp_admin REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT defaclobjtype, defaclacl::text FROM pg_default_acl WHERE defaclrole = 'adp_admin'::regrole ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the defaults for admin now grant execute only to admin itself
+  - sql: |
+      SET ROLE adp_admin
+    expect: ok
+  - sql: |
+      CREATE FUNCTION adp_fn.f_admin() RETURNS int LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      CREATE FUNCTION adp_fn.f_postgres() RETURNS int LANGUAGE sql AS 'SELECT 2'
+    expect: ok
+  - sql: |
+      SELECT p.proname, has_function_privilege('public', p.oid, 'EXECUTE') AS public_exec
+      FROM pg_proc p WHERE p.pronamespace = 'adp_fn'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: f_admin is not executable by PUBLIC while f_postgres keeps the built-in PUBLIC EXECUTE

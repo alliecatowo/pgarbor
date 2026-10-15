@@ -1,0 +1,54 @@
+# Documented json/jsonb expansion functions: json_each, json_each_text, json_array_elements(_text), json_object_keys, json_array_length, json_typeof.
+id: doc-functions-json.json-set-returning-functions
+title: json_each, json_array_elements, json_object_keys, json_array_length and json_typeof documented behavior
+family: doc-functions-json
+tier: core
+feature_ids: [json-each, json-array-elements, json-object-keys, json-array-length, json-typeof]
+required_capabilities: [select, json, jsonb, set-returning-functions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-processing (JSON Processing Functions table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT * FROM json_each('{"a":"foo", "b":"bar"}') ORDER BY key
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM json_each_text('{"a":"foo", "b":"bar"}') ORDER BY key
+    expect: rows
+    order: ordered
+    comment: "json_each_text returns text values, so the quotes are gone"
+  - sql: |
+      SELECT * FROM json_array_elements('[1,true, [2,false]]')
+    expect: rows
+    order: multiset
+    comment: "documented example: elements stay JSON, including the nested array"
+  - sql: |
+      SELECT * FROM json_array_elements_text('["foo", "bar"]')
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM jsonb_object_keys('{"f1":"abc","f2":{"f3":"a", "f4":"b"}}') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: "only the top-level keys are returned"
+  - sql: |
+      SELECT json_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]') AS json_len,
+             jsonb_array_length('[]') AS empty_len
+    expect: rows
+  - sql: |
+      SELECT json_typeof('-123.4') AS t_num,
+             json_typeof('null'::json) AS t_json_null,
+             json_typeof(NULL::json) IS NULL AS t_sql_null,
+             jsonb_typeof('"x"') AS t_string,
+             jsonb_typeof('true') AS t_bool,
+             jsonb_typeof('[]') AS t_array,
+             jsonb_typeof('{}') AS t_object
+    expect: rows
+    comment: "documented: a JSON null yields the text 'null', while an SQL NULL input yields SQL NULL"
+  - sql: |
+      SELECT * FROM json_array_elements('{"a":1}')
+    expect: error
+    sqlstate: "22023"
+    comment: "json_array_elements requires a top-level array"

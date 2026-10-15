@@ -1,0 +1,111 @@
+# The remaining reference-page COMMENT examples (extension, language, foreign-data wrapper and server, large object, event trigger, aggregate, operator forms) run in one fresh database; the documented int4ops operator-class name is shown to be a non-existent name.
+id: cmd-comment.docs-examples-catalog
+title: PostgreSQL reference-page COMMENT examples for extensions, languages, FDW, large objects, event triggers and aggregates
+family: cmd-comment
+tier: extended
+feature_ids: [comment, comment-extension, comment-language, comment-procedural-language, comment-foreign-data-wrapper, comment-server, comment-large-object, comment-event-trigger, comment-aggregate, comment-operator]
+required_capabilities: [comment, extensions, foreign-data-wrappers, large-objects, event-triggers, create-aggregate, create-operator, create-function, plpgsql, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-examples (Some more examples: EXTENSION, PROCEDURAL LANGUAGE, FOREIGN DATA WRAPPER, SERVER, LARGE OBJECT, EVENT TRIGGER, AGGREGATE, OPERATOR)"
+sessions: [a]
+notes: "Doc example 'COMMENT ON OPERATOR CLASS int4ops USING btree' is recorded as the 42704 it produces; the class is int4_ops. The event trigger function is a no-op, so the trigger does not change any later DDL result."
+steps:
+  - sql: |
+      COMMENT ON EXTENSION plpgsql IS 'implements the plpgsql'
+    expect: ok
+  - sql: |
+      SELECT obj_description(oid, 'pg_extension') AS descr FROM pg_extension WHERE extname = 'plpgsql'
+    expect: rows
+  - sql: |
+      COMMENT ON PROCEDURAL LANGUAGE plpgsql IS 'Procedural language plpgsql'
+    expect: ok
+  - sql: |
+      COMMENT ON LANGUAGE plpgsql IS 'PL/pgSQL procedural language'
+    expect: ok
+    comment: PROCEDURAL is a noise word, so both spellings name the same language
+  - sql: |
+      SELECT obj_description(oid, 'pg_language') AS descr FROM pg_language WHERE lanname = 'plpgsql'
+    expect: rows
+  - sql: |
+      CREATE FOREIGN DATA WRAPPER mywrapper
+    expect: ok
+  - sql: |
+      COMMENT ON FOREIGN DATA WRAPPER mywrapper IS 'my foreign data wrapper'
+    expect: ok
+  - sql: |
+      CREATE SERVER myserver FOREIGN DATA WRAPPER mywrapper
+    expect: ok
+  - sql: |
+      COMMENT ON SERVER myserver IS 'my foreign server'
+    expect: ok
+  - sql: |
+      SELECT
+        (SELECT obj_description(oid, 'pg_foreign_data_wrapper') FROM pg_foreign_data_wrapper WHERE fdwname = 'mywrapper') AS fdw_descr,
+        (SELECT obj_description(oid, 'pg_foreign_server') FROM pg_foreign_server WHERE srvname = 'myserver') AS server_descr
+    expect: rows
+  - sql: |
+      SELECT lo_create(346344)
+    expect: rows
+  - sql: |
+      COMMENT ON LARGE OBJECT 346344 IS 'Planning document'
+    expect: ok
+  - sql: |
+      SELECT obj_description(346344::oid, 'pg_largeobject') AS descr
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(346344)
+    expect: rows
+  - sql: |
+      CREATE FUNCTION abort_fn() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END'
+    expect: ok
+  - sql: |
+      CREATE EVENT TRIGGER abort_ddl ON ddl_command_start EXECUTE FUNCTION abort_fn()
+    expect: ok
+  - sql: |
+      COMMENT ON EVENT TRIGGER abort_ddl IS 'Aborts all DDL commands'
+    expect: ok
+  - sql: |
+      SELECT obj_description(oid, 'pg_event_trigger') AS descr FROM pg_event_trigger WHERE evtname = 'abort_ddl'
+    expect: rows
+  - sql: |
+      DROP EVENT TRIGGER abort_ddl
+    expect: ok
+  - sql: |
+      CREATE AGGREGATE my_aggregate(double precision) (sfunc = float8pl, stype = float8)
+    expect: ok
+  - sql: |
+      COMMENT ON AGGREGATE my_aggregate (double precision) IS 'Computes sample variance'
+    expect: ok
+  - sql: |
+      SELECT obj_description('my_aggregate(float8)'::regprocedure, 'pg_proc') AS descr
+    expect: rows
+  - sql: |
+      CREATE FUNCTION op_caret(text, text) RETURNS text LANGUAGE sql AS 'SELECT $1 || $2'
+    expect: ok
+  - sql: |
+      CREATE OPERATOR ^ (LEFTARG = text, RIGHTARG = text, PROCEDURE = op_caret)
+    expect: ok
+  - sql: |
+      COMMENT ON OPERATOR ^ (text, text) IS 'Performs intersection of two texts'
+    expect: ok
+  - sql: |
+      COMMENT ON OPERATOR - (NONE, integer) IS 'Unary minus'
+    expect: ok
+  - sql: |
+      SELECT obj_description('^(text,text)'::regoperator, 'pg_operator') AS binary_descr, obj_description('-(NONE,integer)'::regoperator, 'pg_operator') AS prefix_descr
+    expect: rows
+  - sql: |
+      COMMENT ON OPERATOR CLASS int4ops USING btree IS '4 byte integer operators for btrees'
+    expect: error
+    sqlstate: "42704"
+    comment: the reference-page example names int4ops, which does not exist; int4_ops is the real class
+  - sql: |
+      COMMENT ON OPERATOR CLASS int4_ops USING btree IS '4 byte integer operators for btrees'
+    expect: ok
+  - sql: |
+      COMMENT ON OPERATOR FAMILY integer_ops USING btree IS 'all integer operators for btrees'
+    expect: ok
+  - sql: |
+      COMMENT ON ACCESS METHOD gin IS 'GIN index access method'
+    expect: ok

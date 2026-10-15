@@ -1,0 +1,29 @@
+# UPDATE after a savepoint is undone; a NULL-valued update made before it is kept.
+id: cmd-savepoint.update-undone-null-boundary
+title: UPDATEs before and after a savepoint keep their own effects, including NULL assignments
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, update, null-semantics, begin, commit, insert, select]
+required_capabilities: [create-table, insert, update, select, transactions, savepoints]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-savepoint.html (Description); NULL semantics per ref/update.sgml"
+sessions: [a]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4, note text);
+  INSERT INTO acct VALUES (1, 100, 'orig'), (2, 200, 'orig');
+steps:
+  - sql: |
+      BEGIN;
+      UPDATE acct SET note = NULL WHERE id = 1;
+      SAVEPOINT sp;
+      UPDATE acct SET balance = 0, note = 'changed' WHERE id = 2;
+      UPDATE acct SET balance = balance + 1 WHERE id = 1;
+      ROLLBACK TO SAVEPOINT sp;
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, balance, note, note IS NULL AS note_is_null FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 1 keeps note NULL and balance 100; row 2 is back to 200 and 'orig'

@@ -1,0 +1,30 @@
+# Array operand types are part of the signature: the drop must name the array form, and a scalar signature does not match.
+id: cmd-drop-operator.array-operand-types
+title: DROP OPERATOR matches array operand types exactly and refuses a scalar mismatch
+family: cmd-drop-operator
+tier: extended
+feature_ids: [drop-operator, array-types, operator-signatures]
+required_capabilities: [drop-operator, create-operator, create-function-sql, arrays, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-dropoperator (left_type/right_type signature); arrays"
+sessions: [a]
+setup: |
+  CREATE FUNCTION daa_eq(integer[], integer[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 = $2 $$;
+  CREATE OPERATOR !^! (LEFTARG = integer[], RIGHTARG = integer[], PROCEDURE = daa_eq);
+steps:
+  - sql: |
+      SELECT ARRAY[1, 2] !^! ARRAY[1, 2] AS same
+    expect: rows
+  - sql: |
+      DROP OPERATOR !^! (integer, integer[])
+    expect: error
+    sqlstate: "42883"
+    comment: the scalar-left signature is not defined
+  - sql: |
+      DROP OPERATOR !^! (int4[], pg_catalog.int4[])
+    expect: ok
+    comment: int4[] and integer[] are the same type
+  - sql: |
+      SELECT count(*) AS left_after FROM pg_operator WHERE oprname = '!^!' AND oprnamespace = 'public'::regnamespace
+    expect: rows

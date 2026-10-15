@@ -1,0 +1,33 @@
+# Documented: arguments matching OUT parameters are not evaluated, so a failing expression there
+# does not raise an error; omitting an OUT argument entirely is still an error.
+id: cmd-call.out-arguments-not-evaluated
+title: Expression in an OUT argument position is not evaluated; omitted OUT argument is rejected
+family: cmd-call
+tier: core
+feature_ids: [call, procedures, out-parameters]
+required_capabilities: [select, create-procedure, call, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/call.sgml#sql-call (Parameters: argument)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE p_out(IN x int, OUT y int, OUT z text) LANGUAGE plpgsql AS $$
+  BEGIN
+    y := x * 2;
+    z := 'v' || x;
+  END $$;
+steps:
+  - sql: |
+      CALL p_out(3, 1/0, NULL)
+    expect: rows
+    order: ordered
+    comment: 1/0 would raise 22012 if it were evaluated; it is not
+  - sql: |
+      CALL p_out(3)
+    expect: error
+    sqlstate: "42883"
+    comment: OUT parameters without defaults still need an argument
+  - sql: |
+      CALL p_out(3, NULL)
+    expect: error
+    sqlstate: "42883"

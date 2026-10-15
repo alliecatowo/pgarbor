@@ -1,0 +1,54 @@
+# Creating objects in someone else's schema needs CREATE on that schema. Here the non-owner role
+# pg_monitor is denied in public until CREATE is granted to PUBLIC, then denied again after revoking.
+id: doc-ddl-schemas.public-create-privilege
+title: CREATE on the public schema is needed to create objects there, granted and revoked for PUBLIC
+family: doc-ddl-schemas
+tier: extended
+feature_ids: [schema-privileges, public-schema, grant, revoke, roles, errors]
+required_capabilities: [create-table, select, roles, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-priv (CREATE privilege on the schema; REVOKE CREATE ON SCHEMA public FROM PUBLIC)"
+sessions: [a]
+steps:
+  - sql: |
+      SET ROLE pg_monitor
+    expect: ok
+    comment: pg_monitor is a NOLOGIN predefined role used as a non-owner; requires a superuser session
+  - sql: |
+      CREATE TABLE public.denied (id int4)
+    expect: error
+    sqlstate: "42501"
+    comment: PUBLIC lacks CREATE on public by default
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT CREATE ON SCHEMA public TO PUBLIC
+    expect: ok
+  - sql: |
+      SET ROLE pg_monitor
+    expect: ok
+  - sql: |
+      CREATE TABLE public.allowed_now (id int4)
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT tablename, tableowner FROM pg_tables WHERE tablename = 'allowed_now'
+    expect: rows
+    comment: the table is owned by the role that created it
+  - sql: |
+      REVOKE CREATE ON SCHEMA public FROM PUBLIC
+    expect: ok
+  - sql: |
+      SET ROLE pg_monitor
+    expect: ok
+  - sql: |
+      CREATE TABLE public.denied_again (id int4)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

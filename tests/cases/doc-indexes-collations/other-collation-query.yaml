@@ -1,0 +1,40 @@
+# Doc example: a query that names another collation ("y", ICU) still returns correct rows; the
+# column-collation index cannot accelerate it, but results must not change. NULLs stay outside
+# comparisons and sort according to NULLS FIRST.
+id: doc-indexes-collations.other-collation-query
+title: Query with COLLATE "y" on a column indexed under "x" returns rows ordered by the query collation
+family: doc-indexes-collations
+tier: core
+feature_ids: [indexes, collation, explicit-collate, comparison, nulls, order-by]
+required_capabilities: [create-table, insert, select, create-index, collation]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-collations (Indexes and Collations)"
+sessions: [a]
+setup: |
+  CREATE COLLATION "x" FROM "C";
+  CREATE COLLATION "y" (provider = icu, locale = 'und');
+  CREATE TABLE test1c (id integer, content varchar COLLATE "x");
+  INSERT INTO test1c VALUES (1, 'b'), (2, 'B'), (3, 'a'), (4, 'A'), (5, 'c'), (6, NULL);
+  CREATE INDEX test1c_content_index ON test1c (content);
+steps:
+  - sql: |
+      SELECT content FROM test1c WHERE content > 'a' COLLATE "y" ORDER BY content COLLATE "y"
+    expect: rows
+    order: ordered
+    comment: ICU "y" puts A and B among the rows greater than 'a', unlike the column collation
+  - sql: |
+      SELECT content FROM test1c ORDER BY content COLLATE "y" NULLS FIRST
+    expect: rows
+    order: ordered
+    comment: the NULL row comes first under NULLS FIRST
+  - sql: |
+      SELECT id FROM test1c WHERE content COLLATE "y" = 'a'
+    expect: rows
+    order: multiset
+    comment: equality under "y" is still exact for the same letters (ICU default strength is tertiary)
+  - sql: |
+      SELECT id FROM test1c WHERE content COLLATE "C" > 'A' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: explicit C collation is the byte order; NULL is never selected

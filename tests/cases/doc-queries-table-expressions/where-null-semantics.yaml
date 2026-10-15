@@ -1,0 +1,55 @@
+# WHERE keeps only rows where the condition is true; NULL results are discarded, including under
+# NOT, and comparison with NULL never matches. Correlated subqueries see outer columns.
+id: doc-queries-table-expressions.where-null-semantics
+title: WHERE keeps only true rows; NULL conditions are discarded, IN/BETWEEN/EXISTS/IS NULL
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [where-clause, null-semantics, subquery, in-predicate, exists]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-where"
+sessions: [a]
+setup: |
+  CREATE TABLE fdt (c1 int4, c2 text);
+  CREATE TABLE t2 (c2 int4, c3 int4);
+  INSERT INTO fdt VALUES (1, 'a'), (5, 'b'), (NULL, 'n'), (10, 'c'), (3, 'd');
+  INSERT INTO t2 VALUES (11, 1), (15, 5);
+steps:
+  - sql: |
+      SELECT c2 FROM fdt WHERE c1 > 5
+    expect: rows
+    order: multiset
+    comment: only c1 = 10
+  - sql: |
+      SELECT c2 FROM fdt WHERE NOT (c1 > 5)
+    expect: rows
+    order: multiset
+    comment: NULL row is not returned even though NOT of unknown is unknown
+  - sql: |
+      SELECT c2 FROM fdt WHERE c1 IN (1, 2, 3)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT c2 FROM fdt WHERE c1 = NULL
+    expect: rows
+    order: multiset
+    comment: equality with NULL never yields true, so zero rows
+  - sql: |
+      SELECT c2 FROM fdt WHERE c1 IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT c2 FROM fdt WHERE c1 BETWEEN 1 AND 5
+    expect: rows
+    order: multiset
+    comment: bounds are inclusive
+  - sql: |
+      SELECT c2 FROM fdt WHERE c1 IN (SELECT c3 FROM t2 WHERE c2 = fdt.c1 + 10) ORDER BY c2
+    expect: rows
+    order: ordered
+    comment: correlated subquery; returns rows a and b
+  - sql: |
+      SELECT c2 FROM fdt WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.c2 > fdt.c1 + 10) ORDER BY c2
+    expect: rows
+    order: ordered

@@ -1,0 +1,38 @@
+# Documented example: DROP RULE removes the rule, so inserts reach the table again.
+id: cmd-drop-rule.basic-drop-restores-insert
+title: DROP RULE removes a DO INSTEAD NOTHING rule and inserts start reaching the table
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-rule, rules, insert]
+required_capabilities: [create-table, create-rule, drop-rule, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (Examples: DROP RULE newrule ON mytable)"
+sessions: [a]
+setup: |
+  CREATE TABLE mytable (id int4, val text);
+  CREATE RULE newrule AS ON INSERT TO mytable DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      INSERT INTO mytable VALUES (1, 'blocked')
+    expect: ok
+  - sql: |
+      SELECT id, val FROM mytable ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the INSTEAD NOTHING rule swallowed the insert
+  - sql: |
+      DROP RULE newrule ON mytable
+    expect: ok
+  - sql: |
+      INSERT INTO mytable VALUES (2, 'stored')
+    expect: ok
+  - sql: |
+      SELECT id, val FROM mytable ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the row inserted after the drop is present
+  - sql: |
+      SELECT count(*) FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class WHERE c.relname = 'mytable' AND r.rulename = 'newrule'
+    expect: rows
+    comment: the rule is gone from the catalog

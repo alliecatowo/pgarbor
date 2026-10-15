@@ -1,0 +1,74 @@
+# Simple and searched CASE: NULL operands, BETWEEN boundaries, and CASE_NOT_FOUND when no ELSE applies.
+id: doc-plpgsql-control-structures.case-simple-searched-not-found
+title: "Simple and searched CASE match boundaries; missing ELSE raises 20000 for unmatched or NULL input"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, case, null-handling, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Simple CASE and Searched CASE)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION simple_case(x int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE msg text;
+  BEGIN
+    CASE x
+      WHEN 1, 2 THEN
+        msg := 'one or two';
+      ELSE
+        msg := 'other value than one or two';
+    END CASE;
+    RETURN msg;
+  END $$;
+  CREATE FUNCTION simple_case_noelse(x int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE msg text;
+  BEGIN
+    CASE x
+      WHEN 1, 2 THEN
+        msg := 'one or two';
+    END CASE;
+    RETURN msg;
+  END $$;
+  CREATE FUNCTION searched_case(x int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE msg text;
+  BEGIN
+    CASE
+      WHEN x BETWEEN 0 AND 10 THEN
+        msg := 'value is between zero and ten';
+      WHEN x BETWEEN 11 AND 20 THEN
+        msg := 'value is between eleven and twenty';
+    END CASE;
+    RETURN msg;
+  END $$;
+steps:
+  - sql: |
+      SELECT simple_case(2) AS two, simple_case(NULL::int) AS nul
+    expect: rows
+    comment: NULL never equals 1 or 2, so ELSE runs
+  - sql: |
+      SELECT simple_case_noelse(1) AS one
+    expect: rows
+  - sql: |
+      SELECT simple_case_noelse(3)
+    expect: error
+    sqlstate: "20000"
+    comment: no WHEN matched and there is no ELSE
+  - sql: |
+      SELECT simple_case_noelse(NULL::int)
+    expect: error
+    sqlstate: "20000"
+    comment: NULL operand with no ELSE is also case not found
+  - sql: |
+      SELECT searched_case(0) AS lo, searched_case(10) AS hi, searched_case(11) AS next, searched_case(20) AS top
+    expect: rows
+    comment: both ends of each BETWEEN range match
+  - sql: |
+      SELECT searched_case(21)
+    expect: error
+    sqlstate: "20000"
+    comment: just above the last range with no ELSE
+  - sql: |
+      SELECT searched_case(NULL::int)
+    expect: error
+    sqlstate: "20000"

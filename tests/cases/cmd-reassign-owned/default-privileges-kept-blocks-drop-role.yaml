@@ -1,0 +1,46 @@
+# REASSIGN OWNED does not change default privileges, so the old role still has a pg_default_acl entry and DROP ROLE is refused until DROP OWNED.
+id: cmd-reassign-owned.default-privileges-kept-blocks-drop-role
+title: "REASSIGN OWNED leaves ALTER DEFAULT PRIVILEGES entries of the old role in place"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, default-privileges, drop-role, drop-owned]
+required_capabilities: [roles, drop-role, grant, default-privileges, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-notes"
+sessions: [a]
+setup: |
+  CREATE ROLE ro6_old;
+  CREATE ROLE ro6_new;
+  CREATE ROLE ro6_g;
+  ALTER DEFAULT PRIVILEGES FOR ROLE ro6_old GRANT SELECT ON TABLES TO ro6_g;
+  CREATE TABLE ro6_t (a int4);
+  ALTER TABLE ro6_t OWNER TO ro6_old;
+steps:
+  - sql: |
+      SELECT count(*) AS n FROM pg_default_acl WHERE defaclrole = 'ro6_old'::regrole
+    expect: rows
+    order: ordered
+  - sql: |
+      REASSIGN OWNED BY ro6_old TO ro6_new
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_default_acl WHERE defaclrole = 'ro6_old'::regrole
+    expect: rows
+    order: ordered
+    comment: the default privilege entry still belongs to ro6_old
+  - sql: |
+      SELECT count(*) AS n FROM pg_default_acl WHERE defaclrole = 'ro6_new'::regrole
+    expect: rows
+    order: ordered
+    comment: REASSIGN OWNED did not move the default privilege entry
+  - sql: |
+      DROP ROLE ro6_old
+    expect: error
+    sqlstate: "2BP01"
+    compare_message: false
+    comment: the role still has default privileges, so it cannot be dropped
+  - sql: |
+      DROP OWNED BY ro6_old; DROP OWNED BY ro6_new; DROP ROLE ro6_old; DROP ROLE ro6_new; DROP ROLE ro6_g
+    expect: ok
+    comment: cleanup, DROP OWNED removes the default privilege entry

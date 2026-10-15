@@ -1,0 +1,36 @@
+# CACHE sets the preallocation size; the documented minimum of 1 is enforced.
+id: cmd-alter-sequence.cache-option-and-zero-rejected
+title: "ALTER SEQUENCE CACHE sets cache_size and rejects a cache below one"
+family: cmd-alter-sequence
+tier: core
+feature_ids: [alter-sequence, cache, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_sequence.sgml#sql-altersequence (CACHE)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_cache CACHE 5;
+steps:
+  - sql: |
+      SELECT cache_size FROM pg_sequences WHERE sequencename = 's_cache'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER SEQUENCE s_cache CACHE 20
+    expect: ok
+  - sql: |
+      SELECT cache_size FROM pg_sequences WHERE sequencename = 's_cache'
+    expect: rows
+    order: ordered
+    comment: CACHE 20 replaces the old cache value
+  - sql: |
+      ALTER SEQUENCE s_cache CACHE 0
+    expect: error
+    sqlstate: "22023"
+    comment: the minimum cache is 1
+  - sql: |
+      SELECT cache_size FROM pg_sequences WHERE sequencename = 's_cache'
+    expect: rows
+    order: ordered
+    comment: the rejected CACHE 0 left 20 in place

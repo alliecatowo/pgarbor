@@ -1,0 +1,31 @@
+# IF EXISTS suppresses the missing-aggregate error and issues a notice instead.
+id: cmd-drop-aggregate.if-exists-notice
+title: DROP AGGREGATE IF EXISTS on missing and present aggregates
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, drop-if-exists, aggregates]
+required_capabilities: [aggregates, create-aggregate, create-function, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (IF EXISTS)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2'
+    expect: ok
+  - sql: |
+      DROP AGGREGATE IF EXISTS nosuch(integer)
+    expect: notice
+  - sql: |
+      DROP AGGREGATE nosuch(integer)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      DROP AGGREGATE IF EXISTS myavg(integer)
+    expect: ok
+  - sql: |
+      DROP AGGREGATE IF EXISTS myavg(integer)
+    expect: notice

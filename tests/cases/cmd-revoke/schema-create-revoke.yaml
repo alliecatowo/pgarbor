@@ -1,0 +1,45 @@
+# REVOKE CREATE ON SCHEMA removes object-creation rights in the schema but leaves USAGE in place.
+id: cmd-revoke.schema-create-revoke
+title: REVOKE CREATE ON SCHEMA blocks table creation while USAGE remains
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, schema, create-privilege, usage-privilege, errors]
+required_capabilities: [create-table, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke (REVOKE { { CREATE | USAGE } ... ON SCHEMA schema_name)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvh_u;
+  CREATE SCHEMA rvh_sch;
+  GRANT CREATE, USAGE ON SCHEMA rvh_sch TO rvh_u;
+steps:
+  - sql: |
+      SET ROLE rvh_u
+    expect: ok
+  - sql: |
+      CREATE TABLE rvh_sch.before_t (id int4)
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE CREATE ON SCHEMA rvh_sch FROM rvh_u
+    expect: ok
+  - sql: |
+      SELECT has_schema_privilege('rvh_u', 'rvh_sch', 'CREATE') AS create_priv, has_schema_privilege('rvh_u', 'rvh_sch', 'USAGE') AS usage_priv
+    expect: rows
+  - sql: |
+      SET ROLE rvh_u
+    expect: ok
+  - sql: |
+      CREATE TABLE rvh_sch.after_t (id int4)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      SELECT count(*) FROM rvh_sch.before_t
+    expect: rows
+    comment: USAGE is still held, so existing objects remain queryable
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,35 @@
+# $0 holds the polymorphic return value; anycompatible promotes mixed inputs, while anyelement requires matching types.
+id: doc-plpgsql-declarations.polymorphic-result-and-promotion
+title: $0 polymorphic result alias, anycompatible promotion, and anyelement type mismatch
+family: doc-plpgsql-declarations
+tier: core
+feature_ids: [plpgsql, polymorphic-types, anyelement, anycompatible, alias]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-declarations-parameters (add_three_values with $0, anyelement and anycompatible)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION add_three_values(v1 anyelement, v2 anyelement, v3 anyelement)
+  RETURNS anyelement LANGUAGE plpgsql AS $$
+  DECLARE result ALIAS FOR $0;
+  BEGIN result := v1 + v2 + v3; RETURN result; END $$;
+  CREATE FUNCTION add_three_compat(v1 anycompatible, v2 anycompatible, v3 anycompatible)
+  RETURNS anycompatible LANGUAGE plpgsql AS $$
+  BEGIN RETURN v1 + v2 + v3; END $$;
+  CREATE FUNCTION add_three_plain(v1 anyelement, v2 anyelement, v3 anyelement)
+  RETURNS anyelement LANGUAGE plpgsql AS $$
+  BEGIN RETURN v1 + v2 + v3; END $$;
+steps:
+  - sql: |
+      SELECT add_three_values(1, 2, 3) AS same_type
+    expect: rows
+  - sql: |
+      SELECT add_three_compat(1, 2, 4.7) AS promoted, pg_typeof(add_three_compat(1, 2, 4.7))::text AS result_type
+    expect: rows
+    comment: integer inputs are promoted to numeric; expect 7.7 and numeric
+  - sql: |
+      SELECT add_three_plain(1, 2, 4.7)
+    expect: error
+    sqlstate: "42883"
+    comment: anyelement does not promote mixed inputs, so no function matches

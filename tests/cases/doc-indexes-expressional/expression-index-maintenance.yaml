@@ -1,0 +1,44 @@
+# Expression index entries follow INSERT, UPDATE and DELETE of the underlying row.
+id: doc-indexes-expressional.expression-index-maintenance
+title: Expression index stays consistent through UPDATE and DELETE of the base rows
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, create-index, update, delete, lower]
+required_capabilities: [create-table, create-index, insert, update, delete, select]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (index expressions are computed on insert and non-HOT update)"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (id int4 PRIMARY KEY, col1 text);
+  CREATE INDEX test1_lower_col1_idx ON test1 (lower(col1));
+  INSERT INTO test1 VALUES (1, 'Alpha'), (2, 'beta');
+steps:
+  - sql: |
+      UPDATE test1 SET col1 = 'GAMMA' WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT id FROM test1 WHERE lower(col1) = 'gamma' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the new value is findable through the expression
+  - sql: |
+      SELECT id FROM test1 WHERE lower(col1) = 'beta' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the old key no longer matches
+  - sql: |
+      DELETE FROM test1 WHERE lower(col1) = 'alpha'
+    expect: ok
+  - sql: |
+      SELECT id, col1 FROM test1 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE test1 SET id = 7 WHERE id = 2
+    expect: ok
+    comment: updating a non-indexed column still leaves the expression key findable
+  - sql: |
+      SELECT id FROM test1 WHERE lower(col1) = 'gamma' ORDER BY id
+    expect: rows
+    order: ordered

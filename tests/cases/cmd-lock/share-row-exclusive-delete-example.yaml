@@ -1,0 +1,42 @@
+# sql-lock Examples, second listing: SHARE ROW EXCLUSIVE before a multi-table delete. The child
+# rows must go first because of the foreign key; the lock is taken before either DELETE.
+id: cmd-lock.share-row-exclusive-delete-example
+title: "Documented SHARE ROW EXCLUSIVE example: child-then-parent delete under one lock"
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, lock-modes, foreign-key, transactions, delete]
+required_capabilities: [create-table, insert, delete, select, lock-table, transactions, foreign-key]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (Examples, second listing)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, name text NOT NULL, rating int4);
+  CREATE TABLE films_user_comments (id int4 REFERENCES films (id), comment text);
+  INSERT INTO films VALUES (1, 'Bad One', 2), (2, 'Good One', 8), (3, 'Also Bad', 4);
+  INSERT INTO films_user_comments VALUES (1, 'meh'), (1, 'no'), (2, 'yes'), (3, 'hmm');
+steps:
+  - sql: |
+      BEGIN WORK
+    expect: ok
+  - sql: |
+      LOCK TABLE films IN SHARE ROW EXCLUSIVE MODE
+    expect: ok
+  - sql: |
+      DELETE FROM films_user_comments WHERE id IN (SELECT id FROM films WHERE rating < 5)
+    expect: ok
+  - sql: |
+      DELETE FROM films WHERE rating < 5
+    expect: ok
+  - sql: |
+      COMMIT WORK
+    expect: ok
+  - sql: |
+      SELECT id, name, rating FROM films ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, comment FROM films_user_comments ORDER BY id, comment
+    expect: rows
+    order: ordered

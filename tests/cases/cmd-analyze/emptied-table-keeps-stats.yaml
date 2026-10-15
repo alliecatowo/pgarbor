@@ -1,0 +1,34 @@
+# Statistics gathered earlier are retained when a later ANALYZE finds the table completely empty.
+id: cmd-analyze.emptied-table-keeps-stats
+title: "ANALYZE of an emptied table keeps the previously collected statistics"
+family: cmd-analyze
+tier: core
+feature_ids: [analyze, pg-stats, empty-table, delete]
+required_capabilities: [create-table, insert, select, delete, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/analyze.sgml#sql-analyze (Notes: If the table being analyzed is completely empty)"
+sessions: [a]
+setup: |
+  CREATE TABLE an_k (id int4, a int, b text);
+  INSERT INTO an_k SELECT g, g % 5, 'x' || (g % 4) FROM generate_series(1, 100) g;
+steps:
+  - sql: |
+      ANALYZE an_k
+    expect: ok
+  - sql: |
+      DELETE FROM an_k
+    expect: ok
+  - sql: |
+      ANALYZE an_k
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM an_k
+    expect: rows
+    order: ordered
+    comment: table is now empty
+  - sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'an_k' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: the three columns statistics from the first ANALYZE are still present

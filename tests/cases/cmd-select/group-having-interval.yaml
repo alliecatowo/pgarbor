@@ -1,0 +1,45 @@
+# GROUP BY with sum() over an interval column, HAVING filtering groups, and the 42803 grouping rule.
+id: cmd-select.group-having-interval
+title: GROUP BY sums intervals, HAVING filters groups, ungrouped column is a grouping error
+family: cmd-select
+tier: core
+feature_ids: [select, group-by, having, aggregates, interval]
+required_capabilities: [create-table, insert, select, aggregates, interval]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-groupby and ref/select.sgml#sql-having (films len examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (title text, kind text, len interval);
+  INSERT INTO films VALUES
+    ('Die Hard', 'Action', interval '2 hours 12 minutes'),
+    ('Speed', 'Action', interval '1 hour 56 minutes'),
+    ('Airplane!', 'Comedy', interval '1 hour 27 minutes'),
+    ('Some Like It Hot', 'Comedy', interval '1 hour 31 minutes'),
+    ('Casablanca', 'Romantic', interval '1 hour 42 minutes'),
+    ('Roman Holiday', 'Romantic', interval '2 hours 56 minutes'),
+    ('Hamlet', 'Drama', interval '3 hours 30 minutes'),
+    ('Miracle', 'Drama', interval '58 minutes'),
+    ('Oklahoma', 'Musical', interval '2 hours 27 minutes');
+steps:
+  - sql: |
+      SELECT kind, sum(len) AS total FROM films GROUP BY kind ORDER BY kind
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT kind, sum(len) AS total
+      FROM films
+      GROUP BY kind
+      HAVING sum(len) < interval '5 hours'
+      ORDER BY kind
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT kind FROM films GROUP BY kind HAVING count(*) > 1 ORDER BY kind
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT kind, len FROM films GROUP BY kind
+    expect: error
+    sqlstate: "42803"
+    comment: len is neither grouped nor aggregated

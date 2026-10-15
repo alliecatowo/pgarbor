@@ -1,0 +1,58 @@
+# Malformed SECURITY LABEL statements are rejected by the parser (42601) before any provider or object check runs.
+id: cmd-security-label.syntax-errors
+title: Malformed SECURITY LABEL statements fail with 42601 at parse time
+family: cmd-security-label
+tier: core
+feature_ids: [security-label, security-label-syntax, security-label-string-literal]
+required_capabilities: [security-label, create-table, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-synopsis; ref/security_label.sgml#sql-security-label-params-string-literal"
+sessions: [a]
+setup: |
+  CREATE TABLE sl_syn (id int4, c text)
+steps:
+  - sql: |
+      SECURITY LABEL ON TABLE sl_syn
+    expect: error
+    sqlstate: "42601"
+    comment: IS clause is required; a missing label is not an implicit NULL
+  - sql: |
+      SECURITY LABEL ON TABLE sl_syn IS
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SECURITY LABEL ON TABLE sl_syn 'x'
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SECURITY LABEL ON TABLE sl_syn IS 123
+    expect: error
+    sqlstate: "42601"
+    comment: label must be a string literal or NULL
+  - sql: |
+      SECURITY LABEL ON TABLE sl_syn IS true
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_syn.c
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SECURITY LABEL ON LARGE OBJECT 'abc' IS 'x'
+    expect: error
+    sqlstate: "42601"
+    comment: LARGE OBJECT takes an OID, not a string
+  - sql: |
+      SECURITY LABEL IS 'x' ON TABLE sl_syn
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SECURITY LABEL ON TABLE sl_syn IS 'x' FOR selinux
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SECURITY LABEL ON TABLE sl_syn IS $$dollar-quoted label$$
+    expect: error
+    sqlstate: "22023"
+    comment: a dollar-quoted string is a valid string literal; it parses and then fails the provider check

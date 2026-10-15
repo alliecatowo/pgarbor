@@ -1,0 +1,42 @@
+# Documented: a SQL function with a string-literal body does not depend on the table it reads, so DROP TABLE
+# succeeds and the function survives; calling it fails until a table of the same name is recreated.
+id: doc-ddl-depend.string-body-function-not-tracked
+title: SQL function with string body is not tracked against its table; DROP TABLE succeeds and the call fails
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-table, create-function-sql, user-defined-types, dependency-tracking]
+required_capabilities: [create-table, create-type, create-function-sql, insert, select, drop-table, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (rainbow / get_color_note example, string-literal body)"
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+  CREATE TABLE my_colors (color rainbow, note text);
+  INSERT INTO my_colors VALUES ('red', 'apple'), ('blue', 'sky');
+  CREATE FUNCTION get_color_note (rainbow) RETURNS text AS 'SELECT note FROM my_colors WHERE color = $1' LANGUAGE SQL;
+steps:
+  - sql: |
+      SELECT get_color_note('red')
+    expect: rows
+  - sql: |
+      DROP TABLE my_colors
+    expect: ok
+    comment: no CASCADE needed, the function is not recorded as depending on the table
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'get_color_note'
+    expect: rows
+  - sql: |
+      SELECT get_color_note('red')
+    expect: error
+    sqlstate: "42P01"
+    comment: relation my_colors does not exist
+  - sql: |
+      CREATE TABLE my_colors (color rainbow, note text)
+    expect: ok
+  - sql: |
+      INSERT INTO my_colors VALUES ('red', 'cherry')
+    expect: ok
+  - sql: |
+      SELECT get_color_note('red'), get_color_note('green') IS NULL AS green_missing
+    expect: rows

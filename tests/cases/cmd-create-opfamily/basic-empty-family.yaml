@@ -1,0 +1,30 @@
+# CREATE OPERATOR FAMILY creates an empty family in the current schema, owned by the creating user.
+id: cmd-create-opfamily.basic-empty-family
+title: New operator family is empty, lives in the current schema and is owned by its creator
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, initially-empty, default-schema, owner]
+required_capabilities: [create-operator-family, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: initially empty; created in the current schema; user who defines it becomes its owner)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY cof_basic USING btree
+    expect: ok
+  - sql: |
+      SELECT f.opfname, am.amname, n.nspname, pg_get_userbyid(f.opfowner) = current_user AS owned_by_creator,
+             (SELECT count(*) FROM pg_opclass c WHERE c.opcfamily = f.oid) AS classes,
+             (SELECT count(*) FROM pg_amop o WHERE o.amopfamily = f.oid) AS ops,
+             (SELECT count(*) FROM pg_amproc p WHERE p.amprocfamily = f.oid) AS procs
+      FROM pg_opfamily f
+      JOIN pg_am am ON am.oid = f.opfmethod
+      JOIN pg_namespace n ON n.oid = f.opfnamespace
+      WHERE f.opfname = 'cof_basic'
+    expect: rows
+    order: ordered
+    comment: one row in public, btree, owned by the session user, no classes, operators or procs
+  - sql: |
+      DROP OPERATOR FAMILY cof_basic USING btree
+    expect: ok

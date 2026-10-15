@@ -1,0 +1,50 @@
+# An unknown constraint name fails 42704, and an unknown schema qualifier fails 3F000; both abort the transaction.
+id: cmd-set-constraints.unknown-constraint-and-schema-errors
+title: Unknown constraint name fails with 42704 and unknown schema qualifier with 3F000
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, foreign-key, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: a list of constraint names; Notes: search path is used for an unqualified name)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_fk REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS no_such_constraint DEFERRED
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+    comment: the failed statement aborted the block
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS nosuchschema.c_fk DEFERRED
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+    comment: the same statement with the correct name succeeds
+  - sql: |
+      ROLLBACK
+    expect: ok

@@ -1,0 +1,40 @@
+# Predicate with a strict range: values at and outside the bounds are unconstrained, values strictly inside are unique; NULL values are excluded.
+id: doc-indexes-partial.unique-range-boundaries
+title: Partial unique index with a strict range predicate enforces uniqueness only strictly inside the bounds
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, unique-index, predicate-definition, comparison-operators, null-semantics, errors]
+required_capabilities: [create-table, create-index, unique-index, insert, select, errors]
+provenance:
+  source: hand
+  ref: "indices.sgml#indexes-partial (predicate semantics for unique partial indexes)"
+sessions: [a]
+setup: |
+  CREATE TABLE rng (v int);
+  CREATE UNIQUE INDEX rng_mid ON rng (v) WHERE v > 0 AND v < 10;
+steps:
+  - sql: |
+      INSERT INTO rng VALUES (0), (0), (10), (10), (-5), (-5), (9), (NULL), (NULL)
+    expect: ok
+    comment: the bounds 0 and 10 and the negatives are outside the predicate; NULLs make the predicate NULL, so excluded
+  - sql: |
+      INSERT INTO rng VALUES (9)
+    expect: error
+    sqlstate: "23505"
+    comment: 9 is strictly inside the range and already present
+  - sql: |
+      INSERT INTO rng VALUES (5)
+    expect: ok
+  - sql: |
+      INSERT INTO rng VALUES (5)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) AS n FROM rng
+    expect: rows
+    comment: nine rows from the first insert, plus one 5
+  - sql: |
+      SELECT v FROM rng WHERE v > 0 AND v < 10 ORDER BY v
+    expect: rows
+    order: ordered
+    comment: the rows inside the range are exactly 5 and 9

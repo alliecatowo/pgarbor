@@ -1,0 +1,47 @@
+# COST and ROWS are planner estimates: they are stored in pg_proc, do not change results, and
+# must be positive; ROWS is only valid for set-returning functions.
+id: cmd-alter-function.cost-rows-estimates
+title: COST and ROWS are stored estimates; zero or negative values and ROWS on a scalar function are errors
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, cost, rows, set-returning-functions]
+required_capabilities: [create-function, alter-function, set-returning-functions, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: COST execution_cost, ROWS result_rows)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION srf() RETURNS SETOF int LANGUAGE sql AS 'SELECT generate_series(1, 3)';
+  CREATE FUNCTION plain1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION srf() COST 10 ROWS 500
+    expect: ok
+  - sql: |
+      SELECT procost, prorows FROM pg_proc WHERE proname = 'srf'
+    expect: rows
+  - sql: |
+      SELECT count(*) AS n FROM srf()
+    expect: rows
+    comment: ROWS is an estimate only; the actual row count is still 3
+  - sql: |
+      ALTER FUNCTION srf() ROWS 0
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER FUNCTION srf() COST 0
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER FUNCTION srf() COST -1
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT procost, prorows FROM pg_proc WHERE proname = 'srf'
+    expect: rows
+    comment: rejected statements leave the previous estimates unchanged
+  - sql: |
+      ALTER FUNCTION plain1(int) ROWS 5
+    expect: error
+    sqlstate: "22023"
+    comment: ROWS is not applicable to a function that does not return a set

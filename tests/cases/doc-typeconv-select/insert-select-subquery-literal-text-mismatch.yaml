@@ -1,0 +1,26 @@
+# A literal inside a FROM-clause subselect is resolved to text in that subselect, before the INSERT destination applies.
+id: doc-typeconv-select.insert-select-subquery-literal-text-mismatch
+title: Literal in a FROM subselect feeding INSERT ... SELECT resolves to text and raises 42804
+family: doc-typeconv-select
+tier: core
+feature_ids: [insert, insert-select, type-resolution, errors]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "postgres-18 typeconv.sgml#typeconv-select (simple output columns of a SELECT)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (i int4, v text)
+steps:
+  - sql: |
+      INSERT INTO t SELECT x, 'z' FROM (SELECT '9' AS x) s
+    expect: error
+    sqlstate: "42804"
+    comment: the subselect output column is already text, so the destination rule does not reach it
+  - sql: |
+      INSERT INTO t SELECT x::int4, 'z' FROM (SELECT '9' AS x) s
+    expect: ok
+  - sql: |
+      SELECT i, v FROM t
+    expect: rows
+    order: multiset

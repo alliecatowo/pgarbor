@@ -1,0 +1,38 @@
+# Documented: a SQL-standard BEGIN ATOMIC body is parsed at creation, so its table dependency is recorded
+# and DROP TABLE is refused until CASCADE drops the function too.
+id: doc-ddl-depend.sql-standard-body-tracked
+title: SQL-standard BEGIN ATOMIC function depends on its table; DROP TABLE needs CASCADE
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-table, create-function-sql, user-defined-types, drop-cascade, dependency-tracking]
+required_capabilities: [create-table, create-type, create-function-sql, insert, select, drop-table, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (BEGIN ATOMIC form of get_color_note)"
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+  CREATE TABLE my_colors (color rainbow, note text);
+  INSERT INTO my_colors VALUES ('red', 'apple');
+  CREATE FUNCTION get_color_note (rainbow) RETURNS text
+  BEGIN ATOMIC
+    SELECT note FROM my_colors WHERE color = $1;
+  END;
+steps:
+  - sql: |
+      SELECT get_color_note('red')
+    expect: rows
+  - sql: |
+      DROP TABLE my_colors
+    expect: error
+    sqlstate: "2BP01"
+    comment: DETAIL function get_color_note(rainbow) depends on table my_colors
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'get_color_note'
+    expect: rows
+  - sql: |
+      DROP TABLE my_colors CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'get_color_note'
+    expect: rows

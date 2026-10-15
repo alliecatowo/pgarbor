@@ -1,0 +1,32 @@
+# The HANDLER must name an existing function; the function must accept a single argument of type internal.
+id: cmd-create-access-method.handler-lookup-and-signature
+title: Unknown handler names and handlers without an internal argument are rejected
+family: cmd-create-access-method
+tier: core
+feature_ids: [create-access-method, handler-function, errors]
+required_capabilities: [create-access-method, table-access-method, errors, create-function-internal]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method (Parameters: handler_function is the name of a previously registered function that takes a single argument of type internal)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION bad_handler(int4) RETURNS table_am_handler LANGUAGE internal AS 'heap_tableam_handler';
+steps:
+  - sql: |
+      CREATE ACCESS METHOD x_missing TYPE TABLE HANDLER no_such_handler
+    expect: error
+    sqlstate: "42883"
+    comment: the handler function is not registered
+  - sql: |
+      CREATE ACCESS METHOD x_badarg TYPE TABLE HANDLER bad_handler
+    expect: error
+    sqlstate: "42883"
+    comment: bad_handler takes int4, not internal, so no matching handler(internal) exists
+  - sql: |
+      CREATE ACCESS METHOD x_ok TYPE TABLE HANDLER pg_catalog.heap_tableam_handler
+    expect: ok
+    comment: a schema-qualified built-in handler succeeds
+  - sql: |
+      SELECT amname FROM pg_am WHERE amname LIKE 'x\_%' ORDER BY amname
+    expect: rows
+    order: ordered

@@ -1,0 +1,43 @@
+# SET SCHEMA moves a family; a same-named family already in the target schema blocks the move.
+id: cmd-alter-opfamily.set-schema-moves-and-conflicts
+title: SET SCHEMA moves an operator family, conflicts with a same-named family, and no-ops within the same schema
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, set-schema, schema-qualified-name, errors]
+required_capabilities: [alter-operator-family, create-operator-family, create-schema, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (SET SCHEMA new_schema; name optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cmd_aof_src;
+  CREATE SCHEMA cmd_aof_dst;
+  CREATE OPERATOR FAMILY cmd_aof_src.cmd_aof_mv USING btree;
+  CREATE OPERATOR FAMILY cmd_aof_dst.cmd_aof_mv USING btree;
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_src.cmd_aof_mv USING btree SET SCHEMA cmd_aof_dst
+    expect: error
+    sqlstate: "42710"
+    comment: cmd_aof_dst already holds a btree family named cmd_aof_mv
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_src.cmd_aof_mv USING btree SET SCHEMA no_such_schema_aof
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_src.cmd_aof_mv USING btree SET SCHEMA cmd_aof_src
+    expect: ok
+    comment: moving to the schema it already lives in succeeds without change
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_dst.cmd_aof_mv USING btree RENAME TO cmd_aof_mv2
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_src.cmd_aof_mv USING btree SET SCHEMA cmd_aof_dst
+    expect: ok
+    comment: the name is free in cmd_aof_dst now
+  - sql: |
+      SELECT f.opfnamespace::regnamespace::text AS schema, f.opfname
+      FROM pg_opfamily f WHERE f.opfname LIKE 'cmd_aof_mv%'
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered

@@ -1,0 +1,31 @@
+# Documented: a schema-qualified name creates the configuration in that schema; an unqualified name uses the current schema.
+id: cmd-create-tsconfig.schema-qualified-name
+title: "Schema-qualified name places the configuration in that schema; a missing schema is invalid_schema_name"
+family: cmd-create-tsconfig
+tier: core
+feature_ids: [create-text-search-configuration, schema-qualified-name, schema-scope]
+required_capabilities: [create-text-search-configuration, create-schema, text-search, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsconfig.sgml#sql-createtsconfig (Description: If a schema name is given ... created in the specified schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA tsc_sq;
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_sq.tsc_cfg_q (PARSER = default)
+    expect: ok
+  - sql: |
+      SELECT n.nspname, c.cfgname
+        FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace
+       WHERE c.cfgname = 'tsc_cfg_q'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_no_such_schema.tsc_cfg_bad (PARSER = default)
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      SELECT count(*) FROM pg_ts_config WHERE cfgname = 'tsc_cfg_bad'
+    expect: rows
+    order: ordered

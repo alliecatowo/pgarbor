@@ -1,0 +1,38 @@
+# Collation names follow identifier rules: unquoted names fold to lower case, quoted names keep their case.
+id: cmd-alter-collation.identifier-folding
+title: "ALTER COLLATION RENAME folds unquoted names and preserves quoted names"
+family: cmd-alter-collation
+tier: core
+feature_ids: [alter-collation, rename-collation, identifiers, quoting]
+required_capabilities: [create-collation, alter-collation, icu-provider, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-syntax-lexical.html (identifiers and key words); sql-altercollation.html"
+sessions: [a]
+setup: |
+  CREATE COLLATION cmd_fold (provider = icu, locale = 'und-x-icu');
+steps:
+  - sql: |
+      ALTER COLLATION cmd_fold RENAME TO Cmd_Mixed
+    expect: ok
+  - sql: |
+      SELECT collname FROM pg_collation WHERE collname LIKE 'cmd\_mixed%' OR collname LIKE 'Cmd\_Mixed%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: unquoted Cmd_Mixed is stored as cmd_mixed
+  - sql: |
+      ALTER COLLATION "cmd_mixed" RENAME TO "Cmd_Quoted"
+    expect: ok
+  - sql: |
+      SELECT collname FROM pg_collation WHERE collname LIKE 'cmd\_quoted%' OR collname LIKE 'Cmd\_Quoted%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the quoted name keeps its capitals
+  - sql: |
+      ALTER COLLATION cmd_quoted RENAME TO cmd_other
+    expect: error
+    sqlstate: "42704"
+    comment: the unquoted lower-case reference does not match "Cmd_Quoted"
+  - sql: |
+      ALTER COLLATION "Cmd_Quoted" RENAME TO cmd_final
+    expect: ok

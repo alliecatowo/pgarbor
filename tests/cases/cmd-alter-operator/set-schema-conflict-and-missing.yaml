@@ -1,0 +1,40 @@
+# SET SCHEMA into a schema that already holds an operator with the same name and argument types is refused
+# (a unique violation in pg_operator); a missing target schema fails with 3F000. Neither changes the operator.
+id: cmd-alter-operator.set-schema-conflict-and-missing
+title: "ALTER OPERATOR SET SCHEMA fails on a same-signature clash or a missing schema and leaves the operator in place"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, set-schema, namespaces, errors]
+required_capabilities: [alter-operator, create-operator, create-function-sql, create-schema, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#synopsis (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_sc_eq(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 = $2 $$;
+  CREATE OPERATOR === (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_sc_eq);
+  CREATE SCHEMA cmd_ao_dst;
+  CREATE OPERATOR cmd_ao_dst.=== (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_sc_eq);
+steps:
+  - sql: |
+      ALTER OPERATOR === (int8, int8) SET SCHEMA cmd_ao_dst
+    expect: error
+    sqlstate: "23505"
+    compare_message: false
+    comment: the clash surfaces as a unique violation on pg_operator; the DETAIL includes a schema OID, so the message is not compared
+  - sql: |
+      SELECT n.nspname AS schema_name
+      FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace
+      WHERE o.oprname = '===' AND o.oprleft = 'int8'::regtype AND o.oprright = 'int8'::regtype
+      ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR === (int8, int8) SET SCHEMA cmd_ao_no_such_schema
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER OPERATOR cmd_ao_no_such_schema.=== (int8, int8) SET SCHEMA cmd_ao_dst
+    expect: error
+    sqlstate: "42883"
+    comment: a schema-qualified operator name in a missing schema is not found

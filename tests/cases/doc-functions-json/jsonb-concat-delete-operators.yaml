@@ -1,0 +1,42 @@
+# Documented jsonb || (concatenation) and -, #- (delete) operators, with the documented examples.
+id: doc-functions-json.jsonb-concat-delete-operators
+title: jsonb concatenation and delete operators follow documented merge and removal rules
+family: doc-functions-json
+tier: core
+feature_ids: [jsonb-operators, jsonb-concatenate, jsonb-delete, jsonb-path-delete]
+required_capabilities: [select, jsonb]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-processing (Additional jsonb Operators table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '["a", "b"]'::jsonb || '["a", "d"]'::jsonb AS arr_arr,
+             '{"a": "b"}'::jsonb || '{"c": "d"}'::jsonb AS obj_obj,
+             '[1, 2]'::jsonb || '3'::jsonb AS arr_scalar,
+             '{"a": "b"}'::jsonb || '42'::jsonb AS obj_scalar
+    expect: rows
+    comment: "documented: non-array operands are wrapped into a single-element array"
+  - sql: |
+      SELECT '[1, 2]'::jsonb || jsonb_build_array('[3, 4]'::jsonb) AS appended_as_entry,
+             '{"a": 1, "b": {"x": 1}}'::jsonb || '{"b": {"y": 2}}'::jsonb AS shallow_merge
+    expect: rows
+    comment: "concatenation is not recursive; the nested object is replaced"
+  - sql: |
+      SELECT '{"a": "b", "c": "d"}'::jsonb - 'a' AS del_key,
+             '["a", "b", "c", "b"]'::jsonb - 'b' AS del_all_matching_strings,
+             '{"a": "b", "c": "d"}'::jsonb - '{a,c}'::text[] AS del_keys_array,
+             '["a", "b"]'::jsonb - 1 AS del_index,
+             '["a", "b"]'::jsonb - -1 AS del_neg_index
+    expect: rows
+  - sql: |
+      SELECT '["a", {"b":1}]'::jsonb #- '{1,b}' AS del_path_obj_key,
+             '{"a": [1, 2, 3]}'::jsonb #- '{a,-1}' AS del_path_neg_index,
+             '{"a": 1}'::jsonb #- '{zz}' AS del_missing_path
+    expect: rows
+    comment: "a path to a missing key leaves the value unchanged"
+  - sql: |
+      SELECT '{"a": "b"}'::jsonb - 1 AS del_index_on_object
+    expect: error
+    sqlstate: "22023"
+    comment: "documented: jsonb - integer throws an error if the value is not an array"

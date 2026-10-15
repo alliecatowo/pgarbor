@@ -1,0 +1,35 @@
+# A column whose type lives in the dropped schema blocks RESTRICT; CASCADE drops the type and that column, not the table.
+id: cmd-drop-schema.cascade-enum-type-drops-column
+title: DROP SCHEMA CASCADE drops a type in the schema and the column of another table that uses it
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, cascade, enum-types, alter-table-drop-column]
+required_capabilities: [create-schema, create-table, create-type, insert, select, drop-schema, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Parameters: CASCADE drops objects that depend on the schema's objects)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA ty;
+  CREATE TYPE ty.mood AS ENUM ('sad', 'happy');
+  CREATE TABLE public.reports (c ty.mood, k int);
+  INSERT INTO public.reports VALUES ('happy', 1);
+steps:
+  - sql: |
+      DROP SCHEMA ty
+    expect: error
+    sqlstate: "2BP01"
+    comment: the column c of public.reports depends on ty.mood
+  - sql: |
+      DROP SCHEMA ty CASCADE
+    expect: notice
+  - sql: |
+      SELECT k FROM public.reports
+    expect: rows
+    order: multiset
+    comment: the table and its non-dependent column survive
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'public.reports'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: only column k remains

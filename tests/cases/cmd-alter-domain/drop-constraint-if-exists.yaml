@@ -1,0 +1,37 @@
+# DROP CONSTRAINT IF EXISTS on a missing name only issues a notice; without IF EXISTS it is an error.
+id: cmd-alter-domain.drop-constraint-if-exists
+title: "DROP CONSTRAINT IF EXISTS emits a notice for a missing constraint, while plain DROP raises 42704"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, drop-constraint, check-constraint]
+required_capabilities: [create-domain, alter-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (DROP CONSTRAINT [ IF EXISTS ])"
+sessions: [a]
+setup: |
+  CREATE DOMAIN zipcode AS text CONSTRAINT zipchk CHECK (char_length(VALUE) = 5);
+steps:
+  - sql: |
+      ALTER DOMAIN zipcode DROP CONSTRAINT IF EXISTS nosuch
+    expect: notice
+    comment: NOTICE constraint "nosuch" of domain "zipcode" does not exist, skipping
+  - sql: |
+      ALTER DOMAIN zipcode DROP CONSTRAINT nosuch
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER DOMAIN zipcode DROP CONSTRAINT IF EXISTS zipchk
+    expect: ok
+  - sql: |
+      SELECT '1234'::zipcode AS v
+    expect: rows
+    order: ordered
+    comment: the dropped check no longer applies
+  - sql: |
+      ALTER DOMAIN zipcode DROP CONSTRAINT IF EXISTS zipchk
+    expect: notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_constraint WHERE contypid = 'zipcode'::regtype
+    expect: rows
+    order: ordered

@@ -1,0 +1,31 @@
+# Default plpgsql.variable_conflict = error: a name that could be a variable or a column is rejected at run time.
+id: doc-plpgsql-implementation.ambiguous-reference-default-error
+title: Ambiguous variable/column reference raises an error by default and writes nothing
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, variable-conflict, variable-substitution]
+required_capabilities: [create-table, insert, select, create-function, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Variable Substitution)"
+sessions: [a]
+setup: |
+  CREATE TABLE src (foo int, bar int);
+  CREATE TABLE dest (col int);
+  INSERT INTO src VALUES (1, 2);
+  CREATE FUNCTION conf_err(foo int, bar int) RETURNS void AS $$
+  BEGIN
+    INSERT INTO dest (col) SELECT foo + bar FROM src;
+  END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT conf_err(10, 20)
+    expect: error
+    sqlstate: "42702"
+    comment: foo and bar could be parameters or src columns; the default error mode reports ambiguity
+  - sql: |
+      SELECT count(*) FROM dest
+    expect: rows
+    order: multiset
+    comment: the failed INSERT ... SELECT wrote no rows

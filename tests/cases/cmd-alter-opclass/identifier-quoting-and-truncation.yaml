@@ -1,0 +1,38 @@
+# Opclass names follow identifier rules: quoted names keep case, unquoted names fold to lower case, and names longer than 63 bytes are truncated with a NOTICE.
+id: cmd-alter-opclass.identifier-quoting-and-truncation
+title: "Quoted opclass names keep their case, unquoted references fold, and over-long names are truncated"
+family: cmd-alter-opclass
+tier: extended
+feature_ids: [alter-operator-class, identifiers, quoting, name-truncation]
+required_capabilities: [create-operator-class, alter-operator-class, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (name); doc/src/sgml/sql-syntax-lexical.sgml#SQL-SYNTAX-IDENTIFIERS"
+sessions: [a]
+setup: |
+  CREATE OPERATOR CLASS aoc_cmd_o14 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o14 USING btree RENAME TO "AoC_Quoted_Cmd14"
+    expect: ok
+  - sql: |
+      SELECT opcname FROM pg_opclass WHERE opcname = 'AoC_Quoted_Cmd14'
+    expect: rows
+    order: ordered
+    comment: quoted name keeps its case
+  - sql: |
+      ALTER OPERATOR CLASS AoC_Quoted_Cmd14 USING btree RENAME TO aoc_cmd_o14z
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted name folds to aoc_quoted_cmd14, which does not exist
+  - sql: |
+      ALTER OPERATOR CLASS "AoC_Quoted_Cmd14" USING btree RENAME TO aoc_cmd_o14z
+    expect: ok
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o14z USING btree RENAME TO "aoc_cmd_name_that_is_far_longer_than_sixty_three_bytes_so_it_truncates_cmd14"
+    expect: notice
+    comment: succeeds and emits a NOTICE (42622); the stored name is cut to 63 bytes
+  - sql: |
+      SELECT length(opcname) FROM pg_opclass WHERE opcname LIKE 'aoc_cmd_name_that_is%'
+    expect: rows
+    order: ordered

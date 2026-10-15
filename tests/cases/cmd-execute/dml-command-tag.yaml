@@ -1,0 +1,32 @@
+# EXECUTE returns the command tag of the prepared statement (INSERT), not of EXECUTE; RETURNING yields rows.
+id: cmd-execute.dml-command-tag
+title: EXECUTE of an INSERT reports INSERT's command tag and RETURNING rows
+family: cmd-execute
+tier: core
+feature_ids: [execute, prepare, prepared-statements, insert, returning]
+required_capabilities: [create-table, insert, select, prepared-statements, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/execute.sgml#sql-execute (Outputs)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one');
+steps:
+  - sql: |
+      PREPARE ins(text) AS INSERT INTO t (id, name) VALUES ((SELECT coalesce(max(id), 0) + 1 FROM t), $1)
+    expect: ok
+  - sql: |
+      EXECUTE ins('two')
+    expect: ok
+    comment: command tag is INSERT 0 1
+  - sql: |
+      PREPARE ins_ret(text) AS INSERT INTO t (id, name) VALUES ((SELECT coalesce(max(id), 0) + 1 FROM t), $1) RETURNING id, name
+    expect: ok
+  - sql: |
+      EXECUTE ins_ret('three')
+    expect: rows
+  - sql: |
+      SELECT id, name FROM t ORDER BY id
+    expect: rows
+    order: ordered

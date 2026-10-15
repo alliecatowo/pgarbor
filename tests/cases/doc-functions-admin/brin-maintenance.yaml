@@ -1,0 +1,53 @@
+# BRIN maintenance functions: summarize new ranges, summarize one range, desummarize, and error paths.
+id: doc-functions-admin.brin-maintenance
+title: BRIN summarize and desummarize functions and their error paths
+family: doc-functions-admin
+tier: extended
+feature_ids: [brin, brin-summarize-new-values, brin-summarize-range, brin-desummarize-range]
+required_capabilities: [create-table, insert, create-index, select, brin-index]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-admin-index (brin_summarize_new_values, brin_summarize_range, brin_desummarize_range)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE bt (id int4, v int4)
+    expect: ok
+  - sql: |
+      CREATE INDEX bt_brin ON bt USING brin (id) WITH (pages_per_range = 1)
+    expect: ok
+  - sql: |
+      SELECT brin_summarize_new_values('bt_brin') AS on_empty
+    expect: rows
+    comment: an empty table has no unsummarized ranges
+  - sql: |
+      INSERT INTO bt SELECT g, g FROM generate_series(1, 1000) g
+    expect: ok
+  - sql: |
+      SELECT brin_summarize_new_values('bt_brin') > 0 AS summarized_some
+    expect: rows
+    comment: the count depends on page layout, so only assert it is positive
+  - sql: |
+      SELECT brin_summarize_range('bt_brin', 0) >= 0 AS range_ok
+    expect: rows
+  - sql: |
+      SELECT brin_desummarize_range('bt_brin', 0)
+    expect: rows
+  - sql: |
+      SELECT brin_desummarize_range('bt_brin', 0)
+    expect: rows
+    comment: desummarizing an already removed range is a no-op
+  - sql: |
+      SELECT brin_summarize_range('bt_brin', -1)
+    expect: error
+    sqlstate: "22003"
+    comment: negative block numbers are out of range
+  - sql: |
+      SELECT brin_summarize_range('bt', 0)
+    expect: error
+    sqlstate: "42809"
+    comment: a table is not a BRIN index
+  - sql: |
+      SELECT brin_summarize_new_values('nosuch_idx')
+    expect: error
+    sqlstate: "42P01"

@@ -1,0 +1,45 @@
+# Documented example: DROP SCHEMA mystuff CASCADE removes the schema with everything it contains.
+id: cmd-drop-schema.documented-cascade-mystuff
+title: DROP SCHEMA mystuff CASCADE removes the documented example schema and its table, view, sequence and function
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, cascade, sequences, create-view, create-function-sql]
+required_capabilities: [create-schema, create-table, create-view, create-function, sequences, insert, select, drop-schema, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Examples: DROP SCHEMA mystuff CASCADE)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA mystuff;
+  CREATE TABLE mystuff.items (id serial PRIMARY KEY, label text);
+  CREATE VIEW mystuff.labels AS SELECT label FROM mystuff.items;
+  CREATE FUNCTION mystuff.item_count() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM mystuff.items';
+  INSERT INTO mystuff.items (label) VALUES ('a'), ('b');
+steps:
+  - sql: |
+      SELECT label FROM mystuff.labels ORDER BY label
+    expect: rows
+    order: ordered
+    comment: the view reads the table before the drop
+  - sql: |
+      SELECT mystuff.item_count() AS n
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP SCHEMA mystuff CASCADE
+    expect: notice
+    comment: CASCADE reports the contained objects it removed
+  - sql: |
+      SELECT to_regnamespace('mystuff') IS NULL AS schema_gone
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS leftover FROM pg_class WHERE relname IN ('items', 'labels', 'items_id_seq')
+    expect: rows
+    order: ordered
+    comment: the table, view and serial sequence are gone with the schema
+  - sql: |
+      SELECT count(*) AS leftover FROM pg_proc WHERE proname = 'item_count'
+    expect: rows
+    order: ordered
+    comment: the function is gone with the schema

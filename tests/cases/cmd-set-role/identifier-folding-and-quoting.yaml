@@ -1,0 +1,47 @@
+# Unquoted role names fold to lower case, quoted identifiers and string literals keep case, and unknown names fail.
+id: cmd-set-role.identifier-folding-and-quoting
+title: SET ROLE folds bare identifiers, honours quoted identifiers and string literals, and rejects unknown names with 22023
+family: cmd-set-role
+tier: core
+feature_ids: [set-role, identifiers, quoting, role-name-literal, errors]
+required_capabilities: [roles, set-role, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#description (role name as identifier or string literal) and #compatibility (identifier syntax)"
+sessions: [a]
+setup: |
+  CREATE ROLE "Sr_Fold_Mixed"
+steps:
+  - sql: |
+      SET ROLE Sr_Fold_Mixed
+    expect: error
+    sqlstate: "22023"
+    comment: folds to sr_fold_mixed, which does not exist
+  - sql: |
+      SET ROLE "Sr_Fold_Mixed"
+    expect: ok
+  - sql: |
+      SELECT current_user = 'Sr_Fold_Mixed' AS quoted_ok
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE 'Sr_Fold_Mixed'
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE 'sr_fold_nosuch'
+    expect: error
+    sqlstate: "22023"
+    comment: a string literal is also looked up exactly; the role does not exist
+  - sql: |
+      SELECT current_user = session_user AS unchanged_after_error
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE "Sr_Fold_Mixed"
+    expect: ok

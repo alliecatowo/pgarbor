@@ -1,0 +1,43 @@
+# OWNER TO accepts CURRENT_ROLE, CURRENT_USER and SESSION_USER as role specs; they resolve when the command runs, so SET ROLE changes the result.
+id: cmd-alter-schema.owner-keywords-current-role-session-user
+title: OWNER TO CURRENT_ROLE, CURRENT_USER and SESSION_USER resolve at execution time
+family: cmd-alter-schema
+tier: core
+feature_ids: [alter-schema, owner, role-specification-keywords, set-role]
+required_capabilities: [create-schema, create-role, alter-schema, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_schema.sgml#sql-alterschema (Synopsis: OWNER TO CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_as_kw NOLOGIN;
+  CREATE SCHEMA cmd_as_kw_s;
+steps:
+  - sql: |
+      SET ROLE cmd_as_kw
+    expect: ok
+  - sql: |
+      ALTER SCHEMA cmd_as_kw_s OWNER TO CURRENT_ROLE
+    expect: ok
+    comment: current role is cmd_as_kw
+  - sql: |
+      SELECT pg_get_userbyid(nspowner) = 'cmd_as_kw' AS owner_is_role FROM pg_namespace WHERE nspname = 'cmd_as_kw_s'
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER SCHEMA cmd_as_kw_s OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(nspowner) = session_user AS owner_is_session_user FROM pg_namespace WHERE nspname = 'cmd_as_kw_s'
+    expect: rows
+  - sql: |
+      ALTER SCHEMA cmd_as_kw_s OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(nspowner) = current_user AS owner_is_current_user FROM pg_namespace WHERE nspname = 'cmd_as_kw_s'
+    expect: rows
+  - sql: |
+      DROP SCHEMA cmd_as_kw_s; DROP ROLE cmd_as_kw
+    expect: ok

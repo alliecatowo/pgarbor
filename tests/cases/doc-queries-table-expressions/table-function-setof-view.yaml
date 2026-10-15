@@ -1,0 +1,50 @@
+# A SQL function returning SETOF a table row type can be used as a table in FROM, in a correlated
+# subquery, and inside a view.
+id: doc-queries-table-expressions.table-function-setof-view
+title: SETOF SQL table function used in FROM, a correlated subquery, and a view
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [table-functions, create-function-sql, create-view, subquery]
+required_capabilities: [create-table, insert, select, create-function, create-view]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-tablefunctions (getfoo examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (fooid int, foosubid int, fooname text);
+  INSERT INTO foo VALUES (1, 1, 'Joe'), (1, 2, 'Ed'), (2, 1, 'Mary'), (3, 9, 'Ann');
+  CREATE FUNCTION getfoo(int) RETURNS SETOF foo AS $$
+      SELECT * FROM foo WHERE fooid = $1;
+  $$ LANGUAGE SQL;
+steps:
+  - sql: |
+      SELECT * FROM getfoo(1) AS t1 ORDER BY foosubid
+    expect: rows
+    order: ordered
+    comment: columns are the composite type's attributes
+  - sql: |
+      SELECT fooname FROM getfoo(2) ORDER BY fooname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM foo
+        WHERE foosubid IN (
+                            SELECT foosubid
+                            FROM getfoo(foo.fooid) z
+                            WHERE z.fooid = foo.fooid
+                          )
+    expect: rows
+    order: multiset
+    comment: correlated reference from the table function inside a subquery
+  - sql: |
+      CREATE VIEW vw_getfoo AS SELECT * FROM getfoo(1)
+    expect: ok
+  - sql: |
+      SELECT fooname FROM vw_getfoo ORDER BY fooname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM getfoo(99) AS t1
+    expect: rows
+    order: multiset
+    comment: no rows for a fooid that does not exist

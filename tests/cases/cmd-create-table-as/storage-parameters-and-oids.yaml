@@ -1,0 +1,41 @@
+# WITH storage parameters are accepted; OIDS=TRUE is rejected; OIDS=FALSE and WITHOUT OIDS are accepted.
+id: cmd-create-table-as.storage-parameters-and-oids
+title: CREATE TABLE AS storage parameters validate values and reject WITH OIDS
+family: cmd-create-table-as
+tier: extended
+feature_ids: [create-table-as, storage-parameters, without-oids]
+required_capabilities: [create-table-as, create-table, select, storage-parameters]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (WITH storage_parameter, WITHOUT OIDS)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE sp_fill WITH (fillfactor = 10) AS SELECT 1 AS one
+    expect: ok
+  - sql: |
+      SELECT one FROM sp_fill
+    expect: rows
+  - sql: |
+      CREATE TABLE sp_bad_fill WITH (fillfactor = 1) AS SELECT 1 AS one
+    expect: error
+    sqlstate: "22023"
+    comment: fillfactor below its minimum of 10
+  - sql: |
+      CREATE TABLE sp_unknown WITH (no_such_param = 1) AS SELECT 1 AS one
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      CREATE TABLE sp_oids WITH (oids = true) AS SELECT 1 AS one
+    expect: error
+    sqlstate: "0A000"
+    comment: OIDS=TRUE is not supported
+  - sql: |
+      CREATE TABLE sp_oids_false WITH (oids = false) AS SELECT 1 AS one
+    expect: ok
+  - sql: |
+      CREATE TABLE sp_without_oids WITHOUT OIDS AS SELECT 2 AS two
+    expect: ok
+  - sql: |
+      SELECT two FROM sp_without_oids
+    expect: rows

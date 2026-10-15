@@ -1,0 +1,37 @@
+# ROLLBACK undoes the data changes made by EXECUTE, but PREPARE and the prepared statement itself are not transactional.
+id: cmd-execute.rollback-undoes-insert-keeps-statement
+title: EXECUTE inside a rolled-back transaction leaves the statement usable
+family: cmd-execute
+tier: core
+feature_ids: [execute, prepare, prepared-statements, transactions, insert]
+required_capabilities: [create-table, insert, select, prepared-statements, transactions]
+provenance:
+  source: hand
+  ref: "PG18 ref/execute.sgml#sql-execute; ref/prepare.sgml#sql-prepare (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE tx (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      PREPARE ins(int) AS INSERT INTO tx VALUES ($1)
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      EXECUTE ins(7)
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM tx
+    expect: rows
+    comment: the insert was undone
+  - sql: |
+      EXECUTE ins(8)
+    expect: ok
+  - sql: |
+      SELECT id FROM tx ORDER BY id
+    expect: rows
+    order: ordered

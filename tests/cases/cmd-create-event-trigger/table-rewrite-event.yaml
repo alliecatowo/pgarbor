@@ -1,0 +1,30 @@
+# table_rewrite fires only when ALTER TABLE actually rewrites the table, not for a metadata-only ADD COLUMN.
+id: cmd-create-event-trigger.table-rewrite-event
+title: table_rewrite trigger fires for a type-changing ALTER TABLE but not for ADD COLUMN without default
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-table-rewrite, alter-table]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, alter-table]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE TABLE evlog (seq int4 GENERATED ALWAYS AS IDENTITY, evt text, tag text);
+  CREATE FUNCTION log_rw() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  BEGIN INSERT INTO evlog (evt, tag) VALUES (tg_event, tg_tag); END; $$;
+  CREATE EVENT TRIGGER x_rw ON table_rewrite
+    EXECUTE FUNCTION log_rw();
+  CREATE TABLE tt (a int4);
+steps:
+  - sql: |
+      ALTER TABLE tt ADD COLUMN c int4
+    expect: ok
+    comment: no rewrite is needed, so the trigger does not fire
+  - sql: |
+      ALTER TABLE tt ALTER COLUMN a TYPE int8
+    expect: ok
+    comment: int4 to int8 rewrites the table, so the trigger fires with tg_tag ALTER TABLE
+  - sql: |
+      SELECT evt, tag FROM evlog ORDER BY seq
+    expect: rows
+    order: ordered

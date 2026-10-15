@@ -1,0 +1,31 @@
+# A generated column is recomputed whenever the row changes, so an UPDATE of its base column is
+# reflected by both stored and virtual kinds, including NULL propagation and RETURNING.
+id: doc-ddl-generated-columns.base-update-propagates
+title: UPDATE of a base column recomputes both stored and virtual generated columns
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, stored-generated-columns, virtual-generated-columns, update, returning]
+required_capabilities: [create-table, insert, update, select, returning, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE u (id int PRIMARY KEY, a int, s int GENERATED ALWAYS AS (a * 10) STORED, v int GENERATED ALWAYS AS (a * 10) VIRTUAL);
+  INSERT INTO u (id, a) VALUES (1, 1), (2, NULL)
+steps:
+  - sql: |
+      UPDATE u SET a = a + 5 WHERE id = 1 RETURNING id, a, s, v
+    expect: rows
+  - sql: |
+      UPDATE u SET a = 3 WHERE id = 2 RETURNING id, a, s, v
+    expect: rows
+    comment: NULL base value before the update becomes 3 and both kinds follow
+  - sql: |
+      UPDATE u SET a = NULL WHERE id = 1 RETURNING id, s, v
+    expect: rows
+    comment: assigning NULL to the base column yields NULL in both generated columns
+  - sql: |
+      SELECT id, a, s, v FROM u ORDER BY id
+    expect: rows
+    order: ordered

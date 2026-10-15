@@ -1,0 +1,37 @@
+# Documented partial-index example: the unique index covers only rows with success = true, and the index-only-eligible query still returns the right rows.
+id: doc-indexes-index-only-scans.partial-unique-index-success-only
+title: Partial unique index on (subject, target) WHERE success enforces uniqueness only among successful rows
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, partial-index, unique-index]
+required_capabilities: [create-table, create-index, partial-index, unique-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (CREATE UNIQUE INDEX tests_success_constraint ON tests (subject, target) WHERE success; SELECT target FROM tests WHERE subject = 'some-subject' AND success)"
+sessions: [a]
+setup: |
+  CREATE TABLE tests (subject text, target text, success boolean);
+  CREATE UNIQUE INDEX tests_success_constraint ON tests (subject, target) WHERE success;
+steps:
+  - sql: |
+      INSERT INTO tests VALUES ('some-subject', 't1', false), ('some-subject', 't1', false)
+    expect: ok
+    comment: rows outside the predicate are not covered by the unique index
+  - sql: |
+      INSERT INTO tests VALUES ('some-subject', 't1', true)
+    expect: ok
+  - sql: |
+      INSERT INTO tests VALUES ('some-subject', 't1', true)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO tests VALUES ('some-subject', 't2', true)
+    expect: ok
+  - sql: |
+      SELECT target FROM tests WHERE subject = 'some-subject' AND success ORDER BY target
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n FROM tests WHERE subject = 'some-subject' AND NOT success
+    expect: rows
+    order: ordered

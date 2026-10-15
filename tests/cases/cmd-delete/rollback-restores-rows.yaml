@@ -1,0 +1,33 @@
+# A DELETE inside a transaction is undone by ROLLBACK, and rows deleted by a committed DELETE stay gone.
+id: cmd-delete.rollback-restores-rows
+title: "DELETE is transactional: ROLLBACK restores rows, COMMIT keeps the deletion"
+family: cmd-delete
+tier: core
+feature_ids: [delete, transactions, rollback, commit, create-table, insert, select]
+required_capabilities: [create-table, insert, select, delete, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#description (DELETE deletes rows; standard transactional semantics)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, kind text);
+  INSERT INTO films VALUES (1, 'Musical'), (2, 'Drama'), (3, 'Comedy');
+steps:
+  - sql: |
+      BEGIN;
+      DELETE FROM films WHERE kind <> 'Musical' RETURNING id;
+      ROLLBACK
+    expect: any
+  - sql: |
+      SELECT id, kind FROM films ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN;
+      DELETE FROM films WHERE kind <> 'Musical';
+      COMMIT
+    expect: any
+  - sql: |
+      SELECT id, kind FROM films ORDER BY id
+    expect: rows
+    order: ordered

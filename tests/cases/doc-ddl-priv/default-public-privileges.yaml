@@ -1,0 +1,43 @@
+# Default PUBLIC privileges: CONNECT, TEMPORARY, EXECUTE, USAGE on types, languages and schema public; no table access.
+id: doc-ddl-priv.default-public-privileges
+title: A role with no grants inherits the documented PUBLIC defaults and nothing on tables
+family: doc-ddl-priv
+tier: core
+feature_ids: [public, default-privileges, function-execute, usage, connect, privileges]
+required_capabilities: [create-table, select, roles, errors, create-function-sql, misc-functions]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (PUBLIC defaults: CONNECT and TEMPORARY for databases, EXECUTE for functions, USAGE for languages and types; no table privileges)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_dp_nobody;
+  CREATE FUNCTION dp_f1() RETURNS int4 LANGUAGE sql AS 'SELECT 1';
+  CREATE TABLE dp_t (a int4);
+steps:
+  - sql: |
+      SELECT has_database_privilege('ddp_dp_nobody', current_database(), 'CONNECT') AS connect_p, has_database_privilege('ddp_dp_nobody', current_database(), 'TEMPORARY') AS temp_p, has_database_privilege('ddp_dp_nobody', current_database(), 'CREATE') AS create_p
+    expect: rows
+    order: multiset
+    comment: CONNECT and TEMPORARY come from PUBLIC; CREATE on the database does not
+  - sql: |
+      SELECT has_function_privilege('ddp_dp_nobody', 'dp_f1()', 'EXECUTE') AS fn_exec, has_type_privilege('ddp_dp_nobody', 'int4', 'USAGE') AS type_usage, has_language_privilege('ddp_dp_nobody', 'sql', 'USAGE') AS lang_usage, has_table_privilege('ddp_dp_nobody', 'dp_t', 'SELECT') AS tbl_sel
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT has_schema_privilege('ddp_dp_nobody', 'public', 'USAGE') AS pub_usage, has_schema_privilege('ddp_dp_nobody', 'public', 'CREATE') AS pub_create
+    expect: rows
+    order: multiset
+  - sql: |
+      SET ROLE ddp_dp_nobody
+    expect: ok
+  - sql: |
+      SELECT dp_f1()
+    expect: rows
+    comment: EXECUTE on the function is granted to PUBLIC by default
+  - sql: |
+      SELECT a FROM dp_t
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

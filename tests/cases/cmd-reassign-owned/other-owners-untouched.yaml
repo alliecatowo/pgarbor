@@ -1,0 +1,37 @@
+# Only objects owned by the old role change owner; objects owned by the superuser or by another role keep theirs.
+id: cmd-reassign-owned.other-owners-untouched
+title: "REASSIGN OWNED BY leaves objects owned by other roles unchanged"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, ownership]
+required_capabilities: [roles, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-description"
+sessions: [a]
+setup: |
+  CREATE ROLE ro3_old;
+  CREATE ROLE ro3_new;
+  CREATE ROLE ro3_other;
+  CREATE TABLE ro3_pg (a int4);
+  CREATE TABLE ro3_mine (a int4);
+  CREATE TABLE ro3_oth (a int4);
+  ALTER TABLE ro3_mine OWNER TO ro3_old;
+  ALTER TABLE ro3_oth OWNER TO ro3_other;
+steps:
+  - sql: |
+      SELECT relname, pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname LIKE 'ro3%' ORDER BY relname
+    expect: rows
+    order: ordered
+  - sql: |
+      REASSIGN OWNED BY ro3_old TO ro3_new
+    expect: ok
+  - sql: |
+      SELECT relname, pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname LIKE 'ro3%' ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: only ro3_mine moved; ro3_pg (superuser) and ro3_oth (ro3_other) are unchanged
+  - sql: |
+      DROP OWNED BY ro3_new; DROP OWNED BY ro3_other; DROP TABLE ro3_pg; DROP ROLE ro3_old; DROP ROLE ro3_new; DROP ROLE ro3_other
+    expect: ok
+    comment: cleanup

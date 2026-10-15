@@ -1,0 +1,39 @@
+# ON CONFLICT DO NOTHING: conflicting rows are skipped silently; the conflict target is optional for DO NOTHING,
+# and a named constraint can serve as the arbiter.
+id: cmd-insert.on-conflict-do-nothing
+title: ON CONFLICT DO NOTHING with column target, no target, and ON CONSTRAINT arbiter
+family: cmd-insert
+tier: core
+feature_ids: [insert, on-conflict, unique-constraints]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-on-conflict (conflict_target, DO NOTHING; Examples: ON CONFLICT (did) DO NOTHING, ON CONSTRAINT distributors_pkey DO NOTHING)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did int PRIMARY KEY, dname text, code text UNIQUE);
+  INSERT INTO distributors VALUES (5, 'Gizmo', 'G');
+steps:
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (7, 'Redline GmbH') ON CONFLICT (did) DO NOTHING
+    expect: ok
+    comment: no conflict, so the row is inserted
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (7, 'Dup') ON CONFLICT (did) DO NOTHING
+    expect: ok
+    comment: INSERT 0 0 is reported and the existing row is untouched
+  - sql: |
+      INSERT INTO distributors (did, dname, code) VALUES (8, 'Code clash', 'G') ON CONFLICT DO NOTHING
+    expect: ok
+    comment: with no target, a clash on the unique code column is also skipped
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (9, 'Antwerp Design') ON CONFLICT ON CONSTRAINT distributors_pkey DO NOTHING
+    expect: ok
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (5, 'Clash'), (10, 'Fresh') ON CONFLICT (did) DO NOTHING RETURNING did, dname
+    expect: rows
+    comment: only the non-conflicting row is returned
+  - sql: |
+      SELECT did, dname, code FROM distributors ORDER BY did
+    expect: rows
+    order: ordered

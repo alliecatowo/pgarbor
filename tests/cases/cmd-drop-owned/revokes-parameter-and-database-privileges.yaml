@@ -1,0 +1,32 @@
+# DROP OWNED also revokes privileges on shared objects granted to the role: a configuration parameter SET privilege and CONNECT on the current database.
+id: cmd-drop-owned.revokes-parameter-and-database-privileges
+title: "DROP OWNED revokes SET-on-parameter and CONNECT-on-database privileges granted to the role"
+family: cmd-drop-owned
+tier: extended
+feature_ids: [drop-owned, privileges, shared-objects, parameter-privileges, database-privileges]
+required_capabilities: [roles, drop-role, privileges, grant, revoke, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-description (privileges on shared objects are revoked)"
+sessions: [a]
+setup: |
+  CREATE ROLE dpd_g;
+  GRANT SET ON PARAMETER work_mem TO dpd_g;
+  DO $$ BEGIN
+    EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', current_database());
+    EXECUTE format('GRANT CONNECT ON DATABASE %I TO dpd_g', current_database());
+  END $$;
+steps:
+  - sql: |
+      SELECT has_parameter_privilege('dpd_g', 'work_mem', 'SET') AS param_set, has_database_privilege('dpd_g', current_database(), 'CONNECT') AS db_connect
+    expect: rows
+    order: ordered
+    comment: both shared-object privileges are held before the drop; PUBLIC does not hold CONNECT in this database
+  - sql: |
+      DROP OWNED BY dpd_g
+    expect: ok
+  - sql: |
+      SELECT has_parameter_privilege('dpd_g', 'work_mem', 'SET') AS param_set, has_database_privilege('dpd_g', current_database(), 'CONNECT') AS db_connect
+    expect: rows
+    order: ordered
+    comment: both privileges are revoked

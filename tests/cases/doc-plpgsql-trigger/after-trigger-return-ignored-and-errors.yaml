@@ -1,0 +1,64 @@
+# AFTER row triggers ignore their return value; a BEFORE statement trigger's NULL return is ignored; a RAISE in an AFTER trigger aborts the whole statement.
+id: doc-plpgsql-trigger.after-trigger-return-ignored-and-errors
+title: Return values of AFTER and statement-level triggers are ignored; an AFTER error rolls back the statement
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, after-triggers, statement-triggers, plpgsql, return-value, raise-exception, rollback]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (return value of AFTER row trigger and statement-level triggers is always ignored)"
+sessions: [a]
+setup: |
+  CREATE TABLE a (id int);
+  CREATE TABLE a_log (id int, phase text);
+  CREATE FUNCTION a_after_row() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      INSERT INTO a_log VALUES (NEW.id, 'after-row');
+      RETURN NULL;
+  END $$;
+  CREATE TRIGGER a_after AFTER INSERT ON a
+      FOR EACH ROW EXECUTE FUNCTION a_after_row();
+  CREATE FUNCTION a_stmt_before() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      INSERT INTO a_log VALUES (0, 'stmt-before');
+      RETURN NULL;
+  END $$;
+  CREATE TRIGGER a_stmt_before BEFORE INSERT ON a
+      FOR EACH STATEMENT EXECUTE FUNCTION a_stmt_before();
+  CREATE FUNCTION a_fail_after() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      IF NEW.id = 99 THEN
+          RAISE EXCEPTION 'after trigger refused %', NEW.id;
+      END IF;
+      RETURN NULL;
+  END $$;
+  CREATE TRIGGER a_fail_after AFTER INSERT ON a
+      FOR EACH ROW EXECUTE FUNCTION a_fail_after();
+steps:
+  - sql: |
+      INSERT INTO a VALUES (1), (2)
+    expect: ok
+    comment: NULL from the BEFORE statement trigger does not skip anything; AFTER row returns are ignored
+  - sql: |
+      SELECT id FROM a ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, phase FROM a_log ORDER BY phase, id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO a VALUES (3), (99)
+    expect: error
+    sqlstate: "P0001"
+    comment: the AFTER row trigger aborts the statement, so row 3 is rolled back as well
+  - sql: |
+      SELECT id FROM a ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, phase FROM a_log ORDER BY phase, id
+    expect: rows
+    order: ordered
+    comment: log rows written by the failed statement are rolled back too

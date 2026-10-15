@@ -1,0 +1,38 @@
+# sql-lock Examples, first listing: SHARE lock on the primary-key table before inserting into the
+# foreign-key table. The docs' _id_ placeholder is filled in by a SELECT so the case is runnable.
+id: cmd-lock.films-share-mode-example
+title: "Documented SHARE-mode example: lock parent table, look up key, insert child row, commit"
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, lock-modes, foreign-key, transactions, insert, select]
+required_capabilities: [create-table, insert, select, lock-table, transactions, foreign-key]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (Examples, first listing)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, name text NOT NULL, rating int4);
+  CREATE TABLE films_user_comments (id int4 REFERENCES films (id), comment text);
+  INSERT INTO films VALUES (1, 'Star Wars: Episode I - The Phantom Menace', 3), (2, 'Heat', 9);
+steps:
+  - sql: |
+      BEGIN WORK
+    expect: ok
+  - sql: |
+      LOCK TABLE films IN SHARE MODE
+    expect: ok
+  - sql: |
+      SELECT id FROM films WHERE name = 'Star Wars: Episode I - The Phantom Menace'
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO films_user_comments SELECT id, 'GREAT! I was waiting for it for so long!' FROM films WHERE name = 'Star Wars: Episode I - The Phantom Menace'
+    expect: ok
+  - sql: |
+      COMMIT WORK
+    expect: ok
+  - sql: |
+      SELECT f.id, c.comment FROM films_user_comments c JOIN films f ON f.id = c.id ORDER BY f.id, c.comment
+    expect: rows
+    order: ordered

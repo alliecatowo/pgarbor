@@ -1,0 +1,28 @@
+# Zero-argument aggregates: the (*) form and the old BASETYPE = "ANY" form both count every row
+# (NULLs included) and return the initcond for an empty input.
+id: cmd-create-aggregate.star-zero-arg-count
+title: "Zero-argument aggregates via (*) and BASETYPE = \"ANY\" count all rows and return initcond when empty"
+family: cmd-create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, zero-argument-aggregate]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (arg_data_type, basetype)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE AGGREGATE mystar (*) (SFUNC = int8inc, STYPE = int8, INITCOND = '0');
+  CREATE AGGREGATE cnt0 (BASETYPE = "ANY", SFUNC = int8inc, STYPE = int8, INITCOND = '0');
+steps:
+  - sql: |
+      SELECT mystar(*) FROM t
+    expect: rows
+    comment: four rows, NULL argument rows included because there is no argument
+  - sql: |
+      SELECT cnt0(*) FROM t
+    expect: rows
+  - sql: |
+      SELECT mystar(*) FROM t WHERE false
+    expect: rows
+    comment: empty input yields the initcond

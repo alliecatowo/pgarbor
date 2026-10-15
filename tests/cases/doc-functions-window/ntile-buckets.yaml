@@ -1,0 +1,35 @@
+# ntile: even distribution with the remainder in the first buckets, NULL argument, invalid argument, empty input.
+id: doc-functions-window.ntile-buckets
+title: ntile bucket distribution, NULL and empty-input behavior, and zero-bucket error
+family: doc-functions-window
+tier: core
+feature_ids: [window-functions, ntile]
+required_capabilities: [select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (ntile)"
+steps:
+  - sql: |
+      SELECT id,
+             ntile(2) OVER (ORDER BY id) AS n2,
+             ntile(3) OVER (ORDER BY id) AS n3,
+             ntile(4) OVER (ORDER BY id) AS n4
+      FROM generate_series(1, 7) AS id ORDER BY id
+    expect: rows
+    order: ordered
+    comment: 7 rows into 3 buckets gives sizes 3,2,2 (the earlier buckets get the extra rows)
+  - sql: |
+      SELECT ntile(NULL::int) OVER () AS n FROM generate_series(1, 2) AS g
+    expect: rows
+    order: multiset
+    comment: a NULL bucket count yields NULL for every row
+  - sql: |
+      SELECT ntile(2) OVER () AS n FROM generate_series(1, 0) AS g
+    expect: rows
+    order: multiset
+    comment: no input rows, no output rows
+  - sql: |
+      SELECT ntile(0) OVER () FROM generate_series(1, 2) AS g
+    expect: error
+    sqlstate: "22014"
+    comment: documented argument must be greater than zero

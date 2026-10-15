@@ -1,0 +1,97 @@
+# RESTRICT is the default. Each kind of dependent object (trigger, column default, CHECK constraint,
+# operator, view, SQL-standard body) blocks the drop with 2BP01 and the function stays in place.
+id: cmd-drop-function.restrict-blocks-on-dependents
+title: RESTRICT refuses to drop a function that triggers, defaults, checks, operators, views or bodies depend on
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, restrict, dependencies, triggers, column-defaults, check-constraints, operators, views, sql-body-functions]
+required_capabilities: [create-function, create-table, create-view, create-operator, triggers, drop-function, sql-functions, plpgsql, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (RESTRICT, CASCADE); ddl-depend"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION rtrg() RETURNS trigger LANGUAGE plpgsql AS 'begin return new; end'
+    expect: ok
+  - sql: |
+      CREATE TABLE rt1 (id int)
+    expect: ok
+  - sql: |
+      CREATE TRIGGER rt1_b BEFORE INSERT ON rt1 FOR EACH ROW EXECUTE FUNCTION rtrg()
+    expect: ok
+  - sql: |
+      DROP FUNCTION rtrg()
+    expect: error
+    sqlstate: "2BP01"
+    comment: the trigger depends on the function
+  - sql: |
+      DROP FUNCTION rtrg() RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT is the same as the default
+  - sql: |
+      CREATE FUNCTION rdef() RETURNS int LANGUAGE sql AS 'select 5'
+    expect: ok
+  - sql: |
+      CREATE TABLE rt2 (a int DEFAULT rdef())
+    expect: ok
+  - sql: |
+      DROP FUNCTION rdef()
+    expect: error
+    sqlstate: "2BP01"
+    comment: a column default expression depends on the function
+  - sql: |
+      CREATE FUNCTION rchk(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      CREATE TABLE rt3 (a int CHECK (rchk(a) > 0))
+    expect: ok
+  - sql: |
+      DROP FUNCTION rchk(int)
+    expect: error
+    sqlstate: "2BP01"
+    comment: a CHECK constraint depends on the function
+  - sql: |
+      CREATE FUNCTION rop(int, int) RETURNS bool LANGUAGE sql AS 'select $1 = $2'
+    expect: ok
+  - sql: |
+      CREATE OPERATOR === (leftarg = int, rightarg = int, procedure = rop)
+    expect: ok
+  - sql: |
+      DROP FUNCTION rop(int, int)
+    expect: error
+    sqlstate: "2BP01"
+    comment: the operator depends on the function
+  - sql: |
+      CREATE FUNCTION rview() RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      CREATE VIEW rv AS SELECT rview() AS x
+    expect: ok
+  - sql: |
+      DROP FUNCTION rview()
+    expect: error
+    sqlstate: "2BP01"
+    comment: the view depends on the function
+  - sql: |
+      CREATE FUNCTION rh() RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION rbody() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT rh(); END
+    expect: ok
+  - sql: |
+      DROP FUNCTION rh()
+    expect: error
+    sqlstate: "2BP01"
+    comment: a SQL-standard body records a dependency on rh
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname IN ('rtrg', 'rdef', 'rchk', 'rop', 'rview', 'rh')
+    expect: rows
+    order: multiset
+    comment: 6 rows, nothing was dropped
+  - sql: |
+      SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal
+    expect: rows
+    order: multiset
+    comment: 1 row, the trigger is untouched

@@ -1,0 +1,33 @@
+# uuidv7() returns a uuid of version 7 with a time-ordered layout; its successive values in one session increase.
+id: doc-functions-uuid.uuidv7-shape-and-types
+title: uuidv7 returns version 7 uuids that are distinct and increase within a session
+family: doc-functions-uuid
+tier: core
+feature_ids: [uuid, uuidv7, uuid-version, time-ordered-ids]
+required_capabilities: [select]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-uuid (UUID Generation Functions; uuidv7 example 019535d9-3df7-79fb-b466-fa907fa17f9e)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_typeof(uuidv7())::text AS t, uuid_extract_version(uuidv7()) AS v
+    expect: rows
+    comment: type uuid and version 7 (doc example layout)
+  - sql: |
+      SELECT u::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AS shape_ok
+      FROM (SELECT uuidv7() AS u) s
+    expect: rows
+    comment: the version nibble is 7 and the variant nibble is RFC
+  - sql: |
+      SELECT count(DISTINCT u) = 1000 AS all_distinct
+      FROM (SELECT uuidv7() AS u FROM generate_series(1, 1000)) s
+    expect: rows
+    comment: sub-millisecond counter and random bits keep a burst of values distinct
+  - sql: |
+      WITH g AS (SELECT n, uuidv7() AS u FROM generate_series(1, 200) AS n),
+           w AS (SELECT n, u, lag(u) OVER (ORDER BY n) AS prev FROM g)
+      SELECT bool_and(u > prev) AS increasing
+      FROM w WHERE prev IS NOT NULL
+    expect: rows
+    comment: values generated in sequence in one backend sort in generation order

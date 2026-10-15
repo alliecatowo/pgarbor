@@ -1,0 +1,62 @@
+# DROP TRIGGER is transactional: rolled back, the trigger fires again; committed, it stays gone.
+id: cmd-drop-trigger.transaction-rollback
+title: "DROP TRIGGER inside a transaction is undone by ROLLBACK and sticks after COMMIT"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, transactions, triggers, rollback]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, transactions, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Description: removes an existing trigger definition); transaction semantics of DDL"
+sessions: [a]
+setup: |
+  CREATE TABLE trg_log (tg text);
+  CREATE FUNCTION log_tg() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME);
+    RETURN NEW;
+  END
+  $$;
+  CREATE TABLE t (id int4);
+  CREATE TRIGGER tg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_tg();
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TRIGGER tg ON t
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+    comment: inside the transaction the trigger is already gone
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM trg_log
+    expect: rows
+    comment: nothing was logged inside the rolled-back transaction
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM trg_log
+    expect: rows
+    comment: the rollback restored the trigger, so this insert logs once
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TRIGGER tg ON t
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM trg_log
+    expect: rows
+    comment: the committed drop stuck, so the insert after it does not log

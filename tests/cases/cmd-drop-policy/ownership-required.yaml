@@ -1,0 +1,56 @@
+# Only the table owner may drop a policy. The owner check runs only once the policy is found, so a missing name gives 42704.
+id: cmd-drop-policy.ownership-required
+title: "DROP POLICY by a non-owner fails with 42501 even with IF EXISTS, and the owner can drop it"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, policies, privileges, errors]
+required_capabilities: [create-table, select, rls, roles, privileges, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (Description); PG18 policy.c ownership check"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_dp_owner;
+  CREATE ROLE pgarbor_case_dp_other;
+  CREATE TABLE t (id int4, v int4);
+  ALTER TABLE t OWNER TO pgarbor_case_dp_owner;
+  CREATE POLICY p1 ON t USING (v > 0);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_dp_other
+    expect: ok
+  - sql: |
+      DROP POLICY p1 ON t
+    expect: error
+    sqlstate: "42501"
+    comment: a non-owner cannot drop the policy
+  - sql: |
+      DROP POLICY IF EXISTS p1 ON t
+    expect: error
+    sqlstate: "42501"
+    comment: IF EXISTS does not bypass the owner check when the policy exists
+  - sql: |
+      DROP POLICY nothere ON t
+    expect: error
+    sqlstate: "42704"
+    comment: for a missing policy the lookup fails before the owner check
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT policyname FROM pg_policies WHERE tablename = 't' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: p1 is still defined
+  - sql: |
+      SET ROLE pgarbor_case_dp_owner
+    expect: ok
+  - sql: |
+      DROP POLICY p1 ON t
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_policies WHERE tablename = 't'
+    expect: rows

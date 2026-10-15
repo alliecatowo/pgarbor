@@ -1,0 +1,29 @@
+# Channel names longer than NAMEDATALEN-1 bytes are truncated like any identifier, so two long names with the same prefix are the same channel.
+id: cmd-listen.truncated-identifier-dedupes
+title: Over-long channel name is truncated to 63 bytes and a LISTEN with the truncated name is a no-op
+family: cmd-listen
+tier: extended
+feature_ids: [listen, identifier-truncation, pg-listening-channels]
+required_capabilities: [listen-notify, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 identifier length rule (NAMEDATALEN 64) applied to LISTEN channel, ref/listen.sgml#sql-listen"
+sessions: [a]
+steps:
+  - sql: |
+      LISTEN abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop
+    expect: ok
+    compare_message: false
+    comment: a NOTICE reports the truncation; only the resulting registration is compared
+  - sql: |
+      SELECT length(channel) AS len FROM pg_listening_channels() AS c(channel)
+    expect: rows
+    comment: truncated to 63 bytes
+  - sql: |
+      LISTEN abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijk
+    expect: ok
+    compare_message: false
+  - sql: |
+      SELECT count(*) AS n FROM pg_listening_channels()
+    expect: rows
+    comment: still a single registration

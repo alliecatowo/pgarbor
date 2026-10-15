@@ -1,0 +1,38 @@
+# ON CONFLICT DO UPDATE is an UPSERT: EXCLUDED holds the proposed row, the target table name refers to the
+# existing row, and RETURNING old/new aliases expose both versions (old is NULL for non-conflicting rows).
+id: cmd-insert.on-conflict-do-update
+title: UPSERT with EXCLUDED, multirow mixed insert/update, and RETURNING old and new aliases
+family: cmd-insert
+tier: core
+feature_ids: [insert, on-conflict, upsert, returning]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-insert (Examples: ON CONFLICT (did) DO UPDATE SET dname = EXCLUDED.dname; RETURNING old.did ... new.dname)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did int PRIMARY KEY, dname text NOT NULL);
+  INSERT INTO distributors VALUES (5, 'Gizmo');
+steps:
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (5, 'Gizmo Transglobal'), (6, 'Associated Computing, Inc')
+      ON CONFLICT (did) DO UPDATE SET dname = EXCLUDED.dname
+    expect: ok
+    comment: INSERT 0 2 - the conflicting row is updated and counted, plus the new row
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (5, 'Gizmo Transglobal'), (12, 'Brand new')
+      ON CONFLICT (did) DO UPDATE SET dname = EXCLUDED.dname
+      RETURNING old.did AS old_did, old.dname AS old_dname, new.did AS new_did, new.dname AS new_dname
+    expect: rows
+    order: multiset
+    comment: old values are non-NULL for the conflicting row 5 and NULL for the inserted row 12
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (6, 'Second pass')
+      ON CONFLICT (did) DO UPDATE SET dname = distributors.dname || ' / ' || EXCLUDED.dname
+      RETURNING did, dname
+    expect: rows
+    comment: the existing row is referenced by its table name in SET
+  - sql: |
+      SELECT did, dname FROM distributors ORDER BY did
+    expect: rows
+    order: ordered

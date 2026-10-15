@@ -1,0 +1,42 @@
+# BEGIN ATOMIC bodies record dependencies on the tables they use, so DROP TABLE is refused and
+# CASCADE drops the procedure. A string-literal body is not tracked, so it survives and then fails on CALL.
+id: cmd-create-procedure.sql-body-dependency-tracking
+title: BEGIN ATOMIC bodies track table dependencies; string bodies do not
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, begin-atomic, dependencies, drop-cascade, call]
+required_capabilities: [create-table, insert, select, create-procedure, call]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (sql_body dependency tracking)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE tbl (a int)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE ins_atomic(a int) LANGUAGE sql BEGIN ATOMIC INSERT INTO tbl VALUES (a); END
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE ins_string(a int) LANGUAGE sql AS 'INSERT INTO tbl VALUES ($1)'
+    expect: ok
+  - sql: |
+      DROP TABLE tbl
+    expect: error
+    sqlstate: "2BP01"
+    comment: ins_atomic depends on tbl
+  - sql: |
+      DROP TABLE tbl CASCADE
+    expect: ok
+    compare_message: false
+    comment: the CASCADE notice names ins_atomic(integer)
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('ins_atomic', 'ins_string') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only the string-body procedure survives
+  - sql: |
+      CALL ins_string(1)
+    expect: error
+    sqlstate: "42P01"
+    comment: the dangling string body fails when executed

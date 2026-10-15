@@ -1,0 +1,30 @@
+# RETURNS TABLE is equivalent to OUT parameters with RETURNS SETOF; RETURN QUERY streams rows, and an empty match yields zero rows.
+id: doc-plpgsql-declarations.returns-table-extended-sales
+title: RETURNS TABLE function returns the columns of RETURN QUERY, including zero rows for no match
+family: doc-plpgsql-declarations
+tier: core
+feature_ids: [plpgsql, returns-table, return-query, set-returning-function]
+required_capabilities: [plpgsql, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-declarations-parameters (RETURNS TABLE extended_sales)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales (itemno int, quantity int, price numeric);
+  INSERT INTO sales VALUES (1, 2, 3.5), (1, 1, 10), (2, 5, 1);
+  CREATE FUNCTION extended_sales(p_itemno int)
+  RETURNS TABLE(quantity int, total numeric) LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN QUERY SELECT s.quantity, s.quantity * s.price FROM sales AS s
+                 WHERE s.itemno = p_itemno;
+  END $$;
+steps:
+  - sql: |
+      SELECT quantity, total FROM extended_sales(1)
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM extended_sales(99)
+    expect: rows
+    order: multiset
+    comment: no matching sales rows, so zero rows

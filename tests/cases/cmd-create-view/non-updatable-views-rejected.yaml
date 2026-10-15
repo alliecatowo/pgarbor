@@ -1,0 +1,43 @@
+# Views with DISTINCT, GROUP BY or LIMIT are not automatically updatable and reject DML.
+id: cmd-create-view.non-updatable-views-rejected
+title: DISTINCT, GROUP BY and LIMIT views reject INSERT, DELETE and UPDATE
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, updatable-views, distinct, group-by, limit, errors]
+required_capabilities: [create-table, insert, update, delete, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview-updatable-views"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy'), (2, 'B', 'Comedy'), (3, 'C', 'Drama'), (4, 'D', 'Comedy');
+steps:
+  - sql: |
+      CREATE VIEW kinds AS SELECT DISTINCT kind FROM films
+    expect: ok
+  - sql: |
+      INSERT INTO kinds VALUES ('Western')
+    expect: error
+    sqlstate: "55000"
+    comment: a view containing DISTINCT is read-only by default
+  - sql: |
+      CREATE VIEW kind_counts AS SELECT kind, count(*) AS n FROM films GROUP BY kind
+    expect: ok
+  - sql: |
+      DELETE FROM kind_counts
+    expect: error
+    sqlstate: "55000"
+    comment: a view containing GROUP BY is read-only by default
+  - sql: |
+      CREATE VIEW first_two AS SELECT * FROM films LIMIT 2
+    expect: ok
+  - sql: |
+      UPDATE first_two SET title = 'q' WHERE id = 1
+    expect: error
+    sqlstate: "55000"
+    comment: a view containing LIMIT is read-only by default
+  - sql: |
+      SELECT count(*), sum(id) FROM films
+    expect: rows
+    comment: the base table is unchanged after the rejected statements

@@ -1,0 +1,38 @@
+# RELEASE merges the savepoint's changes into the enclosing transaction, so other sessions see them only after COMMIT.
+id: cmd-release-savepoint.merged-invisible-until-commit
+title: Work merged by RELEASE SAVEPOINT stays invisible to other sessions until the enclosing transaction commits
+family: cmd-release-savepoint
+tier: extended
+feature_ids: [release-savepoint, savepoints, transactions, read-committed, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/release_savepoint.sgml#sql-release-savepoint (Description: changes are merged into the transaction that was active when the savepoint was created)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - session: a
+    sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1);
+      SAVEPOINT s;
+      INSERT INTO t VALUES (2);
+      RELEASE SAVEPOINT s
+    expect: ok
+  - session: b
+    sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: uncommitted work, released or not, is invisible to b
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: after COMMIT both rows are visible

@@ -1,0 +1,24 @@
+# Setting a NOT NULL column to NULL fails with 23502; the statement is atomic, so no row changes.
+id: doc-dml-update.error-not-null-leaves-row
+title: UPDATE setting a NOT NULL column to NULL fails with 23502 and leaves rows unchanged
+family: doc-dml-update
+tier: core
+feature_ids: [update, not-null-constraint, errors]
+required_capabilities: [create-table, insert, select, update, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/dml.sgml#dml-update (the new column value)"
+sessions: [a]
+setup: |
+  CREATE TABLE acct (id int PRIMARY KEY, balance int NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200)
+steps:
+  - sql: |
+      UPDATE acct SET balance = NULL
+    expect: error
+    sqlstate: "23502"
+    comment: the first row would be updated before the violation; the whole statement must roll back
+  - sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered

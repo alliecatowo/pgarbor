@@ -1,0 +1,60 @@
+# Switching DEFERRED to IMMEDIATE checks outstanding modifications during the SET CONSTRAINTS statement itself.
+id: cmd-set-constraints.set-immediate-raises-retroactively
+title: SET CONSTRAINTS IMMEDIATE checks pending rows at the SET statement and fails on a violation
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, foreign-key, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: DEFERRED to IMMEDIATE takes effect retroactively; a violation makes SET CONSTRAINTS fail)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_fk REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (1, 99)
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk IMMEDIATE
+    expect: error
+    sqlstate: "23503"
+    comment: the pending orphan is checked now, not at COMMIT
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM c
+    expect: rows
+    order: ordered
+    comment: the block was rolled back, so no row remains
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO c VALUES (2, 50)
+    expect: ok
+  - sql: |
+      INSERT INTO p VALUES (50)
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS c_fk IMMEDIATE
+    expect: ok
+    comment: the pending row is satisfied by the time of the switch
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM c ORDER BY id
+    expect: rows
+    order: ordered

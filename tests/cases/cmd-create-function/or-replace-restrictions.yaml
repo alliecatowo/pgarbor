@@ -1,0 +1,55 @@
+# CREATE OR REPLACE may change the body but not the return type, the input parameter names or the
+# OUT parameter types; a different argument list creates an overload instead of replacing.
+id: cmd-create-function.or-replace-restrictions
+title: CREATE OR REPLACE allows body changes and rejects return type, input name and OUT type changes
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, create-or-replace, return-type, parameter-names]
+required_capabilities: [create-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-description; #sql-createfunction-notes (replacing restrictions)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION ch() RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE FUNCTION ch() RETURNS text LANGUAGE sql AS 'select ''x'''
+    expect: error
+    sqlstate: "42P13"
+    comment: the return type cannot change; DROP and CREATE is required
+  - sql: |
+      CREATE FUNCTION ch2(p int) RETURNS int LANGUAGE sql AS 'select p'
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE FUNCTION ch2(q int) RETURNS int LANGUAGE sql AS 'select q'
+    expect: error
+    sqlstate: "42P13"
+    comment: an existing input parameter name cannot be changed
+  - sql: |
+      CREATE OR REPLACE FUNCTION ch2(p int) RETURNS int LANGUAGE sql AS 'select p * 10'
+    expect: ok
+  - sql: |
+      SELECT ch2(3) AS v
+    expect: rows
+    comment: 30; the body was replaced
+  - sql: |
+      CREATE FUNCTION ch4(a int, out b int) RETURNS int LANGUAGE sql AS 'select a'
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE FUNCTION ch4(a int, out b text) RETURNS text LANGUAGE sql AS 'select ''x'''
+    expect: error
+    sqlstate: "42P13"
+    comment: OUT parameter types cannot change under OR REPLACE
+  - sql: |
+      CREATE FUNCTION ch6(p int) RETURNS int LANGUAGE sql AS 'select p'
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE FUNCTION ch6(p int, z int) RETURNS int LANGUAGE sql AS 'select p'
+    expect: ok
+    comment: a different argument list is a new overload, not a replacement
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_proc WHERE proname = 'ch6') AS overloads
+    expect: rows
+    comment: "2"

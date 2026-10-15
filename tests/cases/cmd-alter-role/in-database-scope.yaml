@@ -1,0 +1,49 @@
+# IN DATABASE scopes a role setting to one database; database-specific and all-database entries coexist and reset independently.
+id: cmd-alter-role.in-database-scope
+title: ALTER ROLE IN DATABASE sets and resets a database-specific role setting
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, in-database, client-min-messages, errors]
+required_capabilities: [roles, catalog-introspection, select, guc, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-examples (role-specific, database-specific setting); ref/alter_role.sgml#sql-alterrole-params-configuration-parameter"
+sessions: [a]
+notes: "The doc example uses fred and devel. This case uses the current database, which is always present, and a role named alr_db. A role setting only applies at login, so the case checks the catalog and does not reconnect."
+steps:
+  - sql: |
+      CREATE ROLE alr_db
+    expect: ok
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER ROLE alr_db IN DATABASE %I SET client_min_messages = DEBUG', current_database()); END $$
+    expect: ok
+  - sql: |
+      SELECT unnest(s.setconfig) AS setting, s.setdatabase = (SELECT oid FROM pg_database WHERE datname = current_database()) AS this_database FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'alr_db'
+    expect: rows
+  - sql: |
+      ALTER ROLE alr_db SET application_name = 'alr_db_any'
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'alr_db'
+    expect: rows
+    comment: one entry for the database and one for all databases
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER ROLE alr_db IN DATABASE %I RESET client_min_messages', current_database()); END $$
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'alr_db'
+    expect: rows
+    comment: the all-databases entry is untouched
+  - sql: |
+      ALTER ROLE alr_db IN DATABASE nosuchdb_alr SET work_mem = '2MB'
+    expect: error
+    sqlstate: "3D000"
+  - sql: |
+      ALTER ROLE alr_db RESET ALL
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'alr_db'
+    expect: rows
+  - sql: |
+      DROP ROLE alr_db
+    expect: ok

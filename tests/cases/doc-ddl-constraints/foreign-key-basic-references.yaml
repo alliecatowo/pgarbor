@@ -1,0 +1,46 @@
+# Foreign keys reject unmatched non-NULL values, accept NULL, and use the referenced primary key by default.
+id: doc-ddl-constraints.foreign-key-basic-references
+title: Foreign key rejects missing parent rows, accepts NULL, and defaults to the parent primary key
+family: doc-ddl-constraints
+tier: core
+feature_ids: [foreign-keys, primary-keys, insert, delete, update, select]
+required_capabilities: [create-table, constraints, foreign-keys, primary-key, insert, delete, update, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Foreign Keys)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text, price numeric);
+  CREATE TABLE orders (order_id integer PRIMARY KEY, product_no integer REFERENCES products (product_no), quantity integer);
+  CREATE TABLE orders2 (order_id integer PRIMARY KEY, product_no integer REFERENCES products, quantity integer);
+  INSERT INTO products VALUES (1, 'a', 1.0), (2, 'b', 2.0)
+steps:
+  - sql: |
+      INSERT INTO orders VALUES (100, 1, 5), (101, NULL, 1)
+    expect: ok
+    comment: a NULL referencing column is not checked (MATCH SIMPLE default)
+  - sql: |
+      INSERT INTO orders VALUES (102, 99, 1)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      INSERT INTO orders2 VALUES (1, 2, 1)
+    expect: ok
+    comment: no column list, so the primary key product_no of products is referenced
+  - sql: |
+      INSERT INTO orders2 VALUES (2, 3, 1)
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      DELETE FROM products WHERE product_no = 1
+    expect: error
+    sqlstate: "23503"
+    comment: default ON DELETE NO ACTION still fails when the constraint is not satisfied afterwards
+  - sql: |
+      UPDATE products SET product_no = 5 WHERE product_no = 1
+    expect: error
+    sqlstate: "23503"
+  - sql: |
+      SELECT order_id, product_no FROM orders ORDER BY order_id
+    expect: rows
+    order: ordered

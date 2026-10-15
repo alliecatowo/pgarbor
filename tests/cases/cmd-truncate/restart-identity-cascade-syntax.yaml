@@ -1,0 +1,35 @@
+# Option order matters: the grammar is [RESTART|CONTINUE IDENTITY] [CASCADE|RESTRICT], so CASCADE before RESTART is a syntax error.
+id: cmd-truncate.restart-identity-cascade-syntax
+title: "RESTART IDENTITY CASCADE is valid; CASCADE RESTART IDENTITY is a syntax error"
+family: cmd-truncate
+tier: core
+feature_ids: [truncate, restart-identity, cascade, syntax, errors]
+required_capabilities: [create-table, insert, select, identity, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#synopsis"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 GENERATED ALWAYS AS IDENTITY PRIMARY KEY, v text);
+  CREATE TABLE child (id int4 PRIMARY KEY, pid int4 REFERENCES parent (id));
+  INSERT INTO parent (v) VALUES ('a'), ('b');
+  INSERT INTO child VALUES (1, 1);
+steps:
+  - sql: |
+      TRUNCATE parent CASCADE RESTART IDENTITY
+    expect: error
+    sqlstate: "42601"
+    comment: options out of grammar order
+  - sql: |
+      TRUNCATE parent RESTART IDENTITY CASCADE
+    expect: ok
+  - sql: |
+      INSERT INTO parent (v) VALUES ('c') RETURNING id
+    expect: rows
+    order: ordered
+    comment: identity restarted at 1
+  - sql: |
+      SELECT (SELECT count(*) FROM child) AS c
+    expect: rows
+    order: ordered
+    comment: the referencing child table was cascaded

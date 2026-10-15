@@ -1,0 +1,36 @@
+# Documentation says AND CHAIN keeps the characteristics of the finished block; the PG 18.6 probe shows that after an error the chained block gets the defaults instead. The oracle recording is authoritative.
+id: cmd-commit.and-chain-failed-block-characteristics
+title: COMMIT AND CHAIN after an error starts the next block with default characteristics
+family: cmd-commit
+tier: core
+feature_ids: [commit, and-chain, isolation-level, read-only, errors, transactions, guc]
+required_capabilities: [select, transactions, guc, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/commit.sgml#sql-commit (Parameters: AND CHAIN; characteristics of the just finished transaction)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY
+    expect: ok
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+    comment: the block is now aborted
+  - sql: |
+      COMMIT AND CHAIN
+    expect: ok
+    comment: reports ROLLBACK; the chained block is started
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso, current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: documented carry-over versus observed behavior is explained in notes
+  - sql: |
+      COMMIT
+    expect: ok
+notes: >
+  Differential target: a PGArbor implementation that follows the sentence in the documentation
+  (characteristics carried over) will diverge from the oracle. Do not change the expectation
+  to match the documentation; the recorded oracle output decides.

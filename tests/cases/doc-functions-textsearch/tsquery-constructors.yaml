@@ -1,0 +1,44 @@
+# The tsquery constructors (to_tsquery, plainto, phraseto, websearch), tsquery_phrase, numnode and querytree.
+id: doc-functions-textsearch.tsquery-constructors
+title: Query constructors build the documented tsquery trees from plain text and operator syntax
+family: doc-functions-textsearch
+tier: core
+feature_ids: [to-tsquery, plainto-tsquery, phraseto-tsquery, websearch-to-tsquery, tsquery-phrase, numnode, querytree]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-textsearch (tsquery constructor and utility functions)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_tsquery('english', 'The & Fat & Rats') AS tq,
+             plainto_tsquery('english', 'The Fat Rats') AS plain,
+             phraseto_tsquery('english', 'The Fat Rats') AS phrase
+    expect: rows
+    comment: to_tsquery keeps operators, plainto ANDs words, phraseto orders them with <->
+  - sql: |
+      SELECT phraseto_tsquery('english', 'The Cat and Rats') AS phrase_with_stop_word
+    expect: rows
+    comment: a removed stop word still counts as a position gap, so the phrase has <2>
+  - sql: |
+      SELECT websearch_to_tsquery('english', '"fat rat" or cat dog') AS web
+    expect: rows
+    comment: quoted text becomes a phrase, OR is an operator, and the bare word becomes AND
+  - sql: |
+      SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat')) AS default_distance,
+             tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), 10) AS distance_10
+    expect: rows
+    comment: default distance is 1, equivalent to the <-> operator
+  - sql: |
+      SELECT numnode('(fat & rat) | cat'::tsquery) AS nodes_1,
+             numnode(to_tsquery('english', 'fat & !rat')) AS nodes_2
+    expect: rows
+    comment: numnode counts operand and operator nodes; documented example gives 5
+  - sql: |
+      SELECT querytree('foo & ! bar'::tsquery) AS indexable_part
+    expect: rows
+    comment: documented example returns 'foo' because the negated term is not indexable
+  - sql: |
+      SELECT querytree('!!cat'::tsquery) AS non_indexable
+    expect: rows
+    comment: a query with no indexable part is reported as the single character T

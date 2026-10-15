@@ -1,0 +1,44 @@
+# ts_headline (text and jsonb, with options), ts_rank, ts_rank_cd, and ts_rewrite with the documented examples.
+id: doc-functions-textsearch.ts-headline-rank-rewrite
+title: ts_headline marks matches, ts_rank scores documents, and ts_rewrite substitutes subqueries
+family: doc-functions-textsearch
+tier: core
+feature_ids: [ts-headline, ts-rank, ts-rank-cd, ts-rewrite, headline-options]
+required_capabilities: [select, json, text-search, multi-statement]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-textsearch (ts_headline, ts_rank, ts_rank_cd, ts_rewrite)"
+sessions: [a]
+setup: |
+  CREATE TABLE aliases (t tsquery, s tsquery);
+  INSERT INTO aliases VALUES (to_tsquery('a'), to_tsquery('x|y'));
+steps:
+  - sql: |
+      SELECT ts_headline('The fat cat ate the rat.', 'cat') AS hl
+    expect: rows
+    comment: documented example; default markers are <b> and </b>
+  - sql: |
+      SELECT ts_headline('english', 'The fat cat', to_tsquery('cat'), 'StartSel=<<,StopSel=>>,MaxWords=2,MinWords=1') AS custom
+    expect: rows
+    comment: StartSel and StopSel override the markers and MaxWords and MinWords bound the excerpt
+  - sql: |
+      SELECT ts_headline('{"cat":"raining cats and dogs"}'::jsonb, 'cat') AS jsonb_hl
+    expect: rows
+    comment: jsonb input headlines the string values and keeps the JSON structure
+  - sql: |
+      SELECT ts_rank(to_tsvector('raining cats and dogs'), 'cat') AS rank,
+             ts_rank_cd(to_tsvector('raining cats and dogs'), 'cat') AS rank_cd
+    expect: rows
+    comment: documented examples; scores are deterministic for fixed inputs
+  - sql: |
+      SELECT ts_rank(to_tsvector('english', 'cat'), to_tsquery('english', 'dog')) AS no_hit
+    expect: rows
+    comment: a document that does not match the query scores zero
+  - sql: |
+      SELECT ts_rewrite('a & b'::tsquery, 'a'::tsquery, 'foo|bar'::tsquery) AS rewritten
+    expect: rows
+    comment: documented example; every occurrence of a is replaced by the second query
+  - sql: |
+      SELECT ts_rewrite('a & b'::tsquery, 'SELECT t,s FROM aliases') AS rewritten_from_table
+    expect: rows
+    comment: the rewrite rules come from a table of (target, substitute) tsquery pairs

@@ -1,0 +1,29 @@
+# Length limits count characters, not bytes, in multibyte encodings.
+id: doc-datatype-character.multibyte-char-counts
+title: varchar(3) limits characters, so three accented characters fit and a fourth is rejected
+family: doc-datatype-character
+tier: core
+feature_ids: [character-varying, multibyte, char-length, octet-length, string-data-truncation]
+required_capabilities: [create-table, insert, select, errors, utf8]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-character (Both of these types can store strings up to n characters (not bytes) in length)"
+sessions: [a]
+setup: |
+  CREATE TABLE mb (z varchar(3))
+steps:
+  - sql: |
+      INSERT INTO mb VALUES (chr(233) || chr(232) || chr(224))
+    expect: ok
+    comment: three characters, six bytes in UTF-8
+  - sql: |
+      INSERT INTO mb VALUES (chr(233) || chr(232) || chr(224) || chr(225))
+    expect: error
+    sqlstate: "22001"
+  - sql: |
+      SELECT char_length(z) AS cl, octet_length(z) AS ol FROM mb
+    expect: rows
+  - sql: |
+      SELECT (chr(233) || chr(232) || chr(224))::varchar(2) AS mb_trunc, char_length((chr(233) || chr(232) || chr(224))::varchar(2)) AS n
+    expect: rows
+    comment: explicit cast truncates by characters

@@ -1,0 +1,66 @@
+# WHILE tests the condition before each pass: false, NULL, and AND with a NULL operand all run zero times.
+id: doc-plpgsql-control-structures.while-null-and-false
+title: "WHILE checks its condition before each pass; false or NULL conditions run the body zero times"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, while, loop, null-handling, control-flow]
+required_capabilities: [plpgsql, create-function, select, null-handling]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (WHILE)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION countdown(n int) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE c int := 0;
+  BEGIN
+    WHILE n > 0 LOOP
+      n := n - 1;
+      c := c + 1;
+    END LOOP;
+    RETURN c;
+  END $$;
+  CREATE FUNCTION owe_loop(owed int, gift int) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE n int := 0;
+  BEGIN
+    WHILE owed > 0 AND gift > 0 LOOP
+      owed := owed - 10;
+      gift := gift - 5;
+      n := n + 1;
+    END LOOP;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION while_null() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE n int := 0;
+  BEGIN
+    WHILE NULL::boolean LOOP
+      n := n + 1;
+    END LOOP;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION while_not() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE done boolean := false; n int := 0;
+  BEGIN
+    WHILE NOT done LOOP
+      n := n + 1;
+      IF n >= 3 THEN
+        done := true;
+      END IF;
+    END LOOP;
+    RETURN n;
+  END $$;
+steps:
+  - sql: |
+      SELECT countdown(0) AS none, countdown(4) AS four
+    expect: rows
+    comment: a condition that is already false runs the body zero times
+  - sql: |
+      SELECT owe_loop(25, 100) AS both_positive, owe_loop(25, NULL) AS null_gift
+    expect: rows
+    comment: true AND NULL is NULL, which ends the loop before its first pass
+  - sql: |
+      SELECT while_null() AS nul
+    expect: rows
+  - sql: |
+      SELECT while_not() AS n
+    expect: rows
+    comment: WHILE NOT done loops until the flag is set

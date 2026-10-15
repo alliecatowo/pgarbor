@@ -1,0 +1,39 @@
+# Column references: qualified forms, unqualified names, ambiguity across FROM items, and a table alias hiding its name.
+id: doc-sql-expressions.column-refs-ambiguity
+title: Column reference qualification, ambiguity, and alias visibility
+family: doc-sql-expressions
+tier: core
+feature_ids: [column-references, name-resolution, errors]
+required_capabilities: [select, insert, create-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-column-refs"
+sessions: [a]
+setup: |
+  CREATE TABLE colref (x int4, y int4);
+  INSERT INTO colref VALUES (1, 10), (2, 20);
+steps:
+  - sql: |
+      SELECT public.colref.x AS a, colref.y AS b, y FROM colref ORDER BY x
+    expect: rows
+    order: ordered
+    comment: correlation name may be schema-qualified; the qualifier can be omitted when unique
+  - sql: |
+      SELECT t.x AS a, u.x AS b FROM (VALUES (1)) t(x), (VALUES (2)) u(x)
+    expect: rows
+    order: ordered
+    comment: qualified references disambiguate identically named columns
+  - sql: |
+      SELECT x FROM (VALUES (1)) t(x), (VALUES (2)) u(x)
+    expect: error
+    sqlstate: "42702"
+    comment: an unqualified name that matches in two FROM items is ambiguous
+  - sql: |
+      SELECT x FROM colref AS c WHERE colref.y > 0
+    expect: error
+    sqlstate: "42P01"
+    comment: once aliased, the table can only be referenced by its alias
+  - sql: |
+      SELECT z FROM colref
+    expect: error
+    sqlstate: "42703"

@@ -1,0 +1,64 @@
+# Comments on shared objects (the current database and a role) live in cluster-wide catalogs; a missing database only warns, a missing role errors, and dropping the object drops the comment.
+id: cmd-comment.database-and-role-shared
+title: COMMENT ON DATABASE and ROLE store shared-catalog comments; missing database warns, missing role errors
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-database, comment-role, comment-shared-objects]
+required_capabilities: [comment, roles, catalog-introspection, select, errors, dynamic-sql]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-desc (shared objects such as databases, roles, and tablespaces store comments globally); ref/comment.sgml#sql-comment-examples (DATABASE, ROLE examples)"
+sessions: [a]
+notes: "The database is named through current_database() so the case does not depend on a fixed name. The role name is unique to this case because shared-catalog comments are visible cluster-wide."
+steps:
+  - sql: |
+      DO $$ BEGIN EXECUTE format('COMMENT ON DATABASE %I IS %L', current_database(), 'Development Database'); END $$
+    expect: ok
+  - sql: |
+      SELECT shobj_description((SELECT oid FROM pg_database WHERE datname = current_database()), 'pg_database') AS db_descr
+    expect: rows
+  - sql: |
+      DO $$ BEGIN EXECUTE format('COMMENT ON DATABASE %I IS %L', current_database(), 'Replaced database comment'); END $$
+    expect: ok
+  - sql: |
+      SELECT shobj_description((SELECT oid FROM pg_database WHERE datname = current_database()), 'pg_database') AS db_descr
+    expect: rows
+  - sql: |
+      COMMENT ON DATABASE cmd_no_such_db IS 'a missing database only warns'
+    expect: ok
+    comment: PostgreSQL emits WARNING 3D000 and still succeeds
+  - sql: |
+      CREATE ROLE cmd_shrole NOLOGIN
+    expect: ok
+  - sql: |
+      COMMENT ON ROLE cmd_shrole IS 'Administration group for finance tables'
+    expect: ok
+  - sql: |
+      SELECT shobj_description((SELECT oid FROM pg_roles WHERE rolname = 'cmd_shrole'), 'pg_authid') AS role_descr
+    expect: rows
+  - sql: |
+      COMMENT ON ROLE cmd_shrole IS NULL
+    expect: ok
+  - sql: |
+      SELECT shobj_description((SELECT oid FROM pg_roles WHERE rolname = 'cmd_shrole'), 'pg_authid') IS NULL AS removed_by_null
+    expect: rows
+  - sql: |
+      COMMENT ON ROLE cmd_shrole IS 'to be dropped: cmd-comment marker'
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_shrole
+    expect: ok
+  - sql: |
+      SELECT count(*) AS marker_left FROM pg_shdescription WHERE description = 'to be dropped: cmd-comment marker'
+    expect: rows
+    comment: dropping the role drops its shared comment
+  - sql: |
+      COMMENT ON ROLE cmd_nosuch_role IS 'x'
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DO $$ BEGIN EXECUTE format('COMMENT ON DATABASE %I IS NULL', current_database()); END $$
+    expect: ok
+  - sql: |
+      SELECT shobj_description((SELECT oid FROM pg_database WHERE datname = current_database()), 'pg_database') IS NULL AS db_comment_removed
+    expect: rows

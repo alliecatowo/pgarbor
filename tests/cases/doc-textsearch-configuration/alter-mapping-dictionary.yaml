@@ -1,0 +1,37 @@
+# Documented: ALTER MAPPING FOR token types WITH dictionaries replaces the mapping; ALTER MAPPING REPLACE swaps one dictionary for another everywhere.
+id: doc-textsearch-configuration.alter-mapping-dictionary
+title: ALTER MAPPING FOR and ALTER MAPPING REPLACE change which dictionary handles a token
+family: doc-textsearch-configuration
+tier: core
+feature_ids: [tsearch, alter-text-search-configuration, alter-mapping, dictionary-replace]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "textsearch.sgml#textsearch-configuration (ALTER TEXT SEARCH CONFIGURATION pg ALTER MAPPING FOR asciiword ... WITH english_stem)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION public.pg ( COPY = pg_catalog.english )
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION public.pg
+          ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part
+          WITH english_stem
+    expect: ok
+  - sql: |
+      SELECT alias, token, dictionaries FROM ts_debug('public.pg', 'Running dogs') WHERE alias = 'asciiword' ORDER BY token
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_tsvector('public.pg', 'Running dogs') = to_tsvector('english', 'Running dogs') AS matches_english
+    expect: rows
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION public.pg ALTER MAPPING REPLACE english_stem WITH simple
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('public.pg', 'Running dogs') AS no_stemming
+    expect: rows
+    comment: simple dictionary lowercases but does not stem
+  - sql: |
+      SELECT to_tsvector('public.pg', 'Running dogs') = to_tsvector('simple', 'Running dogs') AS matches_simple
+    expect: rows

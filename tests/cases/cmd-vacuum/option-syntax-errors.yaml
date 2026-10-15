@@ -1,0 +1,45 @@
+# Empty option lists, unknown option names and non-boolean values are rejected with syntax_error before any table work.
+id: cmd-vacuum.option-syntax-errors
+title: "VACUUM rejects empty option lists, unknown options and malformed values"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, options, syntax-errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Synopsis)"
+sessions: [a]
+setup: |
+  CREATE TABLE vose (id int4);
+  INSERT INTO vose VALUES (1), (2);
+steps:
+  - sql: |
+      VACUUM ()
+    expect: error
+    sqlstate: "42601"
+    comment: the parenthesized option list needs at least one option
+  - sql: |
+      VACUUM (FOO) vose
+    expect: error
+    sqlstate: "42601"
+    comment: not a VACUUM option
+  - sql: |
+      VACUUM (VERBOSE 'maybe') vose
+    expect: error
+    sqlstate: "42601"
+    comment: VERBOSE requires a boolean
+  - sql: |
+      VACUUM (INDEX_CLEANUP 'maybe') vose
+    expect: error
+    sqlstate: "42601"
+    comment: INDEX_CLEANUP takes AUTO, ON or OFF
+  - sql: |
+      VACUUM (PARALLEL -1) vose
+    expect: error
+    sqlstate: "42601"
+    comment: PARALLEL takes a non-negative integer
+  - sql: |
+      SELECT count(*) FROM vose
+    expect: rows
+    order: ordered
+    comment: no statement changed the table

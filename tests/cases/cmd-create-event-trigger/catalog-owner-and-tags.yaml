@@ -1,0 +1,29 @@
+# The creating user becomes the owner; the stored tag list is normalised to upper case, and the qualified function name is resolved.
+id: cmd-create-event-trigger.catalog-owner-and-tags
+title: pg_event_trigger records owner, event, function, enabled mode and upper-cased tag filter
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, catalog]
+required_capabilities: [event-triggers, plpgsql, create-function, catalog]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE FUNCTION f_noop() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;
+steps:
+  - sql: |
+      CREATE EVENT TRIGGER ev_meta ON ddl_command_start
+        WHEN TAG IN ('create table', 'CREATE TABLE AS')
+        EXECUTE PROCEDURE public.f_noop()
+    expect: ok
+  - sql: |
+      SELECT evtname,
+             evtevent,
+             evtfoid::regproc::text AS fn,
+             evtenabled,
+             array_to_string(evttags, ',') AS tags,
+             pg_get_userbyid(evtowner) = current_user AS owned_by_creator
+        FROM pg_event_trigger
+       ORDER BY evtname
+    expect: rows
+    order: ordered

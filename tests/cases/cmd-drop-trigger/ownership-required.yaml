@@ -1,0 +1,50 @@
+# Only the table owner may drop its triggers. A non-owner gets 42501 even with IF EXISTS, because the table exists and the owner check runs on it.
+id: cmd-drop-trigger.ownership-required
+title: "DROP TRIGGER by a non-owner fails with 42501 even with IF EXISTS, and the owner can drop the trigger"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, privileges, roles, errors, triggers]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, roles, privileges, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Description: the current user must be the owner of the table)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_droptrg_owner;
+  CREATE ROLE pgarbor_case_droptrg_other;
+  CREATE FUNCTION noop_tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TABLE t (id int4);
+  ALTER TABLE t OWNER TO pgarbor_case_droptrg_owner;
+  GRANT ALL ON t TO pgarbor_case_droptrg_other;
+  CREATE TRIGGER tg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION noop_tg();
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_droptrg_other
+    expect: ok
+  - sql: |
+      DROP TRIGGER tg ON t
+    expect: error
+    sqlstate: "42501"
+    comment: a non-owner cannot drop the trigger even with full table privileges
+  - sql: |
+      DROP TRIGGER IF EXISTS tg ON t
+    expect: error
+    sqlstate: "42501"
+    comment: IF EXISTS does not bypass the owner check when the trigger exists
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 't'::regclass AND tgname = 'tg'
+    expect: rows
+    comment: the trigger still exists after the refused drops
+  - sql: |
+      SET ROLE pgarbor_case_droptrg_owner
+    expect: ok
+  - sql: |
+      DROP TRIGGER tg ON t
+    expect: ok
+    comment: the owner drops it
+  - sql: |
+      RESET ROLE
+    expect: ok

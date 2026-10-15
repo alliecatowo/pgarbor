@@ -1,0 +1,34 @@
+# pg_my_temp_schema and pg_is_other_temp_schema across two sessions; only booleans and counts are compared.
+id: doc-functions-info.session-temp-schema-other-sessions
+title: Own and other sessions' temporary schemas via pg_my_temp_schema and pg_is_other_temp_schema
+family: doc-functions-info
+tier: core
+feature_ids: [session-info, temp-tables, temp-schema]
+required_capabilities: [select, temp-tables, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (Session Information Functions: pg_my_temp_schema, pg_is_other_temp_schema)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT pg_my_temp_schema() = 0 AS a_none_yet, pg_trigger_depth() AS depth
+    expect: rows
+    comment: documented, zero when the session has created no temporary tables
+  - session: a
+    sql: |
+      CREATE TEMP TABLE tmp_fi_a (x int)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT pg_my_temp_schema() <> 0 AS a_has_temp,
+             pg_is_other_temp_schema(pg_my_temp_schema()) AS own_is_not_other
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_my_temp_schema() = 0 AS b_none_yet,
+             count(*) FILTER (WHERE pg_is_other_temp_schema(n.oid)) AS other_temp_schemas
+      FROM pg_namespace n
+      WHERE n.nspname LIKE 'pg\_temp%'
+    expect: rows
+    comment: session b sees exactly one other session's temp schema (a's)

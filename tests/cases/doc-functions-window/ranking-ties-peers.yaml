@@ -1,0 +1,37 @@
+# Ranking functions: row_number, rank, dense_rank, percent_rank, cume_dist over ties and NULL peers.
+id: doc-functions-window.ranking-ties-peers
+title: Ranking window functions over peer groups including NULL ordering keys
+family: doc-functions-window
+tier: core
+feature_ids: [window-functions, row-number, rank, dense-rank, percent-rank, cume-dist]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (General-Purpose Window Functions)"
+setup: |
+  CREATE TABLE r (id int4 PRIMARY KEY, ten int4, v text);
+  INSERT INTO r VALUES (1,1,'a'), (2,1,'b'), (3,2,'c'), (4,NULL,'d'), (5,NULL,'e'), (6,3,NULL);
+steps:
+  - sql: |
+      SELECT id,
+             row_number() OVER (ORDER BY ten) AS rn,
+             rank() OVER (ORDER BY ten) AS rk,
+             dense_rank() OVER (ORDER BY ten) AS dr,
+             cume_dist() OVER (ORDER BY ten) AS cd,
+             percent_rank() OVER (ORDER BY ten) AS pr
+      FROM r ORDER BY id
+    expect: rows
+    order: ordered
+    comment: peers share rank and cume_dist; NULLs sort last in ascending order and form one peer group
+  - sql: |
+      SELECT id, rank() OVER (ORDER BY ten DESC NULLS FIRST) AS rk, dense_rank() OVER (ORDER BY ten DESC NULLS FIRST) AS dr
+      FROM r ORDER BY id
+    expect: rows
+    order: ordered
+    comment: explicit NULLS FIRST reverses the peer groups
+  - sql: |
+      SELECT id, row_number() OVER (PARTITION BY ten ORDER BY id DESC) AS rn
+      FROM r ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row_number ignores peers and is unique within each partition

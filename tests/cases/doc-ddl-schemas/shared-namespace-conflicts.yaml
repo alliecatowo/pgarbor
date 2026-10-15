@@ -1,0 +1,57 @@
+# Tables, indexes, sequences and views share one namespace per schema; the same name is allowed in
+# a different schema.
+id: doc-ddl-schemas.shared-namespace-conflicts
+title: Tables, indexes, sequences and views share a namespace within a schema
+family: doc-ddl-schemas
+tier: core
+feature_ids: [create-schema, create-table, create-index, create-view, sequences, errors]
+required_capabilities: [create-schema, create-table, create-index, create-view, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-create (tables, sequences, indexes, views, materialized views, and foreign tables share the same namespace)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE ns_t (id int4)
+    expect: ok
+  - sql: |
+      CREATE INDEX ns_t ON ns_t (id)
+    expect: error
+    sqlstate: "42P07"
+    comment: an index cannot take the name of a table in the same schema
+  - sql: |
+      CREATE SEQUENCE ns_t
+    expect: error
+    sqlstate: "42P07"
+    comment: a sequence cannot take the name of a table in the same schema
+  - sql: |
+      CREATE TABLE ns_t2 (id int4)
+    expect: ok
+  - sql: |
+      CREATE INDEX ns_t2_idx ON ns_t2 (id)
+    expect: ok
+  - sql: |
+      CREATE INDEX ns_t2_idx ON ns_t2 (id)
+    expect: error
+    sqlstate: "42P07"
+    comment: the second index with the same name is rejected
+  - sql: |
+      CREATE VIEW ns_v AS SELECT id FROM ns_t
+    expect: ok
+  - sql: |
+      CREATE TABLE ns_v (id int4)
+    expect: error
+    sqlstate: "42P07"
+    comment: a view and a table with the same name conflict in one schema
+  - sql: |
+      CREATE SCHEMA ns2
+    expect: ok
+  - sql: |
+      CREATE TABLE ns2.ns_t (id int4)
+    expect: ok
+    comment: the same name is fine in a different schema
+  - sql: |
+      CREATE SEQUENCE ns2.ns_t
+    expect: error
+    sqlstate: "42P07"
+    comment: the namespace is per schema, so ns2 now conflicts with its own table

@@ -1,0 +1,47 @@
+# NOTIFY is allowed in a read-only transaction, but after an error in a transaction block it is refused until ROLLBACK.
+id: cmd-notify.transaction-semantics
+title: NOTIFY works in read-only transactions and is refused in an aborted transaction block
+family: cmd-notify
+tier: core
+feature_ids: [notify, transactions, read-only-transactions, aborted-transaction]
+required_capabilities: [select, listen-notify, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/notify.sgml#sql-notify (Notes: NOTIFY interacts with SQL transactions)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN READ ONLY
+    expect: ok
+  - sql: |
+      NOTIFY ro_ch, 'in read only'
+    expect: ok
+    comment: NOTIFY is not a write to user data
+  - sql: |
+      SELECT pg_notify('ro_ch', 'via function')
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      NOTIFY ab_ch
+    expect: error
+    sqlstate: "25P02"
+    comment: aborted block refuses utility commands
+  - sql: |
+      SELECT pg_notify('ab_ch', 'x')
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      NOTIFY ab_ch, 'after rollback'
+    expect: ok

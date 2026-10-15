@@ -1,0 +1,28 @@
+# Outside a transaction block SET CONSTRAINTS only warns and changes nothing; the next statement is still immediate.
+id: cmd-set-constraints.outside-transaction-warning-no-effect
+title: SET CONSTRAINTS outside a transaction block warns and has no effect on later statements
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, foreign-key, transactions, errors]
+required_capabilities: [create-table, insert, select, transactions, constraints, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Notes: Issuing this outside of a transaction block emits a warning and otherwise has no effect)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4 PRIMARY KEY);
+  CREATE TABLE c (id int4 PRIMARY KEY, pid int4 CONSTRAINT c_fk REFERENCES p (id) DEFERRABLE INITIALLY IMMEDIATE);
+steps:
+  - sql: |
+      SET CONSTRAINTS ALL DEFERRED
+    expect: notice
+    comment: WARNING 25P01 "SET CONSTRAINTS can only be used in transaction blocks"
+  - sql: |
+      INSERT INTO c VALUES (1, 99)
+    expect: error
+    sqlstate: "23503"
+    comment: the mode did not persist, so the orphan fails immediately
+  - sql: |
+      SELECT count(*) AS n FROM c
+    expect: rows
+    order: ordered

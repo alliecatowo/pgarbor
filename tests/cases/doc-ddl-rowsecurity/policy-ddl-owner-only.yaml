@@ -1,0 +1,58 @@
+# Enabling RLS and creating policies are owner-only privileges; a non-owner with full table grants is still refused.
+id: doc-ddl-rowsecurity.policy-ddl-owner-only
+title: "Only the table owner may enable RLS or create policies"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, privileges, alter-table, errors]
+required_capabilities: [create-table, insert, select, rls, roles, alter-table]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: Enabling and disabling row security, as well as adding policies to a table, is always the privilege of the table owner only"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr12_o;
+  CREATE ROLE pgarbor_case_role_dr12_n;
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (1), (2);
+  ALTER TABLE t OWNER TO pgarbor_case_role_dr12_o;
+  GRANT ALL ON t TO pgarbor_case_role_dr12_n;
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr12_n
+    expect: ok
+  - sql: |
+      ALTER TABLE t ENABLE ROW LEVEL SECURITY
+    expect: error
+    sqlstate: "42501"
+    comment: must be owner of table t, even with ALL privileges
+  - sql: |
+      CREATE POLICY p_n ON t USING (true)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr12_o
+    expect: ok
+  - sql: |
+      ALTER TABLE t ENABLE ROW LEVEL SECURITY
+    expect: ok
+    comment: the owner may enable row security
+  - sql: |
+      CREATE POLICY p_o ON t FOR SELECT USING (id > 1)
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the owner bypasses RLS and sees both rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr12_o, pgarbor_case_role_dr12_n
+    expect: ok

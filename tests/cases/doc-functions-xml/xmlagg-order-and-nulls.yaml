@@ -1,0 +1,38 @@
+# xmlagg concatenates across rows, honours ORDER BY and the subquery idiom from the docs, and skips NULL inputs.
+id: doc-functions-xml.xmlagg-order-and-nulls
+title: xmlagg concatenates rows in ORDER BY order and handles empty and NULL inputs
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, xmlagg, aggregates, order-by-in-aggregate]
+required_capabilities: [xml, select, create-table, insert, aggregates]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-producing-xml-xmlagg"
+sessions: [a]
+setup: |
+  CREATE TABLE test (y int, x xml);
+  INSERT INTO test VALUES (1, 'abc');
+  INSERT INTO test VALUES (2, '');
+  INSERT INTO test VALUES (3, NULL);
+steps:
+  - sql: |
+      SELECT xmlagg(x) FROM test
+    expect: rows
+    order: multiset
+    comment: doc example shape; rows arrive in an unspecified order, so the result is compared as a multiset
+  - sql: |
+      SELECT xmlagg(x ORDER BY y DESC) FROM test
+    expect: rows
+    comment: doc example with ORDER BY inside the aggregate; NULL and empty inputs contribute nothing
+  - sql: |
+      SELECT xmlagg(x) FROM (SELECT * FROM test ORDER BY y DESC) AS tab
+    expect: rows
+    comment: the older subquery idiom from the docs
+  - sql: |
+      SELECT xmlagg(x) FROM test WHERE y > 100
+    expect: rows
+    comment: aggregate over zero rows, result is still one row
+  - sql: |
+      SELECT xmlagg(x) IS NULL AS only_null FROM test WHERE x IS NULL
+    expect: rows
+    comment: aggregate over only NULL inputs

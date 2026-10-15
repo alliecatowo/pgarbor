@@ -1,0 +1,38 @@
+# CLUSTER with no arguments reclusters only tables that were clustered before.
+id: cmd-cluster.noarg-reclusters-all
+title: Bare CLUSTER reclusters every previously clustered table and leaves others alone
+family: cmd-cluster
+tier: core
+feature_ids: [cluster, cluster-all, cluster-remembered-index]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/cluster.sgml#sql-cluster (Description: CLUSTER without a table_name reclusters all the previously-clustered tables)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX t_v ON t (v);
+  INSERT INTO t VALUES (1, 30), (2, 10);
+  CREATE TABLE u (id int4 PRIMARY KEY, w int4);
+  CREATE INDEX u_w ON u (w);
+  INSERT INTO u VALUES (1, 2), (2, 1);
+  CREATE TABLE z (id int4 PRIMARY KEY);
+  CLUSTER t USING t_v;
+  CLUSTER u USING u_w;
+steps:
+  - sql: |
+      CLUSTER
+    expect: ok
+    compare_message: false
+  - sql: |
+      SELECT c.relname::text AS tbl, i.indexrelid::regclass::text AS idx
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid
+      WHERE i.indisclustered
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: t and u keep their clustered indexes; z was never clustered and does not appear
+  - sql: |
+      SELECT id FROM t ORDER BY ctid
+    expect: rows
+    order: ordered

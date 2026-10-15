@@ -1,0 +1,47 @@
+# Transaction control is allowed through nested CALLs at the top level (CALL proc1 -> CALL proc2 -> CALL proc3).
+id: doc-plpgsql-transactions.nested-call-chain-commits
+title: COMMIT in a procedure reached through a chain of CALLs keeps earlier and later work correctly
+family: doc-plpgsql-transactions
+tier: core
+feature_ids: [plpgsql, procedures, commit, rollback, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, create-procedure, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (a int4);
+steps:
+  - sql: |
+      CREATE PROCEDURE p3() LANGUAGE plpgsql AS $$
+      BEGIN
+          INSERT INTO test1 VALUES (3);
+          COMMIT;
+          INSERT INTO test1 VALUES (4);
+      END $$
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE p2() LANGUAGE plpgsql AS $$
+      BEGIN
+          INSERT INTO test1 VALUES (2);
+          CALL p3();
+          INSERT INTO test1 VALUES (5);
+      END $$
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE p1() LANGUAGE plpgsql AS $$
+      BEGIN
+          INSERT INTO test1 VALUES (1);
+          CALL p2();
+          ROLLBACK;
+          INSERT INTO test1 VALUES (6);
+      END $$
+    expect: ok
+  - sql: |
+      CALL p1()
+    expect: ok
+  - sql: |
+      SELECT a FROM test1 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: p3's COMMIT persists 1,2,3; the ROLLBACK in p1 discards 4 and 5; 6 is inserted afterwards

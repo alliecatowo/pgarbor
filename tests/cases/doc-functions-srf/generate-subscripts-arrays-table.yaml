@@ -1,0 +1,41 @@
+# Documented generate_subscripts examples: presenting array, subscript and element together, and unnesting a 2-D array with a SQL function.
+id: doc-functions-srf.generate-subscripts-unnest
+title: generate_subscripts pairs each array element with its subscript and unnests a 2-D array
+family: doc-functions-srf
+tier: core
+feature_ids: [generate-subscripts, arrays, sql-functions]
+required_capabilities: [create-table, insert, select, create-function-sql, arrays]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-srf-subscripts"
+setup: |
+  CREATE TABLE arrays (a int[]);
+  INSERT INTO arrays VALUES ('{-1,-2}'), ('{100,200,300}');
+sessions: [a]
+steps:
+  - sql: |
+      SELECT * FROM arrays ORDER BY a
+    expect: rows
+    order: ordered
+    comment: documented presentation table
+  - sql: |
+      SELECT a AS array, s AS subscript, a[s] AS value
+      FROM (SELECT generate_subscripts(a, 1) AS s, a FROM arrays) foo
+      ORDER BY a, s
+    expect: rows
+    order: ordered
+    comment: documented example; five rows across both arrays
+  - sql: |
+      CREATE OR REPLACE FUNCTION unnest2(anyarray)
+      RETURNS SETOF anyelement AS $$
+      select $1[i][j]
+         from generate_subscripts($1,1) g1(i),
+              generate_subscripts($1,2) g2(j);
+      $$ LANGUAGE sql IMMUTABLE
+    expect: ok
+    comment: documented function definition
+  - sql: |
+      SELECT * FROM unnest2(ARRAY[[1,2],[3,4]]) ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: documented example; the cross product of the two subscript series

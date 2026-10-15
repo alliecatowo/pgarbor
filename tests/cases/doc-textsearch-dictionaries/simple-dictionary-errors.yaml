@@ -1,0 +1,68 @@
+# Documented error conditions for CREATE/ALTER/DROP TEXT SEARCH DICTIONARY and ts_lexize lookups.
+id: doc-textsearch-dictionaries.dictionary-ddl-errors
+title: dictionary DDL and lookup errors report the documented SQLSTATEs
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, simple-template, errors, ddl]
+required_capabilities: [create-text-search-dictionary, alter-text-search-dictionary, text-search, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Simple Dictionary, Stop Words)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY public.simple_dict (TEMPLATE = pg_catalog.simple, STOPWORDS = english);
+steps:
+  - sql: |
+      SELECT ts_lexize('no_such_dict', 'x')
+    expect: error
+    sqlstate: "42704"
+    comment: lookup by an unknown dictionary name
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY public.simple_dict (TEMPLATE = pg_catalog.simple)
+    expect: error
+    sqlstate: "23505"
+    comment: the name already exists in the schema
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY bad_tmpl (TEMPLATE = no_such_tmpl)
+    expect: error
+    sqlstate: "42704"
+    comment: unknown template
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY bad_notmpl (STOPWORDS = english)
+    expect: error
+    sqlstate: "42P17"
+    comment: TEMPLATE is mandatory
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY bad_param (TEMPLATE = pg_catalog.simple, Bogus = 1)
+    expect: error
+    sqlstate: "22023"
+    comment: the simple template rejects unknown parameters
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY bad_nostop (TEMPLATE = pg_catalog.simple, STOPWORDS = no_such_stop)
+    expect: error
+    comment: the stop-word file must exist; the exact SQLSTATE is internal, so only the error is asserted
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY public.simple_dict ( Accept = maybe )
+    expect: error
+    sqlstate: "42601"
+    comment: Accept is a Boolean
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY public.simple_dict ( Foo = 1 )
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY no_such_dict ( Accept = false )
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP TEXT SEARCH DICTIONARY nosuch
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP TEXT SEARCH DICTIONARY IF EXISTS nosuch
+    expect: notice
+    comment: IF EXISTS turns the missing object into a NOTICE
+  - sql: |
+      SELECT ts_lexize('public.simple_dict', 'Zebra')
+    expect: rows
+    comment: the failed DDL statements left the existing dictionary intact

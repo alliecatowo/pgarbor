@@ -1,0 +1,35 @@
+# Documented: an unqualified configuration is created in the current schema, and an unqualified reference resolves through search_path.
+id: cmd-create-tsconfig.search-path-resolution
+title: "Unqualified configuration name resolves through search_path to the copy in the first matching schema"
+family: cmd-create-tsconfig
+tier: core
+feature_ids: [create-text-search-configuration, search-path, schema-scope]
+required_capabilities: [create-text-search-configuration, create-schema, text-search, select, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsconfig.sgml#sql-createtsconfig (Description: created in the current schema when unqualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA tsc_sp;
+  CREATE TEXT SEARCH CONFIGURATION tsc_sp.tsc_sp_cfg (PARSER = default);
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_sp_cfg (COPY = english)
+    expect: ok
+    comment: created in public, the current schema
+  - sql: |
+      SET search_path = tsc_sp, public
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('tsc_sp_cfg', 'the foxes') AS in_tsc_sp
+    expect: rows
+    order: ordered
+    comment: resolves to the parser-only configuration in tsc_sp, so the vector is empty
+  - sql: |
+      SET search_path = public
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('tsc_sp_cfg', 'the foxes') AS in_public
+    expect: rows
+    order: ordered
+    comment: resolves to the English copy in public

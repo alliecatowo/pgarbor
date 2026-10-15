@@ -1,0 +1,46 @@
+# Partial index over unbilled orders. "billed is not true" also matches NULL billed values; the index is usable only when the query implies the predicate.
+id: doc-indexes-partial.exclude-uninteresting-orders
+title: Partial index WHERE billed IS NOT TRUE keeps NULL rows and answers implied queries correctly
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, create-index, null-semantics, boolean-type, predicate-definition]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex2 (Setting up a Partial Index to Exclude Uninteresting Values)"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (order_nr int PRIMARY KEY, billed boolean, amount numeric(10,2));
+  INSERT INTO orders VALUES (1, true, 10.00), (2, false, 6000.00), (3, NULL, 7000.00), (4, true, 9000.00), (5, false, 100.00), (10000, false, 1.00);
+steps:
+  - sql: |
+      CREATE INDEX orders_unbilled_index ON orders (order_nr) WHERE billed is not true
+    expect: ok
+  - sql: |
+      SELECT pg_get_indexdef('orders_unbilled_index'::regclass)
+    expect: rows
+    comment: the predicate is stored as billed IS NOT TRUE
+  - sql: |
+      SELECT order_nr, billed FROM orders WHERE billed is not true AND order_nr < 10000 ORDER BY order_nr
+    expect: rows
+    order: ordered
+    comment: a NULL billed value satisfies IS NOT TRUE, so order 3 is returned
+  - sql: |
+      SELECT order_nr, amount FROM orders WHERE billed is not true AND amount > 5000.00 ORDER BY order_nr
+    expect: rows
+    order: ordered
+    comment: the query does not mention order_nr; the index is usable but scans all of it, and the answer is unchanged
+  - sql: |
+      SELECT order_nr FROM orders WHERE order_nr = 3501 ORDER BY order_nr
+    expect: rows
+    order: ordered
+    comment: order 3501 does not exist; a query that does not imply the predicate must still return every matching row
+  - sql: |
+      SELECT order_nr FROM orders WHERE order_nr = 10000 ORDER BY order_nr
+    expect: rows
+    order: ordered
+    comment: a billed=false row at the predicate boundary is returned
+  - sql: |
+      SELECT count(*) FROM orders WHERE billed is not true
+    expect: rows
+    comment: counts false and NULL billed rows, not true rows

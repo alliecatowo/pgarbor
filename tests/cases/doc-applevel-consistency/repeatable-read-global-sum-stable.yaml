@@ -1,0 +1,43 @@
+# A REPEATABLE READ transaction's snapshot is frozen at its first query, so a consistency check is stable.
+id: doc-applevel-consistency.repeatable-read-global-sum-stable
+title: REPEATABLE READ sum check ignores a concurrent insert committed after the first query
+family: doc-applevel-consistency
+tier: core
+feature_ids: [repeatable-read, aggregates, mvcc-snapshot]
+required_capabilities: [create-table, insert, select, transactions, isolation-levels, aggregates, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT sum(balance) AS total FROM acct
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      INSERT INTO acct VALUES (3, 50)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT sum(balance) AS total FROM acct
+    expect: rows
+    order: ordered
+    comment: same answer as before, 300, because the snapshot is frozen
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT sum(balance) AS total FROM acct
+    expect: rows
+    order: ordered

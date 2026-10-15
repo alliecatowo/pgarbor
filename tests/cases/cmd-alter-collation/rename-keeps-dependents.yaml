@@ -1,0 +1,42 @@
+# A rename changes the name only: columns and ORDER BY that already use the collation keep working by OID.
+id: cmd-alter-collation.rename-keeps-dependents
+title: "ALTER COLLATION RENAME keeps column dependencies and ordering intact"
+family: cmd-alter-collation
+tier: core
+feature_ids: [alter-collation, rename-collation, collate-clause, dependencies, icu-collation]
+required_capabilities: [create-table, insert, select, create-collation, alter-collation, icu-provider, collate-clause, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-altercollation.html (RENAME TO); column collation is recorded by OID in pg_attribute"
+sessions: [a]
+setup: |
+  CREATE COLLATION cmd_dep (provider = icu, locale = 'und-x-icu');
+  CREATE TABLE cmd_dep_t (id int4 PRIMARY KEY, c text COLLATE cmd_dep);
+  INSERT INTO cmd_dep_t VALUES (1, 'b'), (2, 'A'), (3, 'a');
+steps:
+  - sql: |
+      SELECT id, c FROM cmd_dep_t ORDER BY c, id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER COLLATION cmd_dep RENAME TO cmd_dep_new
+    expect: ok
+  - sql: |
+      SELECT a.attname, a.attcollation::regcollation AS col_collation
+        FROM pg_attribute a WHERE a.attrelid = 'cmd_dep_t'::regclass AND a.attnum > 0 ORDER BY a.attnum
+    expect: rows
+    order: ordered
+    comment: the column still references the same collation, now under its new name
+  - sql: |
+      SELECT id, c FROM cmd_dep_t ORDER BY c, id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM cmd_dep_t WHERE c COLLATE cmd_dep_new = 'A' COLLATE cmd_dep_new
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM cmd_dep_t WHERE c COLLATE cmd_dep = 'A'
+    expect: error
+    sqlstate: "42704"
+    comment: the old name is gone from the catalog

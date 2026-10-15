@@ -1,0 +1,35 @@
+# RENAME [ COLUMN ] is optional: both forms rename a materialized view column.
+id: cmd-alter-materialized-view.rename-column-keyword-optional
+title: "RENAME column works with and without the optional COLUMN keyword"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, rename-column]
+required_capabilities: [create-table, insert, select, create-materialized-view, alter-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (synopsis: RENAME [ COLUMN ])"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_rc_base (id int4, a int4, b text);
+  INSERT INTO amv_rc_base VALUES (1, 10, 'x'), (2, 20, 'y');
+  CREATE MATERIALIZED VIEW amv_rc_mv AS SELECT id, a, b FROM amv_rc_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rc_mv RENAME a TO aa
+    expect: ok
+    comment: COLUMN keyword omitted
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_rc_mv RENAME COLUMN aa TO aaa
+    expect: ok
+    comment: COLUMN keyword given
+  - sql: |
+      SELECT attname FROM pg_attribute
+       WHERE attrelid = 'amv_rc_mv'::regclass AND attnum > 0 AND NOT attisdropped
+       ORDER BY attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, aaa, b FROM amv_rc_mv ORDER BY id
+    expect: rows
+    order: ordered
+    comment: data is unchanged by the rename, only the name moved

@@ -1,0 +1,56 @@
+# Enabling RLS with no policy is default-deny for non-owners; the owner still bypasses.
+id: doc-ddl-rowsecurity.default-deny-enable
+title: "RLS with no policy hides all rows and rejects writes for non-owners"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, default-deny, select, insert, update, delete]
+required_capabilities: [create-table, insert, select, update, delete, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: If no policy exists for the table, a default-deny policy is used"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr01_u;
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  GRANT SELECT, INSERT, UPDATE, DELETE ON t TO pgarbor_case_role_dr01_u;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: the owner (superuser here) bypasses row security, so both rows are visible
+  - sql: |
+      SET ROLE pgarbor_case_role_dr01_u
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no policy means default deny, so no rows are visible
+  - sql: |
+      INSERT INTO t VALUES (3, 30)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      UPDATE t SET v = 0
+    expect: ok
+    comment: UPDATE 0 - the existing rows are invisible to the update
+  - sql: |
+      DELETE FROM t
+    expect: ok
+    comment: DELETE 0 - silently affects nothing
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the rows were never touched
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr01_u
+    expect: ok

@@ -1,0 +1,39 @@
+# A trigger depends on its trigger function: DROP FUNCTION is refused until CASCADE, which drops the trigger
+# but leaves the table and its rows in place.
+id: doc-ddl-depend.drop-function-trigger-dependency
+title: Trigger depends on its trigger function; DROP FUNCTION CASCADE drops the trigger only
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-function, triggers, drop-cascade, dependency-tracking]
+required_capabilities: [create-table, insert, select, errors, triggers, plpgsql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (objects that depend on a function are dropped by CASCADE)"
+sessions: [a]
+setup: |
+  CREATE TABLE tr (id integer);
+  CREATE FUNCTION trf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TRIGGER trg BEFORE INSERT ON tr FOR EACH ROW EXECUTE FUNCTION trf();
+steps:
+  - sql: |
+      DROP FUNCTION trf()
+    expect: error
+    sqlstate: "2BP01"
+    comment: DETAIL trigger trg on table tr depends on function trf()
+  - sql: |
+      INSERT INTO tr VALUES (1)
+    expect: ok
+    comment: trigger still fires and the function still exists
+  - sql: |
+      DROP FUNCTION trf() CASCADE
+    expect: ok
+  - sql: |
+      INSERT INTO tr VALUES (2)
+    expect: ok
+  - sql: |
+      SELECT id FROM tr ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM pg_trigger WHERE tgname = 'trg'
+    expect: rows

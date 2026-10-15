@@ -1,0 +1,35 @@
+# Only the owner may ALTER a materialized view: a non-owner role gets insufficient_privilege.
+id: cmd-alter-materialized-view.non-owner-denied
+title: "ALTER MATERIALIZED VIEW by a non-owner role fails with insufficient privilege"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, privileges, owner, roles]
+required_capabilities: [create-table, select, create-role, create-materialized-view, alter-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (You must own the materialized view)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_no_base (id int4);
+  CREATE MATERIALIZED VIEW amv_no_mv AS SELECT id FROM amv_no_base;
+  CREATE ROLE amv_no_intruder;
+steps:
+  - sql: |
+      SET ROLE amv_no_intruder
+    expect: ok
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_no_mv RENAME TO amv_no_hijacked
+    expect: error
+    sqlstate: "42501"
+    comment: must own the materialized view
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT matviewname FROM pg_matviews WHERE matviewname LIKE 'amv_no%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: name unchanged
+  - sql: |
+      DROP ROLE amv_no_intruder
+    expect: ok

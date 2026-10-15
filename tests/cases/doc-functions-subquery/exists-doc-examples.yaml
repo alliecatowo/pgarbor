@@ -1,0 +1,35 @@
+# EXISTS: documented tab1/tab2 correlated example, EXISTS(SELECT 1 WHERE ...) form, empty and aggregate subqueries.
+id: doc-functions-subquery.exists-doc-examples
+title: EXISTS is true only when the subquery returns at least one row, including aggregate subqueries
+family: doc-functions-subquery
+tier: core
+feature_ids: [exists, correlated-subquery, subquery-expression]
+required_capabilities: [create-table, insert, select, subquery]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (EXISTS)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  CREATE TABLE tab2 (col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+  INSERT INTO tab2 VALUES (10), (10), (NULL);
+steps:
+  - sql: |
+      SELECT col1 FROM tab1 WHERE EXISTS (SELECT 1 FROM tab2 WHERE col2 = tab1.col2) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: documented example; tab1 row 1 is returned once although tab2 holds two matches
+  - sql: |
+      SELECT EXISTS (SELECT 1 WHERE false) AS e1, EXISTS (SELECT NULL WHERE true) AS e2, NOT EXISTS (SELECT 1 FROM tab1 WHERE col1 > 100) AS e3
+    expect: rows
+    comment: a row of NULLs still counts as a returned row
+  - sql: |
+      SELECT EXISTS (SELECT count(*) FROM tab1 WHERE false) AS agg_exists
+    expect: rows
+    comment: an aggregate without GROUP BY always returns one row
+  - sql: |
+      SELECT col1 FROM tab1 t WHERE EXISTS (SELECT 1 FROM tab2 WHERE tab2.col2 = t.col2 AND t.col1 > 1) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: outer reference plus extra predicate; NULL col2 never matches

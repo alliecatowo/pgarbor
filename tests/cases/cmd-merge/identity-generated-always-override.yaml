@@ -1,0 +1,42 @@
+# GENERATED ALWAYS identity: explicit values need OVERRIDING SYSTEM VALUE; DEFAULT VALUES and omitted columns use the sequence.
+id: cmd-merge.identity-generated-always-override
+title: MERGE insert into GENERATED ALWAYS identity requires OVERRIDING SYSTEM VALUE for explicit values
+family: cmd-merge
+tier: core
+feature_ids: [merge, identity-columns, overriding-system-value, insert, default-values, returning]
+required_capabilities: [create-table, insert, select, merge, identity, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (merge_insert: OVERRIDING SYSTEM VALUE, DEFAULT VALUES)"
+setup: |
+  CREATE TABLE idt (id integer GENERATED ALWAYS AS IDENTITY, v integer);
+steps:
+  - sql: |
+      MERGE INTO idt t
+      USING (VALUES (7)) s(v)
+      ON false
+      WHEN NOT MATCHED THEN
+        INSERT (id, v) VALUES (5, s.v)
+    expect: error
+    sqlstate: "428C9"
+    comment: explicit non-DEFAULT value for a GENERATED ALWAYS column without OVERRIDING
+  - sql: |
+      MERGE INTO idt t
+      USING (VALUES (7)) s(v)
+      ON false
+      WHEN NOT MATCHED THEN
+        INSERT (id, v) OVERRIDING SYSTEM VALUE VALUES (5, s.v)
+      RETURNING t.id, t.v
+    expect: rows
+    order: multiset
+    comment: expect (5, 7)
+  - sql: |
+      MERGE INTO idt t
+      USING (VALUES (8)) s(v)
+      ON false
+      WHEN NOT MATCHED THEN
+        INSERT DEFAULT VALUES
+      RETURNING t.id, t.v
+    expect: rows
+    order: multiset
+    comment: expect (1, NULL); DEFAULT VALUES draws the first sequence value

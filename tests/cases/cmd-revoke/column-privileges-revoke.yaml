@@ -1,0 +1,58 @@
+# Table-level REVOKE clears column privileges; column-level REVOKE of a table-level grant has no effect.
+id: cmd-revoke.column-privileges-revoke
+title: Column-level and table-level REVOKE interact with column privileges as documented
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, grant, column-privileges, privileges, errors]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-description (When revoking privileges on a table, the corresponding column privileges are automatically revoked; revoking column privileges from a table-granted role has no effect)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvc_u;
+  CREATE TABLE rvc_t (a int4, b text);
+  INSERT INTO rvc_t VALUES (1, 'x'), (2, 'y');
+  CREATE TABLE rvc_t2 (a int4, b text);
+  INSERT INTO rvc_t2 VALUES (3, 'z');
+steps:
+  - sql: |
+      GRANT SELECT (a, b) ON rvc_t TO rvc_u
+    expect: ok
+  - sql: |
+      REVOKE SELECT (a) ON rvc_t FROM rvc_u
+    expect: ok
+  - sql: |
+      SELECT has_column_privilege('rvc_u', 'rvc_t', 'a', 'SELECT') AS a_sel, has_column_privilege('rvc_u', 'rvc_t', 'b', 'SELECT') AS b_sel
+    expect: rows
+    comment: a revoked, b kept
+  - sql: |
+      GRANT SELECT ON rvc_t TO rvc_u
+    expect: ok
+  - sql: |
+      REVOKE SELECT (a) ON rvc_t FROM rvc_u
+    expect: ok
+  - sql: |
+      SELECT has_column_privilege('rvc_u', 'rvc_t', 'a', 'SELECT') AS a_sel, has_column_privilege('rvc_u', 'rvc_t', 'b', 'SELECT') AS b_sel
+    expect: rows
+    comment: table-level SELECT still covers column a, so the column revoke had no effect
+  - sql: |
+      GRANT SELECT (a) ON rvc_t2 TO rvc_u
+    expect: ok
+  - sql: |
+      REVOKE SELECT ON rvc_t2 FROM rvc_u
+    expect: ok
+  - sql: |
+      SELECT has_column_privilege('rvc_u', 'rvc_t2', 'a', 'SELECT') AS a_sel
+    expect: rows
+    comment: table-level revoke also removed the column privilege
+  - sql: |
+      SET ROLE rvc_u
+    expect: ok
+  - sql: |
+      SELECT a FROM rvc_t2
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

@@ -1,0 +1,62 @@
+# HEADER on COPY TO: boolean spellings turn the header line on or off; HEADER MATCH is rejected for COPY TO; empty tables still emit the header.
+id: cmd-copy.csv-header-and-boolean-options
+title: "COPY CSV HEADER boolean spellings, empty table header, and HEADER MATCH rejection on COPY TO"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-to, copy-csv-format, copy-header, copy-boolean-options, errors]
+required_capabilities: [create-table, insert, select, copy, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy option HEADER; option boolean"
+sessions: [a]
+setup: |
+  CREATE TABLE hd (id int4, label text);
+  INSERT INTO hd VALUES (1, 'one'), (2, 'two');
+  CREATE TABLE hd_empty (id int4, label text);
+steps:
+  - sql: |
+      COPY hd TO STDOUT (FORMAT csv, HEADER)
+    expect: ok
+    order: multiset
+    comment: HEADER without a value means true
+  - sql: |
+      COPY hd TO STDOUT (FORMAT csv, HEADER true)
+    expect: ok
+    order: multiset
+  - sql: |
+      COPY hd TO STDOUT (FORMAT csv, HEADER on)
+    expect: ok
+    order: multiset
+  - sql: |
+      COPY hd TO STDOUT (FORMAT csv, HEADER 1)
+    expect: ok
+    order: multiset
+  - sql: |
+      COPY hd TO STDOUT (FORMAT csv, HEADER off)
+    expect: ok
+    order: multiset
+    comment: no header line is written
+  - sql: |
+      COPY hd TO STDOUT (FORMAT csv, HEADER 0)
+    expect: ok
+    order: multiset
+  - sql: |
+      COPY hd TO STDOUT WITH CSV HEADER
+    expect: ok
+    order: multiset
+    comment: legacy syntax, CSV and HEADER as independent keywords
+  - sql: |
+      COPY hd TO STDOUT (FORMAT csv, HEADER MATCH)
+    expect: error
+    sqlstate: "0A000"
+    comment: MATCH is valid only for COPY FROM
+  - sql: |
+      COPY hd_empty TO STDOUT (FORMAT csv, HEADER)
+    expect: ok
+    order: multiset
+    comment: an empty table still produces the header line only
+  - sql: |
+      COPY hd_empty TO STDOUT (FORMAT csv)
+    expect: ok
+    order: multiset
+    comment: an empty table with no header produces no output

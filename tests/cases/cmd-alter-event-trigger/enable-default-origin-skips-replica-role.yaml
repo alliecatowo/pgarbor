@@ -1,0 +1,29 @@
+# The default (origin) mode of an enabled event trigger does not fire when session_replication_role = replica.
+id: cmd-alter-event-trigger.enable-default-origin-skips-replica-role
+title: Default origin-mode event trigger is skipped under session_replication_role = replica
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      SET session_replication_role = replica
+    expect: ok
+  - sql: |
+      CREATE TABLE t1 (a int4)
+    expect: ok
+    comment: origin-mode trigger is not executed in replica role
+  - sql: |
+      RESET session_replication_role
+    expect: ok
+  - sql: |
+      CREATE TABLE t2 (a int4)
+    expect: error
+    sqlstate: P0001
+    comment: origin role fires the origin-mode trigger

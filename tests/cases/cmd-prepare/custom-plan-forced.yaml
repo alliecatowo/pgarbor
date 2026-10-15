@@ -1,0 +1,34 @@
+# plan_cache_mode = force_custom_plan: every execution plans with the supplied values.
+id: cmd-prepare.custom-plan-forced
+title: force_custom_plan makes every EXECUTE plan with its parameter values
+family: cmd-prepare
+tier: extended
+feature_ids: [prepare, execute, plan-cache-mode, custom-plan, prepared-statements]
+required_capabilities: [create-table, select, prepared-statements, guc, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/prepare.sgml#sql-prepare-notes (generic and custom plans, plan_cache_mode)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (a int, b text)
+steps:
+  - sql: |
+      SET plan_cache_mode = force_custom_plan
+    expect: ok
+  - sql: |
+      PREPARE h (int) AS SELECT count(*) FROM foo WHERE a = $1
+    expect: ok
+  - sql: |
+      EXECUTE h(1)
+    expect: rows
+  - sql: |
+      EXECUTE h(2)
+    expect: rows
+  - sql: |
+      SELECT name, generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'h'
+    expect: rows
+    order: ordered
+    comment: two custom executions and no generic plans
+  - sql: |
+      RESET plan_cache_mode
+    expect: ok

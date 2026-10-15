@@ -1,0 +1,38 @@
+# Schema-qualified names drop the collation in that schema; a missing schema is an error unless IF EXISTS is given (then a notice).
+id: cmd-drop-collation.schema-qualified-and-missing-schema
+title: "DROP COLLATION schema-qualified names, and missing-schema behavior with and without IF EXISTS"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, qualified-names, schemas, if-exists]
+required_capabilities: [create-schema, create-collation, drop-collation, icu-provider, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs drop_collation.sgml#sql-dropcollation (schema-qualified name; IF EXISTS notice)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA dc_q;
+  CREATE COLLATION dc_q.qc (provider = icu, locale = 'de-DE');
+steps:
+  - sql: |
+      DROP COLLATION dc_q.qc
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_collation c JOIN pg_namespace n ON n.oid = c.collnamespace WHERE n.nspname = 'dc_q'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP COLLATION dc_q.qc
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP COLLATION nosch_dc.qc
+    expect: error
+    sqlstate: "3F000"
+    comment: missing schema without IF EXISTS
+  - sql: |
+      DROP COLLATION IF EXISTS nosch_dc.qc
+    expect: notice
+    comment: IF EXISTS on a missing schema notices and succeeds
+  - sql: |
+      DROP SCHEMA dc_q
+    expect: ok

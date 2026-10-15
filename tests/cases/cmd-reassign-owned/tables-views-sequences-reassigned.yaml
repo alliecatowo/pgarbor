@@ -1,0 +1,41 @@
+# REASSIGN OWNED BY moves ownership of every object owned by the old role in the current database: tables, views and identity sequences.
+id: cmd-reassign-owned.tables-views-sequences-reassigned
+title: "REASSIGN OWNED BY moves a table, its view and its identity sequence to the new owner"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, ownership, views, identity-columns]
+required_capabilities: [roles, create-table, create-view, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-description"
+sessions: [a]
+setup: |
+  CREATE ROLE ro1_old;
+  CREATE ROLE ro1_new;
+  CREATE TABLE ro1_t (id int4 GENERATED ALWAYS AS IDENTITY PRIMARY KEY, v int4);
+  CREATE VIEW ro1_v AS SELECT v FROM ro1_t;
+  ALTER TABLE ro1_t OWNER TO ro1_old;
+  ALTER VIEW ro1_v OWNER TO ro1_old;
+steps:
+  - sql: |
+      SELECT relname, relkind, pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname LIKE 'ro1%' ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: all three objects start owned by ro1_old
+  - sql: |
+      REASSIGN OWNED BY ro1_old TO ro1_new
+    expect: ok
+  - sql: |
+      SELECT relname, relkind, pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname LIKE 'ro1%' ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: the table, the view and the identity sequence all belong to ro1_new
+  - sql: |
+      SELECT count(*) AS n FROM ro1_v
+    expect: rows
+    order: ordered
+    comment: the view still works after its owner changed
+  - sql: |
+      DROP OWNED BY ro1_new; DROP ROLE ro1_old; DROP ROLE ro1_new
+    expect: ok
+    comment: cleanup

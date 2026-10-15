@@ -1,0 +1,43 @@
+id: cmd-rollback-to.aborted-transaction-recovery
+title: "ROLLBACK TO a savepoint recovers a transaction aborted by an error"
+family: cmd-rollback-to
+tier: core
+feature_ids: [rollback-to-savepoint, savepoints, errors, transactions]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/rollback_to.sgml#sql-rollback-to (Description; Notes on savepoints as error recovery)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4)
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SAVEPOINT s
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      SELECT 1/0
+    expect: error
+    sqlstate: "22012"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK TO SAVEPOINT s
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok

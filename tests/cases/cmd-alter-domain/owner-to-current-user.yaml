@@ -1,0 +1,36 @@
+# OWNER TO accepts CURRENT_USER, SESSION_USER and CURRENT_ROLE for the session's own role; an unknown role is refused.
+id: cmd-alter-domain.owner-to-current-user
+title: "ALTER DOMAIN OWNER TO accepts the special role keywords and refuses an unknown role"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, owner, roles]
+required_capabilities: [create-domain, alter-domain, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (OWNER TO { new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER })"
+sessions: [a]
+setup: |
+  CREATE DOMAIN ownd AS int;
+steps:
+  - sql: |
+      ALTER DOMAIN ownd OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      ALTER DOMAIN ownd OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      ALTER DOMAIN ownd OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(typowner) = current_user AS owned FROM pg_type WHERE typname = 'ownd'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER DOMAIN ownd OWNER TO no_such_role_zz
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT pg_get_userbyid(typowner) = current_user AS owned FROM pg_type WHERE typname = 'ownd'
+    expect: rows
+    order: ordered
+    comment: a failed owner change leaves ownership untouched

@@ -1,0 +1,31 @@
+# jsonb btree ordering: Object > Array > Boolean > Number > String > null, with the empty-array exception.
+id: doc-datatype-json.jsonb-btree-ordering
+title: jsonb btree ordering across types, pair counts, element order and the empty-array-below-null exception
+family: doc-datatype-json
+tier: core
+feature_ids: [jsonb, jsonb-ordering, btree-index]
+required_capabilities: [create-table, insert, select, order-by, jsonb]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#json-indexing (jsonb Indexing: btree ordering)"
+sessions: [a]
+setup: |
+  CREATE TABLE jv (id int4 PRIMARY KEY, j jsonb);
+  INSERT INTO jv VALUES
+    (1, '"a"'), (2, 'null'), (3, '1'), (4, 'true'), (5, '[]'), (6, '[1]'),
+    (7, '{}'), (8, '{"a": 1}'), (9, '[1, 2]'), (10, '{"b": 1, "d": 1}'), (11, NULL);
+steps:
+  - sql: |
+      SELECT id FROM jv ORDER BY j, id
+    expect: rows
+    order: ordered
+    comment: full type ordering; SQL NULL sorts last under ASC
+  - sql: |
+      SELECT
+        '{"aa": 1, "c": 1}'::jsonb > '{"b": 1, "d": 1}'::jsonb AS key_storage_order,
+        '{"b": 1}'::jsonb > '{"a": 1, "z": 1}'::jsonb AS fewer_pairs,
+        '[1, 2]'::jsonb > '[1]'::jsonb AS more_elements,
+        '[]'::jsonb < 'null'::jsonb AS empty_array_below_null,
+        '[]'::jsonb > 'true'::jsonb AS empty_array_vs_bool
+    expect: rows
+    comment: documented pair and element rules, including the exception

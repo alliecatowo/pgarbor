@@ -1,0 +1,60 @@
+# FROM clause join types from the PG18 table-expressions section: CROSS, INNER, LEFT, RIGHT, FULL.
+id: doc-queries-table-expressions.join-types-cross-inner-outer
+title: CROSS, INNER, LEFT, RIGHT and FULL joins produce the documented row sets
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [joins, cross-join, inner-join, outer-join, from-clause]
+required_capabilities: [create-table, insert, select, join]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-from (Joined Tables, Join Types)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (num int4, name text);
+  CREATE TABLE t2 (num int4, value text);
+  INSERT INTO t1 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+  INSERT INTO t2 VALUES (1, 'xxx'), (3, 'yyy'), (5, 'zzz');
+steps:
+  - sql: |
+      SELECT * FROM t1 CROSS JOIN t2
+    expect: rows
+    order: multiset
+    comment: N * M = 9 rows
+  - sql: |
+      SELECT * FROM t1, t2
+    expect: rows
+    order: multiset
+    comment: comma list is equivalent to CROSS JOIN here
+  - sql: |
+      SELECT * FROM t1 CROSS JOIN t2 ORDER BY t1.num, t2.num, value
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM t1 INNER JOIN t2 ON t1.num = t2.num
+    expect: rows
+    order: multiset
+    comment: INNER is the default; 2 rows
+  - sql: |
+      SELECT * FROM t1 JOIN t2 ON t1.num = t2.num
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT * FROM t1 LEFT JOIN t2 ON t1.num = t2.num
+    expect: rows
+    order: multiset
+    comment: unmatched t1 row (num 2) is kept with NULLs
+  - sql: |
+      SELECT * FROM t1 RIGHT JOIN t2 ON t1.num = t2.num
+    expect: rows
+    order: multiset
+    comment: unmatched t2 row (num 5) is kept with NULLs
+  - sql: |
+      SELECT * FROM t1 FULL JOIN t2 ON t1.num = t2.num
+    expect: rows
+    order: multiset
+    comment: both unmatched sides kept, 4 rows
+  - sql: |
+      SELECT t1.num, t2.num AS t2num FROM t1 CROSS JOIN t2 INNER JOIN t2 AS t3 ON t3.num = t1.num ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: JOIN binds tighter than comma, so the ON condition may reference t1

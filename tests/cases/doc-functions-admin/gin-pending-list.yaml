@@ -1,0 +1,35 @@
+# gin_clean_pending_list: zero when fastupdate is off, valid count otherwise, error on non-GIN relations.
+id: doc-functions-admin.gin-pending-list
+title: gin_clean_pending_list with fastupdate on and off, and on a non-GIN relation
+family: doc-functions-admin
+tier: extended
+feature_ids: [gin, gin-fastupdate, gin-clean-pending-list]
+required_capabilities: [create-table, insert, create-index, select, gin-index]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-admin-index (gin_clean_pending_list: no cleanup and result zero when fastupdate is disabled)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE gt (id int4, a int4[])
+    expect: ok
+  - sql: |
+      CREATE INDEX gt_off ON gt USING gin (a) WITH (fastupdate = off);
+      CREATE INDEX gt_on ON gt USING gin (a) WITH (fastupdate = on)
+    expect: ok
+  - sql: |
+      INSERT INTO gt VALUES (1, '{1,2}'), (2, '{2,3}')
+    expect: ok
+  - sql: |
+      SELECT gin_clean_pending_list('gt_off') AS no_pending_list
+    expect: rows
+    comment: fastupdate off means there is no pending list, so the result is zero
+  - sql: |
+      SELECT gin_clean_pending_list('gt_on') >= 0 AS cleaned
+    expect: rows
+    comment: the exact page count is not asserted
+  - sql: |
+      SELECT gin_clean_pending_list('gt')
+    expect: error
+    sqlstate: "42809"
+    comment: a table is not a GIN index

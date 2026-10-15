@@ -1,0 +1,46 @@
+id: cmd-declare.for-update-scroll-and-insensitive-rejected
+title: SCROLL or INSENSITIVE combined with FOR UPDATE or FOR SHARE is rejected
+family: cmd-declare
+tier: core
+feature_ids: [declare-cursor, for-update, for-share, scroll, insensitive, errors]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare (Parameters: INSENSITIVE with FOR UPDATE/FOR SHARE is an error; Notes: SCROLL with FOR UPDATE)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c SCROLL CURSOR FOR SELECT id FROM t FOR UPDATE
+    expect: error
+    sqlstate: "0A000"
+    comment: backward fetches are disallowed with FOR UPDATE
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c INSENSITIVE CURSOR FOR SELECT id FROM t FOR UPDATE
+    expect: error
+    sqlstate: "42P11"
+    comment: insensitive cursors must be read-only
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c INSENSITIVE CURSOR FOR SELECT id FROM t FOR SHARE
+    expect: error
+    sqlstate: "42P11"
+  - sql: |
+      ROLLBACK
+    expect: ok

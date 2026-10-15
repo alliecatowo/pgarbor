@@ -1,0 +1,59 @@
+# LOCK TABLE accepts tables and views only. Sequences, indexes, composite types and materialized
+# views are rejected with 42809 (wrong_object_type) even though they have a relation or type name.
+id: cmd-lock.non-table-relkinds-42809
+title: LOCK TABLE rejects sequences, indexes, composite types and materialized views with 42809
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, sequences, create-index, create-type, create-materialized-view, errors]
+required_capabilities: [create-table, lock-table, transactions, errors, sequences, create-index, create-type, create-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (Description; name parameter)"
+  license: PostgreSQL
+sessions: [a]
+setup: |
+  CREATE TABLE base_t (id int4 PRIMARY KEY);
+  CREATE SEQUENCE seq_lock_probe;
+  CREATE TYPE comp_lock_probe AS (x int4);
+  CREATE MATERIALIZED VIEW mv_lock_probe AS SELECT id FROM base_t;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE seq_lock_probe IN ACCESS EXCLUSIVE MODE
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE base_t_pkey IN ACCESS EXCLUSIVE MODE
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE comp_lock_probe IN ACCESS SHARE MODE
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      LOCK TABLE mv_lock_probe IN ACCESS SHARE MODE
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ROLLBACK
+    expect: ok

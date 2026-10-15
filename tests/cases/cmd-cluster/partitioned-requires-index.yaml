@@ -1,0 +1,48 @@
+# Clustering a partitioned table needs an index, cannot run in a transaction block, and then clusters each partition.
+id: cmd-cluster.partitioned-requires-index
+title: CLUSTER on a partitioned table requires an index, refuses transactions, and clusters each partition
+family: cmd-cluster
+tier: core
+feature_ids: [cluster, cluster-partitioned, partitioning, transactions, errors]
+required_capabilities: [create-table, create-index, insert, select, partitioning, transactions, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/cluster.sgml#sql-cluster (Description: Clustering a partitioned table clusters each of its partitions; the index may not be omitted; cannot be executed inside a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (id int4, v int4) PARTITION BY RANGE (id);
+  CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (100);
+  CREATE INDEX p_v ON p (v);
+  INSERT INTO p VALUES (3, 30), (1, 10), (2, 20);
+steps:
+  - sql: |
+      CLUSTER p
+    expect: error
+    sqlstate: "42704"
+    comment: the index may not be omitted for a partitioned table
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CLUSTER p USING p_v
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      CLUSTER p USING p_v
+    expect: ok
+    compare_message: false
+  - sql: |
+      SELECT c.relname::text AS tbl
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid
+      WHERE i.indisclustered AND c.relname IN ('p', 'p1')
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the partition p1 is clustered using its partition of p_v
+  - sql: |
+      SELECT id, v FROM p ORDER BY id
+    expect: rows
+    order: ordered

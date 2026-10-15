@@ -1,0 +1,37 @@
+# SET SCHEMA to the current schema is a no-op; a nonexistent target schema is an error that leaves the object in place.
+id: cmd-alter-statistics.set-schema-noop-and-missing-schema
+title: "ALTER STATISTICS SET SCHEMA is a no-op for the same schema and fails for a missing schema"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, set-schema, schema-qualified-names, errors]
+required_capabilities: [create-table, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (SET SCHEMA); PG18 errors for missing schema"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_sn (a int, b int);
+  CREATE STATISTICS ast_sn_s1 (ndistinct) ON a, b FROM ast_sn;
+steps:
+  - sql: |
+      ALTER STATISTICS public.ast_sn_s1 SET SCHEMA public
+    expect: ok
+    comment: same schema, nothing moves
+  - sql: |
+      SELECT stxnamespace::regnamespace::text FROM pg_statistic_ext WHERE stxname = 'ast_sn_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS public.ast_sn_s1 SET SCHEMA ast_sn_missing
+    expect: error
+    sqlstate: "3F000"
+    comment: invalid_schema_name
+  - sql: |
+      ALTER STATISTICS ast_sn_nosch.ast_sn_s1 RENAME TO ast_sn_s2
+    expect: error
+    sqlstate: "3F000"
+    comment: the qualifying schema must exist
+  - sql: |
+      SELECT stxname, stxnamespace::regnamespace::text FROM pg_statistic_ext WHERE stxname LIKE 'ast_sn%' ORDER BY 1
+    expect: rows
+    order: ordered

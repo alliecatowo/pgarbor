@@ -1,0 +1,62 @@
+# An UPDATE that moves a row to another partition is a DELETE from the source partition plus an INSERT into
+# the destination. Row-level BEFORE UPDATE and BEFORE DELETE fire on the source, BEFORE INSERT on the
+# destination; AFTER DELETE and AFTER INSERT apply; AFTER UPDATE does not. Statement-level triggers fire
+# only for the UPDATE on the parent.
+id: doc-trigger-definition.partition-row-movement-trigger-events
+title: Partition-key UPDATE that moves a row fires DELETE and INSERT row triggers but not AFTER UPDATE
+family: doc-trigger-definition
+tier: extended
+feature_ids: [triggers, partitioning, plpgsql, update, trigger-ordering]
+required_capabilities: [create-table, create-function, insert, select, update, plpgsql, triggers, partitioning, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (row movement between partitions: which triggers fire)"
+sessions: [a]
+setup: |
+  CREATE TABLE p (k int, v text) PARTITION BY LIST (k);
+  CREATE TABLE p1 PARTITION OF p FOR VALUES IN (1);
+  CREATE TABLE p2 PARTITION OF p FOR VALUES IN (2);
+  CREATE TABLE trig_log (seq int GENERATED ALWAYS AS IDENTITY, tbl text, ev text);
+  CREATE FUNCTION p_log() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (tbl, ev) VALUES (TG_TABLE_NAME, TG_WHEN || ' ' || TG_LEVEL || ' ' || TG_OP);
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER pb_ins BEFORE INSERT ON p FOR EACH ROW EXECUTE FUNCTION p_log();
+  CREATE TRIGGER pb_upd BEFORE UPDATE ON p FOR EACH ROW EXECUTE FUNCTION p_log();
+  CREATE TRIGGER pb_del BEFORE DELETE ON p FOR EACH ROW EXECUTE FUNCTION p_log();
+  CREATE TRIGGER pa_ins AFTER INSERT ON p FOR EACH ROW EXECUTE FUNCTION p_log();
+  CREATE TRIGGER pa_upd AFTER UPDATE ON p FOR EACH ROW EXECUTE FUNCTION p_log();
+  CREATE TRIGGER pa_del AFTER DELETE ON p FOR EACH ROW EXECUTE FUNCTION p_log();
+  CREATE TRIGGER ps_upd AFTER UPDATE ON p FOR EACH STATEMENT EXECUTE FUNCTION p_log();
+steps:
+  - sql: |
+      INSERT INTO p VALUES (1, 'a')
+    expect: ok
+  - sql: |
+      DELETE FROM trig_log
+    expect: ok
+  - sql: |
+      UPDATE p SET v = 'b' WHERE k = 1
+    expect: ok
+    comment: no row movement, so the ordinary UPDATE row triggers fire on p1
+  - sql: |
+      SELECT tbl, ev FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM trig_log
+    expect: ok
+  - sql: |
+      UPDATE p SET k = 2 WHERE k = 1
+    expect: ok
+    comment: row moves from p1 to p2
+  - sql: |
+      SELECT tbl, ev FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT k, v FROM p ORDER BY k
+    expect: rows
+    order: ordered

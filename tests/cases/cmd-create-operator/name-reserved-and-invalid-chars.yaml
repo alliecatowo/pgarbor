@@ -1,0 +1,39 @@
+# Names that are never legal: => is reserved by the grammar, $ is not an operator character, and -- or /* start a comment.
+id: cmd-create-operator.name-reserved-and-invalid-chars
+title: "Reserved, non-operator and comment-introducing operator names are rejected with syntax errors"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, operator-names, errors]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#description (operator name restrictions)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_neg8b(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT -$1 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR => (RIGHTARG = int8, PROCEDURE = cco_neg8b)
+    expect: error
+    sqlstate: "42601"
+    comment: => is reserved by the SQL grammar
+  - sql: |
+      CREATE OPERATOR $ (RIGHTARG = int8, PROCEDURE = cco_neg8b)
+    expect: error
+    sqlstate: "42601"
+    comment: $ is not in the allowed operator character list
+  - sql: |
+      CREATE OPERATOR +-- (RIGHTARG = int8, PROCEDURE = cco_neg8b)
+    expect: error
+    sqlstate: "42601"
+    comment: -- starts a comment, so the statement is cut short
+  - sql: |
+      CREATE OPERATOR ~/* (RIGHTARG = int8, PROCEDURE = cco_neg8b)
+    expect: error
+    sqlstate: "42601"
+    comment: /* starts a comment and is never closed
+  - sql: |
+      SELECT count(*) AS created FROM pg_operator WHERE oprright = 'int8'::regtype AND oprkind = 'l' AND oprnamespace = 'public'::regnamespace
+    expect: rows
+    order: ordered
+    comment: none of the rejected statements created an operator

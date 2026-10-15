@@ -1,0 +1,36 @@
+# Function bodies are plain string constants (doubled quotes or dollar quoting), and parenthesized
+# type modifiers in argument and return types are discarded by CREATE FUNCTION.
+id: cmd-create-function.body-quoting-and-typmod-discard
+title: Doubled-quote and dollar-quoted bodies are equivalent; typmods in argument and return types are discarded
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, string-quoting, dollar-quoting, type-modifiers]
+required_capabilities: [create-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-notes (type modifiers discarded); #sql-createfunction-description (definition quoting)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION txt() RETURNS text LANGUAGE sql AS 'select ''it''''s'''
+    expect: ok
+    comment: single quotes inside the body are doubled
+  - sql: |
+      CREATE FUNCTION txt2() RETURNS text LANGUAGE sql AS $$select 'it''s'$$
+    expect: ok
+    comment: dollar quoting needs no escaping
+  - sql: |
+      SELECT txt() AS a, txt2() AS b
+    expect: rows
+    comment: both return it's
+  - sql: |
+      CREATE FUNCTION rt(x numeric(5, 2)) RETURNS numeric(6, 1) LANGUAGE sql AS 'select x'
+    expect: ok
+  - sql: |
+      SELECT rt(1.234) AS v
+    expect: rows
+    comment: 1.234; the numeric(6,1) return modifier is not applied, so no rounding happens
+  - sql: |
+      SELECT pg_get_function_result(p.oid) AS result_type, pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p WHERE p.proname = 'rt'
+    expect: rows
+    comment: result numeric, args x numeric

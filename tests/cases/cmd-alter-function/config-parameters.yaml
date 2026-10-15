@@ -1,0 +1,60 @@
+# SET / RESET attach and remove function-local configuration; DEFAULT is equivalent to RESET;
+# RESET ALL clears every setting and leaves proconfig NULL.
+id: cmd-alter-function.config-parameters
+title: SET, SET DEFAULT, RESET and RESET ALL manage function-local configuration in proconfig
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, set-configuration, guc]
+required_capabilities: [create-function, alter-function, guc, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: configuration_parameter, value; SET FROM CURRENT; RESET ALL)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cfg1(text) RETURNS text LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION cfg1(text) SET search_path = admin, pg_temp
+    expect: ok
+  - sql: |
+      SELECT proconfig FROM pg_proc WHERE proname = 'cfg1'
+    expect: rows
+  - sql: |
+      ALTER FUNCTION cfg1(text) SET work_mem = '64kB'
+    expect: ok
+  - sql: |
+      SELECT proconfig FROM pg_proc WHERE proname = 'cfg1'
+    expect: rows
+    comment: both settings present; their order is the stored order, so compare as a set
+    order: multiset
+  - sql: |
+      ALTER FUNCTION cfg1(text) SET search_path TO DEFAULT
+    expect: ok
+    comment: DEFAULT removes only the search_path setting
+  - sql: |
+      SELECT proconfig FROM pg_proc WHERE proname = 'cfg1'
+    expect: rows
+  - sql: |
+      ALTER FUNCTION cfg1(text) RESET work_mem
+    expect: ok
+  - sql: |
+      ALTER FUNCTION cfg1(text) SET nosuchparam = 1
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER FUNCTION cfg1(text) SET work_mem = 'bogus'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER FUNCTION cfg1(text) SET work_mem FROM CURRENT
+    expect: ok
+  - sql: |
+      SELECT proconfig IS NOT NULL AS has_cfg FROM pg_proc WHERE proname = 'cfg1'
+    expect: rows
+  - sql: |
+      ALTER FUNCTION cfg1(text) RESET ALL
+    expect: ok
+  - sql: |
+      SELECT proconfig IS NULL AS none FROM pg_proc WHERE proname = 'cfg1'
+    expect: rows
+    comment: expect true

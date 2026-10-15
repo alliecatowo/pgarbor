@@ -1,0 +1,30 @@
+# Thesaurus '?' placeholder matches any subdictionary stop word between phrase words; a phrase with synonym replacement indexes the replacement only.
+id: doc-textsearch-dictionaries.thesaurus-placeholder
+title: thesaurus question-mark placeholder skips stop words inside a phrase
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, thesaurus-template, stop-words, phrase-match]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Thesaurus Dictionary)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY thes (TEMPLATE = thesaurus, DictFile = thesaurus_sample, Dictionary = pg_catalog.english_stem);
+  CREATE TEXT SEARCH CONFIGURATION thes_cfg (copy = simple);
+  ALTER TEXT SEARCH CONFIGURATION thes_cfg ALTER MAPPING FOR asciiword, hword_asciipart WITH thes, english_stem;
+steps:
+  - sql: |
+      SELECT to_tsvector('thes_cfg', 'booking tickets') AS adjacent,
+             to_tsvector('thes_cfg', 'booking the tickets') AS stop_word_between,
+             to_tsvector('thes_cfg', 'booking a tickets') AS other_stop_word
+    expect: rows
+    comment: the stop word is absorbed by the '?' placeholder; all three replace the phrase with the same lexemes
+  - sql: |
+      SELECT to_tsvector('thes_cfg', 'booking invitation') AS partial_phrase_only
+    expect: rows
+    comment: a non-matching sequence does not trigger the replacement
+  - sql: |
+      SELECT ts_lexize('thes', 'booking') AS phrase_fragment
+    expect: rows
+    comment: NULL because the single token is not a complete definition

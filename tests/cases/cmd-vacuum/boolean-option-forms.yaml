@@ -1,0 +1,42 @@
+# Boolean options accept TRUE/ON/1, FALSE/OFF/0 and an omitted value (meaning TRUE); a non-boolean value is a syntax error.
+id: cmd-vacuum.boolean-option-forms
+title: "VACUUM boolean options accept every documented spelling and reject non-booleans"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, options, boolean-literals, syntax-errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: boolean)"
+sessions: [a]
+setup: |
+  CREATE TABLE vbo (id int4);
+  INSERT INTO vbo VALUES (1), (2), (3);
+steps:
+  - sql: |
+      VACUUM (FULL TRUE, FREEZE ON, ANALYZE 1, DISABLE_PAGE_SKIPPING TRUE) vbo
+    expect: ok
+    comment: TRUE, ON and 1 all enable an option
+  - sql: |
+      VACUUM (FULL FALSE, FREEZE OFF, ANALYZE 0, DISABLE_PAGE_SKIPPING FALSE, SKIP_LOCKED FALSE, TRUNCATE off, PROCESS_TOAST on) vbo
+    expect: ok
+    comment: FALSE, OFF and 0 disable an option
+  - sql: |
+      VACUUM (ANALYZE, SKIP_LOCKED, TRUNCATE) vbo
+    expect: ok
+    comment: an omitted boolean means TRUE
+  - sql: |
+      VACUUM (VERBOSE 1) vbo
+    expect: ok
+    compare_message: false
+    comment: VERBOSE output carries timings and buffer counts, so only the status is compared
+  - sql: |
+      VACUUM (TRUNCATE 2) vbo
+    expect: error
+    sqlstate: "42601"
+    comment: an integer other than 0 or 1 is not a boolean
+  - sql: |
+      SELECT count(*), sum(id) FROM vbo
+    expect: rows
+    order: ordered
+    comment: the three rows survive every variant

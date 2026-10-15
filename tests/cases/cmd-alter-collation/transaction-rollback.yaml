@@ -1,0 +1,58 @@
+# ALTER COLLATION is transactional: a rolled-back rename reverts, a committed one sticks, and an error aborts the block.
+id: cmd-alter-collation.transaction-rollback
+title: "ALTER COLLATION RENAME rolls back and commits inside transaction blocks"
+family: cmd-alter-collation
+tier: core
+feature_ids: [alter-collation, rename-collation, transactions, errors]
+required_capabilities: [create-collation, alter-collation, icu-provider, transactions, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 transaction semantics for DDL on catalog objects; error codes from PG18 oracle"
+sessions: [a]
+setup: |
+  CREATE COLLATION cmd_tx (provider = icu, locale = 'und-x-icu');
+  CREATE COLLATION cmd_tx_other (provider = icu, locale = 'und-x-icu');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_tx RENAME TO cmd_tx_rolled
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT collname FROM pg_collation WHERE collname LIKE 'cmd\_tx%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the rename was undone
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_tx RENAME TO cmd_tx_kept
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT collname FROM pg_collation WHERE collname LIKE 'cmd\_tx%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the committed rename is visible
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_tx_kept RENAME TO cmd_tx_other
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+    comment: the failed statement aborted the block
+  - sql: |
+      ROLLBACK
+    expect: ok

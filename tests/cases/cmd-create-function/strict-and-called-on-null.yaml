@@ -1,0 +1,43 @@
+# STRICT / RETURNS NULL ON NULL INPUT skip the body on any NULL argument; CALLED ON NULL INPUT
+# runs it. The two null-handling clauses cannot be combined.
+id: cmd-create-function.strict-and-called-on-null
+title: STRICT skips the body on NULL arguments; CALLED ON NULL INPUT runs it; null clauses conflict
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, strict, returns-null-on-null-input, called-on-null-input, plpgsql]
+required_capabilities: [create-function, plpgsql, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-description (CALLED ON NULL INPUT / RETURNS NULL ON NULL INPUT / STRICT)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION strict_f(a int) RETURNS int LANGUAGE plpgsql STRICT AS $$ BEGIN RAISE EXCEPTION 'called'; END $$
+    expect: ok
+  - sql: |
+      SELECT strict_f(NULL) IS NULL AS r_null
+    expect: rows
+    comment: true; the body would raise, so it must not run
+  - sql: |
+      CREATE FUNCTION rnoni(a int) RETURNS int LANGUAGE plpgsql RETURNS NULL ON NULL INPUT AS $$ BEGIN RAISE EXCEPTION 'called'; END $$
+    expect: ok
+  - sql: |
+      SELECT rnoni(NULL) IS NULL AS r
+    expect: rows
+    comment: true; RETURNS NULL ON NULL INPUT is the same as STRICT
+  - sql: |
+      CREATE FUNCTION cono(a int) RETURNS int LANGUAGE plpgsql CALLED ON NULL INPUT AS $$ BEGIN IF a IS NULL THEN RAISE EXCEPTION 'nullarg'; END IF; RETURN a; END $$
+    expect: ok
+  - sql: |
+      SELECT cono(NULL)
+    expect: error
+    sqlstate: "P0001"
+    comment: the body runs with NULL and raises
+  - sql: |
+      SELECT cono(7) AS v
+    expect: rows
+  - sql: |
+      CREATE FUNCTION nullconf(a int) RETURNS int LANGUAGE sql RETURNS NULL ON NULL INPUT CALLED ON NULL INPUT AS 'select 1'
+    expect: error
+    sqlstate: "42601"
+    comment: the two null-handling attributes are mutually exclusive

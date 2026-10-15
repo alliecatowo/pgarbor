@@ -1,0 +1,32 @@
+# Only superusers can define new access methods; a plain role is refused with insufficient privilege.
+id: cmd-create-access-method.superuser-only
+title: Non-superuser roles cannot create access methods
+family: cmd-create-access-method
+tier: core
+feature_ids: [create-access-method, privileges, roles]
+required_capabilities: [create-access-method, roles, set-role, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method (Description: Only superusers can define new access methods)"
+sessions: [a]
+setup: |
+  CREATE ROLE cam_plain_role NOLOGIN;
+steps:
+  - sql: |
+      SET ROLE cam_plain_role
+    expect: ok
+  - sql: |
+      CREATE ACCESS METHOD cam_denied TYPE TABLE HANDLER heap_tableam_handler
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_am WHERE amname = 'cam_denied'
+    expect: rows
+    order: ordered
+    comment: the failed definition left no catalog entry
+  - sql: |
+      DROP ROLE cam_plain_role
+    expect: ok

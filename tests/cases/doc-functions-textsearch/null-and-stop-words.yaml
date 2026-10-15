@@ -1,0 +1,45 @@
+# NULL propagation through text search functions, stop-word handling and empty queries.
+id: doc-functions-textsearch.null-and-stop-words
+title: Text search functions propagate NULL and drop stop words with the documented notices
+family: doc-functions-textsearch
+tier: core
+feature_ids: [null-semantics, stop-words, plainto-tsquery, to-tsvector, array-to-tsvector, ts-lexize]
+required_capabilities: [select, text-search, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-textsearch (to_tsvector, plainto_tsquery, array_to_tsvector, ts_lexize, ts_headline)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT to_tsvector(NULL::text) IS NULL AS null_tsv,
+             length(NULL::tsvector) IS NULL AS null_len,
+             numnode(NULL::tsquery) IS NULL AS null_nodes,
+             strip(NULL::tsvector) IS NULL AS null_strip
+    expect: rows
+    comment: NULL input yields NULL output for the single-argument functions
+  - sql: |
+      SELECT 'x' @@ NULL::tsquery IS NULL AS null_query_match
+    expect: rows
+  - sql: |
+      SELECT 'cat'::tsquery @> NULL::tsquery IS NULL AS null_containment
+    expect: rows
+  - sql: |
+      SELECT to_tsvector('english', 'the and of') AS only_stop_words
+    expect: rows
+    comment: a document made only of stop words produces an empty tsvector, not an error
+  - sql: |
+      SELECT plainto_tsquery('english', 'the and of') AS empty_query
+    expect: notice
+    comment: the query has no lexemes, so PostgreSQL emits a notice and returns an empty tsquery
+  - sql: |
+      SELECT plainto_tsquery('english', '') AS empty_text
+    expect: notice
+  - sql: |
+      SELECT ts_lexize('english_stem', 'the') AS stop_word, ts_lexize('english_stem', 'stars') AS stem
+    expect: rows
+    comment: a stop word returns an empty array; a stemmed word returns its lexeme array
+  - sql: |
+      SELECT array_to_tsvector(ARRAY['fat', NULL, 'cat']::text[])
+    expect: error
+    sqlstate: "22004"
+    comment: array_to_tsvector rejects NULL elements

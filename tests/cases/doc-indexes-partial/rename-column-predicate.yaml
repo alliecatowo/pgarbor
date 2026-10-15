@@ -1,0 +1,36 @@
+# Renaming a column referenced by a partial index predicate keeps the index working; the stored predicate follows the new name.
+id: doc-indexes-partial.rename-column-predicate
+title: Renaming a column used in a partial index predicate updates the predicate and keeps uniqueness
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, alter-table, rename-column, unique-index, catalog-introspection]
+required_capabilities: [create-table, create-index, alter-table, unique-index, insert, select, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "indices.sgml#indexes-partial (predicate references table columns; dependency tracking)"
+sessions: [a]
+setup: |
+  CREATE TABLE ren (id int, flag boolean);
+  CREATE UNIQUE INDEX ren_ix ON ren (id) WHERE flag;
+  INSERT INTO ren VALUES (1, true), (2, false);
+steps:
+  - sql: |
+      ALTER TABLE ren RENAME COLUMN flag TO active
+    expect: ok
+  - sql: |
+      SELECT pg_get_indexdef('ren_ix'::regclass)
+    expect: rows
+    comment: the predicate now refers to active
+  - sql: |
+      INSERT INTO ren VALUES (1, true)
+    expect: error
+    sqlstate: "23505"
+    comment: uniqueness still applies to rows where the renamed column is true
+  - sql: |
+      INSERT INTO ren VALUES (2, true), (1, false)
+    expect: ok
+    comment: 2 is new as a true row, and 1 with active false is outside the predicate
+  - sql: |
+      SELECT id, active FROM ren ORDER BY id, active
+    expect: rows
+    order: ordered

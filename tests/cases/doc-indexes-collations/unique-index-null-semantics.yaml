@@ -1,0 +1,32 @@
+# Unique index on a collated column: duplicates of the indexed value conflict with 23505, while
+# NULL keys never conflict with each other.
+id: doc-indexes-collations.unique-index-null-semantics
+title: Unique index under COLLATE "y" rejects a duplicate value but accepts repeated NULLs
+family: doc-indexes-collations
+tier: core
+feature_ids: [indexes, collation, unique-index, nulls, errors]
+required_capabilities: [create-table, insert, select, create-index, collation, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-collations (Indexes and Collations)"
+sessions: [a]
+setup: |
+  CREATE COLLATION "x" FROM "C";
+  CREATE COLLATION "y" (provider = icu, locale = 'und');
+  CREATE TABLE test1c (id integer PRIMARY KEY, content varchar COLLATE "x");
+  INSERT INTO test1c VALUES (1, 'b'), (2, 'B'), (3, 'a'), (4, 'A'), (5, 'c');
+  CREATE UNIQUE INDEX u_y ON test1c (content COLLATE "y");
+steps:
+  - sql: |
+      INSERT INTO test1c VALUES (7, 'a')
+    expect: error
+    sqlstate: "23505"
+    comment: an existing value under the index collation is a duplicate
+  - sql: |
+      INSERT INTO test1c VALUES (8, NULL), (9, NULL)
+    expect: ok
+    comment: NULLs are distinct for unique indexes
+  - sql: |
+      SELECT id, content FROM test1c ORDER BY id
+    expect: rows
+    order: ordered

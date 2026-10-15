@@ -1,0 +1,82 @@
+# REINDEX CONCURRENTLY, SCHEMA, DATABASE and SYSTEM are rejected inside a transaction block (25001).
+id: cmd-reindex.tx-forbidden-forms
+title: CONCURRENTLY, SCHEMA, DATABASE and SYSTEM forms cannot run inside a transaction block
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-concurrently, reindex-schema, reindex-database, reindex-system, transactions, errors]
+required_capabilities: [create-table, create-index, insert, select, reindex, reindex-concurrently, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: SCHEMA, DATABASE, SYSTEM; Rebuilding Indexes Concurrently)"
+sessions: [a]
+setup: |
+  CREATE TABLE ftx (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX ftx_v ON ftx (v);
+  INSERT INTO ftx VALUES (1, 1);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      REINDEX INDEX CONCURRENTLY ftx_v
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      REINDEX TABLE CONCURRENTLY ftx
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      REINDEX (CONCURRENTLY) TABLE ftx
+    expect: error
+    sqlstate: "25001"
+    comment: the parenthesized option form is the same statement
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      REINDEX SCHEMA CONCURRENTLY public
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      REINDEX DATABASE
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      REINDEX SYSTEM
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id, v FROM ftx ORDER BY id
+    expect: rows
+    order: ordered
+    comment: none of the rejected statements changed the table

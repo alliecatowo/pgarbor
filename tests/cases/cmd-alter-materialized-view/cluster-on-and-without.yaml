@@ -1,0 +1,35 @@
+# CLUSTER ON / SET WITHOUT CLUSTER record the clustered index on a materialized view; unknown index fails.
+id: cmd-alter-materialized-view.cluster-on-and-without
+title: "ALTER MATERIALIZED VIEW CLUSTER ON and SET WITHOUT CLUSTER toggle the clustered index"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, cluster, btree-index]
+required_capabilities: [create-table, select, create-index, create-materialized-view, alter-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (CLUSTER ON index_name / SET WITHOUT CLUSTER)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_cl_base (id int4, v text);
+  INSERT INTO amv_cl_base VALUES (2, 'b'), (1, 'a');
+  CREATE MATERIALIZED VIEW amv_cl_mv AS SELECT id, v FROM amv_cl_base;
+  CREATE INDEX amv_cl_mv_id ON amv_cl_mv (id);
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_cl_mv CLUSTER ON amv_cl_mv_id
+    expect: ok
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx, indisclustered FROM pg_index WHERE indrelid = 'amv_cl_mv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_cl_mv SET WITHOUT CLUSTER
+    expect: ok
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx, indisclustered FROM pg_index WHERE indrelid = 'amv_cl_mv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_cl_mv CLUSTER ON amv_cl_nosuch
+    expect: error
+    sqlstate: "42704"

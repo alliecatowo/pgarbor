@@ -1,0 +1,59 @@
+# A restrictive policy is ANDed with the permissive policies; it applies only to the role it names.
+id: doc-ddl-rowsecurity.restrictive-admin-hide-root
+title: "Restrictive policy narrows one role's permissive access without affecting others"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, restrictive, permissive-or, select, insert, update]
+required_capabilities: [create-table, insert, select, update, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: admin_local_only restrictive policy (predicate adapted to be connection-independent)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr06_adm;
+  CREATE ROLE pgarbor_case_role_dr06_bob;
+  CREATE TABLE t (uid int4 PRIMARY KEY, name text NOT NULL);
+  INSERT INTO t VALUES (0, 'root'), (1, 'bob'), (2, 'alice');
+  GRANT SELECT, INSERT, UPDATE ON t TO pgarbor_case_role_dr06_adm, pgarbor_case_role_dr06_bob;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY admin_all ON t TO pgarbor_case_role_dr06_adm USING (true) WITH CHECK (true);
+  CREATE POLICY all_view ON t FOR SELECT USING (true);
+  CREATE POLICY adm_hide_root ON t AS RESTRICTIVE TO pgarbor_case_role_dr06_adm USING (uid <> 0);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr06_adm
+    expect: ok
+  - sql: |
+      SELECT uid FROM t ORDER BY uid
+    expect: rows
+    order: ordered
+    comment: the restrictive policy removes uid 0 for the admin role
+  - sql: |
+      UPDATE t SET name = 'x' WHERE uid = 0
+    expect: ok
+    comment: UPDATE 0 - the restricted row is invisible
+  - sql: |
+      INSERT INTO t VALUES (0, 'root2')
+    expect: error
+    sqlstate: "42501"
+    comment: the restrictive USING also acts as WITH CHECK for INSERT
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr06_bob
+    expect: ok
+  - sql: |
+      SELECT uid FROM t ORDER BY uid
+    expect: rows
+    order: ordered
+    comment: bob is not named by the restrictive policy, so all rows are visible
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr06_adm, pgarbor_case_role_dr06_bob
+    expect: ok

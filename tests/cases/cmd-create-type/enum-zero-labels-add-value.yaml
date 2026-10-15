@@ -1,0 +1,40 @@
+# Enum with zero labels: NULL values only until a label is added with ALTER TYPE (documented in CREATE TYPE).
+id: cmd-create-type.enum-zero-labels-add-value
+title: "Zero-label enum holds only NULL until ALTER TYPE adds a label"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, enum-types, alter-type, create-table, insert, select, errors]
+required_capabilities: [create-type, alter-type, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype-enum"
+steps:
+  - sql: |
+      CREATE TYPE e0 AS ENUM ()
+    expect: ok
+  - sql: |
+      CREATE TABLE e0t (id int4 PRIMARY KEY, x e0)
+    expect: ok
+  - sql: |
+      INSERT INTO e0t VALUES (1, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO e0t VALUES (2, 'x')
+    expect: error
+    sqlstate: "22P02"
+    comment: no labels exist yet, so no non-NULL value is valid
+  - sql: |
+      ALTER TYPE e0 ADD VALUE 'x'
+    expect: ok
+  - sql: |
+      INSERT INTO e0t VALUES (2, 'x')
+    expect: ok
+  - sql: |
+      SELECT id, x::text AS x FROM e0t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TYPE e0 ADD VALUE 'x'
+    expect: error
+    sqlstate: "42710"
+    comment: duplicate label

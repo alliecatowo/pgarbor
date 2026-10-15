@@ -1,0 +1,30 @@
+# Constraints apply even when the value comes from a column DEFAULT.
+id: doc-ddl-constraints.check-default-value-violation
+title: A column DEFAULT that violates CHECK is rejected on insert, while a valid default is accepted
+family: doc-ddl-constraints
+tier: core
+feature_ids: [check-constraints, default-values, insert, select]
+required_capabilities: [create-table, constraints, check-constraint, default-values, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (intro: applies even if the value came from the default value definition)"
+sessions: [a]
+setup: |
+  CREATE TABLE bad_default (id integer, qty integer DEFAULT -1 CHECK (qty > 0));
+  CREATE TABLE good_default (id integer, qty integer DEFAULT 3 CHECK (qty > 0))
+steps:
+  - sql: |
+      INSERT INTO bad_default (id) VALUES (1)
+    expect: error
+    sqlstate: "23514"
+    comment: the default -1 is substituted and then fails the check
+  - sql: |
+      INSERT INTO bad_default (id, qty) VALUES (2, 5)
+    expect: ok
+  - sql: |
+      INSERT INTO good_default (id) VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT id, qty FROM good_default
+    expect: rows
+    order: multiset

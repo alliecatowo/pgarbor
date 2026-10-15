@@ -1,0 +1,41 @@
+# OWNER TO accepts a role name and CURRENT_ROLE / SESSION_USER keywords; an unknown role is 42704.
+id: cmd-alter-view.owner-keywords-and-unknown-role
+title: "ALTER VIEW OWNER TO accepts role names and session keywords and rejects unknown roles"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, owner, roles, error-handling]
+required_capabilities: [create-table, select, create-role, create-view, alter-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (OWNER TO new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE ROLE av_own_new;
+  CREATE TABLE av_ow (id int4);
+  CREATE VIEW av_owv AS SELECT id FROM av_ow;
+steps:
+  - sql: |
+      ALTER VIEW av_owv OWNER TO av_own_new
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'av_owv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER VIEW av_owv OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      SELECT relowner = (SELECT oid FROM pg_roles WHERE rolname = CURRENT_USER) AS owned_by_current FROM pg_class WHERE oid = 'av_owv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER VIEW av_owv OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      ALTER VIEW av_owv OWNER TO av_own_nosuch
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP ROLE av_own_new
+    expect: ok
+    comment: the role no longer owns the view, so it can be dropped

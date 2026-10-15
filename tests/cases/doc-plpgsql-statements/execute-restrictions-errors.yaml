@@ -1,0 +1,60 @@
+# EXECUTE restrictions: a NULL command string is an error, utility commands cannot take USING parameters,
+# SELECT INTO is not accepted inside EXECUTE, and a literal utility command built with format() works.
+id: doc-plpgsql-statements.execute-restrictions-errors
+title: EXECUTE rejects a NULL command string, utility parameters, and SELECT INTO; format-built DDL works
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, execute, dynamic-sql, utility-commands, errors]
+required_capabilities: [plpgsql, create-function, create-table, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-executing-dyn"
+sessions: [a]
+setup: |
+  CREATE FUNCTION f_exec_null() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE q text;
+  BEGIN
+    q := NULL;
+    EXECUTE q;
+    RETURN 'done';
+  END $$;
+  CREATE FUNCTION f_exec_utility_param() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    EXECUTE 'CREATE TABLE tmp_util (a int DEFAULT $1)' USING 1;
+    RETURN 'x';
+  END $$;
+  CREATE FUNCTION f_exec_select_into() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n text;
+  BEGIN
+    EXECUTE 'SELECT INTO n empname FROM emp';
+    RETURN n;
+  END $$;
+  CREATE FUNCTION f_exec_utility_literal() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    EXECUTE format('CREATE TABLE tmp_util (a int DEFAULT %s)', 1);
+    RETURN 'x';
+  END $$;
+  CREATE TABLE emp (empname text, salary int);
+steps:
+  - sql: |
+      SELECT f_exec_null()
+    expect: error
+    sqlstate: "22004"
+    comment: a NULL query string is rejected by EXECUTE
+  - sql: |
+      SELECT f_exec_utility_param()
+    expect: error
+    sqlstate: "42P02"
+    comment: utility statements accept no query parameters
+  - sql: |
+      SELECT f_exec_select_into()
+    expect: error
+    sqlstate: "42601"
+    comment: SELECT INTO is not supported inside EXECUTE
+  - sql: |
+      SELECT f_exec_utility_literal()
+    expect: rows
+    comment: the value is inserted textually into the utility command
+  - sql: |
+      SELECT column_default FROM information_schema.columns WHERE table_name = 'tmp_util' AND column_name = 'a'
+    expect: rows

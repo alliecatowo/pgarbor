@@ -1,0 +1,32 @@
+# Schema names are case-sensitive once quoted: an unquoted name does not match a quoted mixed-case schema.
+id: cmd-drop-schema.quoted-identifier-case
+title: DROP SCHEMA matches the exact name, so unquoted mixedcase does not find a quoted "MixedCase" schema
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, identifiers, quoting, errors]
+required_capabilities: [create-schema, create-table, insert, select, drop-schema, errors]
+provenance:
+  source: hand
+  ref: "ref/drop_schema.sgml#sql-dropschema (Synopsis: name); verified against PostgreSQL 18.6 oracle"
+sessions: [a]
+setup: |
+  CREATE SCHEMA "MixedCase";
+  CREATE TABLE "MixedCase".t (a int);
+steps:
+  - sql: |
+      DROP SCHEMA mixedcase CASCADE
+    expect: error
+    sqlstate: "3F000"
+    comment: the unquoted name folds to lowercase and does not exist
+  - sql: |
+      SELECT count(*) AS n FROM pg_namespace WHERE nspname = 'MixedCase'
+    expect: rows
+    order: ordered
+    comment: the quoted schema is untouched by the failed drop
+  - sql: |
+      DROP SCHEMA "MixedCase" CASCADE
+    expect: notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_namespace WHERE nspname = 'MixedCase'
+    expect: rows
+    order: ordered

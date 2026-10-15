@@ -1,0 +1,30 @@
+# After a drop the name is free: it can be reused with a different definition.
+id: cmd-drop-statistics.recreate-after-drop
+title: A dropped statistics name can be recreated with different kinds and columns
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, create-statistics, extended-statistics]
+required_capabilities: [create-table, extended-statistics, drop-statistics, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics; create_statistics.sgml#sql-createstatistics (kinds)"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_re (a int, b int, c int);
+  CREATE STATISTICS ds_re_s (ndistinct, dependencies) ON a, b FROM ds_re;
+steps:
+  - sql: |
+      SELECT stxname, stxkind, stxkeys FROM pg_statistic_ext WHERE stxname = 'ds_re_s'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP STATISTICS ds_re_s
+    expect: ok
+  - sql: |
+      CREATE STATISTICS ds_re_s (mcv) ON b, c FROM ds_re
+    expect: ok
+  - sql: |
+      SELECT stxname, stxkind, stxkeys FROM pg_statistic_ext WHERE stxname = 'ds_re_s'
+    expect: rows
+    order: ordered
+    comment: the replacement has only the mcv kind and columns b and c

@@ -1,0 +1,55 @@
+# OWNER TO CURRENT_USER, SESSION_USER and CURRENT_ROLE resolve to the role names of the current session.
+id: cmd-alter-event-trigger.owner-keywords-resolve
+title: OWNER TO CURRENT_USER, SESSION_USER and CURRENT_ROLE resolve at execution time
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc, roles]
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      CREATE ROLE cmd_aet_su SUPERUSER
+    expect: ok
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO cmd_aet_su
+    expect: ok
+  - sql: |
+      SET ROLE cmd_aet_su
+    expect: ok
+  - sql: |
+      SELECT current_user AS cu, session_user AS su
+    expect: rows
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO CURRENT_USER
+    expect: ok
+    comment: current_user is cmd_aet_su, already the owner
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO SESSION_USER
+    expect: ok
+    comment: session_user is postgres
+  - sql: |
+      SELECT evtname, pg_get_userbyid(evtowner) AS owner FROM pg_event_trigger
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO CURRENT_ROLE
+    expect: ok
+    comment: current_role is cmd_aet_su (superuser, so allowed)
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT evtname, pg_get_userbyid(evtowner) AS owner FROM pg_event_trigger
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO postgres
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_aet_su
+    expect: ok

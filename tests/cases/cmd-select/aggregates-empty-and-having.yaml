@@ -1,0 +1,45 @@
+# Aggregates over empty input and NULLs: one row without GROUP BY, zero rows with GROUP BY, HAVING without GROUP BY, and aggregate-in-WHERE error.
+id: cmd-select.aggregates-empty-and-having
+title: Aggregates over empty and NULL-containing input, HAVING without GROUP BY, aggregate in WHERE error
+family: cmd-select
+tier: core
+feature_ids: [select, aggregates, group-by, having]
+required_capabilities: [create-table, insert, select, aggregates, group-by]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-groupby and ref/select.sgml#sql-having"
+sessions: [a]
+setup: |
+  CREATE TABLE empty_t (g text, x int4);
+  CREATE TABLE nums (g text, x int4);
+  INSERT INTO nums VALUES ('a', 1), ('a', NULL), ('b', 3);
+steps:
+  - sql: |
+      SELECT count(*), count(x), sum(x), max(x), avg(x) FROM empty_t
+    expect: rows
+    order: multiset
+    comment: aggregate without GROUP BY returns exactly one row over empty input
+  - sql: |
+      SELECT g, count(*) FROM empty_t GROUP BY g
+    expect: rows
+    order: multiset
+    comment: GROUP BY over empty input returns zero rows
+  - sql: |
+      SELECT count(*), count(x), sum(x) FROM nums
+    expect: rows
+    order: multiset
+    comment: count(*) counts NULL rows, count(x) and sum(x) skip NULLs
+  - sql: |
+      SELECT g, count(x) FROM nums GROUP BY g ORDER BY g
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM nums HAVING count(*) > 5
+    expect: rows
+    order: multiset
+    comment: HAVING without GROUP BY filters the single implicit group, leaving zero rows
+  - sql: |
+      SELECT count(*) FROM nums WHERE sum(x) > 0
+    expect: error
+    sqlstate: "42803"
+    comment: aggregate functions are not allowed in WHERE

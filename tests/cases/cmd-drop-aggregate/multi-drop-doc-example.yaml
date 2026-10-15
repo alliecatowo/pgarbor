@@ -1,0 +1,30 @@
+# Doc example: several aggregate signatures can be dropped in one command.
+id: cmd-drop-aggregate.multi-drop-doc-example
+title: DROP AGGREGATE myavg(integer), myavg(bigint) drops both in one command
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, create-aggregate, aggregates]
+required_capabilities: [aggregates, create-aggregate, create-function, drop-aggregate]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (Examples: multiple aggregates)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2'
+    expect: ok
+  - sql: |
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0');
+      CREATE AGGREGATE myavg(bigint) (SFUNC = int8pl, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS before_drop FROM pg_proc WHERE proname = 'myavg' AND prokind = 'a'
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP AGGREGATE myavg(integer), myavg(bigint)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS after_drop FROM pg_proc WHERE proname = 'myavg' AND prokind = 'a'
+    expect: rows
+    order: multiset

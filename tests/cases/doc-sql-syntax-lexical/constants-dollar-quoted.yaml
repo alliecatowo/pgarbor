@@ -1,0 +1,39 @@
+# Dollar-quoted string constants: untagged, tagged, case-sensitive tags, and nesting in a function body.
+id: doc-sql-syntax-lexical.constants-dollar-quoted
+title: "Dollar-quoted strings with tags, nesting and case-sensitive delimiters"
+family: doc-sql-syntax-lexical
+tier: core
+feature_ids: [lexical-structure, string-constants, dollar-quoting, create-function]
+required_capabilities: [create-function, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-syntax-lexical (Dollar-Quoted String Constants)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT $$Dianne's horse$$ AS untagged, $SomeTag$Dianne's horse$SomeTag$ AS tagged
+    expect: rows
+  - sql: |
+      SELECT $$back\slash \n stays literal$$ AS literal_backslash
+    expect: rows
+    comment: "backslashes are not special inside dollar quotes"
+  - sql: |
+      SELECT $tag$x$TAG$ $tag$ AS not_a_closer
+    expect: rows
+    comment: "a closing delimiter must match the opening tag exactly, so $TAG$ does not close $tag$"
+  - sql: |
+      SELECT $TAG$x$tag$
+    expect: error
+    sqlstate: "42601"
+    comment: "tags are case sensitive, so this dollar quote never closes"
+  - sql: |
+      CREATE FUNCTION has_ctl(text) RETURNS boolean LANGUAGE plpgsql AS $function$
+      BEGIN
+          RETURN ($1 ~ $q$[\t\r\n\v\\]$q$);
+      END;
+      $function$
+    expect: ok
+    comment: "the inner $q$ literal does not match the outer $function$ delimiter"
+  - sql: |
+      SELECT has_ctl('plain') AS plain, has_ctl(E'tab\there') AS with_tab, has_ctl('a\b') AS with_backslash
+    expect: rows

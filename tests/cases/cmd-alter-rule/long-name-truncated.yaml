@@ -1,0 +1,27 @@
+# A new name longer than NAMEDATALEN-1 (63 bytes) is truncated with a NOTICE; the truncated name is then the one to address.
+id: cmd-alter-rule.long-name-truncated
+title: ALTER RULE truncates an over-long new name to 63 bytes with a notice
+family: cmd-alter-rule
+tier: extended
+feature_ids: [alter-rule, rename, identifiers, truncation, rules]
+required_capabilities: [create-table, create-rule, select, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS (identifiers longer than 63 bytes are truncated)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4);
+  CREATE RULE r_emp AS ON INSERT TO emp DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      ALTER RULE r_emp ON emp RENAME TO abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijKLMN
+    expect: ok
+    comment: NOTICE identifier will be truncated; the server keeps the first 63 bytes
+  - sql: |
+      SELECT rulename, length(rulename) AS len FROM pg_rules WHERE tablename = 'emp' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP RULE abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijKLMN ON emp
+    expect: ok
+    comment: the long spelling truncates to the same 63-byte name, so it finds the rule

@@ -1,0 +1,36 @@
+# Token type names must be emitted by the parser; ADD, ALTER and DROP MAPPING all reject an unknown one with 22023.
+id: cmd-alter-tsconfig.unknown-token-type-errors
+title: "ADD, ALTER and DROP MAPPING reject an unknown token type"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, token-type, errors]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (token_type is a token type emitted by the configuration's parser)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY english (template = snowball, language = english);
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ADD MAPPING FOR nosuchtok WITH english
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING FOR nosuchtok WITH english
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING FOR nosuchtok
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING IF EXISTS FOR nosuchtok
+    expect: error
+    sqlstate: "22023"
+    comment: IF EXISTS only skips a missing mapping, not an unknown token type
+  - sql: |
+      SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'my_config'::regconfig
+    expect: rows
+    order: multiset

@@ -1,0 +1,35 @@
+# Variant: an expression index whose key is "content COLLATE y". Queries that spell the same
+# expression get the same ordering; the stored definition shows the collation.
+id: doc-indexes-collations.expression-index-collation
+title: Expression index keyed on content COLLATE "y" orders and filters by the ICU collation
+family: doc-indexes-collations
+tier: core
+feature_ids: [indexes, collation, expression-index, explicit-collate, order-by]
+required_capabilities: [create-table, insert, select, create-index, collation, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-collations (Indexes and Collations)"
+sessions: [a]
+setup: |
+  CREATE COLLATION "x" FROM "C";
+  CREATE COLLATION "y" (provider = icu, locale = 'und');
+  CREATE TABLE test1c (id integer, content varchar COLLATE "x");
+  INSERT INTO test1c VALUES (1, 'b'), (2, 'B'), (3, 'a'), (4, 'A'), (5, 'c'), (6, NULL);
+steps:
+  - sql: |
+      CREATE INDEX expr1 ON test1c ((content COLLATE "y"))
+    expect: ok
+  - sql: |
+      SELECT indexdef FROM pg_indexes WHERE indexname = 'expr1'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM test1c WHERE (content COLLATE "y") > 'a' ORDER BY content COLLATE "y", id
+    expect: rows
+    order: ordered
+    comment: the expression must match the index expression for the index to be usable; results are the same either way
+  - sql: |
+      SELECT id FROM test1c WHERE content > 'a' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a plain comparison on the column still uses column collation x, which does not match expr1

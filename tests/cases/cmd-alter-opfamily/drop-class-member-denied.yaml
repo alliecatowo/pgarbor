@@ -1,0 +1,43 @@
+# Operator-class members cannot be dropped from the family; loose members can, at any time.
+id: cmd-alter-opfamily.drop-class-member-denied
+title: "Dropping a class member fails with dependent_objects; loose members drop freely; dropping the class removes its members"
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, operator-class, loose-members, dependencies, errors]
+required_capabilities: [alter-operator-family, create-operator-family, create-operator-class, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Description: loose members vs operator class members)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_cls_fam USING btree;
+  ALTER OPERATOR FAMILY cmd_aof_cls_fam USING btree ADD OPERATOR 1 < (int4, int2);
+  CREATE OPERATOR CLASS cmd_aof_cls FOR TYPE int4 USING btree FAMILY cmd_aof_cls_fam AS
+    OPERATOR 1 < (int4, int4), OPERATOR 2 <= (int4, int4), OPERATOR 3 = (int4, int4),
+    OPERATOR 4 >= (int4, int4), OPERATOR 5 > (int4, int4), FUNCTION 1 btint4cmp(int4, int4);
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_cls_fam USING btree DROP OPERATOR 1 (int4, int4)
+    expect: error
+    sqlstate: "2BP01"
+    comment: operator class cmd_aof_cls requires this member
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_cls_fam USING btree DROP FUNCTION 1 (int4, int4)
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_cls_fam USING btree DROP OPERATOR 1 (int4, int2)
+    expect: ok
+    comment: the loose cross-type member can go
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_cls_fam') AS ops
+    expect: rows
+    comment: five class operators remain
+  - sql: |
+      DROP OPERATOR CLASS cmd_aof_cls USING btree
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_cls_fam USING btree DROP OPERATOR 1 (int4, int4)
+    expect: error
+    sqlstate: "42704"
+    comment: DROP OPERATOR CLASS also removed its members from the family

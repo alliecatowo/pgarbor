@@ -1,0 +1,33 @@
+# Documented: SET SCHEMA into a schema that does not exist or already has a dictionary of the same name fails; same schema is accepted.
+id: cmd-alter-tsdictionary.set-schema-errors
+title: "SET SCHEMA rejects a missing target schema and a name collision; setting the current schema is accepted"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, set-schema, namespace, errors]
+required_capabilities: [create-schema, create-text-search-dictionary, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (SET SCHEMA new_schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA ad_cmd_s3;
+  CREATE TEXT SEARCH DICTIONARY m_dict (TEMPLATE = simple);
+  CREATE TEXT SEARCH DICTIONARY ad_cmd_s3.m_dict (TEMPLATE = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY ad_cmd_s3.m_dict SET SCHEMA public
+    expect: error
+    sqlstate: "42710"
+    comment: public already has m_dict
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY m_dict SET SCHEMA nosuchschema
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY m_dict SET SCHEMA public
+    expect: ok
+    comment: already in public; moving to the same schema is a no-op
+  - sql: |
+      SELECT n.nspname, d.dictname FROM pg_ts_dict d JOIN pg_namespace n ON n.oid = d.dictnamespace WHERE d.dictname = 'm_dict' ORDER BY 1
+    expect: rows
+    order: ordered

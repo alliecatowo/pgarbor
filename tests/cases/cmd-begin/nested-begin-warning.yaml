@@ -1,0 +1,39 @@
+# A second BEGIN inside a block only warns and does not change the block: both inserts commit with the first COMMIT.
+id: cmd-begin.nested-begin-warning
+title: A BEGIN inside an open block is a warning and leaves the transaction unchanged
+family: cmd-begin
+tier: core
+feature_ids: [begin, commit, transactions, insert, notices]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/begin.sgml#sql-begin (Notes: Issuing BEGIN when already inside a transaction block will provoke a warning message)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: notice
+    comment: WARNING "there is already a transaction in progress"
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: the first COMMIT ends the single block, so both rows are committed
+  - sql: |
+      COMMIT
+    expect: notice
+    comment: WARNING "there is no transaction in progress"
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

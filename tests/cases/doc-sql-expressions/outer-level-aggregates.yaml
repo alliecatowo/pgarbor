@@ -1,0 +1,40 @@
+# An aggregate whose arguments reference only outer-level variables belongs to the outer query, not to the subquery.
+id: doc-sql-expressions.outer-level-aggregates
+title: Aggregates in subqueries whose arguments are outer-only belong to the outer query
+family: doc-sql-expressions
+tier: extended
+feature_ids: [aggregate-expressions, scalar-subquery, outer-references, errors]
+required_capabilities: [select, insert, create-table, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-aggregates"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (1), (2), (3);
+steps:
+  - sql: |
+      SELECT (SELECT count(t.id)) AS c FROM t
+    expect: rows
+    order: ordered
+    comment: count(t.id) is an outer-level aggregate, so it counts the outer rows
+  - sql: |
+      SELECT (SELECT sum(t.id) FROM (VALUES (5)) v(z)) AS s FROM t
+    expect: rows
+    order: multiset
+    comment: the outer-level sum is a constant over the inner query, so each outer row gets the same value
+  - sql: |
+      SELECT (SELECT count(*) FROM (VALUES (1),(2)) v(x) WHERE v.x > t.id) AS c FROM t
+    expect: rows
+    order: multiset
+    comment: an aggregate that mixes inner and outer variables stays in the inner query
+  - sql: |
+      SELECT count(*) FROM t WHERE (SELECT count(t.id)) > 0
+    expect: error
+    sqlstate: "42803"
+    comment: the outer-level aggregate is forbidden in the outer WHERE clause
+  - sql: |
+      SELECT t.id FROM t GROUP BY t.id HAVING (SELECT count(t.id)) > 0 ORDER BY t.id
+    expect: rows
+    order: ordered
+    comment: the same aggregate is allowed in HAVING

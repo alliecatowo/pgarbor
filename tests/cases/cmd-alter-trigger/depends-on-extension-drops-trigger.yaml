@@ -1,0 +1,34 @@
+# DEPENDS ON EXTENSION records an extension dependency, so DROP EXTENSION also drops the trigger.
+id: cmd-alter-trigger.depends-on-extension-drops-trigger
+title: "DEPENDS ON EXTENSION makes the trigger drop with its extension"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, extensions, depends-on-extension]
+required_capabilities: [create-table, select, triggers, create-extension, extensions, plpgsql, create-function, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (DEPENDS ON EXTENSION; Examples)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int4, v text);
+  CREATE FUNCTION ath_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TRIGGER emp_stamp BEFORE INSERT ON emp FOR EACH ROW EXECUTE FUNCTION ath_noop();
+steps:
+  - sql: |
+      CREATE EXTENSION hstore
+    expect: ok
+  - sql: |
+      ALTER TRIGGER emp_stamp ON emp DEPENDS ON EXTENSION hstore
+    expect: ok
+  - sql: |
+      SELECT t.tgname, d.deptype::text AS deptype FROM pg_trigger t JOIN pg_depend d ON d.classid = 'pg_trigger'::regclass AND d.objid = t.oid AND d.refclassid = 'pg_extension'::regclass WHERE t.tgname = 'emp_stamp'
+    expect: rows
+    order: ordered
+    comment: one extension dependency of type x (extension)
+  - sql: |
+      DROP EXTENSION hstore
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgname = 'emp_stamp'
+    expect: rows
+    comment: the trigger was dropped with the extension

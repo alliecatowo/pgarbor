@@ -1,0 +1,28 @@
+# For a DELETE action, new.* is NULL and old.* holds the deleted row.
+id: doc-functions-merge-support.delete-old-new-values
+title: merge_action() DELETE from NOT MATCHED BY SOURCE shows old values and NULL new
+family: doc-functions-merge-support
+tier: core
+feature_ids: [merge, merge-action, returning, delete, old-new-alias]
+required_capabilities: [create-table, insert, delete, select, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-merge-support (merge_action())"
+setup: |
+  CREATE TABLE products (product_id int PRIMARY KEY, in_stock bool, quantity int);
+  CREATE TABLE stock (product_id int, quantity int);
+  INSERT INTO products VALUES (1001, false, 0), (1002, true, 5), (1004, true, 9);
+  INSERT INTO stock VALUES (1001, 50), (1002, 0), (1003, 10);
+steps:
+  - sql: |
+      MERGE INTO products p
+        USING stock s ON p.product_id = s.product_id
+        WHEN NOT MATCHED BY SOURCE THEN DELETE
+        RETURNING merge_action() AS a, old.product_id AS oldpid, new.product_id AS newpid
+    expect: rows
+    order: multiset
+    comment: expect DELETE, 1004, NULL
+  - sql: |
+      SELECT product_id FROM products ORDER BY product_id
+    expect: rows
+    order: ordered

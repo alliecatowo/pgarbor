@@ -1,0 +1,64 @@
+# A policy TO a role applies to its members through inheritance; ALTER POLICY ... TO PUBLIC applies it to every role.
+id: doc-ddl-rowsecurity.role-inheritance-and-public
+title: "Policy roles follow membership inheritance and PUBLIC covers every role"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, role-membership, public, select, alter-policy]
+required_capabilities: [create-table, insert, select, rls, roles, alter-table]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: Multiple roles can be assigned to a given policy, and normal role membership and inheritance rules apply; TO PUBLIC"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr14_grp;
+  CREATE ROLE pgarbor_case_role_dr14_mem;
+  CREATE ROLE pgarbor_case_role_dr14_out;
+  GRANT pgarbor_case_role_dr14_grp TO pgarbor_case_role_dr14_mem;
+  CREATE TABLE t (id int4, v text);
+  INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c');
+  GRANT SELECT ON t TO pgarbor_case_role_dr14_mem, pgarbor_case_role_dr14_out;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p_grp ON t TO pgarbor_case_role_dr14_grp USING (id <= 2);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr14_mem
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: mem inherits grp, so the policy applies and rows 1 and 2 are visible
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr14_out
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: out is not in grp and no PUBLIC policy exists, so default deny applies
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER POLICY p_grp ON t TO PUBLIC
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr14_out
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the PUBLIC policy now covers out
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr14_grp, pgarbor_case_role_dr14_mem, pgarbor_case_role_dr14_out
+    expect: ok

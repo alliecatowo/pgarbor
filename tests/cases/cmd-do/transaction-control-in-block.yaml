@@ -1,0 +1,42 @@
+# Inside an explicit transaction block a DO cannot run COMMIT or ROLLBACK; the error aborts the block and only ROLLBACK ends it.
+id: cmd-do.transaction-control-in-block
+title: COMMIT and ROLLBACK inside a DO within a transaction block fail with invalid_transaction_termination
+family: cmd-do
+tier: core
+feature_ids: [do, transactions, commit, rollback, plpgsql]
+required_capabilities: [create-table, insert, select, transactions, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/do.sgml#sql-do (Notes: transaction control statements are only allowed if DO is executed in its own transaction)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v text);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 'pending')
+    expect: ok
+  - sql: |
+      DO $$ BEGIN COMMIT; END $$
+    expect: error
+    sqlstate: "2D000"
+  - sql: |
+      ROLLBACK
+    expect: ok
+    comment: the failed DO left the block aborted; ROLLBACK discards the insert
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DO $$ BEGIN ROLLBACK; END $$
+    expect: error
+    sqlstate: "2D000"
+  - sql: |
+      ROLLBACK
+    expect: ok

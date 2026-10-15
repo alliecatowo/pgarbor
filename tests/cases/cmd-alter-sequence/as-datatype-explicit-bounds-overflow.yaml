@@ -1,0 +1,33 @@
+# Explicit MINVALUE/MAXVALUE are preserved by AS when they fit; a bound that does not fit the new type is an error.
+id: cmd-alter-sequence.as-datatype-explicit-bounds-overflow
+title: "ALTER SEQUENCE AS keeps explicit bounds that fit and rejects a MAXVALUE outside the new type"
+family: cmd-alter-sequence
+tier: core
+feature_ids: [alter-sequence, as-data-type, maxvalue, minvalue, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_sequence.sgml#sql-altersequence (AS data_type: values do not fit)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_fit MINVALUE 5 MAXVALUE 50;
+  CREATE SEQUENCE s_big MAXVALUE 100000;
+steps:
+  - sql: |
+      ALTER SEQUENCE s_fit AS smallint
+    expect: ok
+  - sql: |
+      SELECT data_type, min_value, max_value FROM pg_sequences WHERE sequencename = 's_fit'
+    expect: rows
+    order: ordered
+    comment: explicit bounds were not the type limits, so they are preserved
+  - sql: |
+      ALTER SEQUENCE s_big AS smallint
+    expect: error
+    sqlstate: "22023"
+    comment: MAXVALUE 100000 does not fit smallint
+  - sql: |
+      SELECT data_type, max_value FROM pg_sequences WHERE sequencename = 's_big'
+    expect: rows
+    order: ordered
+    comment: the failed command left the type and maximum unchanged

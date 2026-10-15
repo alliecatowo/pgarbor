@@ -1,0 +1,43 @@
+# DROP PROCEDURE refuses functions and aggregates: with an argument list the object is not a procedure
+# (42809); without one it is not found (42883).
+id: cmd-drop-procedure.function-aggregate-not-procedure
+title: DROP PROCEDURE rejects functions and aggregates of the same name
+family: cmd-drop-procedure
+tier: core
+feature_ids: [drop-procedure, create-function, create-aggregate, errors]
+required_capabilities: [create-function, create-aggregate, drop-procedure, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure (DROP PROCEDURE removes procedures only)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION fx() RETURNS int LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE AGGREGATE pagg(int) (SFUNC = int4pl, STYPE = int4)
+    expect: ok
+  - sql: |
+      DROP PROCEDURE fx()
+    expect: error
+    sqlstate: "42809"
+    comment: the routine exists but is a function
+  - sql: |
+      DROP PROCEDURE fx
+    expect: error
+    sqlstate: "42883"
+    comment: without an argument list no procedure named fx is found
+  - sql: |
+      DROP PROCEDURE pagg(int)
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      SELECT count(*) AS routines FROM pg_proc WHERE proname IN ('fx', 'pagg')
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP FUNCTION fx()
+    expect: ok
+  - sql: |
+      DROP AGGREGATE pagg(int)
+    expect: ok

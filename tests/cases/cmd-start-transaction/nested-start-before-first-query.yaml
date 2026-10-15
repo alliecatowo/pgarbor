@@ -1,0 +1,41 @@
+# A second START TRANSACTION (or BEGIN) inside an open block only warns; if no statement has run yet, its modes still apply.
+id: cmd-start-transaction.nested-start-before-first-query
+title: Nested START TRANSACTION warns and applies its modes if no statement has run yet
+family: cmd-start-transaction
+tier: extended
+feature_ids: [start-transaction, begin, isolation-level, notices, guc]
+required_capabilities: [transactions, select, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/start_transaction.sgml#sql-start-transaction (Description: same as BEGIN; Parameters: as SET TRANSACTION)"
+sessions: [a]
+steps:
+  - sql: |
+      START TRANSACTION
+    expect: ok
+  - sql: |
+      START TRANSACTION ISOLATION LEVEL SERIALIZABLE
+    expect: notice
+    comment: WARNING 25001 "there is already a transaction in progress"
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: the modes of the nested command applied because no query had run
+  - sql: |
+      BEGIN
+    expect: notice
+    comment: BEGIN inside the block is the same kind of warning
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: the BEGIN with no modes does not change the level
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: after COMMIT the session default is back in effect

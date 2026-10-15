@@ -1,0 +1,24 @@
+# CASCADE drops the view and, transitively, every view that depends on it, emitting a NOTICE.
+id: cmd-drop-view.cascade-transitive-notice
+title: DROP VIEW CASCADE removes transitive dependent views and reports a notice
+family: cmd-drop-view
+tier: core
+feature_ids: [drop-view, cascade, dependencies]
+required_capabilities: [create-view, drop-view, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_view.sgml#sql-dropview (CASCADE)"
+sessions: [a]
+setup: |
+  CREATE VIEW ct_v1 AS SELECT 1 AS x;
+  CREATE VIEW ct_v2 AS SELECT x FROM ct_v1;
+  CREATE VIEW ct_v3 AS SELECT x FROM ct_v2;
+steps:
+  - sql: |
+      DROP VIEW ct_v1 CASCADE
+    expect: notice
+    comment: NOTICE drop cascades to 2 other objects; DETAIL drop cascades to view ct_v2 and view ct_v3
+  - sql: |
+      SELECT to_regclass('ct_v1') IS NULL AS v1, to_regclass('ct_v2') IS NULL AS v2, to_regclass('ct_v3') IS NULL AS v3
+    expect: rows
+    order: ordered

@@ -1,0 +1,47 @@
+# tsquery lexemes can carry weight letters (restrict to those weights) and a * suffix (prefix match).
+id: doc-datatype-textsearch.tsquery-weight-and-prefix
+title: tsquery weight restriction and prefix matching with :*
+family: doc-datatype-textsearch
+tier: core
+feature_ids: [tsquery, tsquery-weights, prefix-match, weight-restriction]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-textsearch (lexemes in a tsquery labeled with weight letters; labeled with * to specify prefix matching)"
+sessions: [a]
+setup: |
+  CREATE TABLE wp (id int4 PRIMARY KEY, v tsvector);
+  INSERT INTO wp VALUES
+    (1, 'fat:1A rat:2'::tsvector),
+    (2, 'fat:1C rat:2'::tsvector),
+    (3, 'fat:1B cat:2'::tsvector),
+    (4, 'supermarket:1 cat:2'::tsvector),
+    (5, 'superb:1'::tsvector),
+    (6, 'cat:1'::tsvector);
+steps:
+  - sql: |
+      SELECT 'fat:ab & cat'::tsquery, 'super:*'::tsquery
+    expect: rows
+    comment: weight letters print uppercased; prefix marker is printed as :*
+  - sql: |
+      SELECT id FROM wp WHERE v @@ 'fat:A'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM wp WHERE v @@ 'fat:AB'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: AB accepts a fat lexeme carrying weight A or B only
+  - sql: |
+      SELECT id FROM wp WHERE v @@ 'fat:C'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM wp WHERE v @@ 'super:*'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: prefix super matches supermarket and superb but not cat
+  - sql: |
+      SELECT id FROM wp WHERE v @@ 'cat:*'::tsquery ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,37 @@
+# Successful labeling, label readback via pg_seclabels, NULL removal and the OUT-argument rule need a registered label provider module.
+id: cmd-security-label.quarantined-provider-labeling
+title: With a loaded provider, labels are stored, read back via pg_seclabels, and removed with NULL
+family: cmd-security-label
+tier: extended
+feature_ids: [security-label, security-label-provider, security-label-set, security-label-null, security-label-function-identity]
+required_capabilities: [security-label, create-table, create-function, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-description; ref/security_label.sgml#sql-security-label-params-argmode"
+sessions: [a]
+setup: |
+  CREATE TABLE sl_lab (id int4, c text);
+  CREATE FUNCTION sl_lab_f(a int, b text) RETURNS int LANGUAGE sql AS 'SELECT a'
+steps:
+  - sql: |
+      SECURITY LABEL ON TABLE sl_lab IS 'label-one'
+    expect: ok
+  - sql: |
+      SELECT label FROM pg_seclabels WHERE objoid = 'sl_lab'::regclass
+    expect: rows
+  - sql: |
+      SECURITY LABEL ON TABLE sl_lab IS NULL
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_seclabels WHERE objoid = 'sl_lab'::regclass
+    expect: rows
+  - sql: |
+      SECURITY LABEL ON FUNCTION sl_lab_f(IN int, OUT text) IS 'label-fn'
+    expect: ok
+    comment: OUT arguments are ignored; identity is (int, text)
+  - sql: |
+      SECURITY LABEL ON FUNCTION sl_lab_f(x int, y text) IS 'label-fn-2'
+    expect: ok
+    comment: argument names are ignored
+quarantine:
+  reason: "needs a registered label provider module (contrib dummy_seclabel or sepgsql); pgarbor-oracle does not ship one and LOAD 'dummy_seclabel' fails with 'could not access file'"

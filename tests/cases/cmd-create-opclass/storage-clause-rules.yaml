@@ -1,0 +1,35 @@
+# STORAGE must be omitted unless the index method allows a different storage type: btree rejects it (42P17), GIN accepts it, and an anyarray class may declare STORAGE anyelement.
+id: cmd-create-opclass.storage-clause-rules
+title: "STORAGE is rejected for btree with a different type, accepted for GIN, and anyarray classes may store anyelement"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, storage-type, btree, gin, catalog-introspection, errors]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, gin, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Parameters: storage_type)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_st_bt FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt), STORAGE int8
+    expect: error
+    sqlstate: "42P17"
+    comment: storage type cannot differ from the data type for btree
+  - sql: |
+      CREATE OPERATOR CLASS cr_st_gin FOR TYPE cr_pt USING gin AS OPERATOR 1 <, STORAGE int8
+    expect: ok
+    comment: GIN allows a storage type different from the column type
+  - sql: |
+      CREATE OPERATOR CLASS cr_st_arr FOR TYPE anyarray USING gin AS OPERATOR 1 &&(anyarray, anyarray), OPERATOR 3 @>(anyarray, anyarray), STORAGE anyelement
+    expect: ok
+    comment: anyarray column with anyelement storage, as the docs describe
+  - sql: |
+      SELECT o.opcname, o.opcintype::regtype::text AS intype, o.opckeytype::regtype::text AS keytype FROM pg_opclass o WHERE o.opcname IN ('cr_st_bt', 'cr_st_gin', 'cr_st_arr') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: cr_st_bt is absent because its CREATE failed

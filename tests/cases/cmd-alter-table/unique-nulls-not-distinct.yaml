@@ -1,0 +1,46 @@
+# Default UNIQUE treats NULLs as distinct; UNIQUE NULLS NOT DISTINCT rejects a second all-NULL key; adding it over existing duplicates fails.
+id: cmd-alter-table.unique-nulls-not-distinct
+title: "UNIQUE NULLS NOT DISTINCT rejects duplicate NULL keys that plain UNIQUE allows"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, unique-constraint, nulls-not-distinct, null-semantics, errors]
+required_capabilities: [create-table, alter-table, insert, select, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Parameters: UNIQUE NULLS [NOT] DISTINCT)"
+sessions: [a]
+setup: |
+  CREATE TABLE u_default (a int4, b int4, UNIQUE (a, b));
+  CREATE TABLE u_nnd (a int4, b int4, UNIQUE NULLS NOT DISTINCT (a, b));
+steps:
+  - sql: |
+      INSERT INTO u_default VALUES (NULL, NULL), (NULL, NULL), (1, NULL), (1, NULL)
+    expect: ok
+    comment: default NULLS DISTINCT admits every row
+  - sql: |
+      INSERT INTO u_nnd VALUES (1, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO u_nnd VALUES (1, NULL)
+    expect: error
+    sqlstate: "23505"
+    comment: the NULL in b is treated as equal
+  - sql: |
+      INSERT INTO u_nnd VALUES (NULL, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO u_nnd VALUES (NULL, NULL)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT count(*) AS n FROM u_default
+    expect: rows
+  - sql: |
+      SELECT a, b FROM u_nnd ORDER BY a NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE u_default ADD CONSTRAINT u_default_nnd UNIQUE NULLS NOT DISTINCT (a, b)
+    expect: error
+    sqlstate: "23505"
+    comment: adding the stricter constraint scans existing rows and finds the duplicate NULL keys

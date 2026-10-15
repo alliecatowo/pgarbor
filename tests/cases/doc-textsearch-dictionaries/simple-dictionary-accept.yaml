@@ -1,0 +1,36 @@
+# Simple dictionary template: lower-cases tokens, discards stop words, and with Accept = false returns NULL for unknown words.
+id: doc-textsearch-dictionaries.simple-accept
+title: simple dictionary lower-cases, drops stop words, and honors Accept = false
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, simple-template, stop-words, accept-parameter]
+required_capabilities: [create-text-search-dictionary, alter-text-search-dictionary, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Simple Dictionary)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY public.simple_dict (
+          TEMPLATE = pg_catalog.simple,
+          STOPWORDS = english
+      )
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('public.simple_dict', 'YeS') AS yes_word,
+             ts_lexize('public.simple_dict', 'The') AS stop_word,
+             ts_lexize('public.simple_dict', 'Zebra') AS plain_word
+    expect: rows
+    comment: known non-stop word is lower-cased; stop word gives empty array; unknown-to-stopwords word is still returned lower-cased
+  - sql: |
+      SELECT ts_lexize('public.simple_dict', NULL) AS null_input
+    expect: rows
+    comment: strict function, NULL input gives NULL
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY public.simple_dict ( Accept = false )
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('public.simple_dict', 'YeS') IS NULL AS yes_is_null,
+             ts_lexize('public.simple_dict', 'The') AS stop_word
+    expect: rows
+    comment: with Accept = false a non-stop word is unrecognized (NULL); a stop word still gives {}

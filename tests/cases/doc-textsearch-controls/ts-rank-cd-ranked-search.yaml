@@ -1,0 +1,48 @@
+# Top-N search: ts_rank_cd over matching rows, ordered by rank with an id tie-breaker, with and without normalization 32.
+id: doc-textsearch-controls.ts-rank-cd-ranked-search
+title: Ranked search with ts_rank_cd and LIMIT, normalized and unnormalized
+family: doc-textsearch-controls
+tier: core
+feature_ids: [ts-rank-cd, ranking, normalization, to-tsquery, limit, order-by]
+required_capabilities: [select, text-search, create-table, insert, update, order-by]
+provenance:
+  source: pg-docs
+  ref: "textsearch.sgml#textsearch-ranking (ranked query with ts_rank_cd, LIMIT 10; normalization 32)"
+sessions: [a]
+setup: |
+  CREATE TABLE apod (id int4 PRIMARY KEY, title text, body text, textsearch tsvector);
+  INSERT INTO apod (id, title, body) VALUES
+    (1, 'Neutrinos in the Sun', 'neutrino neutrino flux from the solar core'),
+    (2, 'The Sudbury Neutrino Detector', 'a detector for neutrino detection'),
+    (3, 'A MACHO View of Galactic Dark Matter', 'dark matter halo observed'),
+    (4, 'Hot Gas and Dark Matter', 'hot gas clusters dark matter'),
+    (5, 'Weather report', 'sunny skies today'),
+    (6, 'Dark sky and matter of stars', 'dark dark matter'),
+    (7, 'Ice Fishing for Cosmic Neutrinos', 'neutrinos from cosmic sources'),
+    (8, 'Weak Lensing Distorts the Universe', 'lensing of distant galaxies');
+  UPDATE apod SET textsearch = to_tsvector('english', title || ' ' || body);
+steps:
+  - sql: |
+      SELECT id, title, ts_rank_cd(textsearch, query) AS rank
+      FROM apod, to_tsquery('english', 'neutrino | (dark & matter)') query
+      WHERE query @@ textsearch
+      ORDER BY rank DESC, id
+      LIMIT 10
+    expect: rows
+    order: ordered
+    comment: the doc's LIMIT 10 query with an id tie-breaker so ties order deterministically
+  - sql: |
+      SELECT id, title, ts_rank_cd(textsearch, query, 32) AS rank
+      FROM apod, to_tsquery('english', 'neutrino | (dark & matter)') query
+      WHERE query @@ textsearch
+      ORDER BY rank DESC, id
+      LIMIT 10
+    expect: rows
+    order: ordered
+    comment: normalization 32 maps ranks into (0,1) without changing the order
+  - sql: |
+      SELECT count(*) AS matches
+      FROM apod, to_tsquery('english', 'neutrino | (dark & matter)') query
+      WHERE query @@ textsearch
+    expect: rows
+    comment: row 5 and row 8 do not match

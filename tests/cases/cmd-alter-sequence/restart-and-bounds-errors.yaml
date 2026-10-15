@@ -1,0 +1,44 @@
+# Bounds are checked by ALTER SEQUENCE: RESTART and START must lie within MINVALUE..MAXVALUE, and MINVALUE must be below MAXVALUE.
+id: cmd-alter-sequence.restart-and-bounds-errors
+title: "ALTER SEQUENCE rejects RESTART or START outside the bounds and MINVALUE at or above MAXVALUE"
+family: cmd-alter-sequence
+tier: core
+feature_ids: [alter-sequence, restart, start-with, minvalue, maxvalue, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: hand
+  ref: "ref/alter_sequence.sgml#sql-altersequence (RESTART, START WITH, MINVALUE, MAXVALUE)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_bounds MINVALUE 1 MAXVALUE 10 START 1;
+steps:
+  - sql: |
+      ALTER SEQUENCE s_bounds RESTART WITH 11
+    expect: error
+    sqlstate: "22023"
+    comment: RESTART value above MAXVALUE
+  - sql: |
+      ALTER SEQUENCE s_bounds MINVALUE 10 MAXVALUE 5
+    expect: error
+    sqlstate: "22023"
+    comment: MINVALUE must be less than MAXVALUE
+  - sql: |
+      ALTER SEQUENCE s_bounds MINVALUE 1 START WITH 0
+    expect: error
+    sqlstate: "22023"
+    comment: START below the new MINVALUE
+  - sql: |
+      ALTER SEQUENCE s_bounds START WITH 0
+    expect: error
+    sqlstate: "22023"
+    comment: START below the existing MINVALUE of 1
+  - sql: |
+      ALTER SEQUENCE s_bounds RESTART WITH 0
+    expect: error
+    sqlstate: "22023"
+    comment: RESTART below MINVALUE
+  - sql: |
+      SELECT nextval('s_bounds')
+    expect: rows
+    order: ordered
+    comment: every failed command left the sequence unchanged

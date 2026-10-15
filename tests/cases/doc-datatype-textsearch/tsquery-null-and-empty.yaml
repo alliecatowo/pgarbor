@@ -1,0 +1,33 @@
+# NULL propagates through @@; an empty tsvector or tsquery is valid input with no lexemes.
+id: doc-datatype-textsearch.tsquery-null-and-empty
+title: NULL and empty text-search values in matching and input
+family: doc-datatype-textsearch
+tier: core
+feature_ids: [tsquery, tsvector, null-semantics, empty-input]
+required_capabilities: [select, text-search]
+provenance:
+  source: hand
+  ref: "datatype.sgml#datatype-textsearch (NULL semantics of tsvector and tsquery values; empty input)"
+sessions: [a]
+setup: |
+  CREATE TABLE nv (id int4 PRIMARY KEY, v tsvector);
+  INSERT INTO nv VALUES (1, 'fat:1'::tsvector), (2, NULL), (3, ''::tsvector);
+steps:
+  - sql: |
+      SELECT NULL::tsvector @@ 'fat'::tsquery AS null_vec, to_tsvector('english', 'fat') @@ NULL::tsquery AS null_query
+    expect: rows
+    comment: a NULL operand makes @@ return NULL
+  - sql: |
+      SELECT id FROM nv WHERE v @@ 'fat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL and empty rows never match
+  - sql: |
+      SELECT id FROM nv WHERE NOT (v @@ 'fat'::tsquery) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NOT of a NULL result is still NULL, so row 2 is excluded here
+  - sql: |
+      SELECT ''::tsvector AS empty_vec, ''::tsquery AS empty_query
+    expect: rows
+    comment: empty tsquery input yields a notice that it contains no lexemes

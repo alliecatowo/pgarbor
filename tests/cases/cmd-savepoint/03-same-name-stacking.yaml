@@ -1,0 +1,43 @@
+# Documented "single savepoint name" example. The newest same-named savepoint is used first; after it is
+# released, the older one becomes accessible again.
+id: cmd-savepoint.same-name-stacking
+title: Reusing a savepoint name stacks savepoints; releasing the newest exposes the older one
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, release-savepoint, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: pg-docs
+  ref: "ref/savepoint.sgml#sql-savepoint (Examples: To use a single savepoint name; Compatibility)"
+sessions: [a]
+setup: |
+  CREATE TABLE table1 (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO table1 VALUES (1);
+      SAVEPOINT my_savepoint;
+      INSERT INTO table1 VALUES (2);
+      SAVEPOINT my_savepoint;
+      INSERT INTO table1 VALUES (3);
+      ROLLBACK TO SAVEPOINT my_savepoint
+    expect: ok
+  - sql: |
+      SELECT v FROM table1 ORDER BY v
+    expect: rows
+    order: ordered
+    comment: documented - shows rows 1 and 2; row 3 was rolled back first
+  - sql: |
+      RELEASE SAVEPOINT my_savepoint
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT my_savepoint
+    expect: ok
+  - sql: |
+      SELECT v FROM table1 ORDER BY v
+    expect: rows
+    order: ordered
+    comment: documented - shows only row 1; the older savepoint is accessible again after the release
+  - sql: |
+      COMMIT
+    expect: ok

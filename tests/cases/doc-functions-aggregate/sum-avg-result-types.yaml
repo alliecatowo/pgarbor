@@ -1,0 +1,46 @@
+# sum and avg result types per input type, sum overflow to numeric, and NULL handling for sum/avg.
+id: doc-functions-aggregate.sum-avg-result-types
+title: sum and avg result types per input type, and NULL handling for sum and avg
+family: doc-functions-aggregate
+tier: core
+feature_ids: [sum, avg, aggregate-result-types, aggregate-null-skipping]
+required_capabilities: [select, aggregates, numeric, float8, interval, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (sum and avg signature table; sum of no rows returns null)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT sum(x) AS s, pg_typeof(sum(x)) AS t FROM (VALUES (1::int2), (2)) v(x)
+    expect: rows
+    comment: sum(smallint) returns bigint
+  - sql: |
+      SELECT pg_typeof(sum(x::int4)) AS t4, pg_typeof(sum(x::int8)) AS t8,
+             pg_typeof(avg(x::int2)) AS a2, pg_typeof(avg(x::real)) AS ar
+      FROM (VALUES (1), (2)) v(x)
+    expect: rows
+    comment: sum(integer) is bigint, sum(bigint) is numeric, avg(smallint) is numeric, avg(real) is double precision
+  - sql: |
+      SELECT sum(x) AS s, pg_typeof(sum(x)) AS t FROM (VALUES (9223372036854775807::int8), (1)) v(x)
+    expect: rows
+    comment: sum of bigint widens to numeric instead of overflowing
+  - sql: |
+      SELECT sum(x) AS s, pg_typeof(sum(x)) AS t FROM (VALUES (1::numeric), (2.50)) v(x)
+    expect: rows
+    comment: numeric scale is preserved
+  - sql: |
+      SELECT sum(x) AS s FROM (VALUES (1.5::real), (2.25::real)) v(x)
+    expect: rows
+    comment: sum of real stays real
+  - sql: |
+      SELECT avg(x) AS a FROM (VALUES (1::int8), (2::int8), (NULL)) v(x)
+    expect: rows
+    comment: NULL is excluded from the average denominator
+  - sql: |
+      SELECT avg(x) AS a FROM (VALUES (interval '1 day'), (interval '2 days')) v(x)
+    expect: rows
+    comment: avg of interval
+  - sql: |
+      SELECT sum(x) AS s, avg(x) AS a FROM (SELECT 1 AS x WHERE false) v
+    expect: rows
+    comment: sum and avg of no rows are NULL

@@ -1,0 +1,53 @@
+# An ordinary role can change only its own password and session defaults; superuser-only attributes and other roles are refused.
+id: cmd-alter-role.permission-ordinary-role
+title: Ordinary roles can change only their own password and session defaults
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, permissions, password, superuser, createdb, session-authorization, errors]
+required_capabilities: [roles, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-desc (Ordinary roles can only change their own password; Ordinary roles can only set defaults for themselves)"
+sessions: [a]
+notes: "SET SESSION AUTHORIZATION requires the connected role to be a superuser; the case switches to an ordinary role and back before dropping roles."
+steps:
+  - sql: |
+      CREATE ROLE alr_plain;
+      CREATE ROLE alr_other
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION alr_plain
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_plain PASSWORD 'own_pw'
+    expect: ok
+    comment: changing its own password is allowed
+  - sql: |
+      ALTER ROLE alr_plain SET application_name = 'alr_plain_app'
+    expect: ok
+    comment: an ordinary role can set defaults for itself
+  - sql: |
+      ALTER ROLE alr_other PASSWORD 'other_pw'
+    expect: error
+    sqlstate: "42501"
+    comment: another role's password is refused
+  - sql: |
+      ALTER ROLE alr_plain CREATEDB
+    expect: error
+    sqlstate: "42501"
+    comment: CREATEDB can be changed only by a role that already has it
+  - sql: |
+      ALTER ROLE alr_plain SUPERUSER
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT rolsuper, rolcreatedb FROM pg_roles WHERE rolname = 'alr_plain'
+    expect: rows
+    comment: the refused changes left the role unchanged
+  - sql: |
+      DROP ROLE alr_other;
+      DROP ROLE alr_plain
+    expect: ok

@@ -1,0 +1,36 @@
+# WITH INOUT casts go through text I/O, are explicit-only by default, and the built-in composite-to-text I/O cast is not callable as a function.
+id: cmd-create-cast.with-inout-explicit-io
+title: "WITH INOUT casts are explicit-only and composite-to-text I/O casts are not callable as functions"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, io-conversion-cast, composite-types]
+required_capabilities: [create-type, create-cast, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-description (I/O conversion cast); ref/create_cast.sgml#sql-createcast-notes"
+sessions: [a]
+setup: |
+  CREATE TYPE io_pt AS (a int, b int);
+  CREATE TABLE io_t (p io_pt);
+steps:
+  - sql: |
+      CREATE CAST (text AS io_pt) WITH INOUT
+    expect: ok
+  - sql: |
+      SELECT (CAST('(3,4)'::text AS io_pt)).a AS a, (CAST('(3,4)'::text AS io_pt)).b AS b
+    expect: rows
+    comment: the text is passed to the composite input function
+  - sql: |
+      INSERT INTO io_t SELECT '(3,4)'::text
+    expect: error
+    sqlstate: "42804"
+    comment: WITH INOUT defaults to explicit-only, so no assignment cast applies
+  - sql: |
+      SELECT CAST(ROW(3,4)::io_pt AS text) AS as_text
+    expect: rows
+    comment: the automatic composite-to-string I/O cast is used by explicit syntax
+  - sql: |
+      SELECT text(ROW(3,4)::io_pt) AS fn_style
+    expect: error
+    sqlstate: "42883"
+    comment: composite-to-string I/O casts cannot be invoked with function syntax

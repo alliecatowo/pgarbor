@@ -1,0 +1,49 @@
+# DROP SCHEMA is transactional: rolled back it leaves schema and rows intact; committed it is gone.
+id: cmd-drop-schema.rollback-and-commit-drop
+title: DROP SCHEMA CASCADE inside a transaction is undone by ROLLBACK and takes effect on COMMIT
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, transactions, rollback, commit]
+required_capabilities: [create-schema, create-table, insert, select, drop-schema, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Description: DROP SCHEMA removes schemas from the database)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA keep_me;
+  CREATE TABLE keep_me.t (a int);
+  INSERT INTO keep_me.t VALUES (1), (2);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP SCHEMA keep_me CASCADE
+    expect: notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_namespace WHERE nspname = 'keep_me'
+    expect: rows
+    order: ordered
+    comment: inside the transaction the schema is already gone
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT a FROM keep_me.t ORDER BY a
+    expect: rows
+    order: ordered
+    comment: after ROLLBACK the schema, table and rows are back
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP SCHEMA keep_me CASCADE
+    expect: notice
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT to_regnamespace('keep_me') IS NULL AS schema_gone
+    expect: rows
+    order: ordered
+    comment: after COMMIT the schema is gone

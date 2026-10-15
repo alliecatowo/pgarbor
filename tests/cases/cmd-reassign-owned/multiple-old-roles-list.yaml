@@ -1,0 +1,34 @@
+# The old-role list accepts several roles; each of their objects moves to the single new role, and objects of unlisted roles stay.
+id: cmd-reassign-owned.multiple-old-roles-list
+title: "REASSIGN OWNED BY with several old roles moves all of their objects to one new role"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, multi-role-list, ownership]
+required_capabilities: [roles, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-synopsis"
+sessions: [a]
+setup: |
+  CREATE ROLE ro4_a;
+  CREATE ROLE ro4_b;
+  CREATE ROLE ro4_c;
+  CREATE TABLE ro4_ta (a int4);
+  CREATE TABLE ro4_tb (a int4);
+  CREATE TABLE ro4_tc (a int4);
+  ALTER TABLE ro4_ta OWNER TO ro4_a;
+  ALTER TABLE ro4_tb OWNER TO ro4_b;
+  ALTER TABLE ro4_tc OWNER TO ro4_c;
+steps:
+  - sql: |
+      REASSIGN OWNED BY ro4_a, ro4_b TO ro4_c
+    expect: ok
+  - sql: |
+      SELECT relname, pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname LIKE 'ro4%' ORDER BY relname
+    expect: rows
+    order: ordered
+    comment: ro4_ta and ro4_tb moved to ro4_c; ro4_tc was already ro4_c
+  - sql: |
+      DROP OWNED BY ro4_c; DROP ROLE ro4_a; DROP ROLE ro4_b; DROP ROLE ro4_c
+    expect: ok
+    comment: cleanup

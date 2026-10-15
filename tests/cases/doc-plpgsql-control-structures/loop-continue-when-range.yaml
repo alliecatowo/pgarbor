@@ -1,0 +1,44 @@
+# CONTINUE WHEN skips iterations, and a labeled CONTINUE resumes an outer loop from a nested one.
+id: doc-plpgsql-control-structures.loop-continue-when-range
+title: "CONTINUE WHEN skips iterations outside a range; labeled CONTINUE resumes the outer loop"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, loop, continue, labels, control-flow]
+required_capabilities: [plpgsql, create-function, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Simple Loops: CONTINUE)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION continue_sum() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE cnt int := 0; total int := 0;
+  BEGIN
+    LOOP
+      cnt := cnt + 1;
+      EXIT WHEN cnt > 100;
+      CONTINUE WHEN cnt < 50;
+      total := total + cnt;
+    END LOOP;
+    RETURN total;
+  END $$;
+  CREATE FUNCTION labeled_continue() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE s text := '';
+  BEGIN
+    <<outer_l>>
+    FOR i IN 1..3 LOOP
+      FOR j IN 1..3 LOOP
+        CONTINUE outer_l WHEN j > i;
+        s := s || i || j || ' ';
+      END LOOP;
+    END LOOP;
+    RETURN s;
+  END $$;
+steps:
+  - sql: |
+      SELECT continue_sum() AS total
+    expect: rows
+    comment: only counts in the inclusive range 50 to 100 contribute to the total
+  - sql: |
+      SELECT labeled_continue() AS pairs
+    expect: rows
+    comment: CONTINUE outer_l abandons the inner loop as soon as j exceeds i

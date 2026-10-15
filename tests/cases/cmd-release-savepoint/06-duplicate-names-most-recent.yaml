@@ -1,0 +1,31 @@
+# Duplicate savepoint names: RELEASE acts on the most recently defined unreleased one. ROLLBACK TO then
+# targets the older savepoint with the same name, undoing both inserts.
+id: cmd-release-savepoint.duplicate-names-most-recent
+title: RELEASE of a duplicated savepoint name releases the most recent one only
+family: cmd-release-savepoint
+tier: core
+feature_ids: [release-savepoint, savepoints, rollback-to, begin, insert]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: pg-docs
+  ref: "ref/release_savepoint.sgml#sql-release-savepoint (Notes: If multiple savepoints have the same name, only the most recently defined unreleased one is released)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      SAVEPOINT a;
+      INSERT INTO t VALUES (1);
+      SAVEPOINT a;
+      INSERT INTO t VALUES (2);
+      RELEASE SAVEPOINT a;
+      ROLLBACK TO SAVEPOINT a;
+      COMMIT
+    expect: ok
+    comment: after the release, the name a refers to the outer savepoint, which is rolled back to
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: expect no rows

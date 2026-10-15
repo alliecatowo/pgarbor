@@ -1,0 +1,44 @@
+# A rejected USING or WITH CHECK expression leaves the policy's previous definition intact.
+id: cmd-alter-policy.failed-alter-keeps-definition
+title: "Invalid ALTER POLICY expressions raise their SQLSTATEs and keep the old definition"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, policies, errors, expressions]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (using_expression, check_expression; see CREATE POLICY)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p ON t AS PERMISSIVE FOR ALL USING (v > 0) WITH CHECK (v < 9);
+steps:
+  - sql: |
+      ALTER POLICY p ON t USING (nocol > 1)
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column
+  - sql: |
+      ALTER POLICY p ON t USING (v)
+    expect: error
+    sqlstate: "42804"
+    comment: USING must be boolean
+  - sql: |
+      ALTER POLICY p ON t USING (count(*) > 0)
+    expect: error
+    sqlstate: "42803"
+    comment: aggregates are not allowed in policy expressions
+  - sql: |
+      ALTER POLICY p ON t WITH CHECK (v > 'abc')
+    expect: error
+    sqlstate: "22P02"
+    comment: the literal does not convert to integer
+  - sql: |
+      ALTER POLICY p ON t WITH CHECK (v)
+    expect: error
+    sqlstate: "42804"
+  - sql: |
+      SELECT policyname, permissive, cmd, qual, with_check FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    order: ordered
+    comment: the original USING and WITH CHECK are still in place

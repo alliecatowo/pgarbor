@@ -1,0 +1,37 @@
+# IF EXISTS turns a missing index into a NOTICE; without it the same statement is an undefined_object error.
+id: cmd-drop-index.if-exists-notice
+title: DROP INDEX IF EXISTS on a missing index issues a notice while plain DROP INDEX errors
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, if-exists, notices, errors]
+required_capabilities: [create-table, create-index, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (Parameters: IF EXISTS: a notice is issued in this case)"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int4 PRIMARY KEY, code text);
+  CREATE INDEX items_code_idx ON items (code);
+steps:
+  - sql: |
+      DROP INDEX missing_idx
+    expect: error
+    sqlstate: "42704"
+    comment: without IF EXISTS a missing index is an error
+  - sql: |
+      DROP INDEX IF EXISTS missing_idx
+    expect: notice
+    comment: skipped with a notice, not an error
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'items' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: the existing index is untouched by the no-op drop
+  - sql: |
+      DROP INDEX IF EXISTS items_code_idx
+    expect: ok
+    comment: with an existing index IF EXISTS drops it silently
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'items' ORDER BY indexname
+    expect: rows
+    order: ordered

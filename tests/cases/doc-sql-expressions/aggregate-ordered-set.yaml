@@ -1,0 +1,44 @@
+# Ordered-set aggregates: WITHIN GROUP supplies the sort key, direct arguments are evaluated once per call.
+id: doc-sql-expressions.aggregate-ordered-set
+title: Ordered-set aggregates with WITHIN GROUP, direct arguments and FILTER
+family: doc-sql-expressions
+tier: core
+feature_ids: [aggregate-expressions, ordered-set-aggregates, aggregate-filter-clause]
+required_capabilities: [select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-aggregates"
+sessions: [a]
+setup: |
+  CREATE TABLE households (id int4 PRIMARY KEY, income int4 NOT NULL);
+  INSERT INTO households VALUES (1, 10000), (2, 20000), (3, 90000), (4, 60000);
+steps:
+  - sql: |
+      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY income) FROM households
+    expect: rows
+    order: ordered
+    comment: documented median form; 0.5 is a direct argument
+  - sql: |
+      SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY income) FROM households
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT percentile_disc(array[0.25, 0.75]) WITHIN GROUP (ORDER BY income) FROM households
+    expect: rows
+    order: ordered
+    comment: array direct argument returns one result per fraction
+  - sql: |
+      SELECT mode() WITHIN GROUP (ORDER BY income) FROM households
+    expect: rows
+    order: ordered
+    comment: mode takes no direct arguments
+  - sql: |
+      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY income) FILTER (WHERE income > 15000) FROM households
+    expect: rows
+    order: ordered
+    comment: FILTER removes input rows before the ordered-set computation
+  - sql: |
+      SELECT percentile_cont(0.5, 1) WITHIN GROUP (ORDER BY income) FROM households
+    expect: error
+    sqlstate: "42883"
+    comment: no overload takes two direct arguments

@@ -1,0 +1,36 @@
+# Documented LATERAL form: m.* from a LATERAL function call expands to the function's columns once
+# per row, and equals the (func(x)).* expansion.
+id: doc-rowtypes.lateral-function-expansion
+title: LATERAL function output expanded with m.* matches the parenthesized (f(x)).* expansion
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, lateral, star-expansion, sql-functions]
+required_capabilities: [create-function-sql, create-table, insert, select, lateral, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-usage"
+sessions: [a]
+setup: |
+  CREATE TYPE trio AS (a integer, b integer, c text);
+  CREATE FUNCTION myfunc(integer) RETURNS trio LANGUAGE sql AS 'SELECT $1, $1 * 10, ''v'' || $1';
+  CREATE TABLE some_table (x integer);
+  INSERT INTO some_table VALUES (1), (2), (3);
+steps:
+  - sql: |
+      SELECT (myfunc(x)).* FROM some_table ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT (myfunc(x)).a, (myfunc(x)).b, (myfunc(x)).c FROM some_table ORDER BY x
+    expect: rows
+    order: ordered
+    comment: the documented equivalent of the star form
+  - sql: |
+      SELECT m.* FROM some_table, LATERAL myfunc(x) AS m ORDER BY m.a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT m.* FROM some_table, myfunc(x) AS m ORDER BY m.a
+    expect: rows
+    order: ordered
+    comment: LATERAL is optional here because a function in FROM may reference earlier items

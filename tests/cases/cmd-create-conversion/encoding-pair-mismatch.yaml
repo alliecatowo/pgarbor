@@ -1,0 +1,32 @@
+# CREATE CONVERSION runs the function once as a check. A function whose encoding arguments do not match the
+# declared source and destination is rejected at creation with an internal-style error (no SQLSTATE asserted).
+# A matching pair is accepted.
+id: cmd-create-conversion.encoding-pair-mismatch
+title: A function that does not match the declared encoding pair is rejected at CREATE time
+family: cmd-create-conversion
+tier: core
+feature_ids: [create-conversion, encoding-conversion, conv-proc-signature, errors]
+required_capabilities: [create-conversion, drop-conversion, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 conversioncmds.c check_encoding_conversion_args via create_conversion.sgml conv_proc contract"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE CONVERSION cc_pm_same FOR 'UTF8' TO 'UTF8' FROM utf8_to_iso8859_1
+    expect: error
+    comment: source equals destination but the function converts UTF8 to LATIN1
+  - sql: |
+      CREATE CONVERSION cc_pm_rev FOR 'LATIN1' TO 'UTF8' FROM utf8_to_iso8859_1
+    expect: error
+    comment: reversed pair; the function expects UTF8 as its source
+  - sql: |
+      CREATE CONVERSION cc_pm_ok FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1
+    expect: ok
+  - sql: |
+      SELECT conname FROM pg_conversion WHERE conname LIKE 'cc_pm%' ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP CONVERSION cc_pm_ok
+    expect: ok

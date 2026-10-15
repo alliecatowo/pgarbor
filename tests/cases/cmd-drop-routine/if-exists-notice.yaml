@@ -1,0 +1,35 @@
+# IF EXISTS suppresses the missing-routine error with a notice; without it the same drop is an error.
+id: cmd-drop-routine.if-exists-notice
+title: "DROP ROUTINE IF EXISTS skips missing routines with a notice"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, if-exists, notices]
+required_capabilities: [create-function, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-parameters (IF EXISTS); drop_routine.sgml"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ie_r(integer) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      DROP ROUTINE IF EXISTS ie_r(integer)
+    expect: ok
+    comment: the routine exists, so it is dropped silently
+  - sql: |
+      DROP ROUTINE IF EXISTS ie_r(integer)
+    expect: ok
+    comment: the routine is now missing, so a notice is issued and nothing happens
+  - sql: |
+      DROP ROUTINE IF EXISTS ie_r
+    expect: ok
+    comment: a bare name with no argument list is also skipped with a notice
+  - sql: |
+      DROP ROUTINE ie_r(integer)
+    expect: error
+    sqlstate: "42883"
+    comment: without IF EXISTS the missing routine is an error
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'ie_r'
+    expect: rows
+    order: multiset

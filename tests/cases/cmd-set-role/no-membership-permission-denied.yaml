@@ -1,0 +1,39 @@
+# SET ROLE needs the SET option through membership; without it, 42501. SET ROLE NONE and RESET ROLE are always allowed.
+id: cmd-set-role.no-membership-permission-denied
+title: SET ROLE to an unrelated role fails with 42501 for a non-superuser session, but NONE and RESET still work
+family: cmd-set-role
+tier: core
+feature_ids: [set-role, session-authorization, role-membership, privileges, errors]
+required_capabilities: [roles, set-role, session-authorization, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#description (current session user must have SET option; SET ROLE NONE and RESET ROLE can be executed by any user)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_perm_plain LOGIN;
+  CREATE ROLE sr_perm_target
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION sr_perm_plain
+    expect: ok
+  - sql: |
+      SET ROLE sr_perm_target
+    expect: error
+    sqlstate: "42501"
+    comment: sr_perm_plain has no membership in sr_perm_target
+  - sql: |
+      SELECT current_user = 'sr_perm_plain' AS still_plain
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE NONE
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      DROP ROLE sr_perm_plain, sr_perm_target
+    expect: ok

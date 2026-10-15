@@ -1,0 +1,53 @@
+# Documented note: a per-schema REVOKE cannot remove a global default; it only reverses a previous per-schema GRANT.
+id: cmd-alter-default-privileges.doc-example-per-schema-revoke-no-effect
+title: Per-schema REVOKE of a global PUBLIC EXECUTE default has no effect, but reverses a per-schema GRANT
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, revoke, execute-privilege, functions, schema-scope, default-acl]
+required_capabilities: [create-schema, create-function, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-examples (ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC has no effect)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_webuser') THEN CREATE ROLE adp_webuser; END IF;
+  END $$;
+  CREATE SCHEMA adp_pns;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_pns REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC
+    expect: ok
+    comment: no effect because the global default still grants PUBLIC EXECUTE
+  - sql: |
+      SELECT count(*) FROM pg_default_acl WHERE defaclnamespace = 'adp_pns'::regnamespace
+    expect: rows
+    order: multiset
+    comment: the no-op REVOKE leaves no default-ACL row behind
+  - sql: |
+      CREATE FUNCTION adp_pns.f1() RETURNS int LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      SELECT has_function_privilege('public', 'adp_pns.f1()', 'EXECUTE')
+    expect: rows
+    order: multiset
+    comment: PUBLIC still has EXECUTE on the new function
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_pns GRANT EXECUTE ON FUNCTIONS TO adp_webuser
+    expect: ok
+  - sql: |
+      CREATE FUNCTION adp_pns.f2() RETURNS int LANGUAGE sql AS 'SELECT 2'
+    expect: ok
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_pns REVOKE EXECUTE ON FUNCTIONS FROM adp_webuser
+    expect: ok
+    comment: this reverses the per-schema GRANT made above
+  - sql: |
+      CREATE FUNCTION adp_pns.f3() RETURNS int LANGUAGE sql AS 'SELECT 3'
+    expect: ok
+  - sql: |
+      SELECT p.proname, has_function_privilege('adp_webuser', p.oid, 'EXECUTE') AS webuser_exec
+      FROM pg_proc p WHERE p.pronamespace = 'adp_pns'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: f2 was executable by webuser only under the per-schema grant, f3 is not

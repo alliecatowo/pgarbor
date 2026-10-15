@@ -1,0 +1,44 @@
+# A sequence name must be distinct from any relation in its schema; IF NOT EXISTS skips with a notice and leaves the existing relation untouched.
+id: cmd-create-sequence.name-conflicts-if-not-exists
+title: Duplicate sequence and table names error, IF NOT EXISTS skips with a notice, and nextval rejects a non-sequence
+family: cmd-create-sequence
+tier: core
+feature_ids: [create-sequence, if-not-exists, relation-name-uniqueness, errors, notices]
+required_capabilities: [sequences, create-table, select, errors, notices]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#parameters (IF NOT EXISTS) and description (distinct names)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE nc_tbl (a int4)
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE nc_seq START 42
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE nc_seq
+    expect: error
+    sqlstate: "42P07"
+  - sql: |
+      CREATE SEQUENCE nc_tbl
+    expect: error
+    sqlstate: "42P07"
+    comment: a table already uses the name
+  - sql: |
+      CREATE SEQUENCE IF NOT EXISTS nc_seq
+    expect: notice
+    comment: skipped with a notice, existing sequence kept
+  - sql: |
+      SELECT nextval('nc_seq')
+    expect: rows
+    comment: 42, proving the existing START was not replaced
+  - sql: |
+      CREATE SEQUENCE IF NOT EXISTS nc_tbl
+    expect: notice
+    comment: the existing relation is a table, not a sequence, and it is left as is
+  - sql: |
+      SELECT nextval('nc_tbl')
+    expect: error
+    sqlstate: "42809"
+    comment: nextval on a table is a wrong object type

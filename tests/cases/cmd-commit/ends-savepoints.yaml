@@ -1,0 +1,40 @@
+# COMMIT ends the transaction and with it every savepoint, so later savepoint commands have no transaction to act on.
+id: cmd-commit.ends-savepoints
+title: COMMIT ends the block and its savepoints, so later ROLLBACK TO and RELEASE fail
+family: cmd-commit
+tier: extended
+feature_ids: [commit, savepoints, errors, transactions, insert]
+required_capabilities: [create-table, insert, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/commit.sgml#sql-commit (Description: commits the current transaction); ref/savepoint.sgml (savepoints live inside a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT s1
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT s1
+    expect: error
+    sqlstate: "25P01"
+    comment: no transaction block is open, so the savepoint no longer exists
+  - sql: |
+      RELEASE SAVEPOINT s1
+    expect: error
+    sqlstate: "25P01"
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the insert before COMMIT is kept

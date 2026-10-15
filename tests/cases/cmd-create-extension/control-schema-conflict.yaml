@@ -1,0 +1,32 @@
+# plpgsql's control file pins schema pg_catalog. A conflicting SCHEMA clause is rejected unless CASCADE is given, in which case the clause is ignored for that conflict.
+id: cmd-create-extension.control-schema-conflict
+title: Conflicting SCHEMA with control-file schema fails unless CASCADE ignores it
+family: cmd-create-extension
+tier: core
+feature_ids: [create-extension, schema-clause, control-file, cascade]
+required_capabilities: [create-extension, drop-extension, create-schema, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_extension.sgml#sql-createextension (Parameters: schema_name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA addons;
+  DROP EXTENSION plpgsql;
+steps:
+  - sql: |
+      CREATE EXTENSION plpgsql SCHEMA addons
+    expect: error
+    sqlstate: "0A000"
+    comment: must be installed in schema pg_catalog
+  - sql: |
+      SELECT count(*) AS n FROM pg_extension WHERE extname = 'plpgsql'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE EXTENSION plpgsql SCHEMA addons CASCADE
+    expect: ok
+    comment: CASCADE ignores the conflicting schema
+  - sql: |
+      SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'plpgsql'
+    expect: rows
+    order: ordered

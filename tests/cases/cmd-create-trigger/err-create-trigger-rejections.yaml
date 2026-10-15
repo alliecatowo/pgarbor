@@ -1,0 +1,63 @@
+# Documented rejections for CREATE TRIGGER targets and functions: wrong return type, missing function or table,
+# views, INSTEAD OF on a table, SELECT events, trigger functions with declared arguments, direct calls.
+id: cmd-create-trigger.err-create-trigger-rejections
+title: CREATE TRIGGER rejects bad functions, targets and events with the documented sqlstates
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, errors, trigger-function-rules, views, instead-of-trigger]
+required_capabilities: [create-table, create-view, insert, select, plpgsql, triggers, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER description, parameters and Notes (function must return trigger; SELECT triggers not possible)"
+setup: |
+  CREATE TABLE t (id int);
+  CREATE VIEW v AS SELECT id FROM t;
+  CREATE FUNCTION trg_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;
+  CREATE FUNCTION ret_int() RETURNS int LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      CREATE TRIGGER x1 BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION ret_int()
+    expect: error
+    sqlstate: "42P17"
+    comment: function must return type trigger
+  - sql: |
+      CREATE TRIGGER x2 BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION no_such_fn()
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE TRIGGER x3 BEFORE INSERT ON no_such_table FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      CREATE TRIGGER x4 BEFORE SELECT ON t FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42601"
+    comment: SELECT is not a trigger event
+  - sql: |
+      CREATE TRIGGER x5 BEFORE INSERT ON v FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42809"
+    comment: views cannot have row-level BEFORE or AFTER triggers
+  - sql: |
+      CREATE TRIGGER x6 INSTEAD OF INSERT ON t FOR EACH ROW EXECUTE FUNCTION trg_fn()
+    expect: error
+    sqlstate: "42809"
+    comment: tables cannot have INSTEAD OF triggers
+  - sql: |
+      CREATE FUNCTION fn_with_args(x int) RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql
+    expect: error
+    sqlstate: "42P13"
+    comment: trigger functions cannot have declared arguments
+  - sql: |
+      SELECT trg_fn()
+    expect: error
+    sqlstate: "0A000"
+    comment: trigger functions can only be called as triggers
+  - sql: |
+      CREATE TRIGGER x7 BEFORE INSERT ON t FOR EACH ROW EXECUTE PROCEDURE trg_fn()
+    expect: ok
+    comment: the deprecated PROCEDURE keyword is accepted
+  - sql: |
+      SELECT tgname FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

@@ -1,0 +1,45 @@
+# Trigger names are scoped to their table: dropping tg on one table leaves the same name on another table and the other triggers in place.
+id: cmd-drop-trigger.multiple-triggers-same-name
+title: "DROP TRIGGER on one table leaves a same-named trigger on another table and the remaining triggers in alphabetical firing order"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, triggers, trigger-firing-order, plpgsql]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Description: the trigger is defined for table_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE trg_log (tg text, tbl text);
+  CREATE FUNCTION log_tg() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME, TG_TABLE_NAME);
+    RETURN NEW;
+  END
+  $$;
+  CREATE TABLE t (id int4);
+  CREATE TABLE u (id int4);
+  CREATE TRIGGER tg_a BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_tg();
+  CREATE TRIGGER tg_b BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_tg();
+  CREATE TRIGGER tg_a AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION log_tg();
+steps:
+  - sql: |
+      DROP TRIGGER tg_a ON t
+    expect: ok
+    comment: removes only the trigger named tg_a on t
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES (1)
+    expect: ok
+    comment: the same name on u is untouched and still fires
+  - sql: |
+      SELECT tg, tbl FROM trg_log ORDER BY tg, tbl
+    expect: rows
+    order: ordered
+    comment: t fires only tg_b; u fires its tg_a
+  - sql: |
+      SELECT tgrelid::regclass::text AS tbl, tgname FROM pg_trigger WHERE tgname IN ('tg_a', 'tg_b') AND NOT tgisinternal ORDER BY 1, 2
+    expect: rows
+    order: ordered

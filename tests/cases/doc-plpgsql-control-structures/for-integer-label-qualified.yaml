@@ -1,0 +1,54 @@
+# Integer FOR loops with REVERSE and BY, a labeled loop variable reference, and loop-variable shadowing.
+id: doc-plpgsql-control-structures.for-integer-label-qualified
+title: "Integer FOR loops with REVERSE and BY; labeled loop variable reference; outer variable restored after loop"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, for-loop, reverse, labels, control-flow]
+required_capabilities: [plpgsql, create-function, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (FOR (Integer Variant))"
+sessions: [a]
+setup: |
+  CREATE FUNCTION int_loops() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE s text := ''; i int;
+  BEGIN
+    FOR i IN 1..10 LOOP
+      s := s || i || ',';
+    END LOOP;
+    s := s || '|';
+    FOR i IN REVERSE 10..1 BY 2 LOOP
+      s := s || i || ',';
+    END LOOP;
+    RETURN s;
+  END $$;
+  CREATE FUNCTION label_shadow() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE i int := 99; s text := '';
+  BEGIN
+    <<lp>>
+    FOR i IN 1..3 LOOP
+      s := s || i || ':' || lp.i || ' ';
+    END LOOP;
+    RETURN s || '| after=' || i;
+  END $$;
+  CREATE FUNCTION reverse_empty() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE n int := 0; i int;
+  BEGIN
+    FOR i IN REVERSE 1..5 LOOP
+      n := n + 1;
+    END LOOP;
+    RETURN n;
+  END $$;
+steps:
+  - sql: |
+      SELECT int_loops() AS seq
+    expect: rows
+    comment: plain ascending, then REVERSE with BY 2 starting from the upper bound
+  - sql: |
+      SELECT label_shadow() AS seq
+    expect: rows
+    comment: the loop variable shadows the declared i and the label qualifies it inside the loop
+  - sql: |
+      SELECT reverse_empty() AS n
+    expect: rows
+    comment: with REVERSE the lower bound must not be below the upper bound, so the body never runs

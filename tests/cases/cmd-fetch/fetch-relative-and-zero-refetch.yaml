@@ -1,0 +1,63 @@
+id: cmd-fetch.fetch-relative-and-zero-refetch
+title: RELATIVE moves by count, RELATIVE 0 / FORWARD 0 / BACKWARD 0 re-fetch the current row
+family: cmd-fetch
+tier: core
+feature_ids: [fetch, fetch-relative, fetch-backward, fetch-zero-count, scroll-cursor]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/fetch.sgml#sql-fetch (Parameters: RELATIVE count; Description: RELATIVE 0)"
+sessions: [a]
+setup: |
+  CREATE TABLE nums (n int4 PRIMARY KEY);
+  INSERT INTO nums VALUES (1), (2), (3), (4), (5);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c SCROLL CURSOR FOR SELECT n FROM nums ORDER BY n
+    expect: ok
+  - sql: |
+      FETCH RELATIVE 0 FROM c
+    expect: rows
+    order: ordered
+    comment: cursor is before the first row, so nothing is re-fetched
+  - sql: |
+      FETCH FORWARD 0 FROM c
+    expect: rows
+    order: ordered
+    comment: same as above, before the first row
+  - sql: |
+      FETCH 2 FROM c
+    expect: rows
+    order: ordered
+    comment: rows 1 and 2, cursor now on row 2
+  - sql: |
+      FETCH RELATIVE 0 FROM c
+    expect: rows
+    order: ordered
+    comment: re-fetches row 2
+  - sql: |
+      FETCH BACKWARD 0 FROM c
+    expect: rows
+    order: ordered
+    comment: re-fetches row 2
+  - sql: |
+      FETCH RELATIVE -1 FROM c
+    expect: rows
+    order: ordered
+    comment: the prior row, row 1
+  - sql: |
+      FETCH RELATIVE 2 FROM c
+    expect: rows
+    order: ordered
+    comment: the 2nd succeeding row from row 1, row 3
+  - sql: |
+      FETCH RELATIVE -5 FROM c
+    expect: rows
+    order: ordered
+    comment: moves before the first row, no row returned
+  - sql: |
+      COMMIT
+    expect: ok

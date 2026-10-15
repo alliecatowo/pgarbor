@@ -1,0 +1,45 @@
+# Releasing an outer savepoint also releases every savepoint created after it, so the inner name is gone.
+id: cmd-release-savepoint.releases-inner-savepoints
+title: RELEASE of an outer savepoint also releases the inner savepoints created after it
+family: cmd-release-savepoint
+tier: core
+feature_ids: [release-savepoint, savepoints, errors, begin, insert]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/release_savepoint.sgml#sql-release-savepoint (Description: releases the named savepoint and all active savepoints created after it)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SAVEPOINT a
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SAVEPOINT b
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      RELEASE SAVEPOINT a
+    expect: ok
+  - sql: |
+      RELEASE SAVEPOINT b
+    expect: error
+    sqlstate: "3B001"
+    comment: b was released together with a
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: the whole block was rolled back, so no rows

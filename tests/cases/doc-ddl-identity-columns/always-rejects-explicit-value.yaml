@@ -1,0 +1,43 @@
+# GENERATED ALWAYS rejects user-supplied values (including NULL) in INSERT and UPDATE unless DEFAULT is used.
+id: doc-ddl-identity-columns.always-rejects-explicit-value
+title: GENERATED ALWAYS identity rejects explicit values, NULL and non-DEFAULT updates
+family: doc-ddl-identity-columns
+tier: core
+feature_ids: [identity-columns, errors, insert, update]
+required_capabilities: [create-table, insert, select, update]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-identity-columns"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE al (id bigint GENERATED ALWAYS AS IDENTITY, v text)
+    expect: ok
+  - sql: |
+      INSERT INTO al (v) VALUES ('a')
+    expect: ok
+  - sql: |
+      INSERT INTO al (id, v) VALUES (5, 'x')
+    expect: error
+    sqlstate: "428C9"
+    comment: user-specified value not accepted under ALWAYS
+  - sql: |
+      INSERT INTO al (id, v) VALUES (NULL, 'y')
+    expect: error
+    sqlstate: "428C9"
+    comment: an explicit NULL is also a non-DEFAULT value
+  - sql: |
+      INSERT INTO al (id, v) VALUES (DEFAULT, 'z')
+    expect: ok
+  - sql: |
+      UPDATE al SET id = 7 WHERE v = 'a'
+    expect: error
+    sqlstate: "428C9"
+  - sql: |
+      UPDATE al SET id = DEFAULT WHERE v = 'a'
+    expect: ok
+    comment: DEFAULT in UPDATE draws a new sequence value
+  - sql: |
+      SELECT id, v FROM al ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,28 @@
+# DO NOTHING rows are not affected, so they produce no RETURNING row and merge_action() is never evaluated for them.
+id: doc-functions-merge-support.do-nothing-no-row
+title: MERGE with only DO NOTHING actions returns zero rows from RETURNING merge_action()
+family: doc-functions-merge-support
+tier: core
+feature_ids: [merge, merge-action, returning, do-nothing]
+required_capabilities: [create-table, insert, select, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-merge-support (merge_action())"
+setup: |
+  CREATE TABLE products (product_id int PRIMARY KEY, in_stock bool, quantity int);
+  CREATE TABLE stock (product_id int, quantity int);
+  INSERT INTO products VALUES (1001, false, 0), (1002, true, 5), (1004, true, 9);
+  INSERT INTO stock VALUES (1001, 50), (1002, 0), (1003, 10);
+steps:
+  - sql: |
+      MERGE INTO products p
+        USING stock s ON p.product_id = s.product_id
+        WHEN MATCHED THEN DO NOTHING
+        RETURNING merge_action(), p.product_id
+    expect: rows
+    order: multiset
+    comment: zero rows; no action was executed
+  - sql: |
+      SELECT product_id, in_stock, quantity FROM products ORDER BY product_id
+    expect: rows
+    order: ordered

@@ -1,0 +1,24 @@
+# Ordered-set aggregate without direct arguments: it must be called with WITHIN GROUP, and calling
+# it as an ordinary aggregate is rejected.
+id: cmd-create-aggregate.ordered-set-within-group
+title: "Ordered-set aggregate requires WITHIN GROUP; ordinary call form is rejected"
+family: cmd-create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, ordered-set-aggregates, errors]
+required_capabilities: [create-table, insert, select, aggregates, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (ORDER BY in parameter list, ordered-set aggregates)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE AGGREGATE oset_sum (ORDER BY int4) (SFUNC = int4pl, STYPE = int4, INITCOND = '0');
+steps:
+  - sql: |
+      SELECT oset_sum() WITHIN GROUP (ORDER BY x) FROM t
+    expect: rows
+  - sql: |
+      SELECT oset_sum(x) FROM t
+    expect: error
+    sqlstate: "42809"
+    comment: ordered-set aggregates must be called with WITHIN GROUP

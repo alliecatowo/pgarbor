@@ -1,0 +1,36 @@
+# DROP SCHEMA without CASCADE refuses a non-empty schema; it succeeds once the schema is empty.
+id: doc-ddl-schemas.drop-restrict-nonempty
+title: DROP SCHEMA refuses a non-empty schema until its objects are dropped
+family: doc-ddl-schemas
+tier: core
+feature_ids: [drop-schema, create-schema, create-table, errors]
+required_capabilities: [create-schema, create-table, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-create (To drop a schema if it's empty (all objects in it have been dropped), use: DROP SCHEMA myschema)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA s_ne
+    expect: ok
+  - sql: |
+      CREATE TABLE s_ne.t (id int4)
+    expect: ok
+  - sql: |
+      DROP SCHEMA s_ne
+    expect: error
+    sqlstate: "2BP01"
+    comment: dependent_objects_still_exist, because the schema contains a table
+  - sql: |
+      SELECT to_regnamespace('s_ne') IS NOT NULL AS still_there, to_regclass('s_ne.t') IS NOT NULL AS table_still_there
+    expect: rows
+  - sql: |
+      DROP TABLE s_ne.t
+    expect: ok
+  - sql: |
+      DROP SCHEMA s_ne
+    expect: ok
+    comment: the schema is empty now
+  - sql: |
+      SELECT to_regnamespace('s_ne') IS NULL AS gone
+    expect: rows

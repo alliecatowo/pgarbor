@@ -1,0 +1,28 @@
+# Documented: data values are literals, but scalar expressions are also allowed in VALUES (arithmetic, casts, scalar subqueries).
+id: doc-dml-insert.values-scalar-expressions
+title: VALUES accepts scalar expressions, casts and scalar subqueries
+family: doc-dml-insert
+tier: core
+feature_ids: [insert, insert-expressions]
+required_capabilities: [create-table, insert, select, subquery]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-insert (Usually, the data values will be literals (constants), but scalar expressions are also allowed)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (k int PRIMARY KEY, v int NOT NULL);
+  INSERT INTO base VALUES (1, 10), (2, 25), (3, 7);
+steps:
+  - sql: |
+      CREATE TABLE items (id int, qty int, label text, price numeric(8,2))
+    expect: ok
+  - sql: |
+      INSERT INTO items (id, qty, label, price) VALUES
+          (1 + 1, 2 * 3, 'a' || 'b', 10.00 * 1.10),
+          ('3'::int, (SELECT max(v) FROM base), upper('x'), CAST('2.5' AS numeric(8,2)) + 1),
+          (4, (SELECT count(*) FROM base) - 1, NULL, 0.1 + 0.2)
+    expect: ok
+  - sql: |
+      SELECT id, qty, label, price FROM items ORDER BY id
+    expect: rows
+    order: ordered

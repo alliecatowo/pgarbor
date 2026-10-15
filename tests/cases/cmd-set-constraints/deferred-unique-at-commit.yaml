@@ -1,0 +1,53 @@
+# A DEFERRABLE unique constraint under SET CONSTRAINTS DEFERRED allows a duplicate until COMMIT, which then fails 23505.
+id: cmd-set-constraints.deferred-unique-at-commit
+title: Deferred unique duplicate passes the statement, fails at COMMIT, and a delete-then-reinsert passes
+family: cmd-set-constraints
+tier: core
+feature_ids: [set-constraints, deferrable, unique, transactions, commit, errors]
+required_capabilities: [create-table, insert, select, delete, transactions, constraints, unique-index, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_constraints.sgml#sql-set-constraints (Description: only UNIQUE and PRIMARY KEY constraints are affected by this setting)"
+sessions: [a]
+setup: |
+  CREATE TABLE ud (id int4 CONSTRAINT ud_u UNIQUE DEFERRABLE INITIALLY IMMEDIATE, v text);
+  INSERT INTO ud VALUES (1, 'orig');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ud_u DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO ud VALUES (1, 'dup')
+    expect: ok
+    comment: the duplicate is allowed until commit
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT id, v FROM ud ORDER BY id, v
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET CONSTRAINTS ud_u DEFERRED
+    expect: ok
+  - sql: |
+      INSERT INTO ud VALUES (1, 'new')
+    expect: ok
+  - sql: |
+      DELETE FROM ud WHERE v = 'orig'
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: at commit only one row with id 1 remains
+  - sql: |
+      SELECT id, v FROM ud ORDER BY id, v
+    expect: rows
+    order: ordered

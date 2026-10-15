@@ -1,0 +1,36 @@
+# Unbound refcursor: OPEN FOR query, FETCH INTO in a loop until NOT FOUND, then CLOSE.
+id: doc-plpgsql-cursors.open-for-query-fetch-loop
+title: Unbound refcursor opened FOR a query and drained with FETCH in a loop
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, open-for-query, fetch, found, close]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION drain_group(p_grp int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c refcursor;
+    r text;
+    n int := 0;
+    out text := '';
+  BEGIN
+    OPEN c FOR SELECT name FROM items WHERE grp = p_grp ORDER BY id;
+    LOOP
+      FETCH c INTO r;
+      EXIT WHEN NOT FOUND;
+      n := n + 1;
+      out := out || r || ';';
+    END LOOP;
+    CLOSE c;
+    RETURN n || ':' || out;
+  END $$;
+steps:
+  - sql: |
+      SELECT drain_group(1) AS g1, drain_group(2) AS g2, drain_group(9) AS g9
+    expect: rows
+    comment: the empty group must exit the loop on the first FETCH

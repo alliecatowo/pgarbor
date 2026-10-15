@@ -1,0 +1,78 @@
+# Schema CREATE and USAGE are separate; using a type in a column needs USAGE on the type, and GRANT USAGE ON DOMAIN rejects enums.
+id: cmd-grant.schema-and-type-usage
+title: GRANT CREATE and USAGE on schemas and USAGE on types and domains, with TEMP on schema and domain-type mismatch errors
+family: cmd-grant
+tier: core
+feature_ids: [grant, schema-privileges, type-usage, domains, privileges, errors]
+required_capabilities: [create-schema, create-table, create-type, create-domain, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-objects (ON SCHEMA, ON TYPE, ON DOMAIN)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_st_r;
+  CREATE SCHEMA cgg_st;
+  CREATE TYPE public.cgg_st_en AS ENUM ('a', 'b');
+  REVOKE USAGE ON TYPE public.cgg_st_en FROM PUBLIC;
+  CREATE DOMAIN public.cgg_st_dom AS int4 CHECK (VALUE > 0);
+  REVOKE USAGE ON DOMAIN public.cgg_st_dom FROM PUBLIC;
+steps:
+  - sql: |
+      SELECT has_schema_privilege('cgg_st_r', 'cgg_st', 'USAGE') AS usage,
+             has_schema_privilege('cgg_st_r', 'cgg_st', 'CREATE') AS create_priv
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT CREATE, USAGE ON SCHEMA cgg_st TO cgg_st_r
+    expect: ok
+  - sql: |
+      GRANT TEMP ON SCHEMA cgg_st TO cgg_st_r
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      GRANT CREATE ON SCHEMA cgg_st_missing TO cgg_st_r
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      SET ROLE cgg_st_r
+    expect: ok
+  - sql: |
+      CREATE TABLE cgg_st.tt (x public.cgg_st_en)
+    expect: error
+    sqlstate: "42501"
+    comment: the column type needs USAGE on the enum, which was revoked from PUBLIC
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT USAGE ON TYPE public.cgg_st_en TO cgg_st_r
+    expect: ok
+  - sql: |
+      SET ROLE cgg_st_r
+    expect: ok
+  - sql: |
+      CREATE TABLE cgg_st.tt (x public.cgg_st_en)
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT has_type_privilege('cgg_st_r', 'public.cgg_st_en', 'USAGE') AS enum_usage
+    expect: rows
+    order: ordered
+  - sql: |
+      GRANT USAGE ON DOMAIN public.cgg_st_en TO cgg_st_r
+    expect: error
+    sqlstate: "42809"
+    comment: an enum is not a domain
+  - sql: |
+      GRANT USAGE ON TYPE public.cgg_st_missing TO cgg_st_r
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      GRANT USAGE ON DOMAIN public.cgg_st_dom TO cgg_st_r
+    expect: ok
+  - sql: |
+      SELECT has_type_privilege('cgg_st_r', 'public.cgg_st_dom', 'USAGE') AS domain_usage
+    expect: rows
+    order: ordered

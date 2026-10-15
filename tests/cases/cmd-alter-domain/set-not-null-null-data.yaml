@@ -1,0 +1,45 @@
+# SET NOT NULL fails while stored rows hold NULL; afterwards NULL inserts are rejected until DROP NOT NULL.
+id: cmd-alter-domain.set-not-null-null-data
+title: "SET NOT NULL is refused while the column holds NULLs, then enforced on INSERT"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, not-null, domain-not-null]
+required_capabilities: [create-domain, alter-domain, create-table, insert, delete, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (SET/DROP NOT NULL)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN zipcode AS text;
+  CREATE TABLE addr (id int, z zipcode);
+  INSERT INTO addr VALUES (1, '12345'), (2, NULL);
+steps:
+  - sql: |
+      ALTER DOMAIN zipcode SET NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: column z contains a NULL in row 2
+  - sql: |
+      DELETE FROM addr WHERE id = 2
+    expect: ok
+  - sql: |
+      ALTER DOMAIN zipcode SET NOT NULL
+    expect: ok
+  - sql: |
+      ALTER DOMAIN zipcode SET NOT NULL
+    expect: ok
+    comment: repeating SET NOT NULL is harmless
+  - sql: |
+      INSERT INTO addr VALUES (3, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      ALTER DOMAIN zipcode DROP NOT NULL
+    expect: ok
+  - sql: |
+      INSERT INTO addr VALUES (3, NULL)
+    expect: ok
+  - sql: |
+      SELECT id, z IS NULL AS z_null FROM addr ORDER BY id
+    expect: rows
+    order: ordered

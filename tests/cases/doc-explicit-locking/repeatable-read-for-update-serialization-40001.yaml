@@ -1,0 +1,38 @@
+# In REPEATABLE READ, FOR UPDATE on a row changed since the transaction's snapshot fails with 40001.
+id: doc-explicit-locking.repeatable-read-for-update-serialization-40001
+title: FOR UPDATE in REPEATABLE READ errors when the row changed after the snapshot
+family: doc-explicit-locking
+tier: core
+feature_ids: [select-for-update, repeatable-read, serialization-failure, transactions, multi-session]
+required_capabilities: [create-table, insert, select, update, row-locks, transactions, multi-session, repeatable-read]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-rows (FOR UPDATE in REPEATABLE READ throws if the row changed since the transaction started); #serialization-failure-handling"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t WHERE id = 1
+    expect: rows
+    comment: takes the snapshot
+  - session: b
+    sql: |
+      UPDATE t SET v = v + 1 WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, v FROM t WHERE id = 1 FOR UPDATE
+    expect: error
+    sqlstate: "40001"
+    comment: serialization_failure, concurrent update after snapshot
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok

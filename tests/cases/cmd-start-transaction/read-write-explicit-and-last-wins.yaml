@@ -1,0 +1,53 @@
+# READ WRITE is the default and is accepted explicitly; when READ ONLY and READ WRITE are both given, the last one wins.
+id: cmd-start-transaction.read-write-explicit-and-last-wins
+title: Explicit READ WRITE allows writes and the last of READ ONLY or READ WRITE takes effect
+family: cmd-start-transaction
+tier: core
+feature_ids: [start-transaction, read-write-transactions, read-only-transactions, insert, guc]
+required_capabilities: [create-table, insert, select, transactions, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/start_transaction.sgml#sql-start-transaction (synopsis: READ WRITE | READ ONLY)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      START TRANSACTION READ WRITE
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      START TRANSACTION READ ONLY READ WRITE
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: READ WRITE given last, so the block is read-write
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      START TRANSACTION READ WRITE READ ONLY
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: READ ONLY given last, so the block is read-only
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,32 @@
+# Indexes may have up to 32 columns counting INCLUDE columns; a 33rd column is rejected with 54011.
+id: doc-indexes-multicolumn.max-32-columns
+title: Index column limit of 32 counts key and INCLUDE columns together
+family: doc-indexes-multicolumn
+tier: extended
+feature_ids: [multicolumn-index, btree-index, include-columns, index-column-limit]
+required_capabilities: [create-table, select, create-index, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (up to 32 columns, including INCLUDE columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE wide (c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int, c9 int, c10 int, c11 int, c12 int, c13 int, c14 int, c15 int, c16 int, c17 int, c18 int, c19 int, c20 int, c21 int, c22 int, c23 int, c24 int, c25 int, c26 int, c27 int, c28 int, c29 int, c30 int, c31 int, c32 int, c33 int)
+steps:
+  - sql: |
+      CREATE INDEX wide_33_keys ON wide (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33)
+    expect: error
+    sqlstate: "54011"
+    comment: 33 key columns exceed the limit
+  - sql: |
+      CREATE INDEX wide_17_16 ON wide (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17) INCLUDE (c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33)
+    expect: error
+    sqlstate: "54011"
+    comment: 17 key plus 16 INCLUDE columns is 33 in total
+  - sql: |
+      CREATE INDEX wide_16_16 ON wide (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16) INCLUDE (c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32)
+    expect: ok
+    comment: 16 key plus 16 INCLUDE columns is exactly 32
+  - sql: |
+      SELECT i.indnatts, i.indnkeyatts FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = 'wide_16_16'
+    expect: rows
+    comment: indnatts counts INCLUDE columns, indnkeyatts counts key columns

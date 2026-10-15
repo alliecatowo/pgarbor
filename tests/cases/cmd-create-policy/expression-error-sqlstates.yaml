@@ -1,0 +1,39 @@
+# Policy expressions reject window functions, aggregates and unknown columns; a missing table is refused, and failed statements leave no policy.
+id: cmd-create-policy.expression-error-sqlstates
+title: "Invalid CREATE POLICY expressions and targets raise their SQLSTATEs"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, expressions, errors]
+required_capabilities: [create-table, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy (Parameters: using_expression, check_expression)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+steps:
+  - sql: |
+      CREATE POLICY e1 ON t USING (row_number() OVER () > 0)
+    expect: error
+    sqlstate: "42P20"
+    comment: window functions cannot appear in policy expressions
+  - sql: |
+      CREATE POLICY e2 ON t USING (count(*) > 0)
+    expect: error
+    sqlstate: "42803"
+    comment: aggregate functions cannot appear in policy expressions
+  - sql: |
+      CREATE POLICY e3 ON t USING (nope = 1)
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column
+  - sql: |
+      CREATE POLICY e4 ON no_such_table USING (true)
+    expect: error
+    sqlstate: "42P01"
+    comment: the target table must exist
+  - sql: |
+      SELECT count(*) AS policies FROM pg_policies
+    expect: rows
+    order: multiset
+    comment: no failed statement left a policy behind

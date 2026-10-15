@@ -1,0 +1,39 @@
+# Documented expression/ndistinct example, scaled to one row per day: univariate expression stats exist for each expression and ndistinct covers the pair.
+id: cmd-create-statistics.expression-ndistinct-timestamp-example
+title: Expression and ndistinct statistics on date_trunc expressions from the documented example
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, expression-statistics, ndistinct-kind, date-trunc]
+required_capabilities: [create-table, insert, extended-statistics, catalog-introspection, analyze, select, timestamp-type]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics-examples (expression statistics example t3)"
+sessions: [a]
+setup: |
+  CREATE TABLE t3 (a timestamp);
+  INSERT INTO t3 SELECT i FROM generate_series('2020-01-01'::timestamp, '2020-12-31'::timestamp, '1 day'::interval) s(i);
+  ANALYZE t3;
+steps:
+  - sql: |
+      SELECT count(*) FROM t3 WHERE date_trunc('month', a) = '2020-01-01'::timestamp
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM t3 WHERE date_trunc('day', a) BETWEEN '2020-01-01'::timestamp AND '2020-06-30'::timestamp
+    expect: rows
+  - sql: |
+      CREATE STATISTICS s3 (ndistinct) ON date_trunc('month', a), date_trunc('day', a) FROM t3
+    expect: ok
+  - sql: |
+      ANALYZE t3
+    expect: ok
+  - sql: |
+      SELECT statistics_name, expr::text, n_distinct FROM pg_stats_ext_exprs WHERE statistics_name = 's3' ORDER BY expr::text
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT statistics_name, n_distinct::text FROM pg_stats_ext WHERE statistics_name = 's3'
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM (SELECT date_trunc('month', a), date_trunc('day', a) FROM t3 GROUP BY 1, 2) g
+    expect: rows
+    comment: the GROUP BY result is unchanged by statistics

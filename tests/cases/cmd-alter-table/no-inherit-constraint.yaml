@@ -1,0 +1,53 @@
+# NO INHERIT CHECK stays on the parent; ONLY on DROP CONSTRAINT leaves the child copy local; dropping an inherited constraint from a child is refused.
+id: cmd-alter-table.no-inherit-constraint
+title: "CHECK ... NO INHERIT stays on the parent; ALTER TABLE ONLY drop; inherited constraints cannot be dropped from a child"
+family: cmd-alter-table
+tier: extended
+feature_ids: [alter-table, check-constraint, no-inherit, inheritance, drop-constraint-only, errors]
+required_capabilities: [create-table, alter-table, insert, select, constraints, inheritance, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Examples: ADD CONSTRAINT ... NO INHERIT; DROP CONSTRAINT with and without ONLY)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (a int4 CONSTRAINT zipchk CHECK (a > 0));
+  CREATE TABLE kid () INHERITS (parent);
+steps:
+  - sql: |
+      ALTER TABLE parent ADD CONSTRAINT zz CHECK (a < 100) NO INHERIT
+    expect: ok
+  - sql: |
+      SELECT conrelid::regclass::text AS tbl, conname, connoinherit FROM pg_constraint WHERE conname IN ('zz', 'zipchk') ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO kid (a) VALUES (500)
+    expect: ok
+    comment: zz is not inherited, so the child accepts 500
+  - sql: |
+      INSERT INTO parent (a) VALUES (500)
+    expect: error
+    sqlstate: "23514"
+    comment: zz is enforced on the parent
+  - sql: |
+      ALTER TABLE ONLY parent DROP CONSTRAINT zipchk
+    expect: ok
+    comment: the child keeps its copy of zipchk and it becomes locally defined
+  - sql: |
+      SELECT conrelid::regclass::text AS tbl, conname, conislocal, coninhcount FROM pg_constraint WHERE conname = 'zipchk' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE parent ADD CONSTRAINT zz2 CHECK (a < 50)
+    expect: ok
+  - sql: |
+      ALTER TABLE kid DROP CONSTRAINT zz2
+    expect: error
+    sqlstate: "42P16"
+    comment: zz2 is inherited from parent
+  - sql: |
+      ALTER TABLE parent DROP CONSTRAINT zz2
+    expect: ok
+  - sql: |
+      SELECT count(*) AS left FROM pg_constraint WHERE conname = 'zz2'
+    expect: rows

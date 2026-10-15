@@ -1,0 +1,56 @@
+# NULL semantics in WHERE: equality with NULL is never true, IS NULL, IS DISTINCT FROM, NOT IN with a NULL member, and inclusive BETWEEN.
+id: cmd-select.null-three-valued-filters
+title: WHERE clause three-valued logic with NULL, IS DISTINCT FROM, NOT IN and inclusive BETWEEN
+family: cmd-select
+tier: core
+feature_ids: [select, where, nulls, comparison-operators, between]
+required_capabilities: [create-table, insert, select, where]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-where (rows returned when the condition is true)"
+sessions: [a]
+setup: |
+  CREATE TABLE n (id int4, v int4);
+  INSERT INTO n VALUES (1, 10), (2, NULL), (3, 20), (4, NULL);
+steps:
+  - sql: |
+      SELECT id FROM n WHERE v = NULL
+    expect: rows
+    order: multiset
+    comment: a comparison with NULL is NULL, so no row passes
+  - sql: |
+      SELECT id FROM n WHERE v IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM n WHERE v IS DISTINCT FROM 10 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL values are distinct from 10
+  - sql: |
+      SELECT id FROM n WHERE v NOT IN (10, NULL)
+    expect: rows
+    order: multiset
+    comment: NOT IN with a NULL in the list is never true
+  - sql: |
+      SELECT id FROM n WHERE v NOT IN (10) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL rows are excluded because NULL NOT IN (10) is NULL
+  - sql: |
+      SELECT id FROM n WHERE v > 15 OR v IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM n WHERE v BETWEEN 10 AND 20 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: BETWEEN includes both boundaries
+  - sql: |
+      SELECT NULL = NULL AS eq, NULL IS NOT DISTINCT FROM NULL AS nd
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(v) AS non_null, count(*) AS total FROM n
+    expect: rows
+    order: multiset

@@ -1,0 +1,32 @@
+# Event trigger from the manual: a ddl_command_start trigger raises NOTICE with TG_EVENT and TG_TAG for each supported DDL command.
+id: doc-plpgsql-trigger.event-trigger-snitch
+title: ddl_command_start event trigger reports TG_EVENT and TG_TAG as NOTICE for each DDL command
+family: doc-plpgsql-trigger
+tier: extended
+feature_ids: [event-triggers, plpgsql, tg-event, tg-tag, ddl, notice]
+required_capabilities: [event-triggers, create-function, plpgsql, create-table, alter-table, drop-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (Triggers on Events: A PL/pgSQL Event Trigger Function)"
+notes: Creating an event trigger requires superuser; the oracle runs as the postgres superuser.
+sessions: [a]
+setup: |
+  CREATE OR REPLACE FUNCTION snitch() RETURNS event_trigger AS $$
+  BEGIN
+      RAISE NOTICE 'snitch: % %', tg_event, tg_tag;
+  END;
+  $$ LANGUAGE plpgsql;
+  CREATE EVENT TRIGGER snitch ON ddl_command_start EXECUTE FUNCTION snitch();
+steps:
+  - sql: |
+      CREATE TABLE snitch_t (id int)
+    expect: notice
+    comment: "NOTICE snitch: ddl_command_start CREATE TABLE"
+  - sql: |
+      ALTER TABLE snitch_t ADD COLUMN x int
+    expect: notice
+    comment: "NOTICE snitch: ddl_command_start ALTER TABLE"
+  - sql: |
+      DROP TABLE snitch_t
+    expect: notice
+    comment: "NOTICE snitch: ddl_command_start DROP TABLE"

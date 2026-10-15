@@ -1,0 +1,53 @@
+# A SECURITY DEFINER procedure, or one with a SET clause, cannot execute transaction control statements.
+# A plain procedure can, and LANGUAGE sql rejects COMMIT inside its body.
+id: cmd-create-procedure.security-definer-no-commit
+title: SECURITY DEFINER and SET-clause procedures reject COMMIT at call time
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, security-definer, set-clause, transactions, call]
+required_capabilities: [create-table, select, create-procedure, call, plpgsql, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (SECURITY DEFINER, SET)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE secdef_commit() LANGUAGE plpgsql SECURITY DEFINER AS $$
+      BEGIN
+        COMMIT;
+      END $$
+    expect: ok
+  - sql: |
+      CALL secdef_commit()
+    expect: error
+    sqlstate: "2D000"
+    comment: SECURITY DEFINER procedures cannot commit
+  - sql: |
+      CREATE PROCEDURE setclause_commit() LANGUAGE plpgsql SET search_path = public AS $$
+      BEGIN
+        COMMIT;
+      END $$
+    expect: ok
+  - sql: |
+      CALL setclause_commit()
+    expect: error
+    sqlstate: "2D000"
+    comment: a SET clause also forbids transaction control
+  - sql: |
+      CREATE PROCEDURE plain_commit() LANGUAGE plpgsql AS $$
+      BEGIN
+        COMMIT;
+      END $$
+    expect: ok
+  - sql: |
+      CALL plain_commit()
+    expect: ok
+    comment: control case, no restriction applies
+  - sql: |
+      CREATE PROCEDURE sql_commit() LANGUAGE sql AS 'COMMIT'
+    expect: ok
+  - sql: |
+      CALL sql_commit()
+    expect: error
+    sqlstate: "0A000"
+    comment: COMMIT is not allowed inside a LANGUAGE sql body

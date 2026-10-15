@@ -1,0 +1,37 @@
+# A single-column expression SELECT that returns no rows yields NULL, both in assignment and in IF.
+id: doc-plpgsql-expressions.zero-rows-is-null
+title: Expression whose SELECT returns no rows yields NULL
+family: doc-plpgsql-expressions
+tier: core
+feature_ids: [plpgsql, expressions, null-handling, if-statement]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-expressions (If it produces no rows, the result is taken as NULL)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, NULL);
+  CREATE FUNCTION assign_no_rows() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE v int := 5;
+  BEGIN
+    v := id FROM t WHERE id = 99;
+    RETURN coalesce(v::text, 'NULL');
+  END $$;
+  CREATE FUNCTION if_no_rows() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    IF id > 0 FROM t WHERE id = 99 THEN
+      RETURN 'true branch';
+    ELSE
+      RETURN 'false branch';
+    END IF;
+  END $$;
+steps:
+  - sql: |
+      SELECT assign_no_rows() AS assigned
+    expect: rows
+    comment: the variable is overwritten with NULL, not left at 5
+  - sql: |
+      SELECT if_no_rows() AS branch
+    expect: rows
+    comment: NULL condition takes the ELSE branch

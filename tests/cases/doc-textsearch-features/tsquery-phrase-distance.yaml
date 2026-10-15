@@ -1,0 +1,42 @@
+# tsquery_phrase(q1, q2 [, distance]) requires q2 exactly distance lexemes after q1; default distance is 1
+# (same as <->); the distance range is 0..16384 inclusive and anything else is 22023.
+id: doc-textsearch-features.tsquery-phrase-distance
+title: tsquery_phrase builds <N> phrase queries with exact distance and range checks
+family: doc-textsearch-features
+tier: core
+feature_ids: [tsquery-phrase, followed-by, phrase-distance]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-manipulate-tsquery"
+steps:
+  - sql: |
+      SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), 10)::text AS q10,
+             tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'))::text AS q_default,
+             tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), 0)::text AS q0
+    expect: rows
+    order: ordered
+    comment: documented example is <10>; the two-argument form is distance 1, i.e. <->
+  - sql: |
+      SELECT to_tsvector('simple', 'fat x cat') @@ tsquery_phrase(to_tsquery('simple', 'fat'), to_tsquery('simple', 'cat'), 2) AS dist2_hit,
+             to_tsvector('simple', 'fat x cat') @@ tsquery_phrase(to_tsquery('simple', 'fat'), to_tsquery('simple', 'cat'), 1) AS dist1_miss,
+             to_tsvector('simple', 'fat cat') @@ tsquery_phrase(to_tsquery('simple', 'fat'), to_tsquery('simple', 'cat'), 0) AS dist0_miss
+    expect: rows
+    order: ordered
+    comment: distance is exact; the 0 case needs the two lexemes at the same position, which never happens here
+  - sql: |
+      SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), 16384)::text AS q_max
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), -1)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), 16385)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT tsquery_phrase(to_tsquery('fat'), to_tsquery('cat'), NULL) IS NULL AS null_distance
+    expect: rows
+    order: ordered

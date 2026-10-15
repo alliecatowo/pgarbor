@@ -1,0 +1,38 @@
+# A labeled block qualifies a local variable (block.foo) so it wins over a same-named column of src.
+id: doc-plpgsql-implementation.block-label-qualified-variable
+title: Block label qualifies a local variable that shadows a table column
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, variable-conflict, block-labels, variable-substitution]
+required_capabilities: [create-table, insert, select, create-function, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Variable Substitution)"
+sessions: [a]
+setup: |
+  CREATE TABLE src (foo int, bar int);
+  CREATE TABLE dest (col int);
+  INSERT INTO src VALUES (1, 2);
+  CREATE FUNCTION lbl(foo int, bar int) RETURNS void AS $$
+  <<block>>
+  DECLARE
+    foo int;
+  BEGIN
+    foo := 100;
+    INSERT INTO dest (col) SELECT block.foo + src.bar FROM src;
+  END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT lbl(10, 20)
+    expect: rows
+  - sql: |
+      SELECT col FROM dest ORDER BY col
+    expect: rows
+    order: ordered
+    comment: block.foo is the local 100, src.bar is the column 2
+  - sql: |
+      SELECT foo, bar FROM src
+    expect: rows
+    order: multiset
+    comment: src itself is unchanged by the function

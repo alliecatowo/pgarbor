@@ -1,0 +1,49 @@
+# COPY TO and COPY FROM do not accept views or partitioned parents directly; COPY (SELECT ...) is the documented workaround, and ONLY on a partitioned parent yields no rows.
+id: cmd-copy.view-and-partitioned-rejected
+title: "COPY rejects views and partitioned tables; query form and ONLY behave as documented"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-to, copy-from, views, partitioning, errors]
+required_capabilities: [create-table, create-view, insert, select, copy, partitioning, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy Notes (COPY TO relation types; COPY FROM views)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4, v text);
+  INSERT INTO base VALUES (1, 'a'), (2, 'b');
+  CREATE VIEW vb AS SELECT id, v FROM base;
+  CREATE TABLE pt (id int4, v text) PARTITION BY RANGE (id);
+  CREATE TABLE pt1 PARTITION OF pt FOR VALUES FROM (0) TO (10);
+  INSERT INTO pt VALUES (1, 'p');
+steps:
+  - sql: |
+      COPY vb TO STDOUT
+    expect: error
+    sqlstate: "42809"
+    comment: COPY TO does not support views
+  - sql: |
+      COPY pt TO STDOUT
+    expect: error
+    sqlstate: "42809"
+    comment: COPY TO does not support partitioned tables
+  - sql: |
+      COPY (SELECT * FROM ONLY pt) TO STDOUT
+    expect: ok
+    order: multiset
+    comment: ONLY on the partitioned parent sees no rows; the data is in pt1
+  - sql: |
+      COPY (SELECT id, v FROM pt ORDER BY id) TO STDOUT
+    expect: ok
+    order: ordered
+    comment: the query form reads through to the partition
+  - sql: |
+      COPY (SELECT id, v FROM vb ORDER BY id) TO STDOUT
+    expect: ok
+    order: ordered
+    comment: the query form works on a view
+  - sql: |
+      COPY vb FROM STDIN
+    expect: error
+    sqlstate: "42809"
+    comment: COPY FROM into a view without an INSTEAD OF INSERT trigger

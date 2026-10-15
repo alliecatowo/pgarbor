@@ -1,0 +1,41 @@
+# overlay() and substring()/substr() with the documented examples plus FROM-only, FOR-only, and out-of-range starts.
+id: doc-functions-binarystring.overlay-substring-doc
+title: overlay and substring on bytea follow documented placing, FROM and FOR semantics
+family: doc-functions-binarystring
+tier: core
+feature_ids: [bytea, overlay, substring, substr]
+required_capabilities: [select]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-binarystring-sql (overlay, substring rows) and #functions-binarystring-other (substr)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT overlay('\x1234567890'::bytea PLACING '\002\003'::bytea FROM 2 FOR 3)
+    expect: rows
+    comment: doc example, \x12020390
+  - sql: |
+      SELECT overlay('\x1234567890'::bytea PLACING '\002\003'::bytea FROM 2)
+    expect: rows
+    comment: FOR omitted defaults to length of newsubstring, so \x1202037890
+  - sql: |
+      SELECT overlay('\x1234'::bytea PLACING '\xff'::bytea FROM 10)
+    expect: rows
+    comment: start past the end appends the replacement, \x1234ff
+  - sql: |
+      SELECT substring('\x1234567890'::bytea FROM 3 FOR 2), substr('\x1234567890'::bytea, 3, 2)
+    expect: rows
+    comment: doc examples, both \x5678
+  - sql: |
+      SELECT substring('\x1234567890'::bytea FROM 3), substring('\x1234567890'::bytea FOR 2)
+    expect: rows
+    comment: FROM alone gives the tail, FOR alone gives the head, \x34567890 and \x1234
+  - sql: |
+      SELECT substring('\x1234567890'::bytea FROM 8), substring('\x1234'::bytea FROM 0 FOR 2)
+    expect: rows
+    comment: start beyond the end yields empty; start 0 with count 2 covers only the first byte, \x12
+  - sql: |
+      SELECT substring('\x1234'::bytea FOR -1)
+    expect: error
+    sqlstate: "22011"
+    comment: negative count is rejected

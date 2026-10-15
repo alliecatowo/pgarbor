@@ -1,0 +1,48 @@
+# SET NOT NULL fails on existing NULLs; repeating SET or DROP NOT NULL is a silent no-op.
+id: doc-ddl-alter.set-drop-not-null
+title: SET NOT NULL requires no NULLs; repeated SET and DROP NOT NULL do nothing
+family: doc-ddl-alter
+tier: core
+feature_ids: [alter-table, not-null, set-not-null, drop-not-null, null-semantics, errors]
+required_capabilities: [create-table, alter-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-alter (Adding a Constraint: NOT NULL; Removing a Constraint)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text);
+  INSERT INTO products VALUES (1, 'a'), (2, NULL);
+steps:
+  - sql: |
+      ALTER TABLE products ALTER COLUMN name SET NOT NULL
+    expect: error
+    sqlstate: "23502"
+    comment: the constraint is checked immediately against existing rows
+  - sql: |
+      UPDATE products SET name = 'b' WHERE name IS NULL
+    expect: ok
+  - sql: |
+      ALTER TABLE products ALTER COLUMN name SET NOT NULL
+    expect: ok
+  - sql: |
+      ALTER TABLE products ALTER COLUMN name SET NOT NULL
+    expect: ok
+    comment: silently does nothing when the column already is NOT NULL
+  - sql: |
+      INSERT INTO products VALUES (3, NULL)
+    expect: error
+    sqlstate: "23502"
+  - sql: |
+      ALTER TABLE products ALTER COLUMN name DROP NOT NULL
+    expect: ok
+  - sql: |
+      ALTER TABLE products ALTER COLUMN name DROP NOT NULL
+    expect: ok
+    comment: silently does nothing when there is no NOT NULL constraint
+  - sql: |
+      INSERT INTO products VALUES (3, NULL)
+    expect: ok
+  - sql: |
+      SELECT product_no, name IS NULL AS name_null FROM products ORDER BY product_no
+    expect: rows
+    order: ordered

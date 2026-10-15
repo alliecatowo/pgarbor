@@ -1,0 +1,35 @@
+# The documented script idiom: drop unconditionally before create, so the script works either way.
+id: doc-ddl-basics.drop-if-exists-script
+title: Drop-if-exists then create gives a fresh table with the new shape
+family: doc-ddl-basics
+tier: core
+feature_ids: [drop-table, create-table, table-basics]
+required_capabilities: [create-table, drop-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-basics (DROP TABLE IF EXISTS idiom in SQL script files)"
+sessions: [a]
+setup: |
+  CREATE TABLE my_first_table (first_column text, second_column integer);
+  INSERT INTO my_first_table VALUES ('old', 1);
+steps:
+  - sql: |
+      DROP TABLE IF EXISTS my_first_table
+    expect: ok
+  - sql: |
+      DROP TABLE IF EXISTS my_first_table
+    expect: notice
+    comment: second pass over the same script only notices
+  - sql: |
+      CREATE TABLE my_first_table (second_column integer, third_column text)
+    expect: ok
+  - sql: |
+      SELECT * FROM my_first_table
+    expect: rows
+    order: multiset
+    comment: the recreated table is empty and has the new columns only
+  - sql: |
+      SELECT first_column FROM my_first_table
+    expect: error
+    sqlstate: "42703"
+    comment: the old column from the dropped table does not exist

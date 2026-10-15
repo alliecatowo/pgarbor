@@ -1,0 +1,35 @@
+# COALESCE returns the first non-null argument; all-null yields NULL; common-type resolution.
+id: doc-functions-conditional.coalesce-first-non-null
+title: COALESCE returns its first non-null argument and resolves a common result type
+family: doc-functions-conditional
+tier: core
+feature_ids: [coalesce, null-semantics, type-resolution]
+required_capabilities: [select, create-table, insert, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-coalesce-nvl-ifnull (documented COALESCE(description, short_description, '(none)'))"
+sessions: [a]
+setup: |
+  CREATE TABLE notes (id int4, description text, short_description text);
+  INSERT INTO notes VALUES (1, 'long', NULL), (2, NULL, 'short'), (3, NULL, NULL);
+steps:
+  - sql: |
+      SELECT id, COALESCE(description, short_description, '(none)') AS shown FROM notes ORDER BY id
+    expect: rows
+    order: ordered
+    comment: documented example; falls back through the arguments in order
+  - sql: |
+      SELECT COALESCE(NULL, 'b', 'c') AS c1, COALESCE(NULL::text, NULL) AS c2, COALESCE(NULL::int4, 2.5) AS v, pg_typeof(COALESCE(NULL::int4, 2.5))::text AS t
+    expect: rows
+    order: multiset
+    comment: c2 is NULL; mixed integer and numeric resolves to numeric
+  - sql: |
+      SELECT COALESCE(NULL, NULL) AS allnull, pg_typeof(COALESCE(NULL, NULL))::text AS t
+    expect: rows
+    order: multiset
+    comment: all-null arguments yield NULL with the unknown literals resolved as text
+  - sql: |
+      SELECT COALESCE(NULL, 'x') IS NOT NULL AS has_value, COALESCE(0, NULL) AS zero_kept
+    expect: rows
+    order: multiset
+    comment: zero and empty values are not null and are returned as-is

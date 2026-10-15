@@ -1,0 +1,39 @@
+# date_add / date_subtract with a zone argument, and timestamptz arithmetic across a DST gap.
+id: doc-functions-datetime.date-add-subtract-and-dst
+title: date_add and date_subtract with zone, and interval arithmetic across a DST transition
+family: doc-functions-datetime
+tier: core
+feature_ids: [date-add, date-subtract, timestamptz-arithmetic, dst-arithmetic, time-zone-setting]
+required_capabilities: [select, timestamp, interval, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime-datetime (date_add, date_subtract); functions-datetime-datemath (DST note with America/Denver)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT date_add('2021-10-31 00:00:00+02'::timestamptz, '1 day'::interval, 'Europe/Warsaw') AS doc_add,
+             date_subtract('2021-11-01 00:00:00+01'::timestamptz, '1 day'::interval, 'Europe/Warsaw') AS doc_sub
+    expect: rows
+    order: multiset
+    comment: documented values 2021-10-31 23:00:00+00 and 2021-10-30 22:00:00+00
+  - sql: |
+      SELECT date_add('2021-10-31 00:00:00+02'::timestamptz, '1 day'::interval) = '2021-10-31 00:00:00+02'::timestamptz + '1 day'::interval AS two_arg_add_eq,
+             date_subtract('2021-11-01 00:00:00+01'::timestamptz, '1 day'::interval) = '2021-11-01 00:00:00+01'::timestamptz - '1 day'::interval AS two_arg_sub_eq
+    expect: rows
+    order: multiset
+    comment: the two-argument forms are the plain timestamptz +/- interval operators
+  - sql: |
+      SET TIME ZONE 'America/Denver'
+    expect: ok
+  - sql: |
+      SELECT timestamptz '2005-04-03 01:30:00-07' + interval '1 hour' AS hour_across_gap,
+             timestamptz '2005-04-03 01:30:00-07' + interval '1 day' AS day_across_gap,
+             timestamptz '2005-04-03 01:30:00-07' + interval '24 hours' AS h24_across_gap
+    expect: rows
+    order: multiset
+    comment: 1 hour is absolute time (03:30 MDT); 1 day keeps the wall clock (2005-04-04 01:30 MDT); 24 hours is absolute time, so it lands on 2005-04-04 02:30 MDT
+  - sql: |
+      SELECT timestamptz '2005-04-03 01:30:00-07' + interval '24 hours' = timestamptz '2005-04-03 01:30:00-07' + interval '1 day' AS day_eq_24h
+    expect: rows
+    order: multiset
+    comment: false here because the day crosses a DST change of one hour

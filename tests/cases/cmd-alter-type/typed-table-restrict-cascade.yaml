@@ -1,0 +1,41 @@
+# A typed table blocks ALTER TYPE by default (RESTRICT); CASCADE propagates ADD and DROP ATTRIBUTE to the typed table.
+id: cmd-alter-type.typed-table-restrict-cascade
+title: "RESTRICT refuses ALTER TYPE on a typed table's type; CASCADE propagates the change"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, composite-type, typed-table, restrict, cascade]
+required_capabilities: [create-type, alter-type, composite-type, typed-table, select, order-by]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (CASCADE: propagate to typed tables of the type; RESTRICT: refuse if the type is the type of a typed table, the default)"
+sessions: [a]
+setup: |
+  CREATE TYPE comp AS (a int);
+  CREATE TABLE tt OF comp;
+steps:
+  - sql: |
+      ALTER TYPE comp ADD ATTRIBUTE b int
+    expect: error
+    sqlstate: "2BP01"
+    comment: RESTRICT is the default
+  - sql: |
+      ALTER TYPE comp ADD ATTRIBUTE b int RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT behaves the same
+  - sql: |
+      ALTER TYPE comp ADD ATTRIBUTE b int CASCADE
+    expect: ok
+    comment: CASCADE adds the column to tt as well
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'tt'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TYPE comp DROP ATTRIBUTE b CASCADE
+    expect: ok
+    comment: the drop propagates to the typed table
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'tt'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered

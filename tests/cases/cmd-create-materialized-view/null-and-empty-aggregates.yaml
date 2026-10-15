@@ -1,0 +1,45 @@
+id: cmd-create-materialized-view.null-and-empty-aggregates
+title: NULL handling in aggregates and empty defining results are materialized faithfully
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, aggregates, nulls, group-by]
+required_capabilities: [create-table, insert, select, create-materialized-view, group-by, aggregates, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (query)"
+sessions: [a]
+setup: |
+  CREATE TABLE m (grp text, amt numeric(6,2));
+  INSERT INTO m VALUES ('a', 1.50), ('a', NULL), ('b', NULL);
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_null AS
+        SELECT grp, sum(amt) AS total, count(*) AS rows_all, count(amt) AS rows_nonnull
+        FROM m GROUP BY grp
+    expect: ok
+  - session: a
+    sql: |
+      SELECT grp, total, rows_all, rows_nonnull FROM mv_null ORDER BY grp
+    expect: rows
+    order: ordered
+    comment: sum over only-NULL group is NULL; count(*) counts NULL rows
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_empty AS SELECT grp FROM m WHERE false
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM mv_empty
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_agg_empty AS SELECT sum(amt) AS s, count(*) AS c FROM m WHERE false
+    expect: ok
+  - session: a
+    sql: |
+      SELECT s IS NULL AS s_null, c FROM mv_agg_empty
+    expect: rows
+    order: ordered
+    comment: global aggregate over empty input still yields one row

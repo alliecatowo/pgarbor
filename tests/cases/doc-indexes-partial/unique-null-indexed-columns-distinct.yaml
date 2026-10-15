@@ -1,0 +1,35 @@
+# NULLs in indexed columns of a partial unique index are distinct, so they do not conflict with each other.
+id: doc-indexes-partial.unique-null-indexed-columns-distinct
+title: Partial unique index treats NULL key values as distinct, while a NULL predicate excludes the row
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, unique-index, null-semantics, boolean-type]
+required_capabilities: [create-table, create-index, unique-index, insert, select]
+provenance:
+  source: hand
+  ref: "indices.sgml#indexes-partial (unique partial index; NULLs distinct per unique index semantics)"
+sessions: [a]
+setup: |
+  CREATE TABLE nulls_idx (subject text, success boolean);
+  CREATE UNIQUE INDEX nulls_idx_u ON nulls_idx (subject) WHERE success;
+steps:
+  - sql: |
+      INSERT INTO nulls_idx VALUES (NULL, true), (NULL, true)
+    expect: ok
+    comment: NULL subject values are distinct under a unique index, so two successful NULL-subject rows are allowed
+  - sql: |
+      INSERT INTO nulls_idx VALUES ('x', true)
+    expect: ok
+  - sql: |
+      INSERT INTO nulls_idx VALUES ('x', true)
+    expect: error
+    sqlstate: "23505"
+    comment: a non-NULL duplicate in the predicate is rejected
+  - sql: |
+      INSERT INTO nulls_idx VALUES ('x', NULL), ('x', NULL), ('x', false)
+    expect: ok
+    comment: NULL predicate values are outside the index, as are false values
+  - sql: |
+      SELECT subject, success, count(*) AS n FROM nulls_idx GROUP BY subject, success ORDER BY subject NULLS LAST, success NULLS LAST
+    expect: rows
+    order: ordered

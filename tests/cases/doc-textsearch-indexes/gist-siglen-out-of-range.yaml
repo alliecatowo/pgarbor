@@ -1,0 +1,39 @@
+# siglen must be an integer in 1..2024 for tsvector GiST indexes.
+id: doc-textsearch-indexes.gist-siglen-out-of-range
+title: GiST siglen outside 1 to 2024 or non-integer is rejected
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gist-index, siglen, index-validation]
+required_capabilities: [create-table, create-index, gist-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (siglen maximum 2024 bytes)"
+steps:
+  - sql: |
+      CREATE TABLE docs (id int4 PRIMARY KEY, tsv tsvector)
+    expect: ok
+  - sql: |
+      CREATE INDEX docs_sig_zero ON docs USING GIST (tsv tsvector_ops (siglen = 0))
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      CREATE INDEX docs_sig_neg ON docs USING GIST (tsv tsvector_ops (siglen = -1))
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      CREATE INDEX docs_sig_big ON docs USING GIST (tsv tsvector_ops (siglen = 2025))
+    expect: error
+    sqlstate: "22023"
+    comment: one above the documented maximum
+  - sql: |
+      CREATE INDEX docs_sig_text ON docs USING GIST (tsv tsvector_ops (siglen = 'abc'))
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      CREATE INDEX docs_sig_max ON docs USING GIST (tsv tsvector_ops (siglen = 2024))
+    expect: ok
+    comment: the documented maximum is accepted
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'docs' ORDER BY indexname
+    expect: rows
+    order: ordered

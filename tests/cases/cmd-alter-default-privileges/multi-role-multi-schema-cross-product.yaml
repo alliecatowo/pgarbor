@@ -1,0 +1,37 @@
+# A FOR ROLE list combined with an IN SCHEMA list writes one default entry per role and schema pair.
+id: cmd-alter-default-privileges.multi-role-multi-schema-cross-product
+title: FOR ROLE and IN SCHEMA lists create one default entry per role and schema pair
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, multiple-roles, multiple-schemas, default-acl, revoke]
+required_capabilities: [create-schema, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-synopsis (FOR { ROLE | USER } target_role [, ...] and IN SCHEMA schema_name [, ...])"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_webuser') THEN CREATE ROLE adp_webuser; END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_x1') THEN CREATE ROLE adp_x1; END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_x2') THEN CREATE ROLE adp_x2; END IF;
+  END $$;
+  CREATE SCHEMA adp_cp1;
+  CREATE SCHEMA adp_cp2;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES FOR ROLE adp_x1, adp_x2 IN SCHEMA adp_cp1, adp_cp2 GRANT SELECT ON TABLES TO adp_webuser
+    expect: ok
+  - sql: |
+      SELECT defaclnamespace::regnamespace::text, defaclrole::regrole::text, defaclobjtype, defaclacl::text
+      FROM pg_default_acl ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+    comment: four rows, one for each of the two roles in each of the two schemas
+  - sql: |
+      ALTER DEFAULT PRIVILEGES FOR ROLE adp_x1 IN SCHEMA adp_cp1 REVOKE SELECT ON TABLES FROM adp_webuser
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_default_acl
+    expect: rows
+    order: multiset
+    comment: the entry that became empty is removed and the other three stay

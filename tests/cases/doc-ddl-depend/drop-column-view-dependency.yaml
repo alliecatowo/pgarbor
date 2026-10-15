@@ -1,0 +1,33 @@
+# A view that uses a column blocks ALTER TABLE ... DROP COLUMN unless CASCADE is given, which drops the view.
+id: doc-ddl-depend.drop-column-view-dependency
+title: DROP COLUMN used by a view fails by default and CASCADE drops the view
+family: doc-ddl-depend
+tier: core
+feature_ids: [alter-table, drop-column, drop-cascade, create-view, dependency-tracking]
+required_capabilities: [create-table, insert, select, alter-table, create-view, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (dependencies apply to DROP commands generally)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a integer, b integer);
+  CREATE VIEW vb AS SELECT b FROM t;
+  INSERT INTO t VALUES (1, 2);
+steps:
+  - sql: |
+      ALTER TABLE t DROP COLUMN b
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT b FROM vb
+    expect: rows
+    comment: the view and column are untouched after the refused drop
+  - sql: |
+      ALTER TABLE t DROP COLUMN b CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname = 'vb'
+    expect: rows
+  - sql: |
+      SELECT a FROM t
+    expect: rows

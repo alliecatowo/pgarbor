@@ -1,0 +1,67 @@
+id: cmd-rollback-to.innermost-and-destroyed-savepoints
+title: "Duplicate names use the most recent savepoint; later savepoints are destroyed"
+family: cmd-rollback-to
+tier: core
+feature_ids: [rollback-to-savepoint, savepoints, nested-savepoints]
+required_capabilities: [create-table, insert, select, transactions, savepoints]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/rollback_to.sgml#sql-rollback-to (Description: implicitly destroys all savepoints established after the named savepoint)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4)
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SAVEPOINT sp
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      SAVEPOINT sp
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3)
+    expect: ok
+  - sql: |
+      ROLLBACK TO sp
+    expect: ok
+    comment: rolls back to the most recent sp, removing only row 3
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SAVEPOINT s_outer
+    expect: ok
+  - sql: |
+      SAVEPOINT s_inner
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (4)
+    expect: ok
+  - sql: |
+      ROLLBACK TO s_outer
+    expect: ok
+    comment: destroys s_inner
+  - sql: |
+      ROLLBACK TO s_inner
+    expect: error
+    sqlstate: "3B001"
+  - sql: |
+      ROLLBACK TO s_outer
+    expect: ok
+    comment: transaction is aborted after the failed ROLLBACK TO; a valid rollback recovers it
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok

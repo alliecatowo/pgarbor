@@ -1,0 +1,44 @@
+# MERGE INTO ONLY touches the named parent only; without ONLY (or with *), matching rows in child tables are also updated.
+id: cmd-merge.inherited-target-only-vs-star
+title: MERGE INTO ONLY skips inheritance children while the default and * forms include them
+family: cmd-merge
+tier: extended
+feature_ids: [merge, inheritance, only-keyword, update, insert]
+required_capabilities: [create-table, insert, select, update, merge, inheritance]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Parameters: target_table_name, ONLY and *)"
+setup: |
+  CREATE TABLE par (k integer, n integer);
+  CREATE TABLE chi (k integer, n integer) INHERITS (par);
+  INSERT INTO par VALUES (1, 0);
+  INSERT INTO chi VALUES (2, 0);
+steps:
+  - sql: |
+      MERGE INTO ONLY par p
+      USING (VALUES (1), (2)) s(k)
+      ON p.k = s.k
+      WHEN MATCHED THEN
+        UPDATE SET n = 1
+      WHEN NOT MATCHED THEN
+        INSERT (k, n) VALUES (s.k, 9)
+    expect: ok
+    comment: parent row 1 updated; k=2 lives only in chi, so the parent-only target has no match and a new parent row is inserted
+  - sql: |
+      SELECT k, n, tableoid::regclass::text AS tbl FROM par
+    expect: rows
+    order: multiset
+    comment: expect (1,1,par), (2,9,par), (2,0,chi)
+  - sql: |
+      MERGE INTO par* p
+      USING (VALUES (2)) s(k)
+      ON p.k = s.k
+      WHEN MATCHED THEN
+        UPDATE SET n = 5
+    expect: ok
+    comment: explicit * includes descendants, so both the par row and the chi row with k=2 are updated
+  - sql: |
+      SELECT k, n, tableoid::regclass::text AS tbl FROM par
+    expect: rows
+    order: multiset
+    comment: expect (1,1,par), (2,5,par), (2,5,chi)

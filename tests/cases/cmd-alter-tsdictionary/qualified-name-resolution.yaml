@@ -1,0 +1,35 @@
+# Documented: name may be schema-qualified; qualified names resolve only in the named schema.
+id: cmd-alter-tsdictionary.qualified-name-resolution
+title: "Schema-qualified dictionary names resolve only in their own schema"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, qualified-name, namespace, errors]
+required_capabilities: [create-schema, create-text-search-dictionary, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (name: the name, optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA ad_cmd_s4;
+  CREATE TEXT SEARCH DICTIONARY ad_cmd_s4.n_dq (TEMPLATE = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY ad_cmd_s4.n_dq (accept = false)
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY public.n_dq (accept = false)
+    expect: error
+    sqlstate: "42704"
+    comment: no such dictionary in public
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY nosuchschema.n_dq (accept = false)
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY nosuch (accept = false)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT dictinitoption FROM pg_ts_dict d JOIN pg_namespace n ON n.oid = d.dictnamespace WHERE n.nspname = 'ad_cmd_s4' AND d.dictname = 'n_dq'
+    expect: rows
+    comment: only the qualified ALTER took effect

@@ -1,0 +1,35 @@
+# Without RESTART IDENTITY (explicit CONTINUE IDENTITY) owned sequences keep counting.
+id: cmd-truncate.continue-identity-default
+title: "CONTINUE IDENTITY, the default, leaves owned sequences unchanged"
+family: cmd-truncate
+tier: core
+feature_ids: [truncate, continue-identity, serial, insert, select]
+required_capabilities: [create-table, insert, select, sequences, truncate]
+provenance:
+  source: pg-docs
+  ref: "ref/truncate.sgml#parameters (CONTINUE IDENTITY)"
+sessions: [a]
+setup: |
+  CREATE TABLE sq_own (id serial PRIMARY KEY, v text);
+  INSERT INTO sq_own (v) VALUES ('a'), ('b');
+steps:
+  - sql: |
+      TRUNCATE sq_own CONTINUE IDENTITY
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM sq_own
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO sq_own (v) VALUES ('c') RETURNING id
+    expect: rows
+    order: ordered
+    comment: the sequence continues at 3 instead of restarting at 1
+  - sql: |
+      TRUNCATE sq_own
+    expect: ok
+  - sql: |
+      INSERT INTO sq_own (v) VALUES ('d') RETURNING id
+    expect: rows
+    order: ordered
+    comment: omitting the identity clause behaves like CONTINUE IDENTITY

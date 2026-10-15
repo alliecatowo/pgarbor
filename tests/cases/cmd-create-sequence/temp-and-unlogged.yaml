@@ -1,0 +1,53 @@
+# TEMP sequences shadow same-named permanent ones for the session and vanish on exit; UNLOGGED sets relpersistence 'u'; TEMP in a named schema is rejected.
+id: cmd-create-sequence.temp-and-unlogged
+title: TEMP sequence shadows a permanent sequence until the session ends; UNLOGGED persistence; TEMP in a named schema errors
+family: cmd-create-sequence
+tier: extended
+feature_ids: [create-sequence, temporary-sequence, unlogged-sequence, schema-qualified-name, errors]
+required_capabilities: [sequences, select, reconnect, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#parameters (TEMPORARY, UNLOGGED)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SEQUENCE ts_perm START 500
+    expect: ok
+  - sql: |
+      CREATE TEMP SEQUENCE ts_perm START 1
+    expect: ok
+    comment: same name is allowed because the temporary one lives in pg_temp
+  - sql: |
+      SELECT nextval('ts_perm')
+    expect: rows
+    comment: unqualified name resolves to the temporary sequence, 1
+  - sql: |
+      SELECT nextval('public.ts_perm')
+    expect: rows
+    comment: schema-qualified name reaches the permanent sequence, 500
+  - sql: |
+      CREATE TEMP SEQUENCE public.ts_bad
+    expect: error
+    sqlstate: "42P16"
+    comment: a schema name cannot be given for a temporary sequence
+  - sql: |
+      CREATE UNLOGGED SEQUENCE sq_u
+    expect: ok
+  - sql: |
+      SELECT relname, relpersistence FROM pg_class WHERE relname = 'sq_u'
+    expect: rows
+    comment: relpersistence u means unlogged
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname = 'ts_perm' AND relpersistence = 't'
+    expect: rows
+    comment: one temporary relation exists in this session
+  - reconnect: true
+    comment: session exit drops the temporary sequence
+  - sql: |
+      SELECT nextval('ts_perm')
+    expect: rows
+    comment: the permanent sequence is visible again and continues from 500, giving 501
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname = 'ts_perm' AND relpersistence = 't'
+    expect: rows
+    comment: 0 after reconnect

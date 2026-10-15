@@ -1,0 +1,30 @@
+# DROP TABLE without a keyword uses the default RESTRICT behavior: a table referenced by a foreign key
+# cannot be dropped (SQLSTATE 2BP01), and the failed drop leaves both tables intact.
+id: doc-ddl-depend.drop-table-restrict-default
+title: DROP TABLE on a foreign-key-referenced table fails by default and leaves data intact
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-table, foreign-keys, dependency-tracking, drop-restrict]
+required_capabilities: [create-table, insert, select, drop-table, foreign-keys, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (DROP TABLE products example with orders FK)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text);
+  CREATE TABLE orders (order_id integer PRIMARY KEY, product_no integer REFERENCES products (product_no), quantity integer);
+  INSERT INTO products VALUES (1, 'widget');
+  INSERT INTO orders VALUES (10, 1, 5);
+steps:
+  - sql: |
+      DROP TABLE products
+    expect: error
+    sqlstate: "2BP01"
+    comment: default is RESTRICT; orders_product_no_fkey depends on products
+  - sql: |
+      SELECT count(*) FROM products
+    expect: rows
+  - sql: |
+      SELECT order_id, product_no, quantity FROM orders ORDER BY order_id
+    expect: rows
+    order: ordered

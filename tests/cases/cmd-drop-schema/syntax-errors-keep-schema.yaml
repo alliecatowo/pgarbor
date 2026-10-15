@@ -1,0 +1,44 @@
+# Malformed DROP SCHEMA statements are syntax errors (42601) and drop nothing.
+id: cmd-drop-schema.syntax-errors-keep-schema
+title: DROP SCHEMA with a missing name, a dangling comma, two clauses or no comma between names is a syntax error
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, syntax, errors]
+required_capabilities: [create-schema, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Synopsis: DROP SCHEMA [ IF EXISTS ] name [, ...] [ CASCADE | RESTRICT ])"
+sessions: [a]
+setup: |
+  CREATE SCHEMA syn_keep;
+steps:
+  - sql: |
+      DROP SCHEMA
+    expect: error
+    sqlstate: "42601"
+    comment: a name is required
+  - sql: |
+      DROP SCHEMA IF EXISTS
+    expect: error
+    sqlstate: "42601"
+    comment: IF EXISTS does not replace the name
+  - sql: |
+      DROP SCHEMA syn_keep,
+    expect: error
+    sqlstate: "42601"
+    comment: a trailing comma is not allowed
+  - sql: |
+      DROP SCHEMA syn_keep syn_other
+    expect: error
+    sqlstate: "42601"
+    comment: names in the list must be separated by commas
+  - sql: |
+      DROP SCHEMA syn_keep CASCADE RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: CASCADE and RESTRICT are mutually exclusive
+  - sql: |
+      SELECT count(*) AS n FROM pg_namespace WHERE nspname = 'syn_keep'
+    expect: rows
+    order: ordered
+    comment: none of the malformed statements dropped the schema

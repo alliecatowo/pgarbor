@@ -1,0 +1,29 @@
+# Referring to an access method that was never created fails, and a dropped access method is gone for later USING clauses.
+id: cmd-create-access-method.unknown-access-method-using
+title: USING an access method that does not exist fails with undefined object
+family: cmd-create-access-method
+tier: core
+feature_ids: [create-access-method, drop-access-method, create-table, errors]
+required_capabilities: [create-access-method, table-access-method, create-table, errors]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method (access methods must be defined before use); verified against PG18.6 oracle"
+sessions: [a]
+setup: |
+  CREATE ACCESS METHOD gone_am TYPE TABLE HANDLER heap_tableam_handler;
+  DROP ACCESS METHOD gone_am;
+steps:
+  - sql: |
+      CREATE TABLE t_gone (id int4) USING gone_am
+    expect: error
+    sqlstate: "42704"
+    comment: the access method was dropped in setup
+  - sql: |
+      CREATE TABLE t_never (id int4) USING never_defined_am
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('t_gone', 't_never')
+    expect: rows
+    order: ordered
+    comment: failed CREATE TABLE statements leave no relation behind

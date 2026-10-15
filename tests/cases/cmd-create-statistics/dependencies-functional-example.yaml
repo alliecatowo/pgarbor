@@ -1,0 +1,34 @@
+# Documented functional-dependency example, scaled down: a is determined by b-related grouping, so dependencies a=>b and b=>a are measured.
+id: cmd-create-statistics.dependencies-functional-example
+title: Functional dependency statistics from the documented example are built and reported
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, functional-dependencies, dependencies-kind]
+required_capabilities: [create-table, insert, extended-statistics, catalog-introspection, analyze, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics-examples (functional dependency example t1)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (a int, b int);
+  INSERT INTO t1 SELECT i / 100, i / 500 FROM generate_series(1, 1000) s(i);
+  ANALYZE t1;
+steps:
+  - sql: |
+      SELECT count(*) FROM t1 WHERE a = 1 AND b = 0
+    expect: rows
+    comment: the documented WHERE clause, counted exactly
+  - sql: |
+      CREATE STATISTICS s1 (dependencies) ON a, b FROM t1
+    expect: ok
+  - sql: |
+      ANALYZE t1
+    expect: ok
+  - sql: |
+      SELECT statistics_name, dependencies::text FROM pg_stats_ext WHERE statistics_name = 's1'
+    expect: rows
+    comment: a=>b dependency is strong and b=>a is weak
+  - sql: |
+      SELECT count(*) FROM t1 WHERE a = 1 AND b = 0
+    expect: rows
+    comment: the query result itself is unchanged by statistics

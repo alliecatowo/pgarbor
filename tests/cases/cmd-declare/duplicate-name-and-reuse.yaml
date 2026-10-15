@@ -1,0 +1,52 @@
+id: cmd-declare.duplicate-name-and-reuse
+title: Declaring an already-open cursor name fails, and the name is reusable after rollback or commit
+family: cmd-declare
+tier: core
+feature_ids: [declare-cursor, cursor-name, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare (Parameters: name must differ from any other active cursor name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      DECLARE c CURSOR FOR SELECT name FROM t ORDER BY id
+    expect: error
+    sqlstate: "42P03"
+    comment: the name is already an active cursor in this session
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c CURSOR FOR SELECT name FROM t ORDER BY id
+    expect: ok
+    comment: the earlier cursor vanished with its rolled-back transaction
+  - sql: |
+      FETCH 1 FROM c
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      FETCH 1 FROM c
+    expect: error
+    sqlstate: "34000"
+    comment: a non-holdable cursor is closed at commit
+  - sql: |
+      DECLARE c CURSOR FOR SELECT 1
+    expect: error
+    sqlstate: "25P01"
+    comment: the name is free again, but DECLARE still needs a transaction block

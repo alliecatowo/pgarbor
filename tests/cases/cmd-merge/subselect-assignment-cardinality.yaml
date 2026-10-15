@@ -1,0 +1,45 @@
+# Documented sub-SELECT in merge_update: zero rows assign NULL, more than one row is an error that leaves no partial change.
+id: cmd-merge.subselect-assignment-cardinality
+title: MERGE UPDATE sub-SELECT yields NULL for zero rows and cardinality error for multiple rows
+family: cmd-merge
+tier: core
+feature_ids: [merge, update, subselect, column-list-assignment, cardinality]
+required_capabilities: [create-table, insert, select, update, merge, subselect]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (merge_update sub-SELECT parameter; Notes: cardinality)"
+setup: |
+  CREATE TABLE tgt (id integer PRIMARY KEY, a integer, b text);
+  CREATE TABLE src (id integer, v integer);
+  INSERT INTO tgt VALUES (1, 10, 'one'), (2, 20, 'two');
+  INSERT INTO src VALUES (1, 100), (2, 200);
+steps:
+  - sql: |
+      MERGE INTO tgt t
+      USING src s
+      ON t.id = s.id
+      WHEN MATCHED THEN
+        UPDATE SET (a, b) = (SELECT x.v, 'multi' FROM src x)
+    expect: error
+    sqlstate: "21000"
+    comment: more than one row returned by the sub-SELECT
+  - sql: |
+      SELECT id, a, b FROM tgt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect (1,10,'one'), (2,20,'two'); the failed MERGE changed nothing
+  - sql: |
+      MERGE INTO tgt t
+      USING src s
+      ON t.id = s.id
+      WHEN MATCHED AND s.id = 1 THEN
+        UPDATE SET (a, b) = (SELECT 11, 'eleven' WHERE false)
+      WHEN MATCHED THEN
+        UPDATE SET (a, b) = (SELECT z.a + 1, 'bumped' FROM tgt z WHERE z.id = 2)
+    expect: ok
+    comment: zero-row sub-SELECT assigns NULL to a and b for id 1; the one-row sub-SELECT for id 2 assigns a=21
+  - sql: |
+      SELECT id, a, b FROM tgt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect (1,NULL,NULL), (2,21,'bumped')

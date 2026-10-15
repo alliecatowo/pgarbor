@@ -1,0 +1,37 @@
+# A column's type constrains the values it accepts: integer rejects text and out-of-range values; fractions round.
+id: doc-ddl-basics.integer-column-input-rules
+title: Integer column rejects non-numeric text and out-of-range values, rounds fractions
+family: doc-ddl-basics
+tier: core
+feature_ids: [create-table, integer-type, type-constraints, errors]
+required_capabilities: [create-table, insert, select, errors, order-by]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-basics (the data type constrains the set of possible values that can be assigned to a column)"
+sessions: [a]
+setup: |
+  CREATE TABLE typed (n integer, label text)
+steps:
+  - sql: |
+      INSERT INTO typed VALUES (2.7, 'round'), (-2.5, 'half'), (2147483647, 'max')
+    expect: ok
+  - sql: |
+      SELECT n, label FROM typed ORDER BY n
+    expect: rows
+    order: ordered
+    comment: fractional input is rounded on assignment to integer
+  - sql: |
+      INSERT INTO typed VALUES ('abc', 'text')
+    expect: error
+    sqlstate: "22P02"
+    comment: non-numeric text is rejected by an integer column
+  - sql: |
+      INSERT INTO typed VALUES (2147483648, 'overflow')
+    expect: error
+    sqlstate: "22003"
+    comment: value above the int4 range is rejected
+  - sql: |
+      SELECT count(*) FROM typed
+    expect: rows
+    order: multiset
+    comment: rejected inserts left no rows behind

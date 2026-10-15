@@ -1,0 +1,54 @@
+# CREATE OR REPLACE updates an existing language's parameters, keeps its owner, creates the language if absent, and leaves it unchanged on failure.
+id: cmd-create-language.or-replace-keeps-owner
+title: CREATE OR REPLACE LANGUAGE updates parameters, keeps the owner, creates when absent, and is a no-op on failure
+family: cmd-create-language
+tier: core
+feature_ids: [create-language, or-replace, owner, trusted]
+required_capabilities: [create-language, create-function-sql, alter-language, roles, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Description: CREATE OR REPLACE LANGUAGE)"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS cl_r_owner;
+  CREATE ROLE cl_r_owner NOLOGIN;
+  CREATE LANGUAGE cl_r HANDLER plpgsql_call_handler;
+  ALTER LANGUAGE cl_r OWNER TO cl_r_owner;
+steps:
+  - sql: |
+      CREATE OR REPLACE LANGUAGE cl_r HANDLER plpgsql_call_handler VALIDATOR plpgsql_validator
+    expect: ok
+    comment: adds a validator to the existing language
+  - sql: |
+      SELECT lanvalidator::regproc AS validator, lanowner = (SELECT oid FROM pg_roles WHERE rolname = 'cl_r_owner') AS owner_kept FROM pg_language WHERE lanname = 'cl_r'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OR REPLACE TRUSTED LANGUAGE cl_r HANDLER plpgsql_call_handler
+    expect: ok
+    comment: the TRUSTED flag is part of the replaced parameters
+  - sql: |
+      SELECT lanpltrusted FROM pg_language WHERE lanname = 'cl_r'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OR REPLACE LANGUAGE cl_r HANDLER plpgsql_call_handler
+    expect: ok
+    comment: replacing without TRUSTED makes the language untrusted again
+  - sql: |
+      SELECT lanpltrusted, lanvalidator = 0 AS validator_cleared FROM pg_language WHERE lanname = 'cl_r'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OR REPLACE LANGUAGE cl_r_new HANDLER plpgsql_call_handler
+    expect: ok
+    comment: OR REPLACE creates the language when it does not exist
+  - sql: |
+      CREATE OR REPLACE LANGUAGE cl_r HANDLER cl_no_such_handler
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT lanname, lanowner = (SELECT oid FROM pg_roles WHERE rolname = 'cl_r_owner') AS owner_kept, lanvalidator = 0 AS validator_cleared FROM pg_language WHERE lanname IN ('cl_r', 'cl_r_new') ORDER BY lanname
+    expect: rows
+    order: ordered
+    comment: the failed replace left cl_r as it was

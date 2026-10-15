@@ -1,0 +1,29 @@
+# Ordered-set aggregates are identified by direct-then-ORDER BY argument lists; the signature must match exactly.
+id: cmd-drop-aggregate.ordered-set-signature
+title: DROP AGGREGATE for an ordered-set aggregate requires the ORDER BY signature
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, create-aggregate, ordered-set-aggregates, aggregates]
+required_capabilities: [aggregates, create-aggregate, create-function, drop-aggregate, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (aggregate_signature, ORDER BY form)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2';
+      CREATE AGGREGATE myperc(float8 ORDER BY integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myperc(float8)
+    expect: error
+    sqlstate: "42883"
+    comment: the ORDER BY section is part of the identity
+  - sql: |
+      DROP AGGREGATE myperc(integer ORDER BY float8)
+    expect: error
+    sqlstate: "42883"
+    comment: direct and aggregated argument types are not interchangeable
+  - sql: |
+      DROP AGGREGATE myperc(float8 ORDER BY integer)
+    expect: ok

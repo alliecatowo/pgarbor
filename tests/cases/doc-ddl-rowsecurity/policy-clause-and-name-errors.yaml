@@ -1,0 +1,50 @@
+# Policy names are unique per table only; command-specific clause misuse and unknown tables raise errors.
+id: doc-ddl-rowsecurity.policy-clause-and-name-errors
+title: "Duplicate policy names, misplaced WITH CHECK and USING clauses, and unknown tables are refused"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, errors, with-check, using]
+required_capabilities: [create-table, rls, alter-table]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: each policy for a table must have a unique name; WITH CHECK and USING per command"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p1 ON t FOR SELECT USING (true);
+  CREATE TABLE t2 (id int4);
+steps:
+  - sql: |
+      CREATE POLICY p1 ON t FOR SELECT USING (true)
+    expect: error
+    sqlstate: "42710"
+    comment: the name p1 is already used on table t
+  - sql: |
+      CREATE POLICY p1 ON t2 FOR SELECT USING (true)
+    expect: ok
+    comment: the same policy name is allowed on a different table
+  - sql: |
+      CREATE POLICY p2 ON t FOR SELECT WITH CHECK (true)
+    expect: error
+    sqlstate: "42601"
+    comment: WITH CHECK is not allowed for SELECT policies
+  - sql: |
+      CREATE POLICY p3 ON t FOR INSERT USING (true)
+    expect: error
+    sqlstate: "42601"
+    comment: an INSERT policy takes only WITH CHECK
+  - sql: |
+      CREATE POLICY p4 ON t FOR DELETE WITH CHECK (true)
+    expect: error
+    sqlstate: "42601"
+    comment: WITH CHECK is not allowed for DELETE policies either
+  - sql: |
+      CREATE POLICY p5 ON pgarbor_case_nosuch_table USING (true)
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      DROP TABLE t2
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok

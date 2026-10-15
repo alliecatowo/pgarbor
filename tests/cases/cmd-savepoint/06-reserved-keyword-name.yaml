@@ -1,0 +1,39 @@
+# A reserved keyword is not a valid unquoted savepoint name; a double-quoted identifier is accepted.
+id: cmd-savepoint.reserved-keyword-name
+title: Reserved keyword as savepoint name needs double quotes; quoted name works with ROLLBACK TO
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, quoted-identifiers, errors, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/savepoint.sgml#sql-savepoint (Parameters: savepoint_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SAVEPOINT select
+    expect: error
+    sqlstate: "42601"
+    comment: unquoted reserved keyword is a syntax error; block is now aborted
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (2);
+      SAVEPOINT "select";
+      INSERT INTO t VALUES (3);
+      ROLLBACK TO SAVEPOINT "select";
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: row 1 was rolled back with the first block; row 3 was undone by ROLLBACK TO "select"; only 2 remains

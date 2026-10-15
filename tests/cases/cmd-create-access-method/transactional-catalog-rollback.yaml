@@ -1,0 +1,34 @@
+# CREATE ACCESS METHOD writes the catalog transactionally: a rolled-back definition disappears, a committed one persists.
+id: cmd-create-access-method.transactional-catalog-rollback
+title: CREATE ACCESS METHOD is rolled back with its transaction and persists after COMMIT
+family: cmd-create-access-method
+tier: core
+feature_ids: [create-access-method, transactions, rollback, commit]
+required_capabilities: [create-access-method, table-access-method, transactions, select]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method; catalog transactionality per PostgreSQL catalog semantics, verified against PG18.6 oracle"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN;
+      CREATE ACCESS METHOD txam TYPE TABLE HANDLER heap_tableam_handler;
+      SELECT count(*) FROM pg_am WHERE amname = 'txam';
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_am WHERE amname = 'txam'
+    expect: rows
+    order: ordered
+    comment: rollback removed the definition
+  - sql: |
+      BEGIN;
+      CREATE ACCESS METHOD txam2 TYPE TABLE HANDLER heap_tableam_handler;
+      COMMIT
+    expect: ok
+  - reconnect: true
+  - sql: |
+      SELECT amname, amtype FROM pg_am WHERE amname = 'txam2'
+    expect: rows
+    order: ordered
+    comment: committed definition survives reconnect

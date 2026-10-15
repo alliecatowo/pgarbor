@@ -1,0 +1,46 @@
+# Trivial syntax errors surface when CREATE FUNCTION parses the body; errors that need the catalog (a missing
+# table) surface only when the function runs.
+id: doc-plpgsql-implementation.compile-time-syntax-errors
+title: Syntax errors in a PL/pgSQL body fail at CREATE time; missing relations fail at call time
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, create-function, syntax-errors, plan-cache]
+required_capabilities: [create-table, select, create-function, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Plan Caching)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION trivial_syntax() RETURNS int AS $$
+      BEGIN
+        RETURN 1 +;
+      END;
+      $$ LANGUAGE plpgsql
+    expect: error
+    sqlstate: "42601"
+    comment: dangling operator in an expression is detected during the initial parse
+  - sql: |
+      CREATE FUNCTION bad_stmt_syntax() RETURNS int AS $$
+      BEGIN
+        SELEC 1;
+        RETURN 1;
+      END;
+      $$ LANGUAGE plpgsql
+    expect: error
+    sqlstate: "42601"
+    comment: misspelled statement keyword is a syntax error at creation
+  - sql: |
+      CREATE FUNCTION deep_missing() RETURNS int AS $$
+      BEGIN
+        PERFORM count(*) FROM no_such_table_zz;
+        RETURN 1;
+      END;
+      $$ LANGUAGE plpgsql
+    expect: ok
+    comment: the missing table is not checked when the function is created
+  - sql: |
+      SELECT deep_missing()
+    expect: error
+    sqlstate: "42P01"
+    comment: the reference is analyzed on first execution

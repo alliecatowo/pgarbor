@@ -1,0 +1,41 @@
+# Scalar subqueries: correlated lookup, NULL for zero rows, and the documented error for multiple rows or columns.
+id: doc-sql-expressions.scalar-subquery
+title: Scalar subqueries return NULL for no rows and fail for multiple rows or columns
+family: doc-sql-expressions
+tier: core
+feature_ids: [scalar-subquery, correlated-subquery, errors]
+required_capabilities: [select, insert, create-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-scalar-subqueries"
+sessions: [a]
+setup: |
+  CREATE TABLE st (name text, pop int4);
+  CREATE TABLE cities (name text, state text, pop int4);
+  INSERT INTO st VALUES ('a', 1), ('b', 5), ('c', 3);
+  INSERT INTO cities VALUES ('c1', 'a', 10), ('c2', 'a', 30), ('c3', 'b', 7);
+steps:
+  - sql: |
+      SELECT name, (SELECT max(pop) FROM cities WHERE cities.state = st.name) AS top FROM st ORDER BY name
+    expect: rows
+    order: ordered
+    comment: the documented per-state maximum, using the outer row as a constant
+  - sql: |
+      SELECT (SELECT pop FROM cities WHERE false) AS none
+    expect: rows
+    order: ordered
+    comment: zero rows from the subquery yields NULL, not an error
+  - sql: |
+      SELECT 1 + (SELECT x FROM (VALUES (5)) t(x)) AS plus
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name, (SELECT pop FROM cities WHERE cities.state = st.name) AS p FROM st ORDER BY name
+    expect: error
+    sqlstate: "21000"
+    comment: state 'a' has two cities, so the subquery returns more than one row
+  - sql: |
+      SELECT (SELECT name, pop FROM cities WHERE state = 'a' ORDER BY pop LIMIT 1) AS two
+    expect: error
+    sqlstate: "42601"
+    comment: a scalar subquery must return exactly one column

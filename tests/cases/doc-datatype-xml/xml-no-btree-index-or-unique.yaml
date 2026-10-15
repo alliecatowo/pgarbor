@@ -1,0 +1,38 @@
+# xml cannot be indexed or constrained directly (no btree opclass); an expression index on the text cast works.
+id: doc-datatype-xml.xml-no-btree-index-or-unique
+title: Plain and UNIQUE xml columns fail for lack of a btree operator class; an index on x::text succeeds
+family: doc-datatype-xml
+tier: core
+feature_ids: [xml, create-index, unique-constraint, expression-index, no-btree]
+required_capabilities: [create-table, insert, select, create-index, xml, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-xml-accessing-xml-values (cannot create an index directly on xml; cast to a character string and index that)"
+sessions: [a]
+setup: |
+  CREATE TABLE xi (id int4 PRIMARY KEY, x xml);
+  INSERT INTO xi VALUES (1, '<a/><b/>'), (2, '<c/>');
+steps:
+  - sql: |
+      CREATE INDEX xi_x_idx ON xi (x)
+    expect: error
+    sqlstate: "42704"
+    comment: no default btree operator class for xml
+  - sql: |
+      CREATE TABLE xi_u (x xml UNIQUE)
+    expect: error
+    sqlstate: "42704"
+    comment: a unique constraint needs the same btree class
+  - sql: |
+      CREATE INDEX xi_text_idx ON xi ((x::text))
+    expect: ok
+    comment: documented workaround, index the character-string cast
+  - sql: |
+      SELECT id FROM xi WHERE x::text = '<c/>' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM xi_u
+    expect: error
+    sqlstate: "42P01"
+    comment: the failed CREATE TABLE left no table behind

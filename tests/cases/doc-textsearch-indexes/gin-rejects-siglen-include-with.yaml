@@ -1,0 +1,36 @@
+# siglen is a GiST-only option; GIN does not support INCLUDE and does not accept siglen in WITH.
+id: doc-textsearch-indexes.gin-rejects-siglen-include-with
+title: GIN indexes reject siglen, INCLUDE columns and unknown storage options
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gin-index, siglen, index-include, storage-parameters, index-validation]
+required_capabilities: [create-table, create-index, gin-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (siglen applies to GiST; GiST can be covering)"
+steps:
+  - sql: |
+      CREATE TABLE t (id int4 PRIMARY KEY, tsv tsvector)
+    expect: ok
+  - sql: |
+      CREATE INDEX t_gin_siglen ON t USING GIN (tsv tsvector_ops (siglen = 10))
+    expect: error
+    sqlstate: "22023"
+    comment: tsvector_ops for GIN has no options
+  - sql: |
+      CREATE INDEX t_gin_inc ON t USING GIN (tsv) INCLUDE (id)
+    expect: error
+    sqlstate: "0A000"
+    comment: only GiST supports covering INCLUDE for text search
+  - sql: |
+      CREATE INDEX t_gin_opt ON t USING GIN (tsv) WITH (siglen = 10)
+    expect: error
+    sqlstate: "22023"
+    comment: siglen is not a GIN storage parameter
+  - sql: |
+      CREATE INDEX t_gin ON t USING GIN (tsv)
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 't' ORDER BY indexname
+    expect: rows
+    order: ordered

@@ -1,0 +1,52 @@
+# Output parameters and the three documented ways to return multiple columns: OUT parameters,
+# a named composite type, and RETURNS TABLE. Also checks that RETURNS must agree with OUT params.
+id: cmd-create-function.out-params-record-forms
+title: OUT parameters, composite RETURNS and RETURNS TABLE all yield the same columns; RETURNS must agree with OUT
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, out-parameters, returns-table, composite-return-type]
+required_capabilities: [create-function, create-type, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-examples (dup examples); #sql-createfunction-description (RETURNS)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION dup(in int, out f1 int, out f2 text)
+          AS $$ SELECT $1, CAST($1 AS text) || ' is text' $$
+          LANGUAGE SQL
+    expect: ok
+  - sql: |
+      SELECT * FROM dup(42)
+    expect: rows
+    comment: expect one row, f1 = 42, f2 = '42 is text'
+  - sql: |
+      CREATE TYPE dup_result AS (f1 int, f2 text)
+    expect: ok
+  - sql: |
+      CREATE FUNCTION dup2(int) RETURNS dup_result
+          AS $$ SELECT $1, CAST($1 AS text) || ' is text' $$
+          LANGUAGE SQL
+    expect: ok
+  - sql: |
+      SELECT * FROM dup2(42)
+    expect: rows
+  - sql: |
+      CREATE FUNCTION dup3(int) RETURNS TABLE(f1 int, f2 text)
+          AS $$ SELECT $1, CAST($1 AS text) || ' is text' $$
+          LANGUAGE SQL
+    expect: ok
+  - sql: |
+      SELECT * FROM dup3(42)
+    expect: rows
+    comment: all three forms give identical rows
+  - sql: |
+      CREATE FUNCTION dupbad(a int, OUT x int) RETURNS text LANGUAGE sql AS 'select a'
+    expect: error
+    sqlstate: "42P13"
+    comment: a single OUT parameter of type int requires RETURNS int, not text
+  - sql: |
+      CREATE FUNCTION dupbad2(OUT a int) RETURNS TABLE(x int) LANGUAGE sql AS 'select 1'
+    expect: error
+    sqlstate: "42601"
+    comment: OUT parameters cannot be combined with RETURNS TABLE

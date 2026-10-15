@@ -1,0 +1,23 @@
+# OWNER TO a role that does not exist fails with undefined_object and leaves the owner unchanged.
+id: cmd-alter-opclass.owner-missing-role-42704
+title: "OWNER TO an unknown role raises undefined_object and keeps the current owner"
+family: cmd-alter-opclass
+tier: core
+feature_ids: [alter-operator-class, owner, error-handling]
+required_capabilities: [create-operator-class, alter-operator-class, roles, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opclass.sgml#sql-alteropclass (OWNER TO new_owner)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR CLASS aoc_cmd_o6 FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 3 =, OPERATOR 5 >, FUNCTION 1 btint4cmp(int4,int4);
+steps:
+  - sql: |
+      ALTER OPERATOR CLASS aoc_cmd_o6 USING btree OWNER TO aoc_cmd_no_such_role
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT opcowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) FROM pg_opclass WHERE opcname = 'aoc_cmd_o6'
+    expect: rows
+    order: ordered
+    comment: owner is still the session user

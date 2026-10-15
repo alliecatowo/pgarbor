@@ -1,0 +1,58 @@
+# SET and RESET storage parameters with their validation errors; statistics target -1 means the default; STORAGE is limited to varlena types.
+id: cmd-alter-table.storage-params-statistics
+title: "SET/RESET storage parameters, SET STATISTICS, and SET STORAGE with their validation errors"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, storage-parameters, statistics-target, column-storage, errors]
+required_capabilities: [create-table, alter-table, insert, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Parameters: SET ( storage_parameter ), RESET, SET STATISTICS, SET STORAGE)"
+sessions: [a]
+setup: |
+  CREATE TABLE tuned (a int4, b text);
+  INSERT INTO tuned VALUES (1, 'x'), (2, 'y');
+steps:
+  - sql: |
+      ALTER TABLE tuned SET (fillfactor = 70, autovacuum_enabled = false)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'tuned'::regclass
+    expect: rows
+  - sql: |
+      ALTER TABLE tuned RESET (fillfactor)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'tuned'::regclass
+    expect: rows
+  - sql: |
+      ALTER TABLE tuned SET (no_such_param = 1)
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER TABLE tuned SET (fillfactor = 5)
+    expect: error
+    sqlstate: "22023"
+    comment: fillfactor must be between 10 and 100
+  - sql: |
+      ALTER TABLE tuned ALTER COLUMN a SET STATISTICS 500
+    expect: ok
+  - sql: |
+      ALTER TABLE tuned ALTER COLUMN a SET STATISTICS -1
+    expect: ok
+  - sql: |
+      SELECT attstattarget IS NULL AS default_target FROM pg_attribute WHERE attrelid = 'tuned'::regclass AND attname = 'a'
+    expect: rows
+    comment: -1 restores the default statistics target, stored as NULL
+  - sql: |
+      ALTER TABLE tuned ALTER COLUMN a SET STORAGE EXTERNAL
+    expect: error
+    sqlstate: "0A000"
+    comment: integer columns can only have PLAIN storage
+  - sql: |
+      ALTER TABLE tuned ALTER COLUMN b SET STORAGE EXTERNAL
+    expect: ok
+  - sql: |
+      SELECT attname, attstorage FROM pg_attribute WHERE attrelid = 'tuned'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered

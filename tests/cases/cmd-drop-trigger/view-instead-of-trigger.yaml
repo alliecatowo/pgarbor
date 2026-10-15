@@ -1,0 +1,39 @@
+# An INSTEAD OF trigger is the only way to write to a non-auto-updatable view; dropping it makes the same INSERT fail.
+id: cmd-drop-trigger.view-instead-of-trigger
+title: "DROP TRIGGER removes an INSTEAD OF INSERT trigger from a view, and the view then rejects inserts with 55000"
+family: cmd-drop-trigger
+tier: extended
+feature_ids: [drop-trigger, views, instead-of-triggers, triggers, errors]
+required_capabilities: [create-table, insert, select, create-view, create-function, plpgsql, triggers, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Description: an existing trigger definition); doc/src/sgml/ref/create_trigger.sgml (INSTEAD OF)"
+sessions: [a]
+setup: |
+  CREATE TABLE trg_log (tg text);
+  CREATE FUNCTION view_tg() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME);
+    RETURN NEW;
+  END
+  $$;
+  CREATE TABLE base (id int4);
+  CREATE VIEW vd AS SELECT DISTINCT id FROM base;
+  CREATE TRIGGER vt INSTEAD OF INSERT ON vd FOR EACH ROW EXECUTE FUNCTION view_tg();
+steps:
+  - sql: |
+      INSERT INTO vd VALUES (1)
+    expect: ok
+    comment: the INSTEAD OF trigger handles the insert
+  - sql: |
+      DROP TRIGGER vt ON vd
+    expect: ok
+  - sql: |
+      INSERT INTO vd VALUES (2)
+    expect: error
+    sqlstate: "55000"
+    comment: a DISTINCT view is not automatically updatable, and no trigger remains
+  - sql: |
+      SELECT (SELECT count(*) FROM trg_log) AS logged, (SELECT count(*) FROM base) AS base_rows
+    expect: rows
+    comment: the first insert logged once; neither insert reached the base table

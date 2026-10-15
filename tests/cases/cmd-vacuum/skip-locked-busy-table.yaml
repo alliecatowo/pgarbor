@@ -1,0 +1,47 @@
+# SKIP_LOCKED skips a table that another session holds an exclusive lock on, without waiting; plain VACUUM waits until the lock is released.
+id: cmd-vacuum.skip-locked-busy-table
+title: "VACUUM (SKIP_LOCKED) skips a busy table while plain VACUUM waits"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, skip-locked, lock-table, multi-session]
+required_capabilities: [create-table, insert, select, lock-table, multi-session, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: SKIP_LOCKED)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE vsl (id int4 PRIMARY KEY);
+  INSERT INTO vsl VALUES (1), (2), (3);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE vsl IN ACCESS EXCLUSIVE MODE
+    expect: ok
+  - session: b
+    sql: |
+      VACUUM (SKIP_LOCKED) vsl
+    expect: ok
+    comment: WARNING that the table is skipped; does not wait
+  - session: b
+    sql: |
+      VACUUM vsl
+    async: true
+    expect_blocked: true
+    comment: without SKIP_LOCKED the command waits for the lock
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: the waiting VACUUM proceeds once the lock is released
+  - session: b
+    sql: |
+      SELECT count(*) FROM vsl
+    expect: rows
+    order: ordered

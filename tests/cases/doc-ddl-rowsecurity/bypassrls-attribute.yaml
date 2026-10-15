@@ -1,0 +1,54 @@
+# Roles with BYPASSRLS skip row security even with default deny; ordinary roles do not.
+id: doc-ddl-rowsecurity.bypassrls-attribute
+title: "BYPASSRLS roles see and modify all rows under default deny"
+family: doc-ddl-rowsecurity
+tier: extended
+feature_ids: [rls, bypassrls, role-attributes, default-deny, select, insert]
+required_capabilities: [create-table, insert, select, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: Superusers and roles with the BYPASSRLS attribute always bypass the row security system"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr16_plain;
+  CREATE ROLE pgarbor_case_role_dr16_byp BYPASSRLS;
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (1), (2);
+  GRANT SELECT, INSERT ON t TO pgarbor_case_role_dr16_plain, pgarbor_case_role_dr16_byp;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr16_plain
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM t
+    expect: rows
+    comment: default deny for an ordinary role
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_role_dr16_byp
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the BYPASSRLS role sees both rows
+  - sql: |
+      INSERT INTO t VALUES (3)
+    expect: ok
+    comment: INSERT 0 1 - no policy is needed for BYPASSRLS
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr16_plain, pgarbor_case_role_dr16_byp
+    expect: ok

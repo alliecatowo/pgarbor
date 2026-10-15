@@ -1,0 +1,51 @@
+# OWNER TO accepts CURRENT_USER, SESSION_USER and CURRENT_ROLE as well as a role name; each keyword
+# resolves to the session's own role.
+id: cmd-alter-aggregate.owner-keywords
+title: "ALTER AGGREGATE OWNER TO accepts CURRENT_USER, SESSION_USER and CURRENT_ROLE"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, owner, roles]
+required_capabilities: [roles, aggregates, create-aggregate, create-function, alter-aggregate, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#synopsis (OWNER TO CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+setup: |
+  DROP ROLE IF EXISTS kw_new;
+  CREATE ROLE kw_new;
+  CREATE FUNCTION kw_sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE AGGREGATE kw_agg(integer) (sfunc = kw_sf, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      ALTER AGGREGATE kw_agg(integer) OWNER TO kw_new
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(p.proowner) AS owner FROM pg_proc p WHERE p.proname = 'kw_agg'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER AGGREGATE kw_agg(integer) OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(p.proowner) = CURRENT_USER AS owned_by_current_user FROM pg_proc p WHERE p.proname = 'kw_agg'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER AGGREGATE kw_agg(integer) OWNER TO kw_new
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE kw_agg(integer) OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(p.proowner) = SESSION_USER AS owned_by_session_user FROM pg_proc p WHERE p.proname = 'kw_agg'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER AGGREGATE kw_agg(integer) OWNER TO kw_new
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE kw_agg(integer) OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(p.proowner) = CURRENT_ROLE AS owned_by_current_role FROM pg_proc p WHERE p.proname = 'kw_agg'
+    expect: rows
+    order: ordered

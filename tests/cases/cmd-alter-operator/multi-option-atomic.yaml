@@ -1,0 +1,36 @@
+# One ALTER OPERATOR statement applies all its options or none: HASHES and MERGES are not kept when a later
+# JOIN option names an unknown function. A separate statement can then set the flags.
+id: cmd-alter-operator.multi-option-atomic
+title: "A failing option aborts the whole ALTER OPERATOR SET list, including HASHES, MERGES and RESTRICT"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, hashes, merges, restrict-selectivity, join-selectivity, errors]
+required_capabilities: [alter-operator, create-operator, create-function-sql, internal-functions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#parameters (HASHES, MERGES, RESTRICT, JOIN)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_at_lt(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR <<< (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_at_lt);
+  CREATE FUNCTION cmd_ao_at_contsel(internal, oid, internal, integer)
+  RETURNS float8 AS 'contsel' LANGUAGE internal STABLE STRICT;
+steps:
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (HASHES, MERGES, RESTRICT = cmd_ao_at_contsel, JOIN = cmd_ao_no_such_join)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT oprcanhash, oprcanmerge, oprrest = 0 AS no_restrict, oprjoin = 0 AS no_join
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered
+    comment: nothing from the failed statement was applied
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET (HASHES, MERGES)
+    expect: ok
+  - sql: |
+      SELECT oprcanhash, oprcanmerge
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered

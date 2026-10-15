@@ -1,0 +1,37 @@
+# Every geometric type works as a column; NULL is distinct from the empty text and from valid values.
+id: doc-datatype-geometric.geometric-columns-null
+title: all geometric column types store documented text forms and NULLs
+family: doc-datatype-geometric
+tier: core
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-geometric (Geometric Types)"
+sessions: [a]
+feature_ids: [point, line, lseg, box, path, polygon, circle, null-handling, table-storage]
+required_capabilities: [create-table, insert, select, errors]
+setup: |
+  CREATE TABLE geo (id int4 PRIMARY KEY, p point, l line, s lseg, b box, pa path, pg polygon, c circle)
+steps:
+  - sql: |
+      INSERT INTO geo VALUES
+        (1, '(1,2)', '{1,2,3}', '[(0,0),(1,1)]', '(0,0),(1,1)', '[(0,0),(1,1),(2,0)]', '((0,0),(1,1),(2,0))', '<(1,2),3>'),
+        (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+        (3, '0,0', '{0,1,0}', '(0,0),(0,0)', '1,1,0,0', '((0,0))', '(1,2)', '<(0,0),0>')
+    expect: ok
+  - sql: |
+      SELECT id, p, l, s, b, pa, pg, c FROM geo ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM geo WHERE p IS NULL AND c IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: only the all-NULL row matches
+  - sql: |
+      INSERT INTO geo VALUES (4, NULL, NULL, NULL, NULL, '[]', NULL, NULL)
+    expect: error
+    sqlstate: "22P02"
+    comment: a failing row is not stored
+  - sql: |
+      SELECT count(*) AS n FROM geo
+    expect: rows

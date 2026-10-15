@@ -1,0 +1,48 @@
+# A deferred foreign key is checked when END runs; a violation makes END fail and discards the whole block.
+id: cmd-end.deferred-constraint-fails-at-end
+title: END fails on a deferred foreign key violation and rolls back the block
+family: cmd-end
+tier: core
+feature_ids: [end, foreign-key, deferrable, constraints, transactions, insert]
+required_capabilities: [create-table, insert, select, transactions, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/end.sgml#sql-end (Description: END commits; deferred constraints are checked at commit time)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY);
+  CREATE TABLE child (id int4 PRIMARY KEY, pid int4 REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO child VALUES (1, 99)
+    expect: ok
+    comment: the check is deferred, so the orphan row is accepted for now
+  - sql: |
+      END
+    expect: error
+    sqlstate: "23503"
+    comment: the foreign key check runs during END and fails
+  - sql: |
+      SELECT count(*) AS n FROM child
+    expect: rows
+    order: ordered
+    comment: the failed END rolled everything back
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO parent VALUES (99)
+    expect: ok
+  - sql: |
+      INSERT INTO child VALUES (2, 99)
+    expect: ok
+  - sql: |
+      END
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM child ORDER BY id
+    expect: rows
+    order: ordered

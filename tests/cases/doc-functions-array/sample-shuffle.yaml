@@ -1,0 +1,26 @@
+# array_sample and array_shuffle are random, so this case checks only deterministic properties:
+# the result is a permutation or a subset of the right size, shape is kept, and invalid sizes are rejected.
+id: doc-functions-array.sample-shuffle
+title: array_sample and array_shuffle deterministic properties with invalid sample size
+family: doc-functions-array
+tier: extended
+feature_ids: [array-functions, array-sample, array-shuffle]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-array (array_sample, array_shuffle)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT (SELECT array_agg(x ORDER BY x) FROM unnest(array_sample(ARRAY[1,2,3,4,5,6], 6)) AS x) AS full_sample_sorted, cardinality(array_sample(ARRAY[1,2,3,4,5,6], 3)) AS sample_size, cardinality(array_sample(ARRAY[1,2,3], 0)) AS zero_sample, array_ndims(array_sample(ARRAY[[1,2],[3,4],[5,6]], 2)) AS slice_ndims, cardinality(array_sample(ARRAY[[1,2],[3,4],[5,6]], 2)) AS slice_card
+    expect: rows
+    comment: randomness is hidden by sorting a full-size sample and checking only sizes and shape
+  - sql: |
+      SELECT (SELECT array_agg(x ORDER BY x) FROM unnest(array_shuffle(ARRAY[1,2,3,4])) AS x) AS shuffled_sorted, cardinality(array_shuffle(ARRAY[]::int[])) AS empty_card, array_ndims(array_shuffle(ARRAY[[1,2],[3,4],[5,6]])) AS shuffle_ndims
+    expect: rows
+    comment: shuffling keeps the same multiset of elements and the dimensionality
+  - sql: |
+      SELECT array_sample(ARRAY[1,2], 3)
+    expect: error
+    sqlstate: "22023"
+    comment: sample size may not exceed the length of the first dimension

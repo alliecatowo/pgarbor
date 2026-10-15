@@ -1,0 +1,31 @@
+# Documented: GiST and SP-GiST operator classes can carry INCLUDE payload columns; the index answers the same query.
+id: doc-indexes-index-only-scans.include-gist-spgist-indexdef
+title: INCLUDE is accepted on GiST and SP-GiST point indexes and queries return the correct rows
+family: doc-indexes-index-only-scans
+tier: extended
+feature_ids: [covering-index, include-columns, gist-index, spgist-index]
+required_capabilities: [create-table, create-index, insert, select, gist-index, spgist, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (only B-tree, GiST and SP-GiST indexes currently support included columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE g (p point, name text);
+  CREATE INDEX g_p ON g USING gist (p) INCLUDE (name);
+  CREATE TABLE sp (p point, name text);
+  CREATE INDEX sp_p ON sp USING spgist (p) INCLUDE (name);
+  INSERT INTO g VALUES (point(1, 1), 'in'), (point(20, 20), 'out');
+  INSERT INTO sp VALUES (point(1, 1), 'in'), (point(20, 20), 'out');
+steps:
+  - sql: |
+      SELECT pg_get_indexdef('g_p'::regclass), pg_get_indexdef('sp_p'::regclass)
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name FROM g WHERE p <@ box '((0,0),(10,10))' ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT name FROM sp WHERE p <@ box '((0,0),(10,10))' ORDER BY name
+    expect: rows
+    order: ordered

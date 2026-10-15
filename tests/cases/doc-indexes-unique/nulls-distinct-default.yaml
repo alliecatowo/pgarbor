@@ -1,0 +1,36 @@
+# By default NULLs in a unique column are not considered equal, so many NULL rows are allowed.
+id: doc-indexes-unique.nulls-distinct-default
+title: Default unique index allows multiple NULL keys, including explicit NULLS DISTINCT
+family: doc-indexes-unique
+tier: core
+feature_ids: [unique-index, create-index, nulls, nulls-distinct]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique ('null values in a unique column are not considered equal, allowing multiple nulls')"
+sessions: [a]
+setup: |
+  CREATE TABLE n1 (a int, b int);
+  CREATE UNIQUE INDEX n1_a ON n1 (a);
+  CREATE TABLE n2 (a int, b int);
+  CREATE UNIQUE INDEX n2_a ON n2 (a) NULLS DISTINCT;
+steps:
+  - sql: |
+      INSERT INTO n1 VALUES (NULL, 1), (NULL, 2), (NULL, 3), (5, 4)
+    expect: ok
+  - sql: |
+      INSERT INTO n2 VALUES (NULL, 1), (NULL, 2), (7, 3)
+    expect: ok
+  - sql: |
+      INSERT INTO n1 VALUES (5, 9)
+    expect: error
+    sqlstate: "23505"
+    comment: non-null duplicate still rejected
+  - sql: |
+      SELECT a, b FROM n1 ORDER BY b
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS null_rows FROM n2 WHERE a IS NULL
+    expect: rows
+    order: ordered

@@ -1,0 +1,40 @@
+# The argument list may be omitted only when the name is unambiguous; an empty list means zero arguments.
+id: cmd-drop-routine.bare-name-and-zero-argument
+title: "DROP ROUTINE without an argument list needs a unique name; empty parentheses mean no arguments"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, function-identity, overloading]
+required_capabilities: [create-function, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-notes (argument list can be omitted)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION bn_zero() RETURNS int LANGUAGE sql AS 'SELECT 1';
+  CREATE FUNCTION bn_ov(integer) RETURNS int LANGUAGE sql AS 'SELECT 1';
+  CREATE FUNCTION bn_ov(text) RETURNS int LANGUAGE sql AS 'SELECT 2';
+steps:
+  - sql: |
+      DROP ROUTINE bn_zero()
+    expect: ok
+    comment: empty parentheses name the zero-argument routine
+  - sql: |
+      DROP ROUTINE bn_ov
+    expect: error
+    sqlstate: "42725"
+    comment: two overloads share the name, so the bare name is ambiguous
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'bn_ov'
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP ROUTINE bn_ov(integer)
+    expect: ok
+  - sql: |
+      DROP ROUTINE bn_ov
+    expect: ok
+    comment: only one overload remains, so the argument list can be omitted
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname IN ('bn_zero', 'bn_ov')
+    expect: rows
+    order: multiset

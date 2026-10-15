@@ -1,0 +1,41 @@
+# max and min over text, date, numeric, interval and array inputs; unsupported json input is rejected.
+id: doc-functions-aggregate.max-min-types
+title: max and min over sortable types, NULL skipping, empty input, and rejection of json
+family: doc-functions-aggregate
+tier: core
+feature_ids: [max, min, aggregate-null-skipping, sortable-types]
+required_capabilities: [select, aggregates, errors, arrays, interval]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (max, min: 'Available for any numeric, string, date/time, or enum type ... and also arrays and composite types')"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT max(x) AS mx, min(x) AS mn FROM (VALUES ('b'::text), ('a'), (NULL)) v(x)
+    expect: rows
+    comment: text ordering; NULL is ignored
+  - sql: |
+      SELECT max(d) AS mx, min(d) AS mn FROM (VALUES (date '2020-01-01'), (date '2021-06-30')) v(d)
+    expect: rows
+    comment: date/time types are sortable
+  - sql: |
+      SELECT max(x) AS mx, min(x) AS mn FROM (VALUES (1.5::numeric), (NULL), (-2)) v(x)
+    expect: rows
+    comment: numeric with a NULL and a negative value
+  - sql: |
+      SELECT max(x) AS mx FROM (VALUES (interval '1 day'), (interval '36 hours')) v(x)
+    expect: rows
+    comment: interval input
+  - sql: |
+      SELECT max(x) AS mx FROM (VALUES (ARRAY[1, 2]), (ARRAY[1, 3])) v(x)
+    expect: rows
+    comment: array comparison is element-wise, so {1,3} is greater
+  - sql: |
+      SELECT max(x) AS mx, min(x) AS mn FROM (SELECT 1 AS x WHERE false) v
+    expect: rows
+    comment: zero rows gives NULL
+  - sql: |
+      SELECT max(j) FROM (VALUES ('{"a":1}'::json)) v(j)
+    expect: error
+    sqlstate: "42883"
+    comment: json has no ordering operator, so max(json) does not resolve

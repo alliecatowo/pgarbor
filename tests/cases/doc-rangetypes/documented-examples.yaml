@@ -1,0 +1,49 @@
+# The rangetypes-examples section, run in one fresh database: a tsrange table, containment,
+# overlap, upper bound, intersection and isempty, followed by a GiST index query on the table.
+id: doc-rangetypes.documented-examples
+title: Documented range examples return the documented containment, overlap, bound and intersection results
+family: doc-rangetypes
+tier: core
+feature_ids: [range-types, range-operators, range-functions, gist-index]
+required_capabilities: [range-types, create-table, insert, create-index, gist-index, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rangetypes.sgml#rangetypes-examples"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE reservation (room int, during tsrange);
+      INSERT INTO reservation VALUES
+          (1108, '[2010-01-01 14:30, 2010-01-01 15:30)')
+    expect: ok
+  - sql: |
+      SELECT int4range(10, 20) @> 3
+    expect: rows
+    comment: 3 is not in [10,20)
+  - sql: |
+      SELECT numrange(11.1, 22.2) && numrange(20.0, 30.0)
+    expect: rows
+    comment: overlap on [20.0, 22.2]
+  - sql: |
+      SELECT upper(int8range(15, 25))
+    expect: rows
+    comment: upper bound of [15,25) is exclusive 25
+  - sql: |
+      SELECT int4range(10, 20) * int4range(15, 25)
+    expect: rows
+  - sql: |
+      SELECT isempty(numrange(1, 5))
+    expect: rows
+  - sql: |
+      CREATE INDEX reservation_idx ON reservation USING GIST (during)
+    expect: ok
+  - sql: |
+      SELECT room FROM reservation WHERE during && '[2010-01-01 15:00, 2010-01-01 16:00)'::tsrange ORDER BY room
+    expect: rows
+    order: ordered
+    comment: the reserved interval overlaps the query interval
+  - sql: |
+      SELECT room FROM reservation WHERE during @> '2010-01-01 15:30'::timestamp ORDER BY room
+    expect: rows
+    order: ordered
+    comment: the reservation ends exclusively at 15:30, so no row

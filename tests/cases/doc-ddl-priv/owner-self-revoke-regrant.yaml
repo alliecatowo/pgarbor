@@ -1,0 +1,55 @@
+# An owner may revoke its own ordinary privileges, and as owner it can re-grant them to itself.
+id: doc-ddl-priv.owner-self-revoke-regrant
+title: Owner can revoke its own INSERT privilege and later re-grant it
+family: doc-ddl-priv
+tier: core
+feature_ids: [owner, grant, revoke, insert, privileges]
+required_capabilities: [create-table, insert, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (an object's owner can choose to revoke their own ordinary privileges)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_os_miriam;
+  CREATE TABLE os_t (col1 int4, col2 text);
+  ALTER TABLE os_t OWNER TO ddp_os_miriam;
+steps:
+  - sql: |
+      SET ROLE ddp_os_miriam
+    expect: ok
+  - sql: |
+      INSERT INTO os_t VALUES (1, 'a')
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      REVOKE INSERT ON os_t FROM ddp_os_miriam
+    expect: ok
+  - sql: |
+      SET ROLE ddp_os_miriam
+    expect: ok
+  - sql: |
+      INSERT INTO os_t VALUES (2, 'b')
+    expect: error
+    sqlstate: "42501"
+    comment: the owner has lost its own INSERT privilege
+  - sql: |
+      SELECT col1 FROM os_t ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: the owner keeps SELECT, so only the first row is visible
+  - sql: |
+      GRANT INSERT ON os_t TO ddp_os_miriam
+    expect: ok
+    comment: owners always hold grant options, so they can re-grant their own privilege
+  - sql: |
+      INSERT INTO os_t VALUES (3, 'c')
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT col1, col2 FROM os_t ORDER BY col1
+    expect: rows
+    order: ordered

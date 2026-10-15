@@ -1,0 +1,41 @@
+# FUNCTIONS and ROUTINES are the same keyword in this command and cover procedures as well as functions.
+id: cmd-alter-default-privileges.routines-functions-alias
+title: ON ROUTINES and ON FUNCTIONS share one default entry and apply to procedures
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, routines, functions, procedures, execute-privilege, default-acl]
+required_capabilities: [create-schema, create-function, create-procedure, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-description (FUNCTIONS and ROUTINES are equivalent; functions include procedures)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_webuser') THEN CREATE ROLE adp_webuser; END IF;
+  END $$;
+  CREATE SCHEMA adp_rt;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_rt GRANT EXECUTE ON FUNCTIONS TO adp_webuser
+    expect: ok
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_rt GRANT EXECUTE ON ROUTINES TO adp_webuser
+    expect: ok
+    comment: the same object type entry as FUNCTIONS, so the grant is repeated idempotently
+  - sql: |
+      SELECT defaclobjtype, defaclacl::text FROM pg_default_acl WHERE defaclnamespace = 'adp_rt'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: one row with object type f for both spellings
+  - sql: |
+      CREATE FUNCTION adp_rt.fn1() RETURNS int LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE adp_rt.p1() LANGUAGE plpgsql AS $$ BEGIN NULL; END $$
+    expect: ok
+  - sql: |
+      SELECT p.proname, p.prokind, has_function_privilege('adp_webuser', p.oid, 'EXECUTE') AS webuser_exec
+      FROM pg_proc p WHERE p.pronamespace = 'adp_rt'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the procedure p1 receives the same EXECUTE default as the function

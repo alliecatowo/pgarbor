@@ -1,0 +1,40 @@
+# The sequence argument is a regclass: unquoted names fold to lower case, quoted names are case sensitive, schema-qualified names work, and a table or a missing name is an error.
+id: doc-functions-sequence.regclass-argument-resolution
+title: Sequence functions resolve their regclass argument by identifier rules and reject tables and missing names
+family: doc-functions-sequence
+tier: core
+feature_ids: [regclass, nextval, identifier-folding, errors, wrong-object-type]
+required_capabilities: [sequences, create-table, select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (regclass argument; OID of the sequence in pg_class)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s1;
+  CREATE SEQUENCE "S1";
+  CREATE TABLE tbl (a int4);
+steps:
+  - sql: |
+      SELECT nextval('nosuch_seq')
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT nextval('tbl')
+    expect: error
+    sqlstate: "42809"
+    comment: a table is not a sequence
+  - sql: |
+      SELECT nextval('"S1"') AS quoted, nextval('s1') AS lower_name
+    expect: rows
+    comment: quoted S1 is a different sequence from unquoted s1
+  - sql: |
+      SELECT nextval('public.s1') AS schema_qualified
+    expect: rows
+    comment: the same sequence as s1, so the value continues the count
+  - sql: |
+      SELECT nextval('"s1"') AS quoted_lower, nextval('S1') AS unquoted_folded
+    expect: rows
+    comment: the quoted lower-case name is s1, and unquoted S1 folds to s1
+  - sql: |
+      SELECT nextval('"S1"') AS v
+    expect: rows

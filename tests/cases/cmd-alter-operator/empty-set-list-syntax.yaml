@@ -1,0 +1,30 @@
+# The SET clause needs at least one option, and ALTER OPERATOR needs an action. Both are syntax errors and
+# leave the operator unchanged.
+id: cmd-alter-operator.empty-set-list-syntax
+title: "ALTER OPERATOR rejects an empty SET list and a statement with no action as syntax errors"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, syntax, errors]
+required_capabilities: [alter-operator, create-operator, create-function-sql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#synopsis (SET ( option [, ... ] ))"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_sy_lt(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR <<< (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_sy_lt);
+steps:
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) SET ()
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8)
+    expect: error
+    sqlstate: "42601"
+    comment: an action (OWNER TO, SET SCHEMA or SET) is required
+  - sql: |
+      SELECT oprrest = 0 AS no_restrict, oprjoin = 0 AS no_join, oprcanhash
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered

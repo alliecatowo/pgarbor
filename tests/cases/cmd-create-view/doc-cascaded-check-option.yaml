@@ -1,0 +1,36 @@
+# Documented example: CASCADED CHECK OPTION checks new rows against every underlying view condition.
+id: cmd-create-view.doc-cascaded-check-option
+title: CASCADED check option rejects rows that violate a condition of an underlying view
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, check-option, where, insert, update]
+required_capabilities: [create-table, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview-examples (Create a view with CASCADED CHECK OPTION)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text, classification text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy', 'U'), (2, 'B', 'Comedy', 'PG'), (3, 'C', 'Drama', 'U'), (4, 'D', 'Comedy', 'R');
+  CREATE VIEW comedies AS SELECT * FROM films WHERE kind = 'Comedy';
+steps:
+  - sql: |
+      CREATE VIEW pg_comedies AS SELECT * FROM comedies WHERE classification = 'PG' WITH CASCADED CHECK OPTION
+    expect: ok
+  - sql: |
+      INSERT INTO pg_comedies (id, title, kind, classification) VALUES (12, 'N', 'Drama', 'PG')
+    expect: error
+    sqlstate: "44000"
+    comment: the kind condition of the underlying comedies view is checked too
+  - sql: |
+      INSERT INTO pg_comedies (id, title, kind, classification) VALUES (13, 'O', 'Comedy', 'PG')
+    expect: ok
+  - sql: |
+      UPDATE pg_comedies SET kind = 'Drama' WHERE id = 13
+    expect: error
+    sqlstate: "44000"
+    comment: the updated row would no longer satisfy the cascaded kind condition
+  - sql: |
+      SELECT id, kind, classification FROM pg_comedies ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,32 @@
+# DESC NULLS FIRST and ASC NULLS LAST are the documented defaults; a mixed-order index is created and queried.
+id: cmd-create-index.nulls-order-desc
+title: Index sort options DESC NULLS FIRST and ASC match query ordering with NULL keys
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, sort-order, nulls-ordering, order-by]
+required_capabilities: [create-table, create-index, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Parameters: ASC, DESC, NULLS FIRST, NULLS LAST; Notes: mixed-ordering multicolumn index)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, rating int4);
+  INSERT INTO films VALUES (1, 5), (2, NULL), (3, 3), (4, NULL), (5, 1);
+steps:
+  - sql: |
+      CREATE INDEX f_ord ON films (rating DESC NULLS FIRST, id ASC)
+    expect: ok
+  - sql: |
+      SELECT indoption FROM pg_index WHERE indexrelid = 'f_ord'::regclass
+    expect: rows
+    order: ordered
+    comment: option bits encode DESC and NULLS FIRST for the first column
+  - sql: |
+      SELECT id, rating FROM films ORDER BY rating DESC NULLS FIRST, id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, rating FROM films ORDER BY rating ASC, id
+    expect: rows
+    order: ordered
+    comment: ASC defaults to NULLS LAST

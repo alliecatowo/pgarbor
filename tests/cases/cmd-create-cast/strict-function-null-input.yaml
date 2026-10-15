@@ -1,0 +1,28 @@
+# STRICT cast functions are skipped for NULL input (result NULL); a non-STRICT cast function is called with NULL.
+id: cmd-create-cast.strict-function-null-input
+title: "STRICT cast functions return NULL for NULL input while non-STRICT cast functions receive it"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, cast-function, null-semantics]
+required_capabilities: [create-type, create-cast, create-function-sql, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-description"
+sessions: [a]
+setup: |
+  CREATE TYPE sn_w AS (v numeric);
+  CREATE FUNCTION sn_nonstrict(int8) RETURNS sn_w LANGUAGE sql AS $$ SELECT ROW(COALESCE($1, -1)::numeric)::sn_w $$;
+  CREATE FUNCTION sn_strict(int2) RETURNS sn_w LANGUAGE sql STRICT AS $$ SELECT ROW($1::numeric)::sn_w $$;
+steps:
+  - sql: |
+      CREATE CAST (int8 AS sn_w) WITH FUNCTION sn_nonstrict(int8)
+    expect: ok
+  - sql: |
+      CREATE CAST (int2 AS sn_w) WITH FUNCTION sn_strict(int2)
+    expect: ok
+  - sql: |
+      SELECT (CAST(NULL::int8 AS sn_w)).v AS nonstrict_v, (CAST(4::int8 AS sn_w)).v AS plain_v
+    expect: rows
+  - sql: |
+      SELECT CAST(NULL::int2 AS sn_w) IS NULL AS strict_is_null, (CAST(3::int2 AS sn_w)).v AS strict_v
+    expect: rows

@@ -1,0 +1,36 @@
+# Subquery predicates in WHERE with outer references, NOT EXISTS and correlated IN.
+id: doc-functions-subquery.correlated-filters
+title: Correlated EXISTS, NOT EXISTS and IN in WHERE filter rows using documented NULL rules
+family: doc-functions-subquery
+tier: core
+feature_ids: [exists, not-exists, in-subquery, correlated-subquery]
+required_capabilities: [create-table, insert, select, subquery]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (EXISTS, IN)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  CREATE TABLE tab2 (col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+  INSERT INTO tab2 VALUES (10), (10), (NULL);
+steps:
+  - sql: |
+      SELECT col1 FROM tab1 WHERE col1 IN (SELECT col1 FROM tab1 WHERE col2 > 15) ORDER BY col1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT t.col1 FROM tab1 t WHERE NOT EXISTS (SELECT 1 FROM tab2 WHERE tab2.col2 = t.col2) ORDER BY t.col1
+    expect: rows
+    order: ordered
+    comment: NULL col2 has no match, so NOT EXISTS keeps it
+  - sql: |
+      SELECT col1 FROM tab1 t WHERE t.col2 IN (SELECT col2 FROM tab2 WHERE tab2.col2 > t.col1 * 5) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: correlated IN; the outer reference is re-evaluated per row
+  - sql: |
+      SELECT col1 FROM tab1 t WHERE NOT (t.col2 IN (SELECT col2 FROM tab2)) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: NOT over a NULL-yielding IN is still NULL, so the row is dropped

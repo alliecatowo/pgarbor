@@ -1,0 +1,27 @@
+# The documented reason to prefer pg_notify: channel and payload come from table columns, one call per row.
+id: cmd-notify.pg-notify-non-constant-names
+title: pg_notify sends one notification per row using column-derived channel and payload
+family: cmd-notify
+tier: core
+feature_ids: [pg-notify-function, notify, select-list-set-behavior]
+required_capabilities: [create-table, insert, select, listen-notify]
+provenance:
+  source: pg-docs
+  ref: "ref/notify.sgml#pg_notify (non-constant channel names and payloads)"
+sessions: [a]
+setup: |
+  CREATE TABLE nt_events (id int4 PRIMARY KEY, chan text NOT NULL, body text);
+  INSERT INTO nt_events VALUES (1, 'orders', 'o-1'), (2, 'orders', NULL), (3, 'users', 'u-3');
+steps:
+  - sql: |
+      SELECT pg_notify(chan, coalesce(body, '')) FROM nt_events ORDER BY id
+    expect: rows
+    order: ordered
+    comment: three rows, each a void result, one notification per row
+  - sql: |
+      SELECT count(*) AS n FROM (SELECT pg_notify(chan || '_x', body) FROM nt_events) s
+    expect: rows
+    comment: body NULL in row 2 is passed as NULL payload and accepted
+  - sql: |
+      SELECT pg_notify(chan, body) FROM nt_events WHERE id = 2
+    expect: rows

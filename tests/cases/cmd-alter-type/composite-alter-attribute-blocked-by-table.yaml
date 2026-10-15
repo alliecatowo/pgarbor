@@ -1,0 +1,40 @@
+# Changing a composite attribute's type is refused while a table column uses the composite, but ADD ATTRIBUTE is allowed and stored rows stay readable.
+id: cmd-alter-type.composite-alter-attribute-blocked-by-table
+title: "ALTER ATTRIBUTE TYPE is refused when a table column uses the composite type"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, composite-type, alter-attribute-type, table-column-dependency]
+required_capabilities: [create-type, alter-type, composite-type, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (ALTER ATTRIBUTE ... SET DATA TYPE; a composite type used as a column type)"
+sessions: [a]
+setup: |
+  CREATE TYPE pt AS (x int, y text);
+  CREATE TABLE pts (id int PRIMARY KEY, p pt);
+  INSERT INTO pts VALUES (1, ROW(1, 'a'));
+steps:
+  - sql: |
+      ALTER TYPE pt ALTER ATTRIBUTE x TYPE text
+    expect: error
+    sqlstate: "0A000"
+    comment: the column pts.p uses pt, so the attribute type cannot be rewritten
+  - sql: |
+      ALTER TYPE pt ALTER ATTRIBUTE x SET DATA TYPE bigint
+    expect: error
+    sqlstate: "0A000"
+    comment: the SET DATA TYPE spelling is refused the same way
+  - sql: |
+      ALTER TYPE pt ALTER ATTRIBUTE nosuch SET DATA TYPE int
+    expect: error
+    sqlstate: "42703"
+    comment: unknown attribute is reported before dependency checks would matter
+  - sql: |
+      ALTER TYPE pt ADD ATTRIBUTE z int
+    expect: ok
+    comment: adding an attribute does not rewrite stored composite values
+  - sql: |
+      SELECT id, (p).x, (p).y FROM pts ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the stored row remains readable with its original field values

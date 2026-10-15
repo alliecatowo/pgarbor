@@ -1,0 +1,51 @@
+# RESTRICT is the default: a foreign key owned by one role depends on a table owned by another role.
+# DROP OWNED for the referenced table's owner fails with dependent_objects_still_exist and drops nothing.
+id: cmd-drop-owned.restrict-default-fk-blocks
+title: "DROP OWNED without CASCADE refuses while a foreign key from another owner's table depends on an owned table"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, restrict, foreign-key, dependencies]
+required_capabilities: [roles, drop-role, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-parameters (RESTRICT, the default)"
+sessions: [a]
+setup: |
+  CREATE ROLE dro1_owner;
+  CREATE ROLE dro1_other;
+  CREATE TABLE dro1_parent (id int4 PRIMARY KEY);
+  ALTER TABLE dro1_parent OWNER TO dro1_other;
+  CREATE TABLE dro1_child (id int4 REFERENCES dro1_parent (id));
+  ALTER TABLE dro1_child OWNER TO dro1_owner;
+  CREATE TABLE dro1_own_only (v int4);
+  ALTER TABLE dro1_own_only OWNER TO dro1_owner;
+  INSERT INTO dro1_parent VALUES (1);
+  INSERT INTO dro1_child VALUES (1);
+steps:
+  - sql: |
+      DROP OWNED BY dro1_other
+    expect: error
+    sqlstate: "2BP01"
+    comment: dro1_child (owned by dro1_owner) has a foreign key on dro1_parent, which dro1_other owns
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname LIKE 'dro1%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the refused command dropped nothing
+  - sql: |
+      DROP OWNED BY dro1_other RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: explicit RESTRICT is the same as the default
+  - sql: |
+      SELECT count(*) AS n FROM dro1_child
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP OWNED BY dro1_owner
+    expect: ok
+    comment: nothing depends on dro1_child or dro1_own_only, so this succeeds and removes the foreign key with its table
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname LIKE 'dro1%' ORDER BY 1
+    expect: rows
+    order: ordered

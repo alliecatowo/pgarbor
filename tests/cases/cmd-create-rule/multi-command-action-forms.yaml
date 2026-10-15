@@ -1,0 +1,48 @@
+# DO without ALSO/INSTEAD defaults to ALSO; a parenthesized action list runs each command in order.
+id: cmd-create-rule.multi-command-action-forms
+title: Default ALSO and parenthesized multi-command rule actions both run every command
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, also, instead, rules, insert]
+required_capabilities: [create-table, create-rule, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Parameters: ALSO default; command ( command ; command ... ))"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a int4, b text);
+  CREATE TABLE log1 (a int4);
+  CREATE TABLE log2 (a int4);
+  CREATE TABLE tg2 (a int4);
+steps:
+  - sql: |
+      CREATE RULE r_multi AS ON INSERT TO t DO ( INSERT INTO log1 VALUES (NEW.a); INSERT INTO log2 VALUES (NEW.a * 10); )
+    expect: ok
+    comment: no ALSO or INSTEAD keyword, so the rule is ALSO
+  - sql: |
+      INSERT INTO t VALUES (1, 'x'), (2, 'y')
+    expect: ok
+  - sql: |
+      SELECT 'log1' AS src, a FROM log1 UNION ALL SELECT 'log2', a FROM log2 ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: each row fires both commands; the original insert also happened
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    comment: ALSO keeps the original insert
+  - sql: |
+      CREATE RULE r_inst AS ON INSERT TO tg2 DO INSTEAD ( INSERT INTO log2 VALUES (NEW.a + 100); INSERT INTO log2 VALUES (NEW.a + 200); )
+    expect: ok
+  - sql: |
+      INSERT INTO tg2 VALUES (3)
+    expect: ok
+  - sql: |
+      SELECT a FROM log2 WHERE a > 100 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: both INSTEAD commands ran with the NEW values
+  - sql: |
+      SELECT count(*) AS n FROM tg2
+    expect: rows
+    comment: INSTEAD replaced the insert into tg2, so nothing was stored there

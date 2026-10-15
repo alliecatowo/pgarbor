@@ -1,0 +1,29 @@
+# Unnamed CHECK gets a generated <domain>_check name; CONSTRAINT names the constraint explicitly.
+id: cmd-create-domain.auto-and-named-constraint-names
+title: Generated and explicit domain CHECK constraint names are recorded in pg_constraint
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, check-constraint, constraint-name, catalog]
+required_capabilities: [create-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (CONSTRAINT)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DOMAIN dauto AS int CHECK (VALUE > 0)
+    expect: ok
+  - sql: |
+      CREATE DOMAIN dnamed AS int CONSTRAINT pos_only CHECK (VALUE > 0)
+    expect: ok
+  - sql: |
+      SELECT c.conname, c.contype FROM pg_constraint c
+      WHERE c.contypid IN ('dauto'::regtype, 'dnamed'::regtype)
+      ORDER BY c.conname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '0'::dauto
+    expect: error
+    sqlstate: "23514"
+    comment: the generated name dauto_check appears in the error message

@@ -1,0 +1,48 @@
+# ATTACH PARTITION rejects mismatched definitions, indexes not on a partition of the table, missing names, and self-attachment.
+id: cmd-alter-index.attach-partition-errors
+title: ATTACH PARTITION rejects mismatched, unrelated, missing, and self-referencing indexes
+family: cmd-alter-index
+tier: extended
+feature_ids: [alter-index, partitioned-indexes, attach-partition, errors]
+required_capabilities: [create-table, create-index, partitioned-tables, alter-index, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (ATTACH PARTITION: must be on a partition of the table with an equivalent definition)"
+sessions: [a]
+setup: |
+  CREATE TABLE pt (k int4, v int4) PARTITION BY RANGE (k);
+  CREATE TABLE pt1 (k int4, v int4);
+  ALTER TABLE pt ATTACH PARTITION pt1 FOR VALUES FROM (0) TO (10);
+  CREATE INDEX pt_k ON ONLY pt (k);
+  CREATE INDEX pt1_v ON pt1 (v);
+  CREATE TABLE other (k int4, v int4);
+  CREATE INDEX other_k ON other (k);
+steps:
+  - sql: |
+      ALTER INDEX pt_k ATTACH PARTITION pt1_v
+    expect: error
+    sqlstate: "42P17"
+    comment: pt1_v indexes v rather than k, so the definitions do not match
+  - sql: |
+      ALTER INDEX pt_k ATTACH PARTITION other_k
+    expect: error
+    sqlstate: "55000"
+    comment: other_k is on a table that is not a partition of pt
+  - sql: |
+      ALTER INDEX pt_k ATTACH PARTITION no_such_index
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER INDEX pt_k ATTACH PARTITION pt_k
+    expect: error
+    sqlstate: "55000"
+    comment: an index cannot be attached to itself
+  - sql: |
+      SELECT indexrelid::regclass::text AS idx, indisvalid FROM pg_index WHERE indrelid = 'pt'::regclass ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: all rejected attaches left the parent index without children
+  - sql: |
+      SELECT count(*) AS children FROM pg_inherits WHERE inhparent = 'pt_k'::regclass
+    expect: rows
+    order: ordered

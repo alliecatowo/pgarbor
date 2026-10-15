@@ -1,0 +1,39 @@
+# Attribute defaults recorded in pg_proc, explicit attribute values, and attribute combinations that
+# CREATE FUNCTION rejects (IMMUTABLE with STABLE, ROWS on a non-set function, OUT with RETURNS TABLE).
+id: cmd-create-function.attributes-catalog-and-conflicts
+title: Attribute defaults in pg_proc, explicit attributes, and rejected attribute combinations
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, volatility, parallel-safety, strict, cost, rows, attribute-defaults]
+required_capabilities: [create-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-description (IMMUTABLE/STABLE/VOLATILE, PARALLEL, COST, ROWS, STRICT)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION cat1(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cat2(int) RETURNS int LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE COST 7 AS 'select $1'
+    expect: ok
+  - sql: |
+      SELECT proname, provolatile, proparallel, proisstrict, prosecdef, proleakproof, procost, prorows FROM pg_proc WHERE proname IN ('cat1', 'cat2') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: cat1 defaults v, u, false, false, false, 100, 0; cat2 i, s, true, false, false, 7, 0
+  - sql: |
+      CREATE FUNCTION two(int) RETURNS int LANGUAGE sql IMMUTABLE STABLE AS 'select $1'
+    expect: error
+    sqlstate: "42601"
+    comment: at most one volatility attribute
+  - sql: |
+      CREATE FUNCTION rowsns(int) RETURNS int LANGUAGE sql ROWS 5 AS 'select $1'
+    expect: error
+    sqlstate: "22023"
+    comment: ROWS is only allowed when the function returns a set
+  - sql: |
+      CREATE FUNCTION rrt(OUT a int) RETURNS TABLE(x int) LANGUAGE sql AS 'select 1'
+    expect: error
+    sqlstate: "42601"
+    comment: OUT parameters cannot be used together with RETURNS TABLE

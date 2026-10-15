@@ -1,0 +1,42 @@
+# Under READ COMMITTED, each statement in the same transaction takes a new snapshot and sees rows committed by other sessions.
+id: cmd-set-transaction.read-committed-statement-snapshot
+title: SET TRANSACTION READ COMMITTED sees rows committed between statements of one transaction
+family: cmd-set-transaction
+tier: core
+feature_ids: [set-transaction, isolation-level, read-committed, multi-session, insert]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: READ COMMITTED: a statement can only see rows committed before it began)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SET TRANSACTION ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: the committed row 2 is visible to the next statement
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

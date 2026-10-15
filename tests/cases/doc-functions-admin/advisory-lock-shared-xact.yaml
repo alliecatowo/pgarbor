@@ -1,0 +1,70 @@
+# Shared advisory locks coexist with each other but not with exclusive ones; xact locks release at commit.
+id: doc-functions-admin.advisory-lock-shared-xact
+title: Shared advisory locks coexist, exclusive conflicts, and transaction-level locks release at commit
+family: doc-functions-admin
+tier: core
+feature_ids: [advisory-locks, pg-advisory-lock-shared, pg-advisory-xact-lock, pg-advisory-unlock-all]
+required_capabilities: [select, transactions, advisory-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-advisory-locks (shared locks, xact locks released at end of transaction)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(42) AS not_held
+    expect: rows
+    comment: unlocking a lock that is not held returns false with a warning
+  - session: a
+    sql: |
+      SELECT pg_advisory_lock_shared(8)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock_shared(8) AS shared_with_shared
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(8) AS exclusive_with_shared
+    expect: rows
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock_shared(8) AS a_release
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock_shared(8) AS b_release
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(8) AS exclusive_after_release
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock(8) AS b_exclusive_release
+    expect: rows
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT pg_advisory_xact_lock(9)
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_xact_lock(9) AS while_a_in_txn
+    expect: rows
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_xact_lock(9) AS after_commit
+    expect: rows
+    comment: the transaction lock was released at commit, and this statement's lock is released at its end
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock_all()
+    expect: rows

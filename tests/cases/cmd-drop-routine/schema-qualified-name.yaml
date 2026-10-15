@@ -1,0 +1,31 @@
+# A routine name is resolved in its schema; an unqualified name searches the search_path and misses it.
+id: cmd-drop-routine.schema-qualified-name
+title: "DROP ROUTINE resolves schema-qualified names and does not search other schemas"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, schemas, search-path]
+required_capabilities: [create-schema, create-function, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-parameters (name, optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA sq_s;
+  CREATE FUNCTION sq_s.sq_f(integer) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      DROP ROUTINE sq_f(integer)
+    expect: error
+    sqlstate: "42883"
+    comment: sq_f is not on the search_path (public)
+  - sql: |
+      DROP ROUTINE sq_s.sq_f(bigint)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP ROUTINE sq_s.sq_f(integer)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'sq_s'
+    expect: rows
+    order: multiset

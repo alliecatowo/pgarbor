@@ -1,0 +1,27 @@
+# Documented: if an index tuple exceeds the maximum size for the index type, data insertion fails. Payload columns count toward it.
+id: doc-indexes-index-only-scans.include-row-size-limit
+title: A wide INCLUDE payload makes the insert fail with program_limit_exceeded and the row is not stored
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, include-columns, index-tuple-size]
+required_capabilities: [create-table, create-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (If an index tuple exceeds the maximum size allowed for the index type, data insertion will fail)"
+sessions: [a]
+setup: |
+  CREATE TABLE big (x int, y text);
+  CREATE INDEX big_x_y ON big (x) INCLUDE (y);
+steps:
+  - sql: |
+      INSERT INTO big VALUES (1, 'small')
+    expect: ok
+  - sql: |
+      INSERT INTO big VALUES (2, (SELECT string_agg(md5(g::text), '') FROM generate_series(1, 400) g))
+    expect: error
+    sqlstate: "54000"
+    comment: about 12.8 kB of payload, far above the btree index tuple maximum (8191 bytes);
+  - sql: |
+      SELECT x, y FROM big ORDER BY x
+    expect: rows
+    order: ordered

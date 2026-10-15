@@ -1,0 +1,43 @@
+# Ispell template with the shipped ispell_sample files: base forms, compound splitting, unknown words, and the required file parameters.
+id: doc-textsearch-dictionaries.ispell-sample
+title: ispell dictionary normalizes affixed forms and splits compounds from sample files
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, ispell-template, morphology, compound-words, errors]
+required_capabilities: [create-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Ispell Dictionary)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY isp (
+          TEMPLATE = ispell,
+          DictFile = ispell_sample,
+          AffFile = ispell_sample,
+          Stopwords = english
+      )
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('isp', 'booking') AS affixed_form,
+             ts_lexize('isp', 'skies') AS plural_form,
+             ts_lexize('isp', 'ball') AS plain_base
+    expect: rows
+    comment: booking yields the word itself plus its base form 'book'
+  - sql: |
+      SELECT ts_lexize('isp', 'footballklubber') AS compound
+    expect: rows
+    comment: compound words are split into their dictionary parts
+  - sql: |
+      SELECT ts_lexize('isp', 'zebra') AS unknown_word, ts_lexize('isp', 'the') AS unknown_stop_word
+    expect: rows
+    comment: words the ispell dictionary does not know yield NULL, even when they are English stop words
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY isp_nofile (TEMPLATE = ispell, DictFile = no_such_dict, AffFile = ispell_sample)
+    expect: error
+    comment: the dictionary file is read when the dictionary is created
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY isp_noaff (TEMPLATE = ispell, DictFile = ispell_sample)
+    expect: error
+    sqlstate: "22023"
+    comment: AffFile is required

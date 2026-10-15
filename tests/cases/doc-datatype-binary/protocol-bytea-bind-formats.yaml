@@ -1,0 +1,38 @@
+# bytea over the extended protocol: text-format bind uses the hex literal; binary-format bind and binary result send raw octets.
+id: doc-datatype-binary.protocol-bytea-bind-formats
+title: bytea binds and returns correctly in text format and in binary format over the extended protocol
+family: doc-datatype-binary
+tier: extended
+feature_ids: [bytea, extended-protocol, binary-format, bind-parameters]
+required_capabilities: [create-table, insert, select, extended-protocol]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-binary-bytea-hex-format; protocol-flow.html (binary parameter and result formats)"
+sessions: [a]
+setup: |
+  CREATE TABLE pb (id int4 PRIMARY KEY, data bytea)
+steps:
+  - exec_params:
+      sql: "INSERT INTO pb VALUES ($1, $2)"
+      params: ["1", '\xdeadbeef']
+      param_types: [23, 17]
+    expect: ok
+    comment: text-format bind of a hex literal
+  - exec_params:
+      sql: "INSERT INTO pb VALUES ($1, $2)"
+      params: ["00000002", "0001ff"]
+      param_types: [23, 17]
+      param_formats: [binary, binary]
+    expect: ok
+    comment: binary bind sends the raw octets 00 01 ff
+  - exec_params:
+      sql: "SELECT id, data FROM pb ORDER BY id"
+      result_format: binary
+    expect: rows
+    order: ordered
+    comment: binary result returns raw octets for each bytea column
+  - exec_params:
+      sql: "SELECT id, data FROM pb ORDER BY id"
+    expect: rows
+    order: ordered
+    comment: text result returns hex output

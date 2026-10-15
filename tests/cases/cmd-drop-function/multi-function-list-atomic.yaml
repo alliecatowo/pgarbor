@@ -1,0 +1,54 @@
+# DROP FUNCTION accepts a comma-separated list. A missing item fails the whole command, so nothing is
+# dropped. With IF EXISTS, each missing item becomes a notice and the existing items are dropped. The
+# documented sqrt example is run with overloads created first so it resolves in a fresh database.
+id: cmd-drop-function.multi-function-list-atomic
+title: Comma-separated DROP FUNCTION lists are all-or-nothing without IF EXISTS
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, multiple-functions, if-exists, atomicity, overloading]
+required_capabilities: [create-function, drop-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction-examples (Drop multiple functions in one command; sqrt)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION ml1(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION ml2(text) RETURNS text LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION ml1(int), ml_missing(int)
+    expect: error
+    sqlstate: "42883"
+    comment: the second item does not exist, so ml1 is not dropped either
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname = 'ml1'
+    expect: rows
+    order: multiset
+    comment: 1 row, ml1 still exists
+  - sql: |
+      DROP FUNCTION IF EXISTS ml1(int), ml_missing(int), ml2(text)
+    expect: notice
+    comment: missing items each produce a notice; ml1 and ml2 are dropped
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname IN ('ml1', 'ml2')
+    expect: rows
+    order: multiset
+    comment: 0 rows remain
+  - sql: |
+      CREATE FUNCTION sqrt(integer) RETURNS integer LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION sqrt(bigint) RETURNS bigint LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION sqrt(integer), sqrt(bigint)
+    expect: ok
+    comment: the documented example, applied to user-defined overloads
+  - sql: |
+      DROP FUNCTION sqrt(integer)
+    expect: error
+    sqlstate: "42883"
+    comment: the documented example fails when the overloads do not exist

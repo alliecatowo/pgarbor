@@ -1,0 +1,42 @@
+# ALTER OPERATOR FAMILY is superuser-only; a regular role gets 42501 and the family is unchanged.
+id: cmd-alter-opfamily.nonsuperuser-denied
+title: A non-superuser cannot add members or rename an operator family
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, privileges, superuser-only, errors]
+required_capabilities: [alter-operator-family, create-operator-family, create-role, set-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Description: You must be a superuser to use ALTER OPERATOR FAMILY)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_aof_nonsu_deny;
+  CREATE OPERATOR FAMILY cmd_aof_priv USING btree;
+steps:
+  - sql: |
+      SET ROLE cmd_aof_nonsu_deny
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_priv USING btree ADD OPERATOR 1 < (int4, int4)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_priv USING btree RENAME TO cmd_aof_priv2
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT f.opfname, (SELECT count(*) FROM pg_amop o WHERE o.amopfamily = f.oid) AS members
+      FROM pg_opfamily f WHERE f.opfname LIKE 'cmd_aof_priv%'
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: name unchanged, no member added
+  - sql: |
+      DROP OPERATOR FAMILY cmd_aof_priv USING btree
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_aof_nonsu_deny
+    expect: ok

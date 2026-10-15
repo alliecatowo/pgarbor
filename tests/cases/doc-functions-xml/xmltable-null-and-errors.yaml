@@ -1,0 +1,59 @@
+# XMLTABLE with NULL documents, NULL/DEFAULT/NOT NULL column rules, FOR ORDINALITY uniqueness, default type errors and the unsupported DEFAULT namespace.
+id: doc-functions-xml.xmltable-null-and-errors
+title: XMLTABLE handles NULL documents and enforces documented column and default rules
+family: doc-functions-xml
+tier: extended
+feature_ids: [xml, xmltable, not-null-columns, column-default, for-ordinality, null-semantics]
+required_capabilities: [xml, select, create-table, insert, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-processing-xml-xmltable (column clauses, NOT NULL, FOR ORDINALITY)"
+sessions: [a]
+setup: |
+  CREATE TABLE xdocs (id int4 PRIMARY KEY, x xml);
+  INSERT INTO xdocs VALUES (1, '<a><b>1</b></a>'), (2, NULL), (3, '<a><c>2</c></a>');
+steps:
+  - sql: |
+      SELECT count(*) FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v int)
+    expect: rows
+    comment: a NULL document produces no rows; only the single matching document contributes one row
+  - sql: |
+      SELECT xdocs.id, t.v FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v text) AS t ORDER BY xdocs.id
+    expect: rows
+    order: ordered
+    comment: a row whose path matches nothing yields NULL unless a default or NULL clause applies
+  - sql: |
+      SELECT xdocs.id, t.v FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v int PATH 'c' DEFAULT 7) AS t ORDER BY xdocs.id
+    expect: rows
+    order: ordered
+    comment: the default applies where the path is empty; the NULL document and the document without a b element produce no rows
+  - sql: |
+      SELECT xdocs.id, t.v FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v int PATH 'x' NULL) AS t ORDER BY xdocs.id
+    expect: rows
+    order: ordered
+    comment: the explicit NULL clause is the same as the default nullable behaviour
+  - sql: |
+      SELECT * FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v int PATH 'c' NOT NULL)
+    expect: error
+    sqlstate: "22004"
+    comment: a NOT NULL column that matches nothing is an error
+  - sql: |
+      SELECT * FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v int PATH 'c' NOT NULL DEFAULT NULL)
+    expect: error
+    sqlstate: "22004"
+    comment: a NOT NULL column whose default evaluates to null is also an error
+  - sql: |
+      SELECT * FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v int PATH 'c' DEFAULT 'abc')
+    expect: error
+    sqlstate: 22P02
+    comment: the default must be castable to the column type when it is used
+  - sql: |
+      SELECT * FROM xdocs, XMLTABLE('/a/b' PASSING xdocs.x COLUMNS v text, w FOR ORDINALITY, z FOR ORDINALITY)
+    expect: error
+    sqlstate: "42601"
+    comment: at most one FOR ORDINALITY column is allowed
+  - sql: |
+      SELECT * FROM XMLTABLE(XMLNAMESPACES(DEFAULT 'http://example.com'), '/a' PASSING ('<a/>'::xml) COLUMNS v text)
+    expect: error
+    sqlstate: 0A000
+    comment: a default namespace specification is not supported

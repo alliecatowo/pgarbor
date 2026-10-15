@@ -1,0 +1,44 @@
+# The label provider check runs before the target object is resolved, so a missing object reports 22023, not its own undefined-object error.
+id: cmd-security-label.provider-check-precedes-lookup
+title: Missing provider is reported before a nonexistent target object is looked up
+family: cmd-security-label
+tier: core
+feature_ids: [security-label, security-label-provider, security-label-errors, security-label-undefined-object]
+required_capabilities: [security-label, create-table, create-schema, create-function, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/security_label.sgml#sql-security-label-params-object-name; ref/security_label.sgml#sql-security-label-params-provider"
+sessions: [a]
+setup: |
+  CREATE TABLE sl_present (id int4, c text)
+steps:
+  - sql: |
+      SECURITY LABEL ON TABLE sl_missing IS 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: a nonexistent table would be 42P01 if the object were resolved first
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_present.nosuch IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL ON COLUMN sl_missing.c IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL ON FUNCTION sl_missing_fn(int, text) IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL ON ROLE sl_missing_role IS NULL
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL ON SCHEMA sl_missing_schema IS 'x'
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SECURITY LABEL FOR sl_missing_provider ON TABLE sl_present IS 'x'
+    expect: error
+    sqlstate: "22023"
+    comment: an unknown provider on an existing object fails on the provider, not the object

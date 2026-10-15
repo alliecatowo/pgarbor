@@ -1,0 +1,52 @@
+# table_to_xml, query_to_xml and their nulls, tableforest and targetns parameters per the docs; error for an unknown table.
+id: doc-functions-xml.xml-mapping-table-query
+title: table_to_xml and query_to_xml map rows with nulls, tableforest and targetns options per the docs
+family: doc-functions-xml
+tier: core
+feature_ids: [xml, table-to-xml, query-to-xml, table-to-xmlschema, null-semantics]
+required_capabilities: [xml, select, create-table, insert, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-producing-xml-mapping-tables"
+sessions: [a]
+setup: |
+  CREATE TABLE xmap (id int4 PRIMARY KEY, name text, note text);
+  INSERT INTO xmap VALUES (1, 'a', NULL), (2, 'b&c', 'x');
+steps:
+  - sql: |
+      SELECT table_to_xml('xmap', true, false, '')
+    expect: rows
+    comment: nulls true writes xsi:nil elements; tableforest false gives a document with a table root
+  - sql: |
+      SELECT table_to_xml('xmap', false, false, '')
+    expect: rows
+    comment: nulls false omits null columns entirely
+  - sql: |
+      SELECT table_to_xml('xmap', false, true, '')
+    expect: rows
+    comment: tableforest true gives a content fragment with one row element per tuple
+  - sql: |
+      SELECT table_to_xml('xmap', false, false, 'urn:example:t')
+    expect: rows
+    comment: targetns sets the namespace of the result
+  - sql: |
+      SELECT query_to_xml('select 1 as a, null::int as b', true, false, '')
+    expect: rows
+    comment: query mapping with no table name uses the element names table and row
+  - sql: |
+      SELECT query_to_xml('select 1 as a, null::int as b', false, true, '')
+    expect: rows
+    comment: query mapping as a forest, nulls omitted
+  - sql: |
+      SELECT query_to_xml('select id, name from xmap order by id', false, false, '')
+    expect: rows
+    comment: query mapping of an ordered result set
+  - sql: |
+      SELECT table_to_xmlschema('xmap', false, false, '') IS NOT NULL AS has_schema
+    expect: rows
+    comment: the schema companion function returns a non-null XML Schema document
+  - sql: |
+      SELECT table_to_xml('no_such_table', false, false, '')
+    expect: error
+    sqlstate: 42P01
+    comment: an unknown table name is an undefined-table error

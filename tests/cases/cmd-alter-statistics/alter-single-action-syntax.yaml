@@ -1,0 +1,30 @@
+# The grammar accepts one action per ALTER STATISTICS, and RENAME TO takes an unqualified name.
+id: cmd-alter-statistics.single-action-syntax
+title: "ALTER STATISTICS rejects combined actions and qualified new names"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, syntax-errors, rename-statistics]
+required_capabilities: [create-table, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (synopsis: one action per command)"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_ss (a int, b int);
+  CREATE STATISTICS ast_ss_s1 (ndistinct) ON a, b FROM ast_ss;
+steps:
+  - sql: |
+      ALTER STATISTICS ast_ss_s1 SET STATISTICS 100, RENAME TO ast_ss_z
+    expect: error
+    sqlstate: "42601"
+    comment: two actions in one command are not in the synopsis
+  - sql: |
+      ALTER STATISTICS ast_ss_s1 RENAME TO public.ast_ss_s9
+    expect: error
+    sqlstate: "42601"
+    comment: new_name is a plain identifier; the schema comes from SET SCHEMA
+  - sql: |
+      SELECT stxname, stxstattarget FROM pg_statistic_ext WHERE stxname LIKE 'ast_ss%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: nothing changed

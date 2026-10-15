@@ -1,0 +1,42 @@
+# AS ASSIGNMENT casts apply to stores only; AS IMPLICIT casts also apply when resolving function arguments.
+id: cmd-create-cast.implicit-and-assignment-contexts
+title: "AS ASSIGNMENT casts apply to stores only while AS IMPLICIT casts also apply to function arguments"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, assignment-cast, implicit-cast]
+required_capabilities: [create-type, create-cast, create-function-sql, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-description (AS ASSIGNMENT, AS IMPLICIT)"
+sessions: [a]
+setup: |
+  CREATE TYPE ai_asg AS (v numeric);
+  CREATE TYPE ai_imp AS (v numeric);
+  CREATE FUNCTION ai_asg_fn(int4) RETURNS ai_asg LANGUAGE sql AS $$ SELECT ROW($1::numeric)::ai_asg $$;
+  CREATE FUNCTION ai_imp_fn(int4) RETURNS ai_imp LANGUAGE sql AS $$ SELECT ROW($1::numeric)::ai_imp $$;
+  CREATE FUNCTION ai_asg_val(ai_asg) RETURNS numeric LANGUAGE sql AS $$ SELECT ($1).v $$;
+  CREATE FUNCTION ai_imp_val(ai_imp) RETURNS numeric LANGUAGE sql AS $$ SELECT ($1).v $$;
+  CREATE TABLE ai_t (a ai_asg, i ai_imp);
+steps:
+  - sql: |
+      CREATE CAST (int4 AS ai_asg) WITH FUNCTION ai_asg_fn(int4) AS ASSIGNMENT
+    expect: ok
+  - sql: |
+      CREATE CAST (int4 AS ai_imp) WITH FUNCTION ai_imp_fn(int4) AS IMPLICIT
+    expect: ok
+  - sql: |
+      SELECT ai_imp_val(5) AS v
+    expect: rows
+    comment: the implicit cast is chosen for the function argument
+  - sql: |
+      SELECT ai_asg_val(5)
+    expect: error
+    sqlstate: "42883"
+    comment: an assignment-only cast is not considered for function arguments
+  - sql: |
+      INSERT INTO ai_t VALUES (7, 8)
+    expect: ok
+    comment: both columns accept the integer through their assignment or implicit cast
+  - sql: |
+      SELECT (a).v AS av, (i).v AS iv FROM ai_t
+    expect: rows

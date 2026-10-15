@@ -1,0 +1,32 @@
+# Dependencies are followed recursively: v2 depends on v1 which depends on t, so CASCADE on t drops both views.
+id: doc-ddl-depend.drop-table-cascade-view-chain
+title: DROP TABLE CASCADE removes a chain of dependent views recursively
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-table, drop-cascade, create-view, dependency-tracking]
+required_capabilities: [create-table, insert, select, drop-table, create-view, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (\"all the dependent objects will be removed, as will any objects that depend on them, recursively\")"
+sessions: [a]
+setup: |
+  CREATE TABLE t (a integer, b integer);
+  CREATE VIEW v1 AS SELECT a FROM t;
+  CREATE VIEW v2 AS SELECT a FROM v1;
+  INSERT INTO t VALUES (3, 4), (1, 2);
+steps:
+  - sql: |
+      SELECT a FROM v2 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t
+    expect: error
+    sqlstate: "2BP01"
+    comment: DETAIL lists both view v1 and view v2
+  - sql: |
+      DROP TABLE t CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('t', 'v1', 'v2')
+    expect: rows

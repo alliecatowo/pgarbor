@@ -1,0 +1,30 @@
+# A schema-qualified aggregate name places the aggregate in that schema; it is not visible through an
+# unqualified name when the schema is not on the search path.
+id: cmd-create-aggregate.schema-qualified-name
+title: "Schema-qualified CREATE AGGREGATE places the aggregate in that schema only"
+family: cmd-create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, schemas, errors]
+required_capabilities: [create-table, insert, select, aggregates, schemas, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (description: schema name)"
+setup: |
+  CREATE SCHEMA agg_s;
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+steps:
+  - sql: |
+      CREATE AGGREGATE agg_s.sch_sum (int4) (sfunc = int4pl, stype = int4, initcond = '0')
+    expect: ok
+  - sql: |
+      SELECT agg_s.sch_sum(x) FROM t
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'sch_sum' AND n.nspname = 'agg_s'
+    expect: rows
+  - sql: |
+      SELECT sch_sum(x) FROM t
+    expect: error
+    sqlstate: "42883"
+    comment: agg_s is not on the default search_path

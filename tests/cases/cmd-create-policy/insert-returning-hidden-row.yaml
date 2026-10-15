@@ -1,0 +1,50 @@
+# An inserted row that fails the SELECT policy is accepted silently without RETURNING, but RETURNING makes the statement fail instead of hiding it.
+id: cmd-create-policy.insert-returning-hidden-row
+title: "INSERT ... RETURNING raises an error for a new row that the SELECT policy hides"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, insert, returning, errors]
+required_capabilities: [create-table, insert, select, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy-select"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_ret;
+  CREATE TABLE t (id int4, v int4);
+  GRANT ALL ON t TO pgarbor_case_cp_ret;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p_ins ON t FOR INSERT TO pgarbor_case_cp_ret WITH CHECK (true);
+  CREATE POLICY p_sel ON t FOR SELECT TO pgarbor_case_cp_ret USING (v < 100);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_ret
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 500)
+    expect: ok
+    comment: no RETURNING, so the row is inserted even though the SELECT policy hides it
+  - sql: |
+      INSERT INTO t VALUES (2, 50) RETURNING id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO t VALUES (3, 500) RETURNING id
+    expect: error
+    sqlstate: "42501"
+    comment: a returned row must satisfy SELECT policies, so the statement fails and row 3 is not stored
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the role sees only row 2
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t; DROP ROLE pgarbor_case_cp_ret
+    expect: ok

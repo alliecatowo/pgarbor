@@ -1,0 +1,37 @@
+# A view stores the aggregate by OID, so renaming or moving the aggregate leaves the view working.
+id: cmd-alter-aggregate.view-survives-rename-and-move
+title: "A view over an aggregate keeps working after RENAME and SET SCHEMA"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, views, rename, set-schema, aggregates]
+required_capabilities: [aggregates, create-aggregate, create-function, create-schema, create-view, create-table, insert, alter-aggregate, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#description (ALTER AGGREGATE changes the definition in place)"
+setup: |
+  DROP SCHEMA IF EXISTS vw_s CASCADE;
+  CREATE SCHEMA vw_s;
+  CREATE FUNCTION vw_sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE AGGREGATE vw_agg(integer) (sfunc = vw_sf, stype = int8, initcond = '0');
+  CREATE TABLE vw_t (x int);
+  INSERT INTO vw_t VALUES (1), (2), (3);
+  CREATE VIEW vw_v AS SELECT vw_agg(x) AS s FROM vw_t;
+steps:
+  - sql: |
+      SELECT s FROM vw_v
+    expect: rows
+    comment: sum 6 before any change
+  - sql: |
+      ALTER AGGREGATE vw_agg(integer) RENAME TO vw_agg2
+    expect: ok
+  - sql: |
+      SELECT s FROM vw_v
+    expect: rows
+    comment: the view still resolves the aggregate by OID
+  - sql: |
+      ALTER AGGREGATE vw_agg2(integer) SET SCHEMA vw_s
+    expect: ok
+  - sql: |
+      SELECT s FROM vw_v
+    expect: rows
+    comment: still 6 after the move

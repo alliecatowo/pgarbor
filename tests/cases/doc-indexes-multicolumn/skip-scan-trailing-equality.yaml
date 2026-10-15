@@ -1,0 +1,30 @@
+# Equality only on the trailing column of an index on (x, y); the documented skip-scan case. Results must be exact.
+id: doc-indexes-multicolumn.skip-scan-trailing-equality
+title: Equality on the trailing column of a two-column index returns every matching row
+family: doc-indexes-multicolumn
+tier: core
+feature_ids: [multicolumn-index, btree-index, skip-scan, where-clause]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (index on (x, y) with WHERE y = 7700)"
+sessions: [a]
+setup: |
+  CREATE TABLE sk (x int, y int);
+  CREATE INDEX sk_xy ON sk (x, y);
+  INSERT INTO sk SELECT g, g * 100 FROM generate_series(1, 2000) AS g;
+  INSERT INTO sk VALUES (3, 7700), (1500, 7700)
+steps:
+  - sql: |
+      SELECT x FROM sk WHERE y = 7700 ORDER BY x
+    expect: rows
+    order: ordered
+    comment: rows with x = 3, 77 and 1500 match
+  - sql: |
+      SELECT count(*) FROM sk WHERE y = 7700 AND x > 50
+    expect: rows
+    comment: expects 2
+  - sql: |
+      SELECT count(*) FROM sk WHERE y = 7701
+    expect: rows
+    comment: no match yields a count of zero

@@ -1,0 +1,34 @@
+# The documented merge_action() example: three MERGE actions, RETURNING merge_action() with p.*.
+id: doc-functions-merge-support.doc-example-products
+title: Documented merge_action example returns UPDATE, UPDATE, INSERT for the products merge
+family: doc-functions-merge-support
+tier: core
+feature_ids: [merge, merge-action, returning, update, insert]
+required_capabilities: [create-table, insert, update, select, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-merge-support (Example)"
+setup: |
+  CREATE TABLE products (product_id int PRIMARY KEY, in_stock bool, quantity int);
+  CREATE TABLE stock (product_id int, quantity int);
+  INSERT INTO products VALUES (1001, false, 0), (1002, true, 5);
+  INSERT INTO stock VALUES (1001, 50), (1002, 0), (1003, 10);
+steps:
+  - sql: |
+      MERGE INTO products p
+        USING stock s ON p.product_id = s.product_id
+        WHEN MATCHED AND s.quantity > 0 THEN
+          UPDATE SET in_stock = true, quantity = s.quantity
+        WHEN MATCHED THEN
+          UPDATE SET in_stock = false, quantity = 0
+        WHEN NOT MATCHED THEN
+          INSERT (product_id, in_stock, quantity)
+            VALUES (s.product_id, true, s.quantity)
+        RETURNING merge_action(), p.*
+    expect: rows
+    order: multiset
+    comment: documented output is UPDATE/1001/t/50, UPDATE/1002/f/0, INSERT/1003/t/10
+  - sql: |
+      SELECT product_id, in_stock, quantity FROM products ORDER BY product_id
+    expect: rows
+    order: ordered

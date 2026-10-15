@@ -1,0 +1,46 @@
+# Same-timing triggers fire in name order; one trigger can list several events with OR.
+id: cmd-create-trigger.name-order-and-or-events
+title: Triggers with the same timing fire in name order and one trigger covers several events
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, trigger-firing-order, multiple-events-or, after-trigger]
+required_capabilities: [create-table, insert, update, delete, select, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER description and Compatibility (alphabetical firing by name; OR extension)"
+setup: |
+  CREATE TABLE t (id int, v text);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  CREATE FUNCTION log_name() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ':' || TG_OP);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER zeta AFTER INSERT OR UPDATE OR DELETE ON t FOR EACH ROW EXECUTE FUNCTION log_name()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER alpha AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_name()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER mid AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_name()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER beta AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_name()
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 'a')
+    expect: ok
+    comment: alpha, beta, mid, zeta in alphabetical order
+  - sql: |
+      UPDATE t SET v = 'b'
+    expect: ok
+  - sql: |
+      DELETE FROM t
+    expect: ok
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered

@@ -1,0 +1,43 @@
+# Only the extension owner may UPDATE or ADD members; a superuser's later ADD still works, which shows the denial was about the role.
+id: cmd-alter-extension.non-owner-membership-denied
+title: A non-owner role cannot UPDATE an extension or ADD a member to it
+family: cmd-alter-extension
+tier: core
+feature_ids: [alter-extension, privileges, ownership, errors]
+required_capabilities: [create-extension, create-table, create-role, roles, alter-extension, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (ownership requirements)"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS ext_nonowner;
+  CREATE ROLE ext_nonowner NOLOGIN;
+  CREATE EXTENSION hstore;
+  CREATE TABLE t_ne (id int4);
+steps:
+  - sql: |
+      SET ROLE ext_nonowner
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore UPDATE
+    expect: error
+    sqlstate: "42501"
+    comment: must be owner of extension hstore
+  - sql: |
+      ALTER EXTENSION hstore ADD TABLE t_ne
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD TABLE t_ne
+    expect: ok
+    comment: as the superuser the same statement succeeds
+  - sql: |
+      DROP TABLE t_ne
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP ROLE ext_nonowner
+    expect: ok

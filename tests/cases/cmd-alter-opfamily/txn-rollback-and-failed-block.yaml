@@ -1,0 +1,49 @@
+# ALTER OPERATOR FAMILY is transactional: ROLLBACK undoes it, and a failure aborts the transaction block.
+id: cmd-alter-opfamily.txn-rollback-and-failed-block
+title: ADD inside a transaction is visible to itself, undone by ROLLBACK, and an error aborts the block
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, transactions, rollback, errors]
+required_capabilities: [alter-operator-family, create-operator-family, transactions, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_txn USING btree;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_txn USING btree ADD OPERATOR 1 < (int4, int4), FUNCTION 1 btint4cmp(int4, int4)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_txn'
+    expect: rows
+    comment: the transaction sees its own change
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_txn'
+    expect: rows
+    comment: rollback removed the member
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_txn USING btree ADD OPERATOR 1 < (int4, int4)
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_txn USING btree ADD OPERATOR 1 < (int4, int4)
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+    comment: the block is aborted until ROLLBACK
+  - sql: |
+      ROLLBACK
+    expect: ok

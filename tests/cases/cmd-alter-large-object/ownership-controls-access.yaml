@@ -1,0 +1,54 @@
+# Ownership governs access: after transfer the new owner can read and the former owner (non-superuser) cannot; the bytes never change.
+id: cmd-alter-large-object.ownership-controls-access
+title: After OWNER TO the new owner can read the object, the former owner cannot, and the data is unchanged
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, lo-get, large-objects, privileges]
+required_capabilities: [large-objects, roles, select, set-role]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_alo_acc_old;
+  CREATE ROLE cmd_alo_acc_new;
+steps:
+  - sql: |
+      SELECT lo_from_bytea(930501, convert_to('owned', 'UTF8'))
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 930501 OWNER TO cmd_alo_acc_old
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930501 OWNER TO cmd_alo_acc_new
+    expect: ok
+  - sql: |
+      SET ROLE cmd_alo_acc_old
+    expect: ok
+  - sql: |
+      SELECT convert_from(lo_get(930501), 'UTF8')
+    expect: error
+    sqlstate: "42501"
+    comment: former owner has no privilege on the object any more
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE cmd_alo_acc_new
+    expect: ok
+  - sql: |
+      SELECT convert_from(lo_get(930501), 'UTF8')
+    expect: rows
+    comment: new owner reads the unchanged bytes
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT lo_unlink(930501)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_acc_old
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_alo_acc_new
+    expect: ok

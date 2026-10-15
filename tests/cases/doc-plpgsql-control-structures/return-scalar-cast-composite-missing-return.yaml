@@ -1,0 +1,53 @@
+# Scalar RETURN is assignment-cast to the return type; composite RETURN must match columns; falling off the end is 2F005.
+id: doc-plpgsql-control-structures.return-scalar-cast-composite-missing-return
+title: "Scalar RETURN is assignment-cast, composite RETURN must match columns, and missing RETURN raises 2F005"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, return, composite-types, type-casts, errors]
+required_capabilities: [plpgsql, create-function, create-type, select, composite-types, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (RETURN and the end-of-function run-time error)"
+sessions: [a]
+setup: |
+  CREATE TYPE pair_t AS (a int, b text);
+  CREATE FUNCTION good_pair() RETURNS pair_t LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN (1, 'two'::text);
+  END $$;
+  CREATE FUNCTION bad_pair() RETURNS pair_t LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN (1, 'x', 3);
+  END $$;
+  CREATE FUNCTION round_scalar() RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    RETURN 2.5::numeric;
+  END $$;
+  CREATE FUNCTION maybe_return(x int) RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    IF x > 0 THEN
+      RETURN 1;
+    END IF;
+  END $$;
+steps:
+  - sql: |
+      SELECT good_pair()
+    expect: rows
+    comment: the composite RETURN delivers exactly the requested column set
+  - sql: |
+      SELECT round_scalar()
+    expect: rows
+    comment: the numeric result is assignment-cast to integer
+  - sql: |
+      SELECT maybe_return(1)
+    expect: rows
+  - sql: |
+      SELECT maybe_return(0)
+    expect: error
+    sqlstate: "2F005"
+    comment: control reaches the end of the top-level block without RETURN
+  - sql: |
+      SELECT bad_pair()
+    expect: error
+    sqlstate: "42804"
+    comment: the returned column list does not match pair_t

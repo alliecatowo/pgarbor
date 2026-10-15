@@ -1,0 +1,36 @@
+# Statement-level BEFORE UPDATE sees the pre-statement values of every row; statement-level AFTER UPDATE sees the new values.
+id: doc-trigger-datachanges.stmt-before-after-update
+title: Statement-level BEFORE and AFTER UPDATE triggers see pre- and post-statement values
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, statement-level-triggers, plpgsql, update, visibility]
+required_capabilities: [create-table, insert, select, update, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (none of the changes made by a statement are visible to statement-level BEFORE triggers)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+  CREATE FUNCTION s_upd_bef() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('s_upd_bef', (SELECT sum(v) FROM t));
+    RETURN NULL;
+  END $$;
+  CREATE FUNCTION s_upd_aft() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('s_upd_aft', (SELECT sum(v) FROM t));
+    RETURN NULL;
+  END $$;
+  CREATE TRIGGER trg_upd_bef BEFORE UPDATE ON t FOR EACH STATEMENT EXECUTE FUNCTION s_upd_bef();
+  CREATE TRIGGER trg_upd_aft AFTER UPDATE ON t FOR EACH STATEMENT EXECUTE FUNCTION s_upd_aft();
+steps:
+  - sql: |
+      UPDATE t SET v = v * 2 WHERE id <= 3
+    expect: ok
+  - sql: |
+      SELECT tag, n FROM lg ORDER BY seq
+    expect: rows
+    order: ordered
+    comment: the BEFORE sum is the pre-statement total; the AFTER sum includes the doubled rows

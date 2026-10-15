@@ -1,0 +1,51 @@
+# DISABLE/ENABLE TRIGGER toggle a user trigger by name, ALL or USER; disabled triggers do not fire; unknown trigger names fail with 42704.
+id: cmd-alter-table.triggers-enable-disable
+title: "ALTER TABLE DISABLE and ENABLE TRIGGER by name, ALL and USER"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, triggers, disable-trigger, enable-trigger, errors]
+required_capabilities: [create-table, create-function-sql, plpgsql, triggers, alter-table, insert, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Parameters: DISABLE TRIGGER, ENABLE TRIGGER [ ALL | USER | trigger_name ])"
+sessions: [a]
+setup: |
+  CREATE TABLE audited (a int4);
+  CREATE FUNCTION reject_all() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked'; END $$;
+  CREATE TRIGGER guard BEFORE INSERT ON audited FOR EACH ROW EXECUTE FUNCTION reject_all();
+steps:
+  - sql: |
+      INSERT INTO audited VALUES (1)
+    expect: error
+    sqlstate: "P0001"
+    comment: the trigger raises an exception
+  - sql: |
+      ALTER TABLE audited DISABLE TRIGGER guard
+    expect: ok
+  - sql: |
+      INSERT INTO audited VALUES (2)
+    expect: ok
+    comment: the disabled trigger does not fire
+  - sql: |
+      ALTER TABLE audited ENABLE TRIGGER ALL
+    expect: ok
+  - sql: |
+      INSERT INTO audited VALUES (3)
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      ALTER TABLE audited DISABLE TRIGGER USER
+    expect: ok
+  - sql: |
+      SELECT tgname, tgenabled FROM pg_trigger WHERE tgrelid = 'audited'::regclass ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: tgenabled D means disabled
+  - sql: |
+      ALTER TABLE audited ENABLE TRIGGER nope
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT a FROM audited ORDER BY a
+    expect: rows
+    order: ordered

@@ -1,0 +1,32 @@
+# The multivariate form needs at least two column/expression items; a lone column is rejected with or without kinds.
+id: cmd-create-statistics.single-item-needs-two-columns
+title: Multivariate CREATE STATISTICS rejects a single column or parenthesized column
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, multivariate-statistics, argument-validation]
+required_capabilities: [create-table, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Parameters: column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE cs_one (a int, b int);
+steps:
+  - sql: |
+      CREATE STATISTICS cs_one_s1 ON a FROM cs_one
+    expect: error
+    sqlstate: "42P17"
+    comment: at least two column names or expressions are required
+  - sql: |
+      CREATE STATISTICS cs_one_s2 (ndistinct) ON a FROM cs_one
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      CREATE STATISTICS cs_one_s3 ON (a) FROM cs_one
+    expect: error
+    sqlstate: "42P17"
+    comment: a parenthesized plain column is one item, not an expression form
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxrelid = 'cs_one'::regclass
+    expect: rows
+    comment: no failed statement left an object behind

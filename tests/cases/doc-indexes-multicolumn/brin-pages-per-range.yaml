@@ -1,0 +1,27 @@
+# Multicolumn BRIN index; a second BRIN on the same columns differs only by pages_per_range.
+id: doc-indexes-multicolumn.brin-pages-per-range
+title: Multicolumn BRIN indexes differ by pages_per_range and return exact results
+family: doc-indexes-multicolumn
+tier: extended
+feature_ids: [multicolumn-index, brin-index, storage-parameters]
+required_capabilities: [create-table, insert, select, create-index, brin-index, reloptions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (multicolumn BRIN; multiple BRIN indexes differ by pages_per_range)"
+sessions: [a]
+setup: |
+  CREATE TABLE ev (a int, b int);
+  CREATE INDEX ev_ab_brin32 ON ev USING brin (a, b) WITH (pages_per_range = 32);
+  CREATE INDEX ev_ab_brin64 ON ev USING brin (a, b) WITH (pages_per_range = 64);
+  INSERT INTO ev SELECT g, g % 7 FROM generate_series(1, 5000) AS g
+steps:
+  - sql: |
+      SELECT c.relname, c.reloptions FROM pg_class c WHERE c.relname IN ('ev_ab_brin32', 'ev_ab_brin64') ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FROM ev WHERE a BETWEEN 100 AND 199 AND b = 3
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM ev WHERE b = 6 AND a > 4990
+    expect: rows

@@ -1,0 +1,57 @@
+# MERGE has no triggers of its own. Statement-level triggers fire for each action listed in MERGE, even
+# when no row takes that action; row-level triggers fire only for rows actually updated or inserted.
+id: doc-trigger-definition.merge-statement-vs-row-triggers
+title: MERGE fires statement-level triggers for listed actions and row-level triggers only for performed actions
+family: doc-trigger-definition
+tier: extended
+feature_ids: [triggers, merge, plpgsql, update, insert]
+required_capabilities: [create-table, create-function, insert, select, update, merge, plpgsql, triggers, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (MERGE: statement-level triggers for listed actions; row-level only when performed)"
+sessions: [a]
+setup: |
+  CREATE TABLE tgt (id int PRIMARY KEY, v int);
+  CREATE TABLE src (id int, v int);
+  INSERT INTO tgt VALUES (1, 10);
+  INSERT INTO src VALUES (2, 99);
+  CREATE TABLE trig_log (seq int GENERATED ALWAYS AS IDENTITY, ev text);
+  CREATE FUNCTION m_log() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (ev) VALUES (TG_WHEN || ' ' || TG_LEVEL || ' ' || TG_OP);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER m_bu BEFORE UPDATE ON tgt FOR EACH STATEMENT EXECUTE FUNCTION m_log();
+  CREATE TRIGGER m_au AFTER UPDATE ON tgt FOR EACH STATEMENT EXECUTE FUNCTION m_log();
+  CREATE TRIGGER m_bi BEFORE INSERT ON tgt FOR EACH STATEMENT EXECUTE FUNCTION m_log();
+  CREATE TRIGGER m_ai AFTER INSERT ON tgt FOR EACH STATEMENT EXECUTE FUNCTION m_log();
+  CREATE TRIGGER m_row_upd AFTER UPDATE ON tgt FOR EACH ROW EXECUTE FUNCTION m_log();
+  CREATE TRIGGER m_row_ins AFTER INSERT ON tgt FOR EACH ROW EXECUTE FUNCTION m_log();
+steps:
+  - sql: |
+      MERGE INTO tgt USING src ON tgt.id = src.id
+        WHEN MATCHED THEN UPDATE SET v = src.v
+    expect: ok
+    comment: no source row matches, so no row is updated; the UPDATE statement triggers still fire
+  - sql: |
+      SELECT ev FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM trig_log
+    expect: ok
+  - sql: |
+      MERGE INTO tgt USING src ON tgt.id = src.id
+        WHEN MATCHED THEN UPDATE SET v = src.v
+        WHEN NOT MATCHED THEN INSERT (id, v) VALUES (src.id, src.v)
+    expect: ok
+    comment: one row is inserted and no row is updated; row-level INSERT fires, row-level UPDATE does not
+  - sql: |
+      SELECT ev FROM trig_log ORDER BY seq
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT id, v FROM tgt ORDER BY id
+    expect: rows
+    order: ordered

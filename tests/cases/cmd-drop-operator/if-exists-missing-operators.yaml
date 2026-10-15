@@ -1,0 +1,52 @@
+# IF EXISTS turns a missing operator, a missing schema, and a missing signature into notices; without it each is an error.
+id: cmd-drop-operator.if-exists-missing-operators
+title: DROP OPERATOR IF EXISTS notices for missing names, schemas and signatures
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, if-exists, schemas, signatures]
+required_capabilities: [drop-operator, create-operator, create-function-sql, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#parameters (IF EXISTS: a notice is issued)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dio_lt(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR !?! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dio_lt);
+steps:
+  - sql: |
+      DROP OPERATOR !@! (integer, integer)
+    expect: error
+    sqlstate: "42883"
+    comment: a missing operator without IF EXISTS is an error
+  - sql: |
+      DROP OPERATOR IF EXISTS !@! (integer, integer)
+    expect: notice
+    comment: the same name with IF EXISTS is a notice
+  - sql: |
+      DROP OPERATOR IF EXISTS !?! (text, text)
+    expect: notice
+    comment: the name exists but not for these argument types
+  - sql: |
+      DROP OPERATOR !?! (text, text)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP OPERATOR IF EXISTS no_such_schema.!?! (integer, integer)
+    expect: notice
+    comment: a missing schema is also skipped under IF EXISTS
+  - sql: |
+      DROP OPERATOR no_such_schema.!?! (integer, integer)
+    expect: error
+    sqlstate: "42883"
+    comment: and reported as an unknown operator without IF EXISTS
+  - sql: |
+      SELECT count(*) AS still_there FROM pg_operator WHERE oprname = '!?!' AND oprnamespace = 'public'::regnamespace
+    expect: rows
+    comment: none of the misses removed the real operator
+  - sql: |
+      DROP OPERATOR IF EXISTS !?! (integer, integer)
+    expect: ok
+    comment: the real operator is dropped; IF EXISTS does not change a successful drop
+  - sql: |
+      SELECT count(*) AS left_after FROM pg_operator WHERE oprname = '!?!' AND oprnamespace = 'public'::regnamespace
+    expect: rows

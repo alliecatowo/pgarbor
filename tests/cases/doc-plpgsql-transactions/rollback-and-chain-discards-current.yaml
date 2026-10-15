@@ -1,0 +1,34 @@
+# ROLLBACK AND CHAIN discards only the work since the last transaction boundary; the next transaction is chained.
+id: doc-plpgsql-transactions.rollback-and-chain-discards-current
+title: ROLLBACK AND CHAIN discards the current transaction and chains the next
+family: doc-plpgsql-transactions
+tier: extended
+feature_ids: [plpgsql, rollback-and-chain, isolation-level, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, transactions, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE log (v text);
+steps:
+  - sql: |
+      SET default_transaction_isolation = 'serializable'
+    expect: ok
+    comment: session default, not setup, so the step's own session inherits serializable
+  - sql: |
+      DO $$
+      BEGIN
+          INSERT INTO log VALUES ('before');
+          COMMIT AND CHAIN;
+          INSERT INTO log VALUES ('discarded');
+          ROLLBACK AND CHAIN;
+          INSERT INTO log VALUES (current_setting('transaction_isolation'));
+      END;
+      $$
+    expect: ok
+  - sql: |
+      SELECT v FROM log ORDER BY v
+    expect: rows
+    order: multiset
+    comment: the discarded row is absent, the row before the first chain is committed, and the post-chain row shows serializable

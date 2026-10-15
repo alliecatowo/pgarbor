@@ -1,0 +1,49 @@
+# SET TRANSACTION SNAPSHOT is rejected unless it is the first statement, the isolation level is SERIALIZABLE or REPEATABLE READ, and the snapshot exists.
+id: cmd-set-transaction.snapshot-import-errors
+title: SET TRANSACTION SNAPSHOT errors for wrong isolation level, unknown id and a query already run
+family: cmd-set-transaction
+tier: extended
+feature_ids: [set-transaction, snapshot, isolation-level, errors]
+required_capabilities: [transactions, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: SET TRANSACTION SNAPSHOT must be first, and the transaction must be SERIALIZABLE or REPEATABLE READ)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET TRANSACTION SNAPSHOT '00000003-0000001B-1'
+    expect: error
+    sqlstate: "0A000"
+    comment: default READ COMMITTED cannot import a snapshot
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - sql: |
+      SET TRANSACTION SNAPSHOT '00000003-0000001B-1'
+    expect: error
+    sqlstate: "42704"
+    comment: no exported snapshot has this identifier
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT 1 AS one
+    expect: rows
+    order: ordered
+  - sql: |
+      SET TRANSACTION SNAPSHOT '00000003-0000001B-1'
+    expect: error
+    sqlstate: "25001"
+    comment: must be called before any query
+  - sql: |
+      ROLLBACK
+    expect: ok

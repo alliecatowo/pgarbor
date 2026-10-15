@@ -1,0 +1,41 @@
+# The documented undo example: REVOKE per schema removes the defaults, and an emptied default-ACL entry disappears.
+id: cmd-alter-default-privileges.doc-example-undo-schema-grants
+title: Documented per-schema REVOKE undoes the grants and removes the default-ACL row
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, revoke, default-acl, schema-scope, privileges]
+required_capabilities: [create-schema, create-table, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-examples (undo: ALTER DEFAULT PRIVILEGES IN SCHEMA myschema REVOKE SELECT ON TABLES FROM PUBLIC / REVOKE INSERT ON TABLES FROM webuser)"
+sessions: [a]
+setup: |
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'adp_webuser') THEN CREATE ROLE adp_webuser; END IF;
+  END $$;
+  CREATE SCHEMA adp_undo;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_undo GRANT SELECT ON TABLES TO PUBLIC;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_undo GRANT INSERT ON TABLES TO adp_webuser
+    expect: ok
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_undo REVOKE SELECT ON TABLES FROM PUBLIC;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_undo REVOKE INSERT ON TABLES FROM adp_webuser
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_default_acl WHERE defaclnamespace = 'adp_undo'::regnamespace
+    expect: rows
+    order: multiset
+    comment: the emptied entry is removed entirely
+  - sql: |
+      CREATE TABLE adp_undo.t2 (a int)
+    expect: ok
+  - sql: |
+      SELECT relacl IS NULL AS default_acl,
+             has_table_privilege('public', 'adp_undo.t2', 'SELECT') AS pub_select,
+             has_table_privilege('adp_webuser', 'adp_undo.t2', 'INSERT') AS webuser_insert
+      FROM pg_class WHERE oid = 'adp_undo.t2'::regclass
+    expect: rows
+    order: multiset
+    comment: the new table has only the built-in owner privileges

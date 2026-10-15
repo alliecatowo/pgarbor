@@ -1,0 +1,35 @@
+# Row-level INSTEAD OF INSERT on a view sees the base-table effects of earlier firings of the same command.
+id: doc-trigger-datachanges.instead-of-view-prior-firings
+title: Row-level INSTEAD OF INSERT sees rows written by previous firings of the same command
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, instead-of-triggers, views, plpgsql, insert, visibility]
+required_capabilities: [create-table, create-view, insert, select, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (row-level INSTEAD OF trigger sees effects of previous firings)"
+sessions: [a]
+setup: |
+  CREATE TABLE lg (seq serial, tag text, n int);
+  CREATE TABLE vb (id int, v int);
+  CREATE VIEW vw AS SELECT id, v FROM vb;
+  CREATE FUNCTION io_ins() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('io_ins', (SELECT count(*) FROM vb));
+    INSERT INTO vb(id, v) VALUES (NEW.id, NEW.v);
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER trg_io_ins INSTEAD OF INSERT ON vw FOR EACH ROW EXECUTE FUNCTION io_ins();
+steps:
+  - sql: |
+      INSERT INTO vw VALUES (1, 1), (2, 2), (3, 3)
+    expect: ok
+  - sql: |
+      SELECT n FROM lg WHERE tag = 'io_ins'
+    expect: rows
+    order: multiset
+    comment: the firings see zero, one and two previously written base rows
+  - sql: |
+      SELECT id, v FROM vw ORDER BY id
+    expect: rows
+    order: ordered

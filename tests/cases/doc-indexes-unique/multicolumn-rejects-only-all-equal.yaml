@@ -1,0 +1,31 @@
+# A multicolumn unique index rejects a row only when all indexed columns equal an existing row.
+id: doc-indexes-unique.multicolumn-rejects-only-all-equal
+title: Multicolumn unique index allows rows sharing only some indexed column values
+family: doc-indexes-unique
+tier: core
+feature_ids: [unique-index, create-index, errors, multicolumn-index]
+required_capabilities: [create-table, insert, select, create-index, unique-constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique ('A multicolumn unique index will only reject cases where all indexed columns are equal in multiple rows')"
+sessions: [a]
+setup: |
+  CREATE TABLE enroll (student int, course int, grade text);
+  CREATE UNIQUE INDEX enroll_sc ON enroll (student, course);
+steps:
+  - sql: |
+      INSERT INTO enroll VALUES (1, 10, 'A'), (1, 20, 'B'), (2, 10, 'C')
+    expect: ok
+    comment: rows that share one column value with an existing row are allowed
+  - sql: |
+      INSERT INTO enroll VALUES (1, 10, 'D')
+    expect: error
+    sqlstate: "23505"
+    comment: all indexed columns equal an existing row
+  - sql: |
+      INSERT INTO enroll VALUES (2, 20, 'E')
+    expect: ok
+  - sql: |
+      SELECT student, course, grade FROM enroll ORDER BY student, course
+    expect: rows
+    order: ordered

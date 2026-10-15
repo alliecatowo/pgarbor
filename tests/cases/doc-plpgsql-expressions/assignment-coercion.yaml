@@ -1,0 +1,38 @@
+# Assignment coerces the result like an assignment cast; if none exists, the value goes through text I/O and can fail there.
+id: doc-plpgsql-expressions.assignment-coercion
+title: Assignment coerces via assignment cast, falls back to text I/O, and fails on bad input
+family: doc-plpgsql-expressions
+tier: core
+feature_ids: [plpgsql, expressions, casts, type-coercion, errors]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-statements-assignment (assignment cast, else textual conversion)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION assign_numeric_to_int() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE v int; n numeric := 3.7;
+  BEGIN
+    v := n;
+    RETURN v;
+  END $$;
+  CREATE FUNCTION assign_text_to_int(src text) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE v int;
+  BEGIN
+    v := src;
+    RETURN v;
+  END $$;
+steps:
+  - sql: |
+      SELECT assign_numeric_to_int() AS rounded
+    expect: rows
+    comment: numeric to integer assignment cast rounds
+  - sql: |
+      SELECT assign_text_to_int('42') AS textual
+    expect: rows
+    comment: no assignment cast from text, so the text output and integer input functions are used
+  - sql: |
+      SELECT assign_text_to_int('abc')
+    expect: error
+    sqlstate: "22P02"
+    comment: the input function rejects the string

@@ -1,0 +1,57 @@
+# ACL boundaries: a fresh object has a NULL ACL, the first GRANT fills in the owner entry, and revoking everything leaves an empty non-NULL ACL.
+id: doc-ddl-priv.acl-null-default-and-empty
+title: Fresh tables have a NULL ACL, the first GRANT fills it, and REVOKE ALL leaves it empty
+family: doc-ddl-priv
+tier: core
+feature_ids: [grant, revoke, acl, owner, privileges, catalog-introspection, grant-option]
+required_capabilities: [create-table, select, roles, catalog-introspection, errors, order-by]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (empty privileges entry vs null entry; first GRANT or REVOKE instantiates default privileges; owner's implicit grant options are not shown)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_nul_own;
+  CREATE ROLE ddp_nul_r2;
+  CREATE TABLE ddp_nul_t (a int4);
+  ALTER TABLE ddp_nul_t OWNER TO ddp_nul_own;
+steps:
+  - sql: |
+      SELECT relacl IS NULL AS acl_null FROM pg_class WHERE oid = 'ddp_nul_t'::regclass
+    expect: rows
+    comment: a fresh object has a NULL ACL meaning built-in default privileges
+  - sql: |
+      GRANT SELECT ON ddp_nul_t TO ddp_nul_r2
+    expect: ok
+  - sql: |
+      SELECT relacl::text FROM pg_class WHERE oid = 'ddp_nul_t'::regclass
+    expect: rows
+    order: multiset
+    comment: the first GRANT instantiates the owner's full entry, with no * since owner grant options are implicit
+  - sql: |
+      REVOKE ALL ON ddp_nul_t FROM ddp_nul_own
+    expect: ok
+  - sql: |
+      SELECT relacl IS NULL AS acl_null, relacl::text FROM pg_class WHERE oid = 'ddp_nul_t'::regclass
+    expect: rows
+    order: multiset
+    comment: the owner entry is gone but the ACL is non-null, so it is not the default
+  - sql: |
+      SET ROLE ddp_nul_own
+    expect: ok
+  - sql: |
+      SELECT a FROM ddp_nul_t
+    expect: error
+    sqlstate: "42501"
+    comment: the owner has no SELECT after revoking everything from itself
+  - sql: |
+      GRANT SELECT ON ddp_nul_t TO ddp_nul_r2 WITH GRANT OPTION
+    expect: ok
+    comment: the owner still holds implicit grant options, so it can re-grant
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT relacl::text FROM pg_class WHERE oid = 'ddp_nul_t'::regclass
+    expect: rows
+    order: multiset
+    comment: an explicitly granted grant option is shown with *

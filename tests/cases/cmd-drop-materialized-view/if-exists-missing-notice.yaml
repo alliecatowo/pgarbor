@@ -1,0 +1,31 @@
+# IF EXISTS on a missing materialized view succeeds and issues a notice instead of an error.
+id: cmd-drop-materialized-view.if-exists-missing-notice
+title: DROP MATERIALIZED VIEW IF EXISTS on a missing name issues a notice and succeeds
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, if-exists]
+required_capabilities: [create-materialized-view, drop-materialized-view, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (IF EXISTS)"
+sessions: [a]
+steps:
+  - sql: |
+      DROP MATERIALIZED VIEW IF EXISTS never_created_mv
+    expect: notice
+    comment: NOTICE 'materialized view "never_created_mv" does not exist, skipping'
+  - sql: |
+      SELECT count(*) AS still_none FROM pg_class WHERE relname = 'never_created_mv'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE MATERIALIZED VIEW ine_mv AS SELECT 1 AS one
+    expect: ok
+  - sql: |
+      DROP MATERIALIZED VIEW IF EXISTS ine_mv
+    expect: ok
+    comment: an existing view is dropped silently under IF EXISTS, with no notice
+  - sql: |
+      DROP MATERIALIZED VIEW IF EXISTS ine_mv
+    expect: notice
+    comment: second drop of the same name is the missing case again

@@ -1,0 +1,45 @@
+# Two functions conflict when their names and INPUT argument types match (OUT parameters, argument
+# names and typmods are ignored); different input types overload.
+id: cmd-create-function.overload-and-name-conflicts
+title: Input argument types decide conflicts; OUT params, argument names and typmods do not
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, overloading, duplicate-function, out-parameters, typmod]
+required_capabilities: [create-function, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-overloading; #sql-createfunction-notes (type modifiers discarded)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION foo(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION foo(int, out text) RETURNS text LANGUAGE sql AS 'select $1::text'
+    expect: error
+    sqlstate: "42723"
+    comment: OUT parameters are ignored when comparing signatures, so this conflicts with foo(int)
+  - sql: |
+      CREATE FUNCTION bar(a int) RETURNS int LANGUAGE sql AS 'select a'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION bar(b int) RETURNS int LANGUAGE sql AS 'select b'
+    expect: error
+    sqlstate: "42723"
+    comment: argument names are not part of the signature
+  - sql: |
+      CREATE FUNCTION r(varchar(10)) RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION r(varchar) RETURNS int LANGUAGE sql AS 'select 1'
+    expect: error
+    sqlstate: "42723"
+    comment: the typmod in varchar(10) is discarded, so the signature is r(varchar)
+  - sql: |
+      CREATE FUNCTION foo(text) RETURNS text LANGUAGE sql AS 'select $1'
+    expect: ok
+    comment: different input type overloads the name
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_proc WHERE proname = 'foo') AS foo_overloads, foo(5) AS v_int, foo('x') AS v_text
+    expect: rows
+    comment: foo_overloads 2, v_int 5, v_text x

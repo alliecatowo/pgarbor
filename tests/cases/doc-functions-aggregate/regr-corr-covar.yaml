@@ -1,0 +1,47 @@
+# Two-variable statistics on exact linear data, degenerate inputs (single pair, zero variance), and NULL-pair exclusion.
+id: doc-functions-aggregate.regr-corr-covar
+title: Two-variable statistical aggregates on exact linear data, degenerate inputs, and NULL pair exclusion
+family: doc-functions-aggregate
+tier: core
+feature_ids: [corr, covar-pop, covar-samp, regr-slope, regr-intercept, regr-r2, regr-count, regr-sums, statistical-aggregates]
+required_capabilities: [select, aggregates, float8, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate-statistics-table (corr, covar_pop, covar_samp, regr_*); 'null is returned if the computation is meaningless, for example when N is zero'"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT corr(y, x) AS corr, covar_pop(y, x) AS cp, covar_samp(y, x) AS cs,
+             regr_slope(y, x) AS slope, regr_intercept(y, x) AS icpt, regr_r2(y, x) AS r2,
+             regr_count(y, x) AS n, regr_avgx(y, x) AS ax, regr_avgy(y, x) AS ay,
+             regr_sxx(y, x) AS sxx, regr_sxy(y, x) AS sxy, regr_syy(y, x) AS syy
+      FROM (VALUES (2::float8, 1::float8), (4, 2), (6, 3)) v(y, x)
+    expect: rows
+    comment: points lie on y = 2x exactly, so slope 2, intercept 0, r2 and corr 1
+  - sql: |
+      SELECT corr(y, x) AS corr, covar_samp(y, x) AS cs, regr_slope(y, x) AS slope,
+             regr_sxx(y, x) AS sxx, regr_count(y, x) AS n
+      FROM (VALUES (2::float8, 1::float8)) v(y, x)
+    expect: rows
+    comment: a single pair leaves the sample statistics undefined (NULL) while sxx is 0 and count is 1
+  - sql: |
+      SELECT corr(y, x) AS corr, covar_pop(y, x) AS cp, covar_samp(y, x) AS cs
+      FROM (VALUES (1::float8, 1::float8), (1, 1)) v(y, x)
+    expect: rows
+    comment: zero variance in x makes corr NULL; covariance of constant data is 0
+  - sql: |
+      SELECT regr_avgx(y, x) AS ax, regr_avgy(y, x) AS ay, regr_count(y, x) AS n,
+             regr_sxx(y, x) AS sxx, regr_syy(y, x) AS syy, regr_sxy(y, x) AS sxy
+      FROM (VALUES (NULL::float8, 1::float8), (3, NULL)) v(y, x)
+    expect: rows
+    comment: a pair is used only when both inputs are non-null, so no pair qualifies here
+  - sql: |
+      SELECT regr_count(y, x) AS n, regr_avgx(y, x) AS ax
+      FROM (VALUES (NULL::float8, 1::float8), (3, NULL), (2, 1)) v(y, x)
+    expect: rows
+    comment: only the complete pair (2,1) is counted, so count is 1 and avgx is 1
+  - sql: |
+      SELECT regr_count(y, x) AS n, regr_avgx(y, x) AS ax
+      FROM (SELECT 1.0::float8 AS y, 1.0::float8 AS x WHERE false) v
+    expect: rows
+    comment: zero rows gives count 0 and NULL average

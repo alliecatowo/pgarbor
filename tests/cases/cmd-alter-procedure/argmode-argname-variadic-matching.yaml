@@ -1,0 +1,56 @@
+# ALTER PROCEDURE ignores argument names, accepts an explicit OUT or IN marker, and matches a
+# VARIADIC argument by its array type. Only input types decide the lookup.
+id: cmd-alter-procedure.argmode-argname-variadic-matching
+title: ALTER PROCEDURE matches on input types; argnames, IN and OUT markers and VARIADIC arrays resolve
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, argmodes, argnames, variadic, function-identity]
+required_capabilities: [create-procedure, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Parameters: argmode, argname, argtype); ref/drop_procedure.sgml (lookup rules)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE pout(IN a int, OUT b int) LANGUAGE SQL AS $$ SELECT 1 $$;
+  CREATE PROCEDURE vp(VARIADIC int[]) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE pout(int) RENAME TO pout2
+    expect: ok
+    comment: the OUT parameter is not part of the lookup key
+  - sql: |
+      ALTER PROCEDURE pout2(int, OUT int) RENAME TO pout3
+    expect: ok
+    comment: an explicit OUT marker in the list is accepted
+  - sql: |
+      ALTER PROCEDURE pout3(int, int) RENAME TO pout4
+    expect: ok
+    comment: listing every parameter type, OUT included, also matches
+  - sql: |
+      ALTER PROCEDURE pout4(x int, y int) RENAME TO pout5
+    expect: ok
+    comment: argument names are ignored
+  - sql: |
+      ALTER PROCEDURE pout5(IN a int) RENAME TO pout6
+    expect: ok
+    comment: explicit IN is the default mode
+  - sql: |
+      ALTER PROCEDURE vp(int[]) RENAME TO vp2
+    expect: ok
+    comment: the VARIADIC parameter matches its array type
+  - sql: |
+      ALTER PROCEDURE vp2(VARIADIC int[]) RENAME TO vp3
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE vp3(VARIADIC integer[]) RENAME TO vp4
+    expect: ok
+    comment: integer and int4 spellings name the same type
+  - sql: |
+      ALTER PROCEDURE pout6(text) RENAME TO pout7
+    expect: error
+    sqlstate: "42883"
+    comment: the argument types still have to match
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('pout6', 'vp4') ORDER BY 1
+    expect: rows
+    order: ordered

@@ -1,0 +1,47 @@
+# Documented json[b]_populate_record(set), json[b]_to_record(set): field-to-column conversion, nested composites, and unmatched columns.
+id: doc-functions-json.json-populate-and-to-record
+title: populate_record, populate_recordset, to_record and to_recordset conversions into composite types
+family: doc-functions-json
+tier: core
+feature_ids: [json-populate-record, json-populate-recordset, json-to-record, json-to-recordset, composite-types]
+required_capabilities: [select, json, jsonb, create-type, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-processing (json_populate_record, json_populate_recordset, json_to_record, json_to_recordset)"
+sessions: [a]
+setup: |
+  CREATE TYPE subrowtype AS (d int, e text);
+  CREATE TYPE myrowtype AS (a int, b text[], c subrowtype);
+  CREATE TYPE twoints AS (a int, b int);
+  CREATE TYPE pairrow AS (a int, b text);
+steps:
+  - sql: |
+      SELECT * FROM json_populate_record(null::myrowtype,
+        '{"a": 1, "b": ["2", "a b"], "c": {"d": 4, "e": "a  b c"}, "x": "foo"}')
+    expect: rows
+    comment: "documented example; the unknown key x is ignored, nested object and array are converted recursively"
+  - sql: |
+      SELECT * FROM json_populate_recordset(null::twoints, '[{"a":1,"b":2}, {"a":3,"b":4}]') ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT * FROM jsonb_populate_record(
+        (SELECT ROW(9, NULL::int)::twoints),
+        '{"a": 5}')
+    expect: rows
+    comment: "when base is not NULL, unmatched columns keep the base values"
+  - sql: |
+      SELECT * FROM json_to_record('{"a":1,"b":[1,2,3],"c":[1,2,3],"e":"bar","r": {"a": 123, "b": "a b c"}}')
+        AS x(a int, b text, c int[], d text, r pairrow)
+    expect: rows
+    comment: "unmatched column d is NULL; array-valued field b is kept as its JSON text"
+  - sql: |
+      SELECT * FROM json_to_recordset('[{"a":1,"b":"foo"}, {"a":"2","c":"bar"}]') AS x(a int, b text)
+    expect: rows
+    order: multiset
+    comment: "documented: the string \"2\" is coerced to int, and the missing b becomes NULL"
+  - sql: |
+      SELECT * FROM json_populate_record(null::twoints, '{"a": "not-a-number"}')
+    expect: error
+    sqlstate: "22P02"
+    comment: "a string that the column type cannot parse is an input-syntax error"

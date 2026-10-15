@@ -1,0 +1,41 @@
+id: cmd-fetch.fetch-in-failed-transaction
+title: FETCH inside an aborted transaction fails with 25P02 until ROLLBACK, after which the cursor is gone
+family: cmd-fetch
+tier: core
+feature_ids: [fetch, errors, transactions, rollback]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/fetch.sgml#sql-fetch (Description); ref/declare.sgml (cursor lifetime)"
+sessions: [a]
+setup: |
+  CREATE TABLE nums (n int4 PRIMARY KEY);
+  INSERT INTO nums VALUES (1), (2), (3);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c CURSOR FOR SELECT n FROM nums ORDER BY n
+    expect: ok
+  - sql: |
+      SELECT 1 / 0
+    expect: error
+    sqlstate: "22012"
+    comment: the transaction is now aborted
+  - sql: |
+      FETCH FROM c
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      FETCH ALL FROM c
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      FETCH FROM c
+    expect: error
+    sqlstate: "34000"
+    comment: the cursor was declared in the rolled-back transaction

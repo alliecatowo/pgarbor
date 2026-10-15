@@ -1,0 +1,67 @@
+# The manuals' accounts example: a policy for role managers using manager = current_user, with its implicit WITH CHECK.
+id: doc-ddl-rowsecurity.accounts-manager-example
+title: "Manager policy restricts SELECT, UPDATE, DELETE and INSERT to own accounts"
+family: doc-ddl-rowsecurity
+tier: core
+feature_ids: [rls, policies, select, insert, update, delete, with-check, role-membership]
+required_capabilities: [create-table, insert, select, update, delete, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-rowsecurity: the accounts example (account_managers policy)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_role_dr03_managers;
+  CREATE ROLE pgarbor_case_role_dr03_a;
+  CREATE ROLE pgarbor_case_role_dr03_b;
+  GRANT pgarbor_case_role_dr03_managers TO pgarbor_case_role_dr03_a, pgarbor_case_role_dr03_b;
+  CREATE TABLE accounts (manager text, company text, contact_email text);
+  INSERT INTO accounts VALUES
+    ('pgarbor_case_role_dr03_a', 'acme', 'a@example.test'),
+    ('pgarbor_case_role_dr03_b', 'bigco', 'b@example.test');
+  GRANT SELECT, INSERT, UPDATE, DELETE ON accounts TO pgarbor_case_role_dr03_managers;
+  ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY account_managers ON accounts TO pgarbor_case_role_dr03_managers
+    USING (manager = current_user);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_dr03_a
+    expect: ok
+  - sql: |
+      SELECT company FROM accounts ORDER BY company
+    expect: rows
+    order: ordered
+    comment: only the row whose manager is the current role
+  - sql: |
+      UPDATE accounts SET contact_email = 'x@example.test' WHERE company = 'bigco'
+    expect: ok
+    comment: UPDATE 0 - another manager's row is invisible to UPDATE
+  - sql: |
+      DELETE FROM accounts WHERE company = 'bigco'
+    expect: ok
+    comment: DELETE 0
+  - sql: |
+      INSERT INTO accounts VALUES ('pgarbor_case_role_dr03_b', 'other', 'o@example.test')
+    expect: error
+    sqlstate: "42501"
+    comment: the implicit WITH CHECK rejects a row owned by another manager
+  - sql: |
+      UPDATE accounts SET manager = 'pgarbor_case_role_dr03_b' WHERE company = 'acme'
+    expect: error
+    sqlstate: "42501"
+    comment: the new row would belong to another manager, so WITH CHECK fails
+  - sql: |
+      INSERT INTO accounts VALUES ('pgarbor_case_role_dr03_a', 'newco', 'n@example.test')
+    expect: ok
+  - sql: |
+      SELECT company FROM accounts ORDER BY company
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP TABLE accounts
+    expect: ok
+  - sql: |
+      DROP ROLE pgarbor_case_role_dr03_a, pgarbor_case_role_dr03_b, pgarbor_case_role_dr03_managers
+    expect: ok

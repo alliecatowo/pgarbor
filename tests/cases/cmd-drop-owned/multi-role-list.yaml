@@ -1,0 +1,37 @@
+# One DROP OWNED command takes a comma-separated list of roles and drops the objects of all of them.
+id: cmd-drop-owned.multi-role-list
+title: "DROP OWNED BY with a list of roles drops objects owned by each listed role and nothing else"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, role-list]
+required_capabilities: [roles, drop-role, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-synopsis"
+sessions: [a]
+setup: |
+  CREATE ROLE dml_a1;
+  CREATE ROLE dml_a2;
+  CREATE TABLE dml_ta1 (a int4);
+  ALTER TABLE dml_ta1 OWNER TO dml_a1;
+  CREATE TABLE dml_ta2 (a int4);
+  ALTER TABLE dml_ta2 OWNER TO dml_a2;
+  CREATE TABLE dml_ta3 (a int4);
+steps:
+  - sql: |
+      DROP OWNED BY dml_a1, dml_a2
+    expect: ok
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname LIKE 'dml_ta%' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only the table owned by the session user remains
+  - sql: |
+      DROP OWNED BY dml_a1, dml_a2 CASCADE
+    expect: ok
+    comment: repeating the command when the roles own nothing is not an error
+  - sql: |
+      DROP OWNED BY dml_a1, dml_nobody
+    expect: error
+    sqlstate: "42704"
+    comment: an unknown role in the list is an error

@@ -1,0 +1,32 @@
+# Single-row subquery comparison: zero rows yield NULL, more than one row raises cardinality_violation.
+id: doc-functions-subquery.single-row-comparison
+title: Row comparison with a single-row subquery yields NULL on zero rows and errors on more than one
+family: doc-functions-subquery
+tier: core
+feature_ids: [single-row-comparison, row-constructor, null-semantics]
+required_capabilities: [create-table, insert, select, subquery, row-constructor, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (Single-Row Comparison)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+steps:
+  - sql: |
+      SELECT (1, 10) = (SELECT col1, col2 FROM tab1 WHERE col1 = 1) AS r1, (1, 2) = (SELECT col1, col2 FROM tab1 WHERE col1 = 1) AS r0, (1, 10) = (SELECT col1, col2 FROM tab1 WHERE col1 = 9) AS rz
+    expect: rows
+    comment: a zero-row subquery gives NULL
+  - sql: |
+      SELECT (1, NULL::int) = (SELECT col1, col2 FROM tab1 WHERE col1 = 1) AS rn, 0 = (SELECT col1 FROM tab1 WHERE false) AS z
+    expect: rows
+  - sql: |
+      SELECT 1 = (SELECT col1 FROM tab1) AS multi
+    expect: error
+    sqlstate: "21000"
+    comment: more than one row returned by a subquery used as an expression
+  - sql: |
+      SELECT (1, 2) = (SELECT col1, col2 FROM tab1) AS multi_row
+    expect: error
+    sqlstate: "21000"
+    comment: the single-row form also rejects a multi-row result

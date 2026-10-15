@@ -1,0 +1,42 @@
+# UPDATE silently skips rows failing USING, but a visible row whose new value fails WITH CHECK aborts the whole statement.
+id: cmd-create-policy.update-silent-filter-and-check-error
+title: "UPDATE filters target rows with USING and rejects new values that fail WITH CHECK"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, update, errors]
+required_capabilities: [create-table, insert, select, update, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy-update"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_upd;
+  CREATE TABLE t (id int4, v int4);
+  INSERT INTO t VALUES (1, 5), (2, -1), (3, 0);
+  GRANT SELECT, UPDATE ON t TO pgarbor_case_cp_upd;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p_upd ON t FOR UPDATE TO pgarbor_case_cp_upd USING (v > 0) WITH CHECK (v >= 0);
+  CREATE POLICY p_sel ON t FOR SELECT TO pgarbor_case_cp_upd USING (true);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_upd
+    expect: ok
+  - sql: |
+      UPDATE t SET v = -1 WHERE id = 1
+    expect: error
+    sqlstate: "42501"
+    comment: row 1 is visible under USING, but the new value fails WITH CHECK
+  - sql: |
+      UPDATE t SET v = v + 10 WHERE true
+    expect: ok
+    comment: rows 2 and 3 fail USING and are silently skipped; only row 1 is updated
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t; DROP ROLE pgarbor_case_cp_upd
+    expect: ok

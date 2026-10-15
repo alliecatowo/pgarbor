@@ -1,0 +1,55 @@
+# NULL enum values follow SQL NULL rules; aggregates ignore them; an enum type with zero labels is legal (datatype.sgml#datatype-enum-ordering).
+id: doc-datatype-enum.null-and-empty-enum
+title: NULL enum values obey SQL NULL rules and an enum with no labels yields NULL aggregates
+family: doc-datatype-enum
+tier: core
+feature_ids: [enum-null, enum-ordering, aggregate-min, aggregate-max, empty-enum]
+required_capabilities: [create-type, create-table, insert, select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-enum-ordering"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE TABLE person (name text, current_mood mood);
+  INSERT INTO person VALUES ('Moe', 'happy'), ('Larry', 'sad')
+steps:
+  - sql: |
+      INSERT INTO person VALUES ('Nobody', NULL)
+    expect: ok
+  - sql: |
+      SELECT name FROM person WHERE current_mood = NULL
+    expect: rows
+    order: multiset
+    comment: equality with NULL is never true, so no rows
+  - sql: |
+      SELECT name FROM person WHERE current_mood IS NULL
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT name FROM person ORDER BY current_mood
+    expect: rows
+    order: ordered
+    comment: NULLs sort last by default
+  - sql: |
+      SELECT min(current_mood)::text AS lo, max(current_mood)::text AS hi, count(current_mood) AS non_null, count(*) AS total FROM person
+    expect: rows
+    order: multiset
+    comment: aggregates ignore the NULL row
+  - sql: |
+      SELECT NULL::mood < 'ok' AS cmp
+    expect: rows
+    order: multiset
+    comment: comparison with NULL yields NULL
+  - sql: |
+      CREATE TYPE no_labels AS ENUM ()
+    expect: ok
+  - sql: |
+      SELECT max(x::text) AS m FROM (SELECT NULL::no_labels AS x) s
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT max(current_mood) AS m FROM person WHERE false
+    expect: rows
+    order: multiset
+    comment: max over zero rows is NULL

@@ -1,0 +1,41 @@
+# ALTER LARGE OBJECT ... OWNER TO assigns a new owner visible in pg_largeobject_metadata; the object is unchanged otherwise.
+id: cmd-alter-large-object.owner-assign-basic
+title: ALTER LARGE OBJECT OWNER TO assigns a new owner recorded in pg_largeobject_metadata
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, large-objects, owner]
+required_capabilities: [large-objects, roles, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_basic_owner
+    expect: ok
+  - sql: |
+      SELECT lo_create(930101)
+    expect: rows
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930101
+    expect: rows
+    comment: freshly created object is owned by the creating role (the superuser)
+  - sql: |
+      ALTER LARGE OBJECT 930101 OWNER TO cmd_alo_basic_owner
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930101
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 930101 OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930101
+    expect: rows
+    comment: CURRENT_USER resolves to the session user postgres
+  - sql: |
+      SELECT lo_unlink(930101)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_basic_owner
+    expect: ok

@@ -1,0 +1,31 @@
+# Portals are closed implicitly at transaction end, so a returned refcursor is unusable after COMMIT.
+id: doc-plpgsql-cursors.portal-closed-at-commit
+title: Returned refcursor no longer resolves after the transaction commits
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, refcursor-return, portal-lifetime, transactions]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE test (col text);
+  INSERT INTO test VALUES ('123');
+  CREATE FUNCTION reffunc_kept(refcursor) RETURNS refcursor AS '
+  BEGIN
+      OPEN $1 FOR SELECT col FROM test;
+      RETURN $1;
+  END;
+  ' LANGUAGE plpgsql;
+steps:
+  - sql: |
+      BEGIN;
+      SELECT reffunc_kept('kept');
+      COMMIT
+    expect: ok
+  - sql: |
+      FETCH ALL IN kept
+    expect: error
+    sqlstate: "34000"
+    comment: the portal was implicitly closed at COMMIT

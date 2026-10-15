@@ -1,0 +1,39 @@
+# The optional column list renames output columns; fewer names are allowed, too many or duplicate names are errors.
+id: cmd-create-table-as.column-name-list
+title: Explicit CTAS column list renames columns and rejects too many or duplicate names
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, column-names]
+required_capabilities: [create-table-as, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (column_name parameter)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE renamed (a, b) AS SELECT 1 AS x, 'two' AS y
+    expect: ok
+  - sql: |
+      SELECT a, b FROM renamed
+    expect: rows
+    comment: explicit names replace x and y
+  - sql: |
+      CREATE TABLE partial_names (first_col) AS SELECT 10 AS x, 20 AS y
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'partial_names'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: first column renamed, second keeps its query name
+  - sql: |
+      CREATE TABLE too_many (a, b) AS SELECT 1
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE TABLE dup_names (a, a) AS SELECT 1, 2
+    expect: error
+    sqlstate: "42701"
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('too_many', 'dup_names')
+    expect: rows
+    comment: failed CREATE TABLE AS leaves no table behind

@@ -1,0 +1,52 @@
+# Without an argument list, DROP FUNCTION name matches any function with that name when the name is
+# unique in its schema, including a zero-argument function. name() is different: it selects only the
+# zero-argument form.
+id: cmd-drop-function.name-without-argument-list
+title: Bare function name drops a uniquely named function regardless of its arguments
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, name-only-identity, zero-argument-functions]
+required_capabilities: [create-function, drop-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction-examples (update_employee_salaries)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION unq(a int, b text) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION unq()
+    expect: error
+    sqlstate: "42883"
+    comment: unq() names the zero-argument form, which does not exist
+  - sql: |
+      DROP FUNCTION unq
+    expect: ok
+    comment: the name is unique, so the argument list may be omitted
+  - sql: |
+      CREATE FUNCTION update_employee_salaries(p int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION update_employee_salaries
+    expect: ok
+  - sql: |
+      CREATE FUNCTION update_employee_salaries() RETURNS int LANGUAGE sql AS 'select 1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION update_employee_salaries()
+    expect: ok
+    comment: explicit empty parentheses select the zero-argument form
+  - sql: |
+      DROP FUNCTION no_such_function
+    expect: error
+    sqlstate: "42883"
+    comment: a missing name without an argument list is an error
+  - sql: |
+      DROP FUNCTION IF EXISTS no_such_function
+    expect: notice
+  - sql: |
+      SELECT count(*) FROM pg_proc WHERE proname IN ('unq', 'update_employee_salaries')
+    expect: rows
+    order: multiset
+    comment: 0 rows remain

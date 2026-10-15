@@ -1,0 +1,41 @@
+# A role name that does not exist is an error, and it is raised before any object is reassigned.
+id: cmd-reassign-owned.missing-role-error-atomic
+title: "REASSIGN OWNED with an unknown old or new role fails without moving any object"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, errors, role-lookup]
+required_capabilities: [roles, create-table, select, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-parameters"
+sessions: [a]
+setup: |
+  CREATE ROLE ro16_old;
+  CREATE ROLE ro16_new;
+  CREATE TABLE ro16_t (a int4);
+  ALTER TABLE ro16_t OWNER TO ro16_old;
+steps:
+  - sql: |
+      REASSIGN OWNED BY ro16_missing TO ro16_new
+    expect: error
+    sqlstate: "42704"
+    comment: unknown old role
+  - sql: |
+      REASSIGN OWNED BY ro16_old TO ro16_missing
+    expect: error
+    sqlstate: "42704"
+    comment: unknown new role
+  - sql: |
+      REASSIGN OWNED BY ro16_old, ro16_missing TO ro16_new
+    expect: error
+    sqlstate: "42704"
+    comment: an unknown name anywhere in the list fails the whole command
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro16_t'
+    expect: rows
+    order: ordered
+    comment: nothing was reassigned by the failed commands
+  - sql: |
+      DROP OWNED BY ro16_old; DROP ROLE ro16_old; DROP ROLE ro16_new
+    expect: ok
+    comment: cleanup

@@ -1,0 +1,36 @@
+# UNIQUE table constraint on one column: duplicate non-NULL values are rejected while NULLs never conflict.
+id: cmd-create-table.unique-table-constraint
+title: Named UNIQUE table constraint rejects duplicate values and allows repeated NULLs
+family: cmd-create-table
+tier: core
+feature_ids: [create-table, unique-constraint, null-semantics]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_table.sgml#sql-createtable-examples (Define a unique table constraint for the table films)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE films (
+          code        char(5),
+          title       varchar(40),
+          did         integer,
+          date_prod   date,
+          kind        varchar(10),
+          len         interval hour to minute,
+          CONSTRAINT production UNIQUE(date_prod)
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO films (code, title, date_prod) VALUES ('a', 'One', '2001-01-01'), ('b', 'Two', NULL), ('c', 'Three', NULL)
+    expect: ok
+    comment: NULLs are distinct for UNIQUE, so two NULL dates coexist
+  - sql: |
+      INSERT INTO films (code, title, date_prod) VALUES ('d', 'Dup', '2001-01-01')
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate date_prod violates constraint production
+  - sql: |
+      SELECT code, date_prod FROM films ORDER BY code
+    expect: rows
+    order: ordered

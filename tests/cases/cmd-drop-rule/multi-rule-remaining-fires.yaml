@@ -1,0 +1,29 @@
+# Dropping one of several ALSO rules leaves the others in effect for subsequent inserts.
+id: cmd-drop-rule.multi-rule-remaining-fires
+title: After dropping one of two DO ALSO rules, the remaining rule still fires and the dropped one does not
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-rule, rules, insert]
+required_capabilities: [create-table, create-rule, drop-rule, insert, select]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (rule dropped from a table with several rules)"
+sessions: [a]
+setup: |
+  CREATE TABLE mr_src (a int4);
+  CREATE TABLE mr_l1 (a int4);
+  CREATE TABLE mr_l2 (a int4);
+  CREATE RULE mr_1 AS ON INSERT TO mr_src DO ALSO INSERT INTO mr_l1 VALUES (NEW.a);
+  CREATE RULE mr_2 AS ON INSERT TO mr_src DO ALSO INSERT INTO mr_l2 VALUES (NEW.a);
+steps:
+  - sql: |
+      DROP RULE mr_1 ON mr_src
+    expect: ok
+  - sql: |
+      INSERT INTO mr_src VALUES (7), (8)
+    expect: ok
+  - sql: |
+      SELECT 'l1' AS t, a FROM mr_l1 UNION ALL SELECT 'l2', a FROM mr_l2 ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: l1 stays empty, l2 receives both rows from mr_2

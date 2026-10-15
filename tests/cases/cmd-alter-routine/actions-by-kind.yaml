@@ -1,0 +1,61 @@
+# ALTER ROUTINE action list: function accepts volatility, parallel, cost, leakproof, security;
+# procedures reject volatility and parallel (42P13); aggregates reject volatility (42809).
+# Conflicting volatility and bad values are syntax (42601) or range (22023) errors.
+id: cmd-alter-routine.actions-by-kind
+title: ALTER ROUTINE action list is accepted for functions and rejected for procedures and aggregates as documented
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, volatility, parallel, cost, security, leakproof]
+required_capabilities: [create-function, create-procedure, create-aggregate, alter-function, aggregates, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: action list); ref/alter_function.sgml (Parameters: IMMUTABLE/STABLE/VOLATILE, PARALLEL, COST, ROWS)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE PROCEDURE pr1(int) LANGUAGE sql AS 'SELECT 1';
+  CREATE AGGREGATE agg1(int) (SFUNC = int4pl, STYPE = int4, INITCOND = '0');
+steps:
+  - sql: |
+      ALTER ROUTINE foo(integer) STABLE PARALLEL SAFE COST 10 LEAKPROOF SECURITY DEFINER
+    expect: ok
+  - sql: |
+      SELECT provolatile, proparallel, procost, proleakproof, prosecdef FROM pg_proc WHERE proname = 'foo' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE foo(integer) NOT LEAKPROOF EXTERNAL SECURITY INVOKER VOLATILE PARALLEL UNSAFE
+    expect: ok
+  - sql: |
+      ALTER ROUTINE foo(integer) COST -1
+    expect: error
+    sqlstate: "22023"
+    comment: COST must be positive
+  - sql: |
+      ALTER ROUTINE foo(integer) ROWS 5
+    expect: error
+    sqlstate: "22023"
+    comment: ROWS only applies to functions returning a set
+  - sql: |
+      ALTER ROUTINE foo(integer) PARALLEL FOO
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      ALTER ROUTINE foo(integer) STABLE VOLATILE
+    expect: error
+    sqlstate: "42601"
+    comment: conflicting volatility options in one action list
+  - sql: |
+      ALTER ROUTINE pr1(int) IMMUTABLE
+    expect: error
+    sqlstate: "42P13"
+    comment: procedures have no volatility attribute
+  - sql: |
+      ALTER ROUTINE pr1(int) PARALLEL SAFE
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      ALTER ROUTINE agg1(int) STABLE
+    expect: error
+    sqlstate: "42809"
+    comment: aggregates are not functions for this action

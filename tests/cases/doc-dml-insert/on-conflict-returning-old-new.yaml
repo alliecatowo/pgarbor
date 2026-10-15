@@ -1,0 +1,31 @@
+# Documented: in an INSERT with ON CONFLICT DO UPDATE, RETURNING can expose the old and new values of conflicting rows through old.* and new.*; for a plain new row old values are NULL.
+id: doc-dml-insert.on-conflict-returning-old-new
+title: RETURNING old.* and new.* on INSERT ... ON CONFLICT DO UPDATE
+family: doc-dml-insert
+tier: extended
+feature_ids: [insert, returning, on-conflict, returning-old-new]
+required_capabilities: [create-table, insert, select, returning, on-conflict, update]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (old and new values in INSERT with ON CONFLICT DO UPDATE will be non-NULL for conflicting rows)"
+sessions: [a]
+setup: |
+  CREATE TABLE inv (sku int PRIMARY KEY, qty int NOT NULL, label text DEFAULT 'x');
+  INSERT INTO inv (sku, qty) VALUES (1, 5);
+steps:
+  - sql: |
+      INSERT INTO inv (sku, qty) VALUES (1, 9)
+        ON CONFLICT (sku) DO UPDATE SET qty = inv.qty + EXCLUDED.qty
+        RETURNING sku, old.qty AS old_qty, new.qty AS new_qty, new.qty - old.qty AS delta
+    expect: rows
+    comment: conflicting row, old and new both non-NULL
+  - sql: |
+      INSERT INTO inv (sku, qty) VALUES (2, 4)
+        ON CONFLICT (sku) DO UPDATE SET qty = EXCLUDED.qty
+        RETURNING sku, old.qty AS old_qty, new.qty AS new_qty
+    expect: rows
+    comment: non-conflicting row, old values are NULL
+  - sql: |
+      SELECT sku, qty, label FROM inv ORDER BY sku
+    expect: rows
+    order: ordered

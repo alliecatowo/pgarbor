@@ -1,0 +1,40 @@
+# date_bin(stride, source, origin): documented example, bin edges, origin offsets, and the documented error conditions.
+id: doc-functions-datetime.date-bin-variants
+title: date_bin bins to stride multiples from an origin and rejects zero, negative and month strides
+family: doc-functions-datetime
+tier: core
+feature_ids: [date-bin, binning-origin, stride-validation, interval-month-restriction]
+required_capabilities: [select, timestamp, interval, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime-bin (date_bin)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT date_bin('15 minutes', timestamp '2001-02-16 20:38:40', timestamp '2001-02-16 20:05:00') AS doc_example,
+             date_bin('15 minutes', timestamp '2001-02-16 20:05:00', timestamp '2001-02-16 20:05:00') AS on_origin,
+             date_bin('15 minutes', timestamp '2001-02-16 20:04:59', timestamp '2001-02-16 20:05:00') AS just_before_origin,
+             date_bin('1 day', timestamp '2001-02-16 20:38:40', timestamp '2001-02-16') AS day_bin
+    expect: rows
+    order: multiset
+    comment: documented 2001-02-16 20:35:00; a timestamp equal to the origin is its own bin start; a value before the origin bins to the earlier stride boundary
+  - sql: |
+      SELECT date_bin('1 hour', timestamptz '2001-02-16 20:38:40+00', timestamptz '2001-02-16 00:00:00+00') AS tz_bin
+    expect: rows
+    order: multiset
+    comment: timestamptz input returns timestamptz; session is UTC in this case
+  - sql: |
+      SELECT date_bin('0 minutes', timestamp '2001-02-16 20:38:40', timestamp '2001-02-16') AS zero_stride
+    expect: error
+    sqlstate: "22008"
+    comment: stride must be greater than zero
+  - sql: |
+      SELECT date_bin('-1 minutes', timestamp '2001-02-16 20:38:40', timestamp '2001-02-16') AS negative_stride
+    expect: error
+    sqlstate: "22008"
+    comment: a negative stride is also rejected as not greater than zero
+  - sql: |
+      SELECT date_bin('1 month', timestamp '2001-02-16 20:38:40', timestamp '2001-02-16') AS month_stride
+    expect: error
+    sqlstate: "0A000"
+    comment: timestamps cannot be binned into intervals containing months or years

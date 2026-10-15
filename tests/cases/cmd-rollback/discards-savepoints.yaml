@@ -1,0 +1,39 @@
+# ROLLBACK ends the whole transaction, including every savepoint in it, so no savepoint survives it.
+id: cmd-rollback.discards-savepoints
+title: ROLLBACK ends the transaction along with any savepoints it established
+family: cmd-rollback
+tier: core
+feature_ids: [rollback, savepoints, transactions, insert]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/rollback.sgml#sql-rollback (Description: discards all updates; see also sql-rollback-to)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SAVEPOINT s1
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT s1
+    expect: error
+    sqlstate: "3B001"
+    comment: the savepoint went away with the transaction
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: both inserts were discarded

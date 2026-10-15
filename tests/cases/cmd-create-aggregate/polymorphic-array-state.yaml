@@ -1,0 +1,21 @@
+# Polymorphic aggregate: input anyelement, state anyarray. Ordering comes from the aggregate's own
+# ORDER BY clause so the collected array is deterministic.
+id: cmd-create-aggregate.polymorphic-array-state
+title: "Polymorphic aggregate collects an array from anyelement input via anyarray state"
+family: cmd-create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, polymorphism, arrays]
+required_capabilities: [create-table, insert, select, aggregates, arrays]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (arg_data_type, state_data_type, polymorphic types)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE FUNCTION arr_app(anyarray, anyelement) RETURNS anyarray LANGUAGE sql IMMUTABLE AS $$ SELECT $1 || $2 $$;
+  CREATE AGGREGATE my_arr (anyelement) (sfunc = arr_app, stype = anyarray, initcond = '{}');
+steps:
+  - sql: |
+      SELECT my_arr(x ORDER BY x NULLS LAST) FROM t
+    expect: rows
+    comment: NULL elements are appended, not skipped, since the transition function is not strict

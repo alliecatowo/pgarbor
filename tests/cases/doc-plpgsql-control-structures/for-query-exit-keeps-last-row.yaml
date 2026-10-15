@@ -1,0 +1,70 @@
+# FOR over a query keeps the last row after EXIT; FOR over UPDATE RETURNING; FOR IN EXECUTE USING; FOR with scalar target list.
+id: doc-plpgsql-control-structures.for-query-exit-keeps-last-row
+title: "FOR query loops: last row survives EXIT, DML RETURNING source, EXECUTE with USING, scalar target list"
+family: doc-plpgsql-control-structures
+tier: core
+feature_ids: [plpgsql, for-loop, exit, update, returning, execute, using]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, update, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-control-structures (Looping through Query Results)"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (id int PRIMARY KEY, name text NOT NULL, salary int NOT NULL);
+  INSERT INTO emp VALUES (1, 'ann', 50), (2, 'bob', 70), (3, 'cy', 90);
+  CREATE FUNCTION last_before_exit() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r record; last text := '';
+  BEGIN
+    FOR r IN SELECT id, name FROM emp ORDER BY id LOOP
+      last := r.name;
+      IF r.id = 2 THEN
+        EXIT;
+      END IF;
+    END LOOP;
+    RETURN last || '/' || r.id;
+  END $$;
+  CREATE FUNCTION raise_high_pay() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE r record; n int := 0;
+  BEGIN
+    FOR r IN UPDATE emp SET salary = salary + 10 WHERE salary > 60 RETURNING id, salary LOOP
+      n := n + 1;
+    END LOOP;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION names_min_pay(min_pay int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r record; s text := '';
+  BEGIN
+    FOR r IN EXECUTE 'SELECT id, name FROM emp WHERE salary >= $1 ORDER BY id' USING min_pay LOOP
+      s := s || r.id || '=' || r.name || ';';
+    END LOOP;
+    RETURN s;
+  END $$;
+  CREATE FUNCTION scalar_targets() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE eid int; ename text; s text := '';
+  BEGIN
+    FOR eid, ename IN SELECT id, name FROM emp ORDER BY id LOOP
+      s := s || eid || ename || ' ';
+    END LOOP;
+    RETURN s;
+  END $$;
+steps:
+  - sql: |
+      SELECT last_before_exit() AS last
+    expect: rows
+    comment: after EXIT the record still holds the row that triggered it, id 2
+  - sql: |
+      SELECT raise_high_pay() AS updated
+    expect: rows
+    comment: UPDATE with RETURNING can be the source of a FOR loop
+  - sql: |
+      SELECT id, salary FROM emp ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT names_min_pay(60) AS names
+    expect: rows
+    comment: the dynamic query is parameterized with USING
+  - sql: |
+      SELECT scalar_targets() AS pairs
+    expect: rows
+    comment: a comma-separated list of scalar variables receives the columns

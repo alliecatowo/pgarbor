@@ -1,0 +1,46 @@
+# A procedure that raises an error after writing: the write is rolled back, and inside an explicit
+# block the transaction is aborted (25P02) until ROLLBACK.
+id: cmd-call.error-rolls-back-procedure
+title: Error raised inside a called procedure undoes its writes and aborts the enclosing block
+family: cmd-call
+tier: core
+feature_ids: [call, procedures, errors, transactions, rollback]
+required_capabilities: [create-table, insert, select, create-procedure, call, plpgsql, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/call.sgml#sql-call (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  CREATE PROCEDURE p_raise() LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO t VALUES (99, 'r');
+    RAISE EXCEPTION 'boom %', 42;
+  END $$;
+steps:
+  - sql: |
+      CALL p_raise()
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    comment: autocommit CALL rolled back its insert
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CALL p_raise()
+    expect: error
+    sqlstate: "P0001"
+  - sql: |
+      SELECT 1 AS x
+    expect: error
+    sqlstate: "25P02"
+    comment: the enclosing transaction block is aborted
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows

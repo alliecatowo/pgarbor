@@ -1,0 +1,49 @@
+# Privilege statements name real objects and roles; each missing name raises its own SQLSTATE.
+id: doc-ddl-priv.missing-object-errors
+title: GRANT, REVOKE and SET ROLE fail with the right SQLSTATE for missing table, column or role
+family: doc-ddl-priv
+tier: core
+feature_ids: [grant, revoke, privileges, roles, errors]
+required_capabilities: [create-table, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (GRANT and REVOKE name existing objects and roles)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_mo_rw;
+  CREATE TABLE mo_t (a int4);
+steps:
+  - sql: |
+      GRANT SELECT ON mo_missing TO ddp_mo_rw
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      GRANT SELECT (zz) ON mo_t TO ddp_mo_rw
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      GRANT SELECT ON mo_t TO mo_missing_role
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      REVOKE SELECT ON mo_missing FROM ddp_mo_rw
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SET ROLE mo_missing_role
+    expect: error
+    sqlstate: "22023"
+    comment: SET ROLE reports an unknown role as invalid_parameter_value, not undefined_object
+  - sql: |
+      GRANT SELECT ON mo_t TO ddp_mo_rw
+    expect: ok
+  - sql: |
+      SET ROLE ddp_mo_rw
+    expect: ok
+  - sql: |
+      SELECT a FROM mo_t
+    expect: rows
+    order: multiset
+  - sql: |
+      RESET ROLE
+    expect: ok

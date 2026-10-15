@@ -1,0 +1,48 @@
+# EXTRACT field-applicability rules, unknown field names, and infinite inputs (documented NULL/Infinity rules).
+id: doc-functions-datetime.extract-errors-and-infinity
+title: EXTRACT rejects fields not applicable to the input type, rejects unknown fields, and handles infinity
+family: doc-functions-datetime
+tier: core
+feature_ids: [extract, field-applicability, unknown-field, infinity-extract]
+required_capabilities: [select, date-type, timestamp, interval, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime-extract (Note on field applicability; infinite input handling)"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT extract(hour from date '2001-02-16') AS hour_of_date
+    expect: error
+    sqlstate: "0A000"
+    comment: fields smaller than a day cannot be extracted from a date
+  - sql: |
+      SELECT extract(day from time '12:00') AS day_of_time
+    expect: error
+    sqlstate: "0A000"
+    comment: fields of a day or more cannot be extracted from a time
+  - sql: |
+      SELECT extract(timezone from timestamp '2001-02-16 20:38:40') AS tz_of_timestamp
+    expect: error
+    sqlstate: "0A000"
+    comment: timezone fields apply only to timestamptz and timetz
+  - sql: |
+      SELECT extract(fortnight from timestamp '2001-02-16') AS unknown_field
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized field name
+  - sql: |
+      SELECT date_trunc('fortnight', timestamp '2001-02-16 20:38:40') AS unknown_unit
+    expect: error
+    sqlstate: "22023"
+    comment: date_trunc rejects unrecognized units with invalid_parameter_value
+  - sql: |
+      SELECT extract(epoch from timestamp 'infinity') AS epoch_inf,
+             extract(year from timestamp '-infinity') AS year_ninf,
+             extract(hour from interval 'infinity') AS hour_inf,
+             extract(day from timestamp 'infinity') AS day_inf
+    expect: rows
+    order: multiset
+    comment: monotonic fields return +/-Infinity; other fields such as day return NULL for an infinite timestamp

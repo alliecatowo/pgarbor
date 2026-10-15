@@ -1,0 +1,35 @@
+# CASCADE drops the dependent column default; the table, its rows and the column remain, and the column stops auto-filling.
+id: cmd-drop-sequence.cascade-drops-column-default
+title: DROP SEQUENCE CASCADE removes the dependent column default but keeps the table and its data
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, cascade, dependencies, column-defaults]
+required_capabilities: [sequences, create-table, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Parameters: CASCADE; ddl-depend)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE dseq;
+  CREATE TABLE t6 (id int4 DEFAULT nextval('dseq'), v text);
+  INSERT INTO t6 (id, v) VALUES (10, 'before');
+steps:
+  - sql: |
+      DROP SEQUENCE dseq CASCADE
+    expect: ok
+    comment: the default is dropped with the sequence (a NOTICE is also emitted)
+  - sql: |
+      SELECT column_name, column_default FROM information_schema.columns WHERE table_name = 't6' ORDER BY column_name
+    expect: rows
+    order: ordered
+    comment: the id column exists but has no default any more
+  - sql: |
+      INSERT INTO t6 (v) VALUES ('after') RETURNING id, v
+    expect: rows
+    order: ordered
+    comment: without a default the omitted id is NULL
+  - sql: |
+      SELECT id, v FROM t6 ORDER BY v
+    expect: rows
+    order: multiset
+    comment: pre-existing rows are untouched

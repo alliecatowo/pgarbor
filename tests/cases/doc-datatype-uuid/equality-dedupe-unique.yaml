@@ -1,0 +1,38 @@
+# Equality is on the 128-bit value, so differently spelled inputs collide on UNIQUE and in DISTINCT / GROUP BY.
+id: doc-datatype-uuid.equality-dedupe-unique
+title: Spellings of one uuid collide on UNIQUE and collapse in DISTINCT and GROUP BY
+family: doc-datatype-uuid
+tier: core
+feature_ids: [uuid, uuid-input, unique-constraint, distinct, group-by]
+required_capabilities: [create-table, insert, select, constraints, aggregates, errors]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-uuid (alternative input forms denote the same value)"
+sessions: [a]
+setup: |
+  CREATE TABLE u_dup (id uuid UNIQUE, note text);
+  INSERT INTO u_dup VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'first');
+steps:
+  - sql: |
+      INSERT INTO u_dup VALUES ('{A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11}', 'braced upper')
+    expect: error
+    sqlstate: "23505"
+    comment: same 128-bit value, different spelling
+  - sql: |
+      INSERT INTO u_dup VALUES ('a0eebc999c0b4ef8bb6d6bb9bd380a11', 'compact')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO u_dup VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12', 'neighbour')
+    expect: ok
+  - sql: |
+      SELECT count(*) AS rows_total, count(DISTINCT id) AS distinct_ids FROM u_dup
+    expect: rows
+  - sql: |
+      SELECT id::text, count(*) FROM (VALUES
+        ('a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11'::uuid),
+        ('{A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11}'::uuid),
+        ('a0eebc999c0b4ef8bb6d6bb9bd380a11'::uuid)) AS v(id)
+      GROUP BY id
+    expect: rows
+    order: multiset

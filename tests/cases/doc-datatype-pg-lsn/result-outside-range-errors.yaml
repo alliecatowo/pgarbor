@@ -1,0 +1,44 @@
+# Documented: the calculated LSN must stay between 0/0 and FFFFFFFF/FFFFFFFF; otherwise the operation fails.
+id: doc-datatype-pg-lsn.result-outside-range-errors
+title: Offsetting an LSN past 0/0 or FFFFFFFF/FFFFFFFF fails with out-of-range, while edge results succeed
+family: doc-datatype-pg-lsn
+tier: core
+feature_ids: [pg-lsn, operators, range-bounds, errors]
+required_capabilities: [select, numeric, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-pg-lsn"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '0/0'::pg_lsn - 1::numeric
+    expect: error
+    sqlstate: "22023"
+    comment: below the minimum LSN
+  - sql: |
+      SELECT '0/10'::pg_lsn - 17::numeric
+    expect: error
+    sqlstate: "22023"
+    comment: one byte below 0/0
+  - sql: |
+      SELECT '0/10'::pg_lsn - 4294967296::numeric
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      SELECT 'FFFFFFFF/FFFFFFFF'::pg_lsn + 1::numeric
+    expect: error
+    sqlstate: "22023"
+    comment: above the maximum LSN
+  - sql: |
+      SELECT '0/10'::pg_lsn + 1e30::numeric
+    expect: error
+    sqlstate: "22023"
+    comment: offset far beyond the type range
+  - sql: |
+      SELECT '0/10'::pg_lsn + (-16)::numeric AS exactly_zero, 'FFFFFFFF/FFFFFFFF'::pg_lsn - 1::numeric AS just_below_max, 'FFFFFFFF/FFFFFFFF'::pg_lsn + 0::numeric AS max_unchanged
+    expect: rows
+    comment: edge results that stay in range succeed
+  - sql: |
+      SELECT 'FFFFFFFF/FFFFFFFF'::pg_lsn - 'FFFFFFFF/FFFFFFFE'::pg_lsn AS one_byte, '0/0'::pg_lsn - '0/FFFFFFFF'::pg_lsn AS full_negative_span
+    expect: rows
+    comment: LSN-LSN subtraction is numeric and has no range limit

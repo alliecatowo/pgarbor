@@ -1,0 +1,33 @@
+# ON CONFLICT DO NOTHING returns only the rows actually inserted; a fully conflicting insert returns zero rows.
+id: doc-dml-returning.on-conflict-do-nothing-skips-returning
+title: ON CONFLICT DO NOTHING RETURNING omits conflicting rows and yields no rows when all conflict
+family: doc-dml-returning
+tier: core
+feature_ids: [returning, insert, on-conflict, unique-constraints]
+required_capabilities: [create-table, insert, select, returning, on-conflict]
+provenance:
+  source: pg-docs
+  ref: "dml.sgml#dml-returning (INSERT ... ON CONFLICT; RETURNING semantics)"
+sessions: [a]
+setup: |
+  CREATE TABLE inv (sku text PRIMARY KEY, qty int4 NOT NULL, note text);
+  INSERT INTO inv VALUES ('a', 1, NULL), ('b', 2, 'keep');
+steps:
+  - sql: |
+      INSERT INTO inv VALUES ('b', 7, 'x'), ('c', 3, NULL)
+        ON CONFLICT DO NOTHING
+        RETURNING sku, qty
+    expect: rows
+    order: multiset
+    comment: b conflicts and is skipped, so only c comes back
+  - sql: |
+      INSERT INTO inv VALUES ('b', 9, 'y')
+        ON CONFLICT DO NOTHING
+        RETURNING sku
+    expect: rows
+    order: multiset
+    comment: every row conflicts, so RETURNING produces zero rows
+  - sql: |
+      SELECT sku, qty, note FROM inv ORDER BY sku
+    expect: rows
+    order: ordered

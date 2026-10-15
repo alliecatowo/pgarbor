@@ -1,0 +1,25 @@
+# SET SCHEMA fails with 42710 when the target schema already has a conversion of that name; both stay put.
+id: cmd-alter-conversion.set-schema-conflict-error
+title: SET SCHEMA into a schema that already has a conversion with the same name fails
+family: cmd-alter-conversion
+tier: core
+feature_ids: [alter-conversion, set-schema, schemas, errors]
+required_capabilities: [alter-conversion, create-conversion, create-schema, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 alter_conversion.sgml SET SCHEMA; name uniqueness per schema"
+sessions: [a]
+setup: |
+  CREATE SCHEMA clash_s;
+  CREATE CONVERSION clash_s.clash FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+  CREATE CONVERSION public.clash FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+steps:
+  - sql: |
+      ALTER CONVERSION public.clash SET SCHEMA clash_s
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT n.nspname, c.conname FROM pg_conversion c JOIN pg_namespace n ON n.oid = c.connamespace WHERE c.conname = 'clash' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: one in each schema, unchanged

@@ -1,0 +1,38 @@
+# Named calls must still resolve to a signature: unknown names, missing mandatory parameters and
+# arguments to functions without named parameters all fail with undefined_function.
+id: doc-sql-syntax-calling-funcs.unknown-argument-name-error
+title: Unknown argument names and missing mandatory arguments do not resolve (42883)
+family: doc-sql-syntax-calling-funcs
+tier: core
+feature_ids: [create-function, function-calls, named-notation, errors]
+required_capabilities: [create-function, select, default-arguments]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-syntax-calling-funcs-named"
+sessions: [a]
+setup: |
+  CREATE FUNCTION concat_lower_or_upper(a text, b text, uppercase boolean DEFAULT false)
+  RETURNS text AS $$
+    SELECT CASE WHEN $3 THEN UPPER($1 || ' ' || $2) ELSE LOWER($1 || ' ' || $2) END;
+  $$ LANGUAGE SQL IMMUTABLE STRICT;
+steps:
+  - sql: |
+      SELECT concat_lower_or_upper(a => 'Hello', c => 'x') AS r
+    expect: error
+    sqlstate: "42883"
+    comment: no parameter named c
+  - sql: |
+      SELECT concat_lower_or_upper(a => 'Hello', uppercase => true) AS r
+    expect: error
+    sqlstate: "42883"
+    comment: mandatory parameter b omitted
+  - sql: |
+      SELECT concat_lower_or_upper('Hello') AS r
+    expect: error
+    sqlstate: "42883"
+    comment: mandatory parameter b omitted in positional notation
+  - sql: |
+      SELECT abs(x => -1) AS r
+    expect: error
+    sqlstate: "42883"
+    comment: built-in function with unnamed parameters

@@ -1,0 +1,38 @@
+# pg_lsn as a column type: NULLs, uniqueness via its btree operator class, and array output.
+id: doc-datatype-pg-lsn.table-column-unique-and-array
+title: pg_lsn columns support UNIQUE constraints, NULL defaults, and arrays with the documented text form
+family: doc-datatype-pg-lsn
+tier: core
+feature_ids: [pg-lsn, create-table, constraints, arrays, unique]
+required_capabilities: [create-table, insert, select, constraints, arrays, errors]
+provenance:
+  source: hand
+  ref: "PG18 datatype.sgml#datatype-pg-lsn; btree operator class of pg_lsn"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE lsn_wal (seq int4 PRIMARY KEY, flushed pg_lsn UNIQUE, note text DEFAULT 'none')
+    expect: ok
+  - sql: |
+      INSERT INTO lsn_wal (seq, flushed) VALUES (1, '16/B374D848'), (2, '0/0'), (3, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO lsn_wal (seq, flushed) VALUES (4, '16/b374d848')
+    expect: error
+    sqlstate: "23505"
+    comment: same LSN after case-insensitive parse violates UNIQUE
+  - sql: |
+      INSERT INTO lsn_wal (seq, flushed) VALUES (5, NULL)
+    expect: ok
+    comment: multiple NULLs do not violate UNIQUE
+  - sql: |
+      SELECT seq, flushed::text, note FROM lsn_wal ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ARRAY['0/1'::pg_lsn, '1/0'::pg_lsn] AS lsn_array, (ARRAY['0/1'::pg_lsn, '1/0'::pg_lsn])[2] AS second
+    expect: rows
+  - sql: |
+      SELECT flushed FROM lsn_wal WHERE flushed = ANY (ARRAY['0/0'::pg_lsn, '16/B374D848'::pg_lsn]) ORDER BY seq
+    expect: rows
+    order: ordered

@@ -1,0 +1,51 @@
+# Row-locking clauses across two sessions: NOWAIT fails fast with 55P03, SKIP LOCKED omits locked rows, FOR SHARE does not conflict with a non-share row lock on another row.
+id: cmd-select.for-update-nowait-skip-locked
+title: FOR UPDATE NOWAIT raises lock_not_available, SKIP LOCKED omits locked rows
+family: cmd-select
+tier: core
+feature_ids: [select, locking-clause, for-update, for-share, nowait, skip-locked]
+required_capabilities: [create-table, insert, select, transactions, row-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-for-update-share (The Locking Clause)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, bal int4);
+  INSERT INTO acct VALUES (1, 100), (2, 200), (3, 300);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM acct WHERE id = 1 FOR UPDATE
+    expect: rows
+    order: multiset
+  - session: b
+    sql: |
+      SELECT id FROM acct ORDER BY id FOR UPDATE NOWAIT
+    expect: error
+    sqlstate: "55P03"
+    comment: row 1 is locked by session a, so NOWAIT fails at once
+  - session: b
+    sql: |
+      SELECT id FROM acct ORDER BY id FOR UPDATE SKIP LOCKED
+    expect: rows
+    order: ordered
+    comment: locked row 1 is skipped, leaving 2 and 3
+  - session: b
+    sql: |
+      SELECT id FROM acct WHERE id = 2 FOR SHARE NOWAIT
+    expect: rows
+    order: multiset
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id FROM acct ORDER BY id FOR UPDATE NOWAIT
+    expect: rows
+    order: ordered
+    comment: after the rollback nothing is locked

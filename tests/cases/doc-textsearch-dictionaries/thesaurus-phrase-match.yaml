@@ -1,0 +1,47 @@
+# Thesaurus dictionary over thesaurus_sample: multi-word phrases replace the matched words, longest match wins, and '*' skips the subdictionary.
+id: doc-textsearch-dictionaries.thesaurus-phrases
+title: thesaurus replaces multi-word phrases with the longest matching definition
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, thesaurus-template, phrase-match, text-search-configuration]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Thesaurus Dictionary, Thesaurus Configuration)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY thes (
+          TEMPLATE = thesaurus,
+          DictFile = thesaurus_sample,
+          Dictionary = pg_catalog.english_stem
+      )
+    expect: ok
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION thes_cfg (copy = simple)
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION thes_cfg
+          ALTER MAPPING FOR asciiword, hword_asciipart
+          WITH thes, english_stem
+    expect: ok
+  - sql: |
+      SELECT to_tsvector('thes_cfg', 'one two three') AS longest_phrase,
+             to_tsvector('thes_cfg', 'one two') AS two_word_phrase,
+             to_tsvector('thes_cfg', 'one') AS single_word
+    expect: rows
+    comment: the longest matching phrase wins; the '*' prefixed replacement is not re-normalized
+  - sql: |
+      SELECT to_tsvector('thes_cfg', 'two three') AS partial_phrase
+    expect: rows
+    comment: no phrase covers 'two three'; 'two' matches its single-word entry and 'three' goes to english_stem
+  - sql: |
+      SELECT ts_lexize('thes', 'one') AS single_word_lexize,
+             ts_lexize('thes', 'booking') AS partial_phrase_alone
+    expect: rows
+    comment: ts_lexize treats its input as one token, so a phrase fragment alone is unrecognized
+  - sql: |
+      SELECT * FROM ts_debug('thes_cfg', 'one two three')
+    expect: rows
+    order: ordered
+    comment: the thesaurus claims 'one' and 'two' and passes 'three' to english_stem

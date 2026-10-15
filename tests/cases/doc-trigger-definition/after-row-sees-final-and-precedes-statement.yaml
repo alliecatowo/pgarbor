@@ -1,0 +1,42 @@
+# Row-level AFTER triggers see the final row (after BEFORE triggers changed it) and run at the end of the
+# statement, before any statement-level AFTER trigger.
+id: doc-trigger-definition.after-row-sees-final-and-precedes-statement
+title: AFTER row triggers see the final row and fire before the AFTER statement trigger
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, plpgsql, insert, trigger-ordering]
+required_capabilities: [create-table, create-function, insert, select, plpgsql, triggers, identity]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (AFTER row triggers fire at end of statement, before statement-level AFTER triggers; AFTER sees final value)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int, v int);
+  CREATE TABLE trig_log (seq int GENERATED ALWAYS AS IDENTITY, lvl text, v int);
+  CREATE FUNCTION bump_fn() RETURNS trigger AS $$
+  BEGIN
+    NEW.v := NEW.v + 1;
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION log_fn() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (lvl, v) VALUES (TG_LEVEL, CASE WHEN TG_LEVEL = 'ROW' THEN NEW.v END);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER t_bump BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION bump_fn();
+  CREATE TRIGGER t_row_after AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_fn();
+  CREATE TRIGGER t_stmt_after AFTER INSERT ON t FOR EACH STATEMENT EXECUTE FUNCTION log_fn();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (1, 10), (2, 20)
+    expect: ok
+  - sql: |
+      SELECT lvl, v FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

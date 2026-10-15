@@ -1,0 +1,55 @@
+# A procedure with OUT arguments can be named by its input list, or by all types when no argmodes are written.
+id: cmd-drop-routine.out-args-lookup-rules
+title: "DROP ROUTINE matches OUT arguments only when argmodes are omitted and types are verified"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, drop-procedure, out-arguments, argmodes]
+required_capabilities: [create-procedure, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-notes (OUT arguments); drop_procedure.sgml#sql-dropprocedure-examples"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE ol_do(IN target_schema text, OUT results text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP ROUTINE ol_do(text, integer)
+    expect: error
+    sqlstate: "42883"
+    comment: without argmodes the OUT argument type is checked against the command
+  - sql: |
+      DROP ROUTINE ol_do(text)
+    expect: ok
+    comment: input-only list matches the procedure
+  - sql: |
+      CREATE PROCEDURE ol_do(IN target_schema text, OUT results text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP ROUTINE ol_do(IN text)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE ol_do(IN target_schema text, OUT results text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP ROUTINE ol_do(text, text)
+    expect: ok
+    comment: all-types list with the OUT type matches when no argmodes are written
+  - sql: |
+      CREATE PROCEDURE ol_do(IN target_schema text, OUT results text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP ROUTINE ol_do(IN target_schema text, OUT results text)
+    expect: ok
+    comment: explicit argmodes select the same procedure
+  - sql: |
+      CREATE PROCEDURE ol_do(IN target_schema text, OUT results text) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP ROUTINE ol_do
+    expect: ok
+    comment: the only routine of that name, so no argument list is needed
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'ol_do'
+    expect: rows
+    order: multiset

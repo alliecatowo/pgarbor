@@ -1,0 +1,38 @@
+# PL/pgSQL docs "Transaction Management": procedure that alternately COMMITs and ROLLBACKs inside a loop.
+id: doc-plpgsql-transactions.procedure-commit-rollback-loop
+title: Procedure alternating COMMIT and ROLLBACK in a loop keeps only even rows
+family: doc-plpgsql-transactions
+tier: core
+feature_ids: [plpgsql, procedures, commit, rollback, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, create-procedure, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (a int4);
+steps:
+  - sql: |
+      CREATE PROCEDURE transaction_test1()
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+          FOR i IN 0..9 LOOP
+              INSERT INTO test1 (a) VALUES (i);
+              IF i % 2 = 0 THEN
+                  COMMIT;
+              ELSE
+                  ROLLBACK;
+              END IF;
+          END LOOP;
+      END;
+      $$
+    expect: ok
+  - sql: |
+      CALL transaction_test1()
+    expect: ok
+  - sql: |
+      SELECT a FROM test1 ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only the even values survive; each odd INSERT was rolled back before the next iteration

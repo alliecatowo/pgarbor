@@ -1,0 +1,47 @@
+# OWNED BY ties a sequence to a table column (auto dependency, dropped with the table); OWNED BY NONE does not. Bad targets are rejected.
+id: cmd-create-sequence.owned-by-column-lifecycle
+title: OWNED BY links a sequence to a column and drops it with the table; invalid OWNED BY targets are rejected
+family: cmd-create-sequence
+tier: core
+feature_ids: [create-sequence, owned-by, drop-table, dependencies, errors]
+required_capabilities: [sequences, create-table, select, drop, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#parameters (OWNED BY)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE owner_t (a int4, b int4)
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE sq_own OWNED BY owner_t.a
+    expect: ok
+  - sql: |
+      CREATE SEQUENCE sq_free OWNED BY NONE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_depend
+      WHERE objid = 'sq_own'::regclass AND refobjid = 'owner_t'::regclass AND refobjsubid = 1 AND deptype = 'a'
+    expect: rows
+    comment: one automatic dependency on owner_t.a
+  - sql: |
+      CREATE SEQUENCE sq_bad1 OWNED BY owner_t.nope
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      CREATE SEQUENCE sq_bad2 OWNED BY missing_t.a
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      CREATE SEQUENCE sq_bad3 OWNED BY owner_t
+    expect: error
+    sqlstate: "42601"
+    comment: OWNED BY needs table.column or NONE
+  - sql: |
+      DROP TABLE owner_t
+    expect: ok
+    comment: the owned sequence is dropped with its column's table
+  - sql: |
+      SELECT to_regclass('sq_own') IS NULL AS own_gone, to_regclass('sq_free') IS NULL AS free_gone
+    expect: rows
+    comment: own_gone true, free_gone false

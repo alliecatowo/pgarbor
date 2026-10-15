@@ -1,0 +1,37 @@
+# REVOKE TEMP ON DATABASE (TEMP is an alias of TEMPORARY) from PUBLIC blocks temporary table creation by other roles.
+id: cmd-revoke.temp-database-revoke
+title: REVOKE TEMP ON DATABASE from PUBLIC blocks temporary table creation for a non-granted role
+family: cmd-revoke
+tier: extended
+feature_ids: [revoke, database-privilege, temporary-privilege, public-role, errors]
+required_capabilities: [create-table, roles, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke (REVOKE { CREATE | CONNECT | TEMPORARY | TEMP } ON DATABASE database_name)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvm_s;
+steps:
+  - sql: |
+      SET ROLE rvm_s
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE rvm_tmp_before (x int4)
+    expect: ok
+    comment: PUBLIC holds TEMP on a new database by default
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DO $$ BEGIN EXECUTE format('REVOKE TEMP ON DATABASE %I FROM PUBLIC', current_database()); END $$
+    expect: ok
+  - sql: |
+      SET ROLE rvm_s
+    expect: ok
+  - sql: |
+      CREATE TEMP TABLE rvm_tmp_after (x int4)
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok

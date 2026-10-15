@@ -1,0 +1,30 @@
+# A multi-object DROP AGGREGATE fails as a whole when one listed signature is missing; the other is kept.
+id: cmd-drop-aggregate.multi-drop-atomic-failure
+title: Failed multi-aggregate DROP leaves the existing aggregate in place
+family: cmd-drop-aggregate
+tier: core
+feature_ids: [drop-aggregate, aggregates, errors, transactions]
+required_capabilities: [aggregates, create-aggregate, create-function, drop-aggregate, errors]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_aggregate.sgml#sql-dropaggregate (multiple aggregates in one command)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION my_add(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS 'SELECT coalesce($1, 0) + $2'
+    expect: ok
+  - sql: |
+      CREATE AGGREGATE myavg(integer) (SFUNC = my_add, STYPE = int8, INITCOND = '0')
+    expect: ok
+  - sql: |
+      DROP AGGREGATE myavg(integer), myavg(text)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT count(*) AS still_there FROM pg_proc WHERE proname = 'myavg' AND prokind = 'a'
+    expect: rows
+    order: multiset
+    comment: the list is resolved before any drop, so myavg(integer) survives
+  - sql: |
+      DROP AGGREGATE myavg(integer)
+    expect: ok

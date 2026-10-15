@@ -1,0 +1,47 @@
+# nextval and setval are never rolled back, so values are lost on ROLLBACK; NEXT VALUE FOR is not supported, nextval() is the way to draw values.
+id: cmd-create-sequence.nextval-not-rolled-back-and-compat
+title: nextval and setval survive ROLLBACK and NEXT VALUE FOR is a syntax error
+family: cmd-create-sequence
+tier: core
+feature_ids: [create-sequence, nextval, setval, transactions, rollback, sql-compatibility]
+required_capabilities: [sequences, select, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_sequence.sgml#notes (nextval and setval never rolled back) and #compatibility"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SEQUENCE nr START 1
+    expect: ok
+  - sql: |
+      BEGIN;
+      SELECT nextval('nr');
+      ROLLBACK
+    expect: ok
+    comment: value 1 is consumed even though the transaction rolled back
+  - sql: |
+      SELECT nextval('nr')
+    expect: rows
+    comment: returns 2, leaving a gap at 1
+  - sql: |
+      BEGIN;
+      SELECT setval('nr', 100);
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT last_value, is_called FROM nr
+    expect: rows
+    comment: setval was not undone, last_value is 100 with is_called true
+  - sql: |
+      SELECT nextval('nr')
+    expect: rows
+    comment: "101"
+  - sql: |
+      SELECT NEXT VALUE FOR nr
+    expect: error
+    sqlstate: "42601"
+    comment: standard NEXT VALUE FOR is not supported
+  - sql: |
+      SELECT nextval('nr')
+    expect: rows
+    comment: 102, the failed statement consumed nothing

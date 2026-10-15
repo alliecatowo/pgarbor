@@ -1,0 +1,30 @@
+# Built-in routines required by the database system cannot be dropped, even with CASCADE or IF EXISTS.
+id: cmd-drop-routine.builtin-routine-protected
+title: "DROP ROUTINE refuses to drop built-in system routines"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, system-catalogs, dependencies]
+required_capabilities: [errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_routine.sgml (routine lookup); cmd-drop-aggregate.builtin-aggregate-protected"
+sessions: [a]
+steps:
+  - sql: |
+      DROP ROUTINE abs(integer)
+    expect: error
+    sqlstate: "2BP01"
+    comment: the built-in abs(integer) is required by the database system
+  - sql: |
+      DROP ROUTINE pg_catalog.abs(integer) CASCADE
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP ROUTINE IF EXISTS abs(integer)
+    expect: error
+    sqlstate: "2BP01"
+    comment: IF EXISTS only suppresses missing routines, not protected ones
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'abs' AND oidvectortypes(proargtypes) = 'integer'
+    expect: rows
+    order: multiset

@@ -1,0 +1,39 @@
+# Documented: CASCADE on a foreign-key target removes only the foreign-key constraint, not the referencing table.
+id: cmd-drop-table.fk-restrict-then-cascade
+title: DROP TABLE CASCADE on a referenced table drops only the foreign key and keeps the child
+family: cmd-drop-table
+tier: core
+feature_ids: [drop-table, cascade, foreign-key]
+required_capabilities: [create-table, foreign-key, insert, select, drop-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_table.sgml#sql-droptable (Description: foreign-key constraint with CASCADE)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY);
+  CREATE TABLE child (pid int4 REFERENCES parent (id));
+  INSERT INTO parent VALUES (1);
+  INSERT INTO child VALUES (1);
+steps:
+  - sql: |
+      DROP TABLE parent
+    expect: error
+    sqlstate: "2BP01"
+    comment: the referencing foreign key blocks a plain drop
+  - sql: |
+      DROP TABLE parent CASCADE
+    expect: ok
+  - sql: |
+      SELECT pid FROM child ORDER BY pid
+    expect: rows
+    order: ordered
+    comment: the child table and its row survive
+  - sql: |
+      INSERT INTO child VALUES (99)
+    expect: ok
+    comment: no foreign key remains, so an orphan value is accepted
+  - sql: |
+      SELECT count(*) AS foreign_keys FROM pg_constraint WHERE conrelid = 'child'::regclass AND contype = 'f'
+    expect: rows
+    order: ordered
+    comment: zero foreign key constraints remain on child

@@ -1,0 +1,34 @@
+# SUPPORT names a planner support function (superuser only); a support function that does not
+# exist is an error, and a valid one is recorded in prosupport.
+id: cmd-alter-function.support-function
+title: SUPPORT sets the planner support function; an unknown support function is rejected
+family: cmd-alter-function
+tier: extended
+feature_ids: [alter-function, support-function, set-returning-functions]
+required_capabilities: [create-function, alter-function, set-returning-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: SUPPORT support_function)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION srf2() RETURNS SETOF int LANGUAGE sql AS 'SELECT generate_series(1, 2)';
+steps:
+  - sql: |
+      ALTER FUNCTION srf2() SUPPORT nosuch_support_fn
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT prosupport::oid = 0 AS none FROM pg_proc WHERE proname = 'srf2'
+    expect: rows
+    comment: no support function was set by the failed statement
+  - sql: |
+      ALTER FUNCTION srf2() SUPPORT generate_series_int4_support
+    expect: ok
+    comment: superuser may set a built-in support function
+  - sql: |
+      SELECT prosupport::regproc AS support FROM pg_proc WHERE proname = 'srf2'
+    expect: rows
+  - sql: |
+      SELECT count(*) AS n FROM srf2()
+    expect: rows
+    comment: the support function does not change the result set

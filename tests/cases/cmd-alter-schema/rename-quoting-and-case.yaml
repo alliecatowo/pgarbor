@@ -1,0 +1,36 @@
+# Unquoted new names fold to lower case, quoted names keep their case; later lookups must match the stored case exactly.
+id: cmd-alter-schema.rename-quoting-and-case
+title: RENAME TO folds unquoted names to lower case and keeps quoted names case-sensitive
+family: cmd-alter-schema
+tier: core
+feature_ids: [alter-schema, rename, identifiers, quoting]
+required_capabilities: [create-schema, alter-schema, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_schema.sgml#sql-alterschema (Parameters: name, new_name); doc/src/sgml/sql.sgml (identifiers)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA "cmd_as_Quoted";
+steps:
+  - sql: |
+      ALTER SCHEMA "cmd_as_Quoted" RENAME TO cmd_as_Plain
+    expect: ok
+    comment: unquoted new name folds to cmd_as_plain
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname = 'cmd_as_plain'
+    expect: rows
+  - sql: |
+      ALTER SCHEMA cmd_as_plain RENAME TO "CMD_AS_PLAIN"
+    expect: ok
+    comment: quoted new name keeps upper case
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname = 'CMD_AS_PLAIN'
+    expect: rows
+  - sql: |
+      ALTER SCHEMA "cmd_as_plain" OWNER TO CURRENT_USER
+    expect: error
+    sqlstate: "3F000"
+    comment: the lower-case quoted name no longer exists
+  - sql: |
+      DROP SCHEMA "CMD_AS_PLAIN"
+    expect: ok

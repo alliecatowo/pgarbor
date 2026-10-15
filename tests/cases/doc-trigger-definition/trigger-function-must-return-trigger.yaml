@@ -1,0 +1,33 @@
+# A trigger function must be declared to return type trigger, and a trigger function cannot be called
+# directly because its input arrives only through TriggerData.
+id: doc-trigger-definition.trigger-function-must-return-trigger
+title: Trigger function must return type trigger and cannot be called directly
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, create-function, errors]
+required_capabilities: [create-table, create-function, select, plpgsql, triggers, error-sqlstate]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (trigger function must return trigger; receives input through TriggerData)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int);
+  CREATE FUNCTION not_a_trigger() RETURNS int AS $$
+  BEGIN RETURN 1; END
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION real_trigger() RETURNS trigger AS $$
+  BEGIN RETURN NEW; END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER bad BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION not_a_trigger()
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      SELECT real_trigger()
+    expect: error
+    sqlstate: "0A000"
+    comment: direct call of a trigger function is rejected
+  - sql: |
+      CREATE TRIGGER good BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION real_trigger()
+    expect: ok

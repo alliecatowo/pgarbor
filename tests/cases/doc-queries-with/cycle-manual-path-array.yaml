@@ -1,0 +1,45 @@
+# Hand-written cycle detection: an array of visited ids plus an is_cycle flag, as the doc shows.
+id: doc-queries-with.cycle-manual-path-array
+title: Hand-written path array detects a cycle and the recursive term stops on is_cycle
+family: doc-queries-with
+tier: core
+feature_ids: [with-clause, recursive-cte, arrays, cycle-detection]
+required_capabilities: [create-table, insert, select, with, recursive-cte, arrays]
+provenance:
+  source: pg-docs
+  ref: "queries.sgml#queries-with (Cycle Detection, is_cycle and path columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE graph (id int, link int, data text);
+  INSERT INTO graph VALUES (1, 2, 'x'), (2, 3, 'y'), (3, 1, 'z'), (3, 4, 'w');
+steps:
+  - sql: |
+      WITH RECURSIVE search_graph(id, link, data, depth, is_cycle, path) AS (
+          SELECT g.id, g.link, g.data, 0, false, ARRAY[g.id]
+          FROM graph g
+        UNION ALL
+          SELECT g.id, g.link, g.data, sg.depth + 1,
+            g.id = ANY(path),
+            path || g.id
+          FROM graph g, search_graph sg
+          WHERE g.id = sg.link AND NOT is_cycle
+      )
+      SELECT id, link, depth, is_cycle, path FROM search_graph
+    expect: rows
+    order: multiset
+    comment: rows whose id already appears on the path are emitted with is_cycle true and not expanded further
+  - sql: |
+      WITH RECURSIVE search_graph(id, link, data, depth, is_cycle, path) AS (
+          SELECT g.id, g.link, g.data, 0, false, ARRAY[g.id]
+          FROM graph g
+        UNION ALL
+          SELECT g.id, g.link, g.data, sg.depth + 1,
+            g.id = ANY(path),
+            path || g.id
+          FROM graph g, search_graph sg
+          WHERE g.id = sg.link AND NOT is_cycle
+      )
+      SELECT count(*) FILTER (WHERE is_cycle) AS cycle_rows FROM search_graph
+    expect: rows
+    order: ordered
+    comment: count of rows flagged as cycles

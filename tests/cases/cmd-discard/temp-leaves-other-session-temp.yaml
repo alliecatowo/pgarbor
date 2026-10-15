@@ -1,0 +1,37 @@
+# DISCARD TEMP only affects the issuing session; another session's temporary table survives.
+id: cmd-discard.temp-leaves-other-session-temp
+title: DISCARD TEMP in one session does not drop another session's temporary table
+family: cmd-discard
+tier: core
+feature_ids: [discard, discard-temp, temp-tables, multi-session]
+required_capabilities: [select, create-table, insert, temp-tables, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/discard.sgml#sql-discard (Parameters: TEMPORARY)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      CREATE TEMP TABLE ta (id int4);
+      INSERT INTO ta VALUES (1)
+    expect: ok
+  - session: b
+    sql: |
+      CREATE TEMP TABLE tb (id int4);
+      INSERT INTO tb VALUES (2), (3)
+    expect: ok
+  - session: a
+    sql: |
+      DISCARD TEMP
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM ta
+    expect: error
+    sqlstate: "42P01"
+  - session: b
+    sql: |
+      SELECT id FROM tb ORDER BY id
+    expect: rows
+    order: ordered
+    comment: b's temp table is not affected by a's DISCARD TEMP

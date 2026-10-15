@@ -1,0 +1,32 @@
+# A language with dependent functions cannot be dropped (2BP01) until they are dropped; DROP LANGUAGE is the documented counterpart in the Notes.
+id: cmd-create-language.drop-language-dependency
+title: A language with a dependent function cannot be dropped, and dropping the function first lets DROP LANGUAGE succeed
+family: cmd-create-language
+tier: extended
+feature_ids: [create-language, drop-language, dependencies, error-handling]
+required_capabilities: [create-language, create-function-sql, drop-language, plpgsql, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_language.sgml#sql-createlanguage (Notes: Use DROP LANGUAGE to drop procedural languages)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE LANGUAGE cl_dep HANDLER plpgsql_call_handler
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cl_dep_fn() RETURNS int LANGUAGE cl_dep AS $$ BEGIN RETURN 1; END $$
+    expect: ok
+  - sql: |
+      DROP LANGUAGE cl_dep
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP FUNCTION cl_dep_fn()
+    expect: ok
+  - sql: |
+      DROP LANGUAGE cl_dep
+    expect: ok
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_language WHERE lanname = 'cl_dep'
+    expect: rows
+    order: ordered

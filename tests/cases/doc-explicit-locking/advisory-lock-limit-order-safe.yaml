@@ -1,0 +1,37 @@
+# The documented safe form: apply LIMIT in a subquery before calling the locking function.
+id: doc-explicit-locking.advisory-lock-limit-order-safe
+title: Advisory locks taken on a LIMITed subquery acquire exactly the selected keys
+family: doc-explicit-locking
+tier: core
+feature_ids: [advisory-locks, select, limit, multi-session]
+required_capabilities: [create-table, insert, select, advisory-locks, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#advisory-locks (safe form: SELECT pg_advisory_lock(q.id) FROM (SELECT ... LIMIT 100) q)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE foo (id int4 PRIMARY KEY);
+  INSERT INTO foo SELECT g FROM generate_series(12346, 12400) AS g;
+steps:
+  - session: a
+    sql: |
+      SELECT count(*) AS locked FROM (
+        SELECT pg_advisory_lock(q.id) FROM (
+          SELECT id FROM foo WHERE id > 12345 ORDER BY id LIMIT 10
+        ) q
+      ) x
+    expect: rows
+    comment: ten keys 12346..12355 locked
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(12355) AS inside_range, pg_try_advisory_lock(12356) AS past_range
+    expect: rows
+    comment: 12355 held by a, 12356 free
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock_all()
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock_all()
+    expect: rows

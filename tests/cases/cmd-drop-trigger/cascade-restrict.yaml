@@ -1,0 +1,41 @@
+# Triggers have no dependent objects, so CASCADE and RESTRICT (the default) both drop the trigger the same way.
+id: cmd-drop-trigger.cascade-restrict
+title: "DROP TRIGGER with CASCADE or RESTRICT drops the trigger with no dependents, and the default is RESTRICT"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, cascade, restrict, triggers]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger (Parameters: CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE trg_log (tg text);
+  CREATE FUNCTION log_tg() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME);
+    RETURN NEW;
+  END
+  $$;
+  CREATE TABLE t (id int4);
+  CREATE TRIGGER t_restrict BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_tg();
+  CREATE TRIGGER t_cascade BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_tg();
+steps:
+  - sql: |
+      DROP TRIGGER t_restrict ON t RESTRICT
+    expect: ok
+    comment: explicit RESTRICT, nothing depends on the trigger
+  - sql: |
+      DROP TRIGGER t_cascade ON t CASCADE
+    expect: ok
+    comment: explicit CASCADE has nothing extra to drop
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM trg_log
+    expect: rows
+    comment: neither dropped trigger fires for this insert
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal
+    expect: rows

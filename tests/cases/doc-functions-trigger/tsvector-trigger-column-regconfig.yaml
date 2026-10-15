@@ -1,0 +1,43 @@
+# tsvector_update_trigger_column takes the text search configuration per row from a regconfig column.
+# The trigger recomputes only when an input text column changes, so changing the config column alone
+# leaves the old tsv in place until a text column changes.
+id: doc-functions-trigger.tsvector-trigger-column-regconfig
+title: tsvector_update_trigger_column selects the configuration per row from a regconfig column
+family: doc-functions-trigger
+tier: core
+feature_ids: [triggers, text-search, tsvector, regconfig, update]
+required_capabilities: [create-table, create-function, insert, update, select, triggers, text-search]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#builtin-triggers-table (tsvector_update_trigger_column); textsearch.sgml#textsearch-update-triggers"
+sessions: [a]
+setup: |
+  CREATE TABLE docs (cfg regconfig, title text, body varchar(50), tsv tsvector);
+  CREATE TRIGGER doctsv BEFORE INSERT OR UPDATE ON docs FOR EACH ROW
+    EXECUTE FUNCTION tsvector_update_trigger_column(tsv, cfg, title, body);
+steps:
+  - sql: |
+      INSERT INTO docs (cfg, title, body) VALUES ('english', 'The Cats', 'Running Dogs'), ('simple', 'The Cats', 'Running Dogs')
+    expect: ok
+  - sql: |
+      SELECT cfg, tsv FROM docs ORDER BY cfg
+    expect: rows
+    order: ordered
+    comment: english stems and drops 'the'; simple keeps every word
+  - sql: |
+      UPDATE docs SET cfg = 'simple'
+    expect: ok
+    comment: changing only the config column does not recompute tsv
+  - sql: |
+      SELECT cfg, tsv FROM docs ORDER BY cfg
+    expect: rows
+    order: multiset
+    comment: the english-derived tsv is kept on the former english row
+  - sql: |
+      UPDATE docs SET body = 'Running Dogs!' WHERE cfg = 'simple'
+    expect: ok
+  - sql: |
+      SELECT cfg, tsv FROM docs ORDER BY cfg
+    expect: rows
+    order: ordered
+    comment: a text column change recomputes tsv under the row's current config

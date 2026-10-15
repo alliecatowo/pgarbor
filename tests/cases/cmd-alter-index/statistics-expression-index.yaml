@@ -1,0 +1,54 @@
+# ALTER INDEX ... ALTER COLUMN n SET STATISTICS on an expression index: docs example, -1 reverts to default, 10001 is clamped with a WARNING.
+id: cmd-alter-index.statistics-expression-index
+title: SET STATISTICS on an expression index column; -1 reverts, out-of-range values clamp or fail
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, statistics-target, expression-index, boundaries, errors]
+required_capabilities: [create-table, create-index, alter-index, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (ALTER COLUMN SET STATISTICS; Examples: expression index statistics)"
+sessions: [a]
+setup: |
+  CREATE TABLE measured (x int4, y int4, z int4, t int4);
+  CREATE INDEX coord_idx ON measured (x, y, (z + t));
+steps:
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS 1000
+    expect: ok
+    comment: docs example; column 3 is the expression (z + t)
+  - sql: |
+      SELECT attnum, attstattarget FROM pg_attribute WHERE attrelid = 'coord_idx'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: only the expression column carries the target, the plain columns stay at the default NULL
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS -1
+    expect: ok
+  - sql: |
+      SELECT attstattarget FROM pg_attribute WHERE attrelid = 'coord_idx'::regclass AND attnum = 3
+    expect: rows
+    order: ordered
+    comment: -1 reverts to the system default, stored as NULL
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS 0
+    expect: ok
+    comment: zero is a valid target
+  - sql: |
+      SELECT attstattarget FROM pg_attribute WHERE attrelid = 'coord_idx'::regclass AND attnum = 3
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS 10001
+    expect: ok
+    compare_message: false
+    comment: above the 10000 maximum the server clamps with a WARNING instead of failing
+  - sql: |
+      SELECT attstattarget FROM pg_attribute WHERE attrelid = 'coord_idx'::regclass AND attnum = 3
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS -2
+    expect: error
+    sqlstate: "22023"
+    comment: values below -1 are rejected

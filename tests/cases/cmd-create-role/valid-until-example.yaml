@@ -1,0 +1,42 @@
+# VALID UNTIL stores an expiry on the password; omitting it means no expiry (NULL). An unparseable timestamp is rejected.
+id: cmd-create-role.valid-until-example
+title: VALID UNTIL stores the password expiry as given, omitted VALID UNTIL is NULL, bad timestamp is rejected
+family: cmd-create-role
+tier: core
+feature_ids: [create-role, valid-until, password, errors, timestamps]
+required_capabilities: [roles, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_role.sgml#examples (CREATE ROLE miriam ... VALID UNTIL '2005-01-01'); VALID UNTIL clause"
+sessions: [a]
+notes: Expiry is only a password expiry, not a role expiry, so login is not tested here.
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_miriam WITH LOGIN PASSWORD 'jw8s0F4' VALID UNTIL '2005-01-01'
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_forever LOGIN PASSWORD 'jw8s0F4'
+    expect: ok
+  - sql: |
+      SELECT rolname,
+             rolvaliduntil = '2005-01-01 00:00:00+00'::timestamptz AS expires_2005_utc,
+             rolvaliduntil IS NULL AS never_expires
+        FROM pg_roles
+       WHERE rolname IN ('ccr_miriam', 'ccr_forever')
+       ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE ROLE ccr_badvu LOGIN VALID UNTIL 'not a date'
+    expect: error
+    sqlstate: "22007"
+  - sql: |
+      SELECT count(*) AS badvu_exists FROM pg_roles WHERE rolname = 'ccr_badvu'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ccr_miriam, ccr_forever
+    expect: ok

@@ -1,0 +1,37 @@
+# Repeated RELEASE of one name releases progressively older savepoints; once none are left, ROLLBACK TO fails.
+id: cmd-release-savepoint.repeated-release-then-rollback-to-3b001
+title: Repeated RELEASE of a duplicated name consumes both savepoints, so a later ROLLBACK TO fails with 3B001
+family: cmd-release-savepoint
+tier: core
+feature_ids: [release-savepoint, savepoints, rollback-to, errors, begin, insert]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/release_savepoint.sgml#sql-release-savepoint (Notes: Repeated commands will release progressively older savepoints)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      SAVEPOINT a;
+      INSERT INTO t VALUES (1);
+      SAVEPOINT a;
+      INSERT INTO t VALUES (2);
+      RELEASE SAVEPOINT a;
+      RELEASE SAVEPOINT a
+    expect: ok
+    comment: the second RELEASE releases the older a
+  - sql: |
+      ROLLBACK TO SAVEPOINT a
+    expect: error
+    sqlstate: "3B001"
+    comment: no savepoint named a remains
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: expect no rows

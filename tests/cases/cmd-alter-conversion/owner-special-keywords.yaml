@@ -1,0 +1,52 @@
+# OWNER TO accepts CURRENT_ROLE, CURRENT_USER and SESSION_USER. Under SET ROLE, the new owner must be a role the current role can SET ROLE to.
+id: cmd-alter-conversion.owner-special-keywords
+title: OWNER TO CURRENT_ROLE, CURRENT_USER and SESSION_USER, with the SET ROLE membership requirement
+family: cmd-alter-conversion
+tier: core
+feature_ids: [alter-conversion, owner, set-role, roles, errors]
+required_capabilities: [alter-conversion, create-conversion, create-role, set-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_conversion.sgml#sql-alterconversion (Description: owner requires SET ROLE)"
+sessions: [a]
+setup: |
+  CREATE ROLE alter_conv_kw;
+  CREATE CONVERSION kw_conv FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+  ALTER CONVERSION kw_conv OWNER TO alter_conv_kw;
+steps:
+  - sql: |
+      SET ROLE alter_conv_kw
+    expect: ok
+  - sql: |
+      ALTER CONVERSION kw_conv OWNER TO CURRENT_ROLE
+    expect: ok
+    comment: the current role is the owner already; a no-op change
+  - sql: |
+      ALTER CONVERSION kw_conv OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      ALTER CONVERSION kw_conv OWNER TO SESSION_USER
+    expect: error
+    sqlstate: "42501"
+    comment: the current role (alter_conv_kw) is not a member of the session user, so it cannot SET ROLE to the new owner
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT conname, pg_get_userbyid(conowner) AS owner FROM pg_conversion WHERE conname = 'kw_conv'
+    expect: rows
+    order: ordered
+    comment: owner is still alter_conv_kw after the rejected change
+  - sql: |
+      ALTER CONVERSION kw_conv OWNER TO SESSION_USER
+    expect: ok
+    comment: as the session user (superuser) the change is allowed
+  - sql: |
+      SELECT pg_get_userbyid(conowner) = session_user AS owned_by_session_user FROM pg_conversion WHERE conname = 'kw_conv'
+    expect: rows
+  - sql: |
+      DROP CONVERSION kw_conv
+    expect: ok
+  - sql: |
+      DROP ROLE alter_conv_kw
+    expect: ok

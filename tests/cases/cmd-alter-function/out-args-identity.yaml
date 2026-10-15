@@ -1,0 +1,36 @@
+# ALTER FUNCTION ignores OUT arguments and argument names when identifying a function; only the
+# IN/INOUT/VARIADIC types count.
+id: cmd-alter-function.out-args-identity
+title: OUT arguments are ignored when locating a function; argument names and IN mode are not significant
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, rename, function-identity, out-parameters]
+required_capabilities: [create-function, alter-function, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: argmode, argname)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION op_out(IN a int, OUT b int) LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION op_out(int) RENAME TO op_out2
+    expect: ok
+    comment: the OUT argument is not part of the identity; the IN type alone matches
+  - sql: |
+      ALTER FUNCTION op_out2(IN x int) RENAME TO op_out3
+    expect: ok
+    comment: argument name and explicit IN mode are not significant
+  - sql: |
+      ALTER FUNCTION op_out3(OUT b int) RENAME TO op_out4
+    expect: error
+    sqlstate: "42883"
+    comment: OUT is ignored, so the identity is op_out3() which does not exist
+  - sql: |
+      ALTER FUNCTION op_out3 RENAME TO op_out4
+    expect: ok
+    comment: the name alone is unique
+  - sql: |
+      SELECT op_out4(5) AS r
+    expect: rows
+    order: ordered

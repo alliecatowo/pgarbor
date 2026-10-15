@@ -1,0 +1,37 @@
+# GIN storage parameters fastupdate and gin_pending_list_limit: valid settings, and the lower bound of the list limit.
+id: doc-textsearch-indexes.gin-storage-parameters
+title: GIN fastupdate and gin_pending_list_limit storage parameters
+family: doc-textsearch-indexes
+tier: extended
+feature_ids: [gin-index, fastupdate, gin-pending-list, storage-parameters]
+required_capabilities: [create-table, create-index, alter-index, gin-index, catalog-introspection, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (GIN build time, pending list)"
+steps:
+  - sql: |
+      CREATE TABLE t (id int4 PRIMARY KEY, tsv tsvector)
+    expect: ok
+  - sql: |
+      CREATE INDEX t_gin_nofast ON t USING GIN (tsv) WITH (fastupdate = off)
+    expect: ok
+  - sql: |
+      CREATE INDEX t_gin_pl ON t USING GIN (tsv) WITH (gin_pending_list_limit = 64)
+    expect: ok
+    comment: 64 kB is the documented minimum for the pending list limit
+  - sql: |
+      CREATE INDEX t_gin_pl0 ON t USING GIN (tsv) WITH (gin_pending_list_limit = 0)
+    expect: error
+    sqlstate: "22023"
+    comment: below the valid range of 64 to 2147483647
+  - sql: |
+      SELECT relname, reloptions FROM pg_class WHERE relname IN ('t_gin_nofast', 't_gin_pl') ORDER BY relname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX t_gin_nofast SET (fastupdate = on)
+    expect: ok
+  - sql: |
+      SELECT relname, reloptions FROM pg_class WHERE relname = 't_gin_nofast'
+    expect: rows
+    order: ordered

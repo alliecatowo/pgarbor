@@ -1,0 +1,43 @@
+# RENAME ATTRIBUTE works only on composite types, rejects collisions and unknown names, and accepts CASCADE.
+id: cmd-alter-type.composite-rename-attribute
+title: "RENAME ATTRIBUTE on a composite changes the field name and rejects collisions"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, composite-type, rename-attribute]
+required_capabilities: [create-type, alter-type, composite-type, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (RENAME ATTRIBUTE: only usable with composite types)"
+sessions: [a]
+setup: |
+  CREATE TYPE compfoo AS (f1 int, f2 text);
+  CREATE TYPE colors AS ENUM ('red');
+steps:
+  - sql: |
+      ALTER TYPE compfoo RENAME ATTRIBUTE f1 TO g1
+    expect: ok
+  - sql: |
+      SELECT (ROW(5, 'b')::compfoo).g1
+    expect: rows
+    comment: the field is reachable under its new name
+  - sql: |
+      ALTER TYPE compfoo RENAME ATTRIBUTE f2 TO g1
+    expect: error
+    sqlstate: "42701"
+    comment: g1 is already taken
+  - sql: |
+      ALTER TYPE compfoo RENAME ATTRIBUTE nosuch TO q
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      ALTER TYPE colors RENAME ATTRIBUTE f1 TO g1
+    expect: error
+    sqlstate: "42P01"
+    comment: an enum has no attributes; the error names the missing relation
+  - sql: |
+      ALTER TYPE compfoo RENAME ATTRIBUTE g1 TO h1 CASCADE
+    expect: ok
+    comment: CASCADE is accepted and propagates to typed tables, of which there are none here
+  - sql: |
+      SELECT (ROW(5, 'b')::compfoo).h1
+    expect: rows

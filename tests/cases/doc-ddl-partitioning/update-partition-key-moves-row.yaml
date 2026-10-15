@@ -1,0 +1,42 @@
+# Updating the partition key so the row no longer satisfies its partition's bounds moves the row to
+# the partition that now matches it. An update that stays in range does not move it.
+id: doc-ddl-partitioning.update-partition-key-moves-row
+title: Updating the partition key moves the row to the matching partition
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, range-partitioning, update, partition-routing]
+required_capabilities: [create-table, insert, update, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning (Declarative Partitioning: 'Updating the partition key of a row will cause it to be moved')"
+sessions: [a]
+setup: |
+  CREATE TABLE mv (id int NOT NULL, v int) PARTITION BY RANGE (v);
+  ALTER TABLE mv ADD PRIMARY KEY (id, v);
+  CREATE TABLE mv_low PARTITION OF mv FOR VALUES FROM (0) TO (100);
+  CREATE TABLE mv_high PARTITION OF mv FOR VALUES FROM (100) TO (200);
+  INSERT INTO mv VALUES (1, 5), (2, 150);
+steps:
+  - sql: |
+      UPDATE mv SET v = 120 WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, id, v FROM mv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE mv SET v = 130 WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass::text AS part, id, v FROM mv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE mv SET v = 999 WHERE id = 2
+    expect: error
+    sqlstate: "23514"
+    comment: new key maps to no partition, so the update fails and the row stays put
+  - sql: |
+      SELECT tableoid::regclass::text AS part, id, v FROM mv ORDER BY id
+    expect: rows
+    order: ordered

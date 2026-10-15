@@ -1,0 +1,51 @@
+# CURRENT_ROLE and CURRENT_USER resolve to the role in effect after SET ROLE; SESSION_USER stays the login role.
+id: cmd-alter-large-object.keywords-under-set-role
+title: CURRENT_ROLE, CURRENT_USER and SESSION_USER resolve differently under SET ROLE
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, set-role, session-user, current-role]
+required_capabilities: [large-objects, roles, catalog-introspection, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_kw_role
+    expect: ok
+  - sql: |
+      SELECT lo_create(930201)
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 930201 OWNER TO cmd_alo_kw_role
+    expect: ok
+  - sql: |
+      SET ROLE cmd_alo_kw_role
+    expect: ok
+  - sql: |
+      SELECT current_user::text AS cur, session_user::text AS sess
+    expect: rows
+    comment: current_user is the SET ROLE target; session_user is the login role
+  - sql: |
+      ALTER LARGE OBJECT 930201 OWNER TO CURRENT_ROLE
+    expect: ok
+    comment: the caller owns the object and may SET ROLE to itself
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930201
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930201 OWNER TO SESSION_USER
+    expect: ok
+    comment: after RESET ROLE, SESSION_USER and CURRENT_USER are both postgres
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930201
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(930201)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_kw_role
+    expect: ok

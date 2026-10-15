@@ -1,0 +1,34 @@
+# A zero-argument aggregate is referenced with * in place of the argument list; empty parentheses are a
+# syntax error and a spurious argument type does not match.
+id: cmd-alter-aggregate.zero-arg-star
+title: "ALTER AGGREGATE addresses a zero-argument aggregate only with (*)"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, rename, aggregates, zero-argument-aggregates]
+required_capabilities: [aggregates, create-aggregate, alter-aggregate, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#parameters (argtype: write * for zero-argument aggregate)"
+setup: |
+  CREATE AGGREGATE zc_cnt(*) (sfunc = int8inc, stype = int8, initcond = '0');
+steps:
+  - sql: |
+      SELECT zc_cnt(*) FROM generate_series(1, 4)
+    expect: rows
+    comment: count of four input rows
+  - sql: |
+      ALTER AGGREGATE zc_cnt(*) RENAME TO zc_cnt2
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE zc_cnt2() RENAME TO zc_cnt3
+    expect: error
+    sqlstate: "42601"
+    comment: empty parentheses are not valid; the documentation requires *
+  - sql: |
+      ALTER AGGREGATE zc_cnt2(integer) RENAME TO zc_cnt3
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT zc_cnt2(*) FROM generate_series(1, 4)
+    expect: rows
+    comment: still four after the failed attempts

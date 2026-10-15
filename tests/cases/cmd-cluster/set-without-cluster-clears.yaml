@@ -1,0 +1,31 @@
+# ALTER TABLE ... CLUSTER ON sets the remembered index, and SET WITHOUT CLUSTER clears it.
+id: cmd-cluster.set-without-cluster-clears
+title: ALTER TABLE SET WITHOUT CLUSTER clears the remembered index so plain CLUSTER fails
+family: cmd-cluster
+tier: core
+feature_ids: [cluster, alter-table-cluster-on, alter-table-set-without-cluster]
+required_capabilities: [create-table, create-index, insert, select, alter-table, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/cluster.sgml#sql-cluster (Description: use the CLUSTER or SET WITHOUT CLUSTER forms of ALTER TABLE to set the index to be used for future cluster operations, or to clear any previous setting)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX t_v ON t (v);
+  INSERT INTO t VALUES (1, 2), (2, 1);
+steps:
+  - sql: |
+      ALTER TABLE t CLUSTER ON t_v
+    expect: ok
+  - sql: |
+      CLUSTER t
+    expect: ok
+    comment: the index set by ALTER TABLE is used
+  - sql: |
+      ALTER TABLE t SET WITHOUT CLUSTER
+    expect: ok
+  - sql: |
+      CLUSTER t
+    expect: error
+    sqlstate: "42704"
+    comment: no clustered index remains

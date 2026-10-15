@@ -1,0 +1,48 @@
+# Partitioned tables and indexes: REINDEX inside a transaction is rejected, outside it is allowed; partitions are fine.
+id: cmd-reindex.partitioned-tx-rules
+title: REINDEX of a partitioned table or index is rejected in a transaction block but allowed outside one
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-table, reindex-index, reindex-concurrently, partitioning, transactions, errors]
+required_capabilities: [create-table, create-index, insert, select, reindex, reindex-concurrently, partitioning, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: INDEX, TABLE; Notes: Reindexing partitioned indexes or partitioned tables)"
+sessions: [a]
+setup: |
+  CREATE TABLE pt (id int4, v int4) PARTITION BY RANGE (id);
+  CREATE TABLE pt1 PARTITION OF pt FOR VALUES FROM (0) TO (100);
+  CREATE INDEX pt_v ON pt (v);
+  INSERT INTO pt VALUES (1, 10), (50, 20);
+steps:
+  - sql: |
+      BEGIN; REINDEX TABLE pt
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN; REINDEX INDEX pt_v
+    expect: error
+    sqlstate: "25001"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN; REINDEX TABLE pt1; COMMIT
+    expect: ok
+    comment: a plain partition is an ordinary table, so REINDEX is allowed in a transaction
+  - sql: |
+      REINDEX TABLE pt
+    expect: ok
+  - sql: |
+      REINDEX INDEX pt_v
+    expect: ok
+  - sql: |
+      REINDEX TABLE CONCURRENTLY pt
+    expect: ok
+  - sql: |
+      SELECT id, v FROM pt ORDER BY id
+    expect: rows
+    order: ordered

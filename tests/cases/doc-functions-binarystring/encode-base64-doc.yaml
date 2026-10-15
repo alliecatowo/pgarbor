@@ -1,0 +1,42 @@
+# base64 encode/decode per the docs: 76-column line breaks with bare newline, whitespace ignored on decode, errors on bad input.
+id: doc-functions-binarystring.encode-base64-doc
+title: base64 encode and decode follow the documented line breaking, whitespace rules and error cases
+family: doc-functions-binarystring
+tier: core
+feature_ids: [bytea, encode, decode, base64]
+required_capabilities: [select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-binarystring-encodings (encode/decode, base64 format)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT encode('123\000\001'::bytea, 'base64')
+    expect: rows
+    comment: doc example, MTIzAAE=
+  - sql: |
+      SELECT decode('MTIzAAE=', 'base64')
+    expect: rows
+    comment: doc example, \x3132330001
+  - sql: |
+      SELECT decode(E'MTIz\n AAE=\t', 'base64')
+    expect: rows
+    comment: decode ignores newline, space and tab characters
+  - sql: |
+      SELECT length(encode(repeat('a', 60)::bytea, 'base64')), position(E'\n' IN encode(repeat('a', 60)::bytea, 'base64'))
+    expect: rows
+    comment: 60 bytes give 80 base64 characters; the line is broken after 76 characters with a bare newline
+  - sql: |
+      SELECT decode('MTI=', 'base64')
+    expect: rows
+    comment: valid padding decodes to \x3132
+  - sql: |
+      SELECT decode('MTIzAAE', 'base64')
+    expect: error
+    sqlstate: "22023"
+    comment: missing padding is invalid base64 end sequence
+  - sql: |
+      SELECT decode('MTIz!', 'base64')
+    expect: error
+    sqlstate: "22023"
+    comment: a symbol outside the base64 alphabet is rejected

@@ -1,0 +1,25 @@
+# HYPOTHETICAL is only valid on ordered-set aggregates. On a valid hypothetical-set aggregate it has
+# no run-time effect beyond parse-time type resolution.
+id: cmd-create-aggregate.hypothetical-flag
+title: "HYPOTHETICAL is rejected on ordinary aggregates and accepted on ordered-set aggregates"
+family: cmd-create-aggregate
+tier: extended
+feature_ids: [aggregates, create-aggregate, hypothetical-set-aggregates, errors]
+required_capabilities: [create-table, insert, select, aggregates, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (HYPOTHETICAL)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+steps:
+  - sql: |
+      CREATE AGGREGATE hypnorm (int4) (sfunc = int4pl, stype = int4, hypothetical)
+    expect: error
+    sqlstate: "42P13"
+  - sql: |
+      CREATE AGGREGATE hyp_sum (int4 ORDER BY int4) (SFUNC = int4pl, STYPE = int4, INITCOND = '0', HYPOTHETICAL)
+    expect: ok
+  - sql: |
+      SELECT hyp_sum(3) WITHIN GROUP (ORDER BY x) FROM t
+    expect: rows

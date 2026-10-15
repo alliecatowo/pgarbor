@@ -1,0 +1,39 @@
+# A primary key implies NOT NULL and uniqueness over its (possibly composite) columns; only one per table.
+id: doc-ddl-constraints.primary-key-composite
+title: Composite PRIMARY KEY enforces NOT NULL and uniqueness; a second primary key is rejected
+family: doc-ddl-constraints
+tier: core
+feature_ids: [primary-keys, not-null-constraints, unique-constraints, insert, select]
+required_capabilities: [create-table, constraints, primary-key, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Primary Keys)"
+sessions: [a]
+setup: |
+  CREATE TABLE example (a integer, b integer, c integer, PRIMARY KEY (a, c))
+steps:
+  - sql: |
+      INSERT INTO example VALUES (1, NULL, 1)
+    expect: ok
+    comment: b is not part of the key, so it may be NULL
+  - sql: |
+      INSERT INTO example VALUES (1, 2, NULL)
+    expect: error
+    sqlstate: "23502"
+    comment: key columns are implicitly NOT NULL
+  - sql: |
+      INSERT INTO example VALUES (1, 2, 1)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO example VALUES (1, 3, 2)
+    expect: ok
+  - sql: |
+      SELECT a, b, c FROM example ORDER BY a, c
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE twopk (a integer PRIMARY KEY, b integer PRIMARY KEY)
+    expect: error
+    sqlstate: "42P16"
+    comment: a table can have at most one primary key

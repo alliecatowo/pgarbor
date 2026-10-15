@@ -1,0 +1,26 @@
+# A prepared SELECT * whose result type changes under it fails on EXECUTE instead of silently changing shape.
+id: cmd-prepare.ddl-result-type-change-error
+title: EXECUTE of a prepared SELECT * fails after ALTER TABLE changes its result columns
+family: cmd-prepare
+tier: core
+feature_ids: [prepare, execute, alter-table, replan, prepared-statements, errors]
+required_capabilities: [create-table, alter-table, select, prepared-statements, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/prepare.sgml#sql-prepare-notes (re-analysis after DDL)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (a int, b text);
+  INSERT INTO foo VALUES (1, 'one')
+steps:
+  - sql: |
+      PREPARE s1 AS SELECT * FROM foo
+    expect: ok
+  - sql: |
+      ALTER TABLE foo ADD COLUMN e int
+    expect: ok
+  - sql: |
+      EXECUTE s1
+    expect: error
+    sqlstate: "0A000"
+    comment: the cached plan's result type changed, so EXECUTE refuses it

@@ -1,0 +1,36 @@
+# IN SCHEMA is not allowed for schemas or large objects; the statement fails with 0LP01 for both GRANT and REVOKE.
+id: cmd-alter-default-privileges.error-in-schema-schemas-large-objects
+title: IN SCHEMA is rejected with 0LP01 for ON SCHEMAS and ON LARGE OBJECTS
+family: cmd-alter-default-privileges
+tier: core
+feature_ids: [alter-default-privileges, schemas, large-objects, schema-scope, errors]
+required_capabilities: [create-schema, large-objects, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/ref/alter_default_privileges.sgml#sql-alterdefaultprivileges-parameters (IN SCHEMA is not allowed when setting privileges for schemas and large objects)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA adp_ie;
+steps:
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_ie GRANT USAGE ON SCHEMAS TO PUBLIC
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_ie GRANT CREATE ON SCHEMAS TO PUBLIC
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_ie GRANT SELECT ON LARGE OBJECTS TO PUBLIC
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      ALTER DEFAULT PRIVILEGES IN SCHEMA adp_ie REVOKE SELECT ON LARGE OBJECTS FROM PUBLIC
+    expect: error
+    sqlstate: "0LP01"
+    comment: the check applies to REVOKE as well as GRANT
+  - sql: |
+      SELECT count(*) FROM pg_default_acl WHERE defaclnamespace = 'adp_ie'::regnamespace
+    expect: rows
+    order: multiset
+    comment: no schema-scoped default was written

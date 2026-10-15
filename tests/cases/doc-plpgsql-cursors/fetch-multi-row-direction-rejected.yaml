@@ -1,0 +1,28 @@
+# FETCH in PL/pgSQL fetches a single row, so a direction that can return several rows is rejected.
+id: doc-plpgsql-cursors.fetch-multi-row-direction-rejected
+title: FETCH FORWARD with a count is rejected in PL/pgSQL
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, fetch, fetch-direction]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+steps:
+  - sql: |
+      CREATE FUNCTION fetch_forward_two() RETURNS text LANGUAGE plpgsql AS $$
+      DECLARE c SCROLL CURSOR FOR SELECT name FROM items ORDER BY id; r text;
+      BEGIN OPEN c; FETCH FORWARD 2 FROM c INTO r; RETURN r; END $$
+    expect: error
+    sqlstate: "0A000"
+    comment: FORWARD with a count can return multiple rows, which INTO cannot take
+  - sql: |
+      CREATE FUNCTION fetch_relative_expr() RETURNS text LANGUAGE plpgsql AS $$
+      DECLARE c SCROLL CURSOR FOR SELECT name FROM items ORDER BY id; r text; n int := 2;
+      BEGIN OPEN c; FETCH RELATIVE n FROM c INTO r; RETURN r; END $$
+    expect: ok
+    comment: RELATIVE with a variable count is a single-row direction and is accepted

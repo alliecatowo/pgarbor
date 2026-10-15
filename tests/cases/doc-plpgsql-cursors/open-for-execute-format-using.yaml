@@ -1,0 +1,38 @@
+# OPEN FOR EXECUTE with format() for an identifier and USING for the value, then a missing-table error.
+id: doc-plpgsql-cursors.open-for-execute-format-using
+title: OPEN FOR EXECUTE builds the table name with format and passes the key with USING
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, open-for-execute, format, using]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION names_in(tabname text, keyvalue int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c refcursor;
+    r text;
+    out text := '';
+  BEGIN
+    OPEN c FOR EXECUTE format('SELECT name FROM %I WHERE grp = $1 ORDER BY id', tabname) USING keyvalue;
+    LOOP
+      FETCH c INTO r;
+      EXIT WHEN NOT FOUND;
+      out := out || r;
+    END LOOP;
+    CLOSE c;
+    RETURN out;
+  END $$;
+steps:
+  - sql: |
+      SELECT names_in('items', 1) AS g1, names_in('items', 2) AS g2, names_in('items', 9) AS g9
+    expect: rows
+  - sql: |
+      SELECT names_in('no_such_table', 1)
+    expect: error
+    sqlstate: "42P01"
+    comment: the table name is an identifier substituted by format, so a missing table fails at OPEN

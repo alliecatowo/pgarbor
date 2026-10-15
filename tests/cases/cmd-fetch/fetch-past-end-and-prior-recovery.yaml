@@ -1,0 +1,61 @@
+id: cmd-fetch.fetch-past-end-and-prior-recovery
+title: A FETCH that runs off the end leaves the cursor after the last row; PRIOR and BACKWARD ALL recover
+family: cmd-fetch
+tier: core
+feature_ids: [fetch, fetch-prior, fetch-backward-all, fetch-all, scroll-cursor]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/fetch.sgml#sql-fetch (Description: running off the end)"
+sessions: [a]
+setup: |
+  CREATE TABLE nums (n int4 PRIMARY KEY);
+  INSERT INTO nums VALUES (1), (2), (3), (4), (5);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c SCROLL CURSOR FOR SELECT n FROM nums ORDER BY n
+    expect: ok
+  - sql: |
+      FETCH ABSOLUTE 4 FROM c
+    expect: rows
+    order: ordered
+  - sql: |
+      FETCH FORWARD 10 FROM c
+    expect: rows
+    order: ordered
+    comment: only row 5 is left, cursor is left after the last row
+  - sql: |
+      FETCH NEXT FROM c
+    expect: rows
+    order: ordered
+    comment: after the last row, nothing is returned
+  - sql: |
+      FETCH PRIOR FROM c
+    expect: rows
+    order: ordered
+    comment: PRIOR from after-last returns the last row
+  - sql: |
+      FETCH PRIOR FROM c
+    expect: rows
+    order: ordered
+  - sql: |
+      FETCH ALL FROM c
+    expect: rows
+    order: ordered
+    comment: row 5 only, cursor left after the last row
+  - sql: |
+      FETCH BACKWARD ALL FROM c
+    expect: rows
+    order: ordered
+    comment: rows 4, 3, 2, 1 in backward order, cursor left before the first row
+  - sql: |
+      FETCH NEXT FROM c
+    expect: rows
+    order: ordered
+    comment: from before the first row, NEXT returns row 1
+  - sql: |
+      COMMIT
+    expect: ok

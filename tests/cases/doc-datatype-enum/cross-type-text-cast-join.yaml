@@ -1,0 +1,27 @@
+# Explicit ::text casts on both sides make the cross-enum comparison legal (datatype.sgml#datatype-enum-type-safety).
+id: doc-datatype-enum.cross-type-text-cast-join
+title: Joining two enum types works after casting both sides to text
+family: doc-datatype-enum
+tier: core
+feature_ids: [enum-type-safety, explicit-cast, enum-to-text, join]
+required_capabilities: [create-type, create-table, insert, select, join]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-enum-type-safety"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE TYPE happiness AS ENUM ('happy', 'very happy', 'ecstatic');
+  CREATE TABLE person (name text, current_mood mood);
+  CREATE TABLE holidays (num_weeks integer, happiness happiness);
+  INSERT INTO person VALUES ('Moe', 'happy'), ('Larry', 'sad');
+steps:
+  - sql: |
+      INSERT INTO holidays(num_weeks,happiness) VALUES (4, 'happy'), (6, 'very happy'), (8, 'ecstatic')
+    expect: ok
+  - sql: |
+      SELECT person.name, holidays.num_weeks FROM person, holidays
+      WHERE person.current_mood::text = holidays.happiness::text
+    expect: rows
+    order: multiset
+    comment: documented result is Moe / 4; Larry (sad) matches no holiday

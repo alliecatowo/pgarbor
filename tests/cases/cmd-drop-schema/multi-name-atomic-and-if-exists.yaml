@@ -1,0 +1,34 @@
+# DROP SCHEMA takes a list; one missing name without IF EXISTS fails the whole command, IF EXISTS turns it into a notice.
+id: cmd-drop-schema.multi-name-atomic-and-if-exists
+title: DROP SCHEMA with several names is all-or-nothing, and IF EXISTS skips only the missing name with a notice
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, multiple-names, if-exists, notices, errors]
+required_capabilities: [create-schema, select, errors, notices]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Synopsis: name [, ...]; Parameters: IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA m1;
+  CREATE SCHEMA m2;
+steps:
+  - sql: |
+      DROP SCHEMA m1, nope_missing, m2
+    expect: error
+    sqlstate: "3F000"
+    comment: the missing name aborts the statement before any schema is removed
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname IN ('m1', 'm2') ORDER BY nspname
+    expect: rows
+    order: ordered
+    comment: m1 and m2 both survived the failed command
+  - sql: |
+      DROP SCHEMA IF EXISTS m1, nope_missing, m2
+    expect: notice
+    comment: IF EXISTS skips the missing name with a notice and drops the other two
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname IN ('m1', 'm2') ORDER BY nspname
+    expect: rows
+    order: ordered
+    comment: no rows, so both named schemas are gone

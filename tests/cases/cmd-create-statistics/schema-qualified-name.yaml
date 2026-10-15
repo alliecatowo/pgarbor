@@ -1,0 +1,31 @@
+# A schema-qualified name places the statistics object in that schema, so the same bare name can exist in two schemas.
+id: cmd-create-statistics.schema-qualified-name
+title: Schema-qualified statistics name places the object in the named schema
+family: cmd-create-statistics
+tier: core
+feature_ids: [create-statistics, schema-qualification, name-conflicts]
+required_capabilities: [create-table, create-schema, extended-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics (Description: schema; Parameters: statistics_name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cs_sch;
+  CREATE TABLE cs_sch_t (a int, b int);
+steps:
+  - sql: |
+      CREATE STATISTICS cs_sch.cs_shared ON a, b FROM cs_sch_t
+    expect: ok
+  - sql: |
+      CREATE STATISTICS public.cs_shared ON a, b FROM cs_sch_t
+    expect: ok
+    comment: the same bare name in another schema is distinct
+  - sql: |
+      CREATE STATISTICS cs_sch.cs_shared ON a, b FROM cs_sch_t
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      SELECT stxname, stxnamespace::regnamespace::text AS schema_name, stxowner::regrole::text AS owner FROM pg_statistic_ext ORDER BY schema_name, stxname
+    expect: rows
+    order: ordered
+    comment: owner is the role issuing the command

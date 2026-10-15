@@ -1,0 +1,28 @@
+# The lexer maps != to <> on input, so creating != defines <>; both spellings then resolve to the same operator.
+id: cmd-create-operator.bang-equal-maps-to-not-equal
+title: "Creating != defines the <> operator, and both spellings call the same procedure"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, operator-names, lexer]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#description (!= mapped to <>)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_box_ne(box, box) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT area($1) <> area($2) $$;
+steps:
+  - sql: |
+      CREATE OPERATOR != (LEFTARG = box, RIGHTARG = box, PROCEDURE = cco_box_ne)
+    expect: ok
+  - sql: |
+      SELECT oprname, oprcode::regproc AS fn FROM pg_operator
+      WHERE oprleft = 'box'::regtype AND oprname IN ('!=', '<>')
+      ORDER BY oprname
+    expect: rows
+    order: ordered
+    comment: only one operator exists, named <>
+  - sql: |
+      SELECT ('((0,0),(1,1))'::box) != ('((0,0),(2,2))'::box) AS ne_diff,
+             ('((0,0),(1,1))'::box) <> ('((0,0),(1,1))'::box) AS ne_same
+    expect: rows

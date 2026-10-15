@@ -1,0 +1,23 @@
+# Both directions for a composite type: FROM SQL returns internal, TO SQL returns the composite; catalog shows both.
+id: cmd-create-transform.composite-type-both-directions
+title: "A composite type can have both FROM SQL and TO SQL functions, and both appear in pg_transform"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, transform-from-sql, transform-to-sql, composite-type]
+required_capabilities: [create-transform, create-function, create-type, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-description"
+sessions: [a]
+setup: |
+  CREATE TYPE ct_pair AS (k int, v text);
+  CREATE FUNCTION ct_pair_from(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+  CREATE FUNCTION ct_pair_to(val internal) RETURNS ct_pair LANGUAGE internal IMMUTABLE STRICT AS 'record_recv';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR ct_pair LANGUAGE sql (FROM SQL WITH FUNCTION ct_pair_from(internal), TO SQL WITH FUNCTION ct_pair_to(internal))
+    expect: ok
+  - sql: |
+      SELECT trftype::regtype::text AS type_name, trffromsql::regprocedure::text AS from_fn, trftosql::regprocedure::text AS to_fn
+        FROM pg_transform WHERE trftype = 'ct_pair'::regtype
+    expect: rows

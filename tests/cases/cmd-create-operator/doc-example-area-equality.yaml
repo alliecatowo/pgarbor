@@ -1,0 +1,46 @@
+# The CREATE OPERATOR example from the reference page: === on box with COMMUTATOR, NEGATOR, RESTRICT, JOIN, HASHES, MERGES.
+# The NEGATOR !== does not exist yet, so a shell operator is created; calling it must fail with "operator is only a shell".
+id: cmd-create-operator.doc-example-area-equality
+title: "Documented === box example creates the operator, its shell negator, and optimizer links"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, commutator, negator, hashes, merges, selectivity-estimators]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#examples"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_area_eq(box, box) RETURNS bool LANGUAGE sql IMMUTABLE AS $$ SELECT area($1) = area($2) $$;
+steps:
+  - sql: |
+      CREATE OPERATOR === (
+          LEFTARG = box,
+          RIGHTARG = box,
+          FUNCTION = cco_area_eq,
+          COMMUTATOR = ===,
+          NEGATOR = !==,
+          RESTRICT = areasel,
+          JOIN = areajoinsel,
+          HASHES, MERGES
+      )
+    expect: ok
+  - sql: |
+      SELECT oprname, oprcode::regproc AS fn, oprcom::regoperator AS commutator,
+             oprnegate::regoperator AS negator, oprrest::regproc AS restrict_fn,
+             oprjoin::regproc AS join_fn, oprcanhash, oprcanmerge
+      FROM pg_operator
+      WHERE oprname IN ('===', '!==') AND oprleft = 'box'::regtype AND oprright = 'box'::regtype
+      ORDER BY oprname
+    expect: rows
+    order: ordered
+    comment: the negator shell has no procedure and no optimizer attributes
+  - sql: |
+      SELECT ('((0,0),(2,2))'::box) === ('((0,0),(1,4))'::box) AS same_area,
+             ('((0,0),(2,2))'::box) === ('((0,0),(1,1))'::box) AS different_area
+    expect: rows
+  - sql: |
+      SELECT ('((0,0),(1,1))'::box) !== ('((0,0),(1,1))'::box)
+    expect: error
+    sqlstate: "42883"
+    comment: the shell negator cannot be called until it is defined

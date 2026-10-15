@@ -1,0 +1,30 @@
+# Row-level AFTER INSERT firings see all rows the multi-row INSERT added, not just the row that fired them.
+id: doc-trigger-datachanges.row-after-insert-sees-statement
+title: Row-level AFTER INSERT triggers see all rows of a multi-row INSERT
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, row-level-triggers, plpgsql, insert, visibility]
+required_capabilities: [create-table, insert, select, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (when a row-level AFTER trigger is fired, all data changes are complete)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+  CREATE FUNCTION ra_ins() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('ra_ins', (SELECT count(*) FROM t));
+    RETURN NULL;
+  END $$;
+  CREATE TRIGGER trg_ra_ins AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION ra_ins();
+steps:
+  - sql: |
+      INSERT INTO t VALUES (3, 30), (4, 40), (5, 50)
+    expect: ok
+  - sql: |
+      SELECT n FROM lg WHERE tag = 'ra_ins'
+    expect: rows
+    order: multiset
+    comment: every firing counts the table after the whole statement

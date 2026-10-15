@@ -1,0 +1,44 @@
+# PARALLEL takes a non-negative worker count; it is not used with FULL except that zero is accepted.
+id: cmd-vacuum.parallel-option
+title: "VACUUM PARALLEL accepts zero and positive counts, rejects negatives and FULL with workers"
+family: cmd-vacuum
+tier: extended
+feature_ids: [vacuum, parallel, create-index, errors]
+required_capabilities: [create-table, create-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: PARALLEL; Notes)"
+sessions: [a]
+setup: |
+  CREATE TABLE vp (id int4 PRIMARY KEY, a int4, b text);
+  CREATE INDEX vp_a ON vp (a);
+  INSERT INTO vp SELECT g, g % 5, 'row' || g FROM generate_series(1, 100) g;
+steps:
+  - sql: |
+      VACUUM (PARALLEL 0) vp
+    expect: ok
+    comment: disables parallel vacuum
+  - sql: |
+      VACUUM (PARALLEL 2) vp
+    expect: ok
+    comment: the worker count is an upper bound, so success does not depend on workers being used
+  - sql: |
+      VACUUM (PARALLEL 2, ANALYZE) vp
+    expect: ok
+  - sql: |
+      VACUUM (FULL, PARALLEL 2) vp
+    expect: error
+    sqlstate: "0A000"
+    comment: parallel workers cannot be combined with FULL
+  - sql: |
+      VACUUM (FULL, PARALLEL 0) vp
+    expect: ok
+    comment: zero workers is allowed with FULL
+  - sql: |
+      VACUUM (PARALLEL -1) vp
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT count(*), sum(a) FROM vp
+    expect: rows
+    order: ordered

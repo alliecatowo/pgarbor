@@ -1,0 +1,44 @@
+# Without IF EXISTS, unknown names and non-matching argument types fail with 42883; default values
+# do not create extra signatures.
+id: cmd-drop-procedure.missing-and-mismatch-errors
+title: DROP PROCEDURE errors for unknown names and non-matching argument lists
+family: cmd-drop-procedure
+tier: core
+feature_ids: [drop-procedure, create-procedure, errors]
+required_capabilities: [create-procedure, drop-procedure, plpgsql, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure (name, argtype)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE pmiss(a int, b int DEFAULT 1) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      DROP PROCEDURE nosuch
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP PROCEDURE nosuch()
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP PROCEDURE pmiss(text)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      DROP PROCEDURE pmiss(int)
+    expect: error
+    sqlstate: "42883"
+    comment: the DEFAULT on b does not create a one-argument signature
+  - sql: |
+      DROP PROCEDURE pmiss(int, text)
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT count(*) AS procs FROM pg_proc WHERE proname = 'pmiss'
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP PROCEDURE pmiss(int, int)
+    expect: ok

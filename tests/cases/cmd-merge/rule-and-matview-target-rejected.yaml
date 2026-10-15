@@ -1,0 +1,40 @@
+# MERGE is not supported on a target table with rules, nor on a materialized view.
+id: cmd-merge.rule-and-matview-target-rejected
+title: MERGE into a table with a rule or into a materialized view is rejected with feature_not_supported
+family: cmd-merge
+tier: core
+feature_ids: [merge, rules, materialized-view, errors, syntax-restriction]
+required_capabilities: [create-table, insert, select, merge, rules, materialized-view]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Description: MERGE is not supported if the target is a materialized view, foreign table, or has rules)"
+setup: |
+  CREATE TABLE rt (a integer);
+  CREATE RULE r_rt AS ON INSERT TO rt DO ALSO NOTHING;
+  CREATE TABLE mvsrc (a integer);
+  INSERT INTO mvsrc VALUES (1);
+  CREATE MATERIALIZED VIEW mv AS SELECT a FROM mvsrc;
+steps:
+  - sql: |
+      MERGE INTO rt
+      USING (VALUES (1)) s(a)
+      ON rt.a = s.a
+      WHEN NOT MATCHED THEN
+        INSERT VALUES (s.a)
+    expect: error
+    sqlstate: "0A000"
+    comment: relation "rt" has a rule
+  - sql: |
+      MERGE INTO mv
+      USING (VALUES (1)) s(a)
+      ON mv.a = s.a
+      WHEN MATCHED THEN
+        DELETE
+    expect: error
+    sqlstate: "0A000"
+    comment: materialized views are not valid MERGE targets
+  - sql: |
+      SELECT count(*) FROM rt
+    expect: rows
+    order: multiset
+    comment: expect 0; the rejected MERGE inserted nothing

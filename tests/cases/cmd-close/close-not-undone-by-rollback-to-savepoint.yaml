@@ -1,0 +1,37 @@
+id: cmd-close.close-not-undone-by-rollback-to-savepoint
+title: CLOSE is not undone by ROLLBACK TO SAVEPOINT
+family: cmd-close
+tier: core
+feature_ids: [close, savepoints, declare-cursor, errors]
+required_capabilities: [create-table, insert, select, transactions, cursors, savepoints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/close.sgml#sql-close (Notes)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE s CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      SAVEPOINT sp
+    expect: ok
+  - sql: |
+      CLOSE s
+    expect: ok
+  - sql: |
+      ROLLBACK TO SAVEPOINT sp
+    expect: ok
+  - sql: |
+      FETCH 1 FROM s
+    expect: error
+    sqlstate: "34000"
+    comment: the cursor remains closed after rolling back to the savepoint
+  - sql: |
+      ROLLBACK
+    expect: ok

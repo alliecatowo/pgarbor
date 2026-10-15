@@ -1,0 +1,36 @@
+# Dropping one half of a commutator pair clears the partner's commutator link; the partner keeps working.
+id: cmd-drop-operator.commutator-link-cleared
+title: Dropping an operator clears its commutator partner's link without dropping the partner
+family: cmd-drop-operator
+tier: core
+feature_ids: [drop-operator, commutator, create-operator, operator-metadata]
+required_capabilities: [drop-operator, create-operator, create-function-sql, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_operator.sgml#description (operator is removed from the database)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dcp_lt(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE FUNCTION dcp_gt(integer, integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 > $2 $$;
+  CREATE OPERATOR !<! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dcp_lt, COMMUTATOR = '!>!');
+  CREATE OPERATOR !>! (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = dcp_gt, COMMUTATOR = '!<!');
+steps:
+  - sql: |
+      SELECT oprname, oprcom::regoperator::text AS commutator FROM pg_operator WHERE oprname IN ('!<!', '!>!') AND oprnamespace = 'public'::regnamespace ORDER BY oprname
+    expect: rows
+    order: ordered
+    comment: each operator names the other as its commutator
+  - sql: |
+      DROP OPERATOR !<! (integer, integer)
+    expect: ok
+  - sql: |
+      SELECT oprname, oprcom::regoperator::text AS commutator FROM pg_operator WHERE oprname = '!>!' AND oprnamespace = 'public'::regnamespace
+    expect: rows
+    comment: the partner remains, with no commutator
+  - sql: |
+      SELECT 2 !>! 1 AS gt, 1 !>! 2 AS lt
+    expect: rows
+  - sql: |
+      SELECT 1 !<! 2
+    expect: error
+    sqlstate: "42883"

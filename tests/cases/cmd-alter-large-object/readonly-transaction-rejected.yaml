@@ -1,0 +1,37 @@
+# ALTER LARGE OBJECT writes catalog data, so it is refused in a read-only transaction and the owner is unchanged.
+id: cmd-alter-large-object.readonly-transaction-rejected
+title: ALTER LARGE OBJECT is refused in a READ ONLY transaction
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, transactions, read-only, errors]
+required_capabilities: [large-objects, roles, catalog-introspection, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_ro_role
+    expect: ok
+  - sql: |
+      SELECT lo_create(930801)
+    expect: rows
+  - sql: |
+      BEGIN READ ONLY
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930801 OWNER TO cmd_alo_ro_role
+    expect: error
+    sqlstate: "25006"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930801
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(930801)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_ro_role
+    expect: ok

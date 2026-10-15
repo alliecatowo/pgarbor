@@ -1,0 +1,40 @@
+# Documented: with only PARSER, the new configuration has no token-type mappings and therefore ignores all words.
+id: cmd-create-tsconfig.parser-only-no-mappings
+title: "CREATE TEXT SEARCH CONFIGURATION with PARSER only starts with no mappings and ignores all words"
+family: cmd-create-tsconfig
+tier: core
+feature_ids: [create-text-search-configuration, parser-option, token-mappings]
+required_capabilities: [create-text-search-configuration, text-search, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsconfig.sgml#sql-createtsconfig (Description: parser only => no mappings, ignores all words)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_parser_only (PARSER = default)
+    expect: ok
+  - sql: |
+      SELECT p.prsname, c.cfgname
+        FROM pg_ts_config c JOIN pg_ts_parser p ON p.oid = c.cfgparser
+       WHERE c.cfgname = 'tsc_parser_only'
+    expect: rows
+    order: ordered
+    comment: the parser recorded in the configuration is the one named in PARSER
+  - sql: |
+      SELECT count(*) FROM pg_ts_config_map m
+        JOIN pg_ts_config c ON c.oid = m.mapcfg
+       WHERE c.cfgname = 'tsc_parser_only'
+    expect: rows
+    order: ordered
+    comment: no mappings at all
+  - sql: |
+      SELECT to_tsvector('tsc_parser_only', 'the quick brown foxes') AS v,
+             to_tsvector('tsc_parser_only', 'quick') = ''::tsvector AS is_empty
+    expect: rows
+    order: ordered
+    comment: every word is ignored, so the tsvector is empty
+  - sql: |
+      SELECT to_tsvector('simple', 'the quick brown foxes') @@ to_tsquery('tsc_parser_only', 'foxes') AS matches
+    expect: rows
+    order: ordered
+    comment: a query built with the parser-only configuration never matches

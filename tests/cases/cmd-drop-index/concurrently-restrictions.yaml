@@ -1,0 +1,44 @@
+# CONCURRENTLY rejects CASCADE, multiple names, and partitioned indexes with 0A000.
+id: cmd-drop-index.concurrently-restrictions
+title: DROP INDEX CONCURRENTLY rejects CASCADE, multiple names, and partitioned indexes
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, concurrently, partitioning, errors]
+required_capabilities: [create-table, create-index, partitioning, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (CONCURRENTLY caveats: only one index name, CASCADE not supported, partitioned tables not supported)"
+sessions: [a]
+setup: |
+  CREATE TABLE ev (id int4, kind int4, payload text) PARTITION BY RANGE (id);
+  CREATE TABLE ev_low PARTITION OF ev FOR VALUES FROM (0) TO (100);
+  CREATE INDEX ev_kind_idx ON ev (kind);
+  CREATE TABLE flat (id int4 PRIMARY KEY, a int4, b int4);
+  CREATE INDEX flat_a ON flat (a);
+  CREATE INDEX flat_b ON flat (b);
+steps:
+  - sql: |
+      DROP INDEX CONCURRENTLY flat_a CASCADE
+    expect: error
+    sqlstate: "0A000"
+    comment: CASCADE is not supported with CONCURRENTLY
+  - sql: |
+      DROP INDEX CONCURRENTLY flat_a, flat_b
+    expect: error
+    sqlstate: "0A000"
+    comment: only one index name is allowed
+  - sql: |
+      DROP INDEX CONCURRENTLY IF EXISTS flat_a, flat_b
+    expect: error
+    sqlstate: "0A000"
+    comment: the multiple-name check happens before IF EXISTS is applied
+  - sql: |
+      DROP INDEX CONCURRENTLY ev_kind_idx
+    expect: error
+    sqlstate: "0A000"
+    comment: indexes on partitioned tables cannot be dropped concurrently
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename IN ('flat', 'ev') ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: every refused statement left the indexes in place

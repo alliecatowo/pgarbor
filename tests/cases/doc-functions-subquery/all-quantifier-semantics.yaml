@@ -1,0 +1,39 @@
+# ALL and <> ALL (NOT IN equivalence), vacuous truth on empty subqueries, NULL propagation.
+id: doc-functions-subquery.all-quantifier-semantics
+title: ALL is vacuously true on empty subqueries and NOT IN is equivalent to <> ALL
+family: doc-functions-subquery
+tier: core
+feature_ids: [all-subquery, not-in-subquery, null-semantics]
+required_capabilities: [create-table, insert, select, subquery, arrays]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (ALL, NOT IN is equivalent to <> ALL)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  CREATE TABLE tab2 (col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+  INSERT INTO tab2 VALUES (10), (10), (NULL);
+steps:
+  - sql: |
+      SELECT 5 > ALL (SELECT col1 FROM tab1 WHERE false) AS a4, 5 > ALL (SELECT col1 FROM tab1) AS a5, 1 > ALL (SELECT col2 FROM tab1) AS n1, 100 > ALL (SELECT col2 FROM tab1) AS n2
+    expect: rows
+    comment: ALL over an empty subquery is true; a false member makes it false; no false but a NULL gives NULL
+  - sql: |
+      SELECT 20 = ALL (SELECT col2 FROM tab1 WHERE col1 = 2) AS allsingle, 5 = ALL (ARRAY[]::int[]) AS e_all
+    expect: rows
+  - sql: |
+      SELECT col1, col2 NOT IN (SELECT col2 FROM tab2 WHERE col2 IS NOT NULL) AS ni, col2 <> ALL (SELECT col2 FROM tab2 WHERE col2 IS NOT NULL) AS al FROM tab1 ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: NOT IN and <> ALL agree row by row, including NULL results
+  - sql: |
+      SELECT col1 FROM tab1 WHERE col2 <> ALL (SELECT col2 FROM tab2) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: a NULL in the subquery means no row can pass
+  - sql: |
+      SELECT col1 FROM tab1 WHERE col2 <> ALL (SELECT col2 FROM tab2 WHERE col2 IS NOT NULL) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: rows with NULL col2 still drop out because the comparison is NULL

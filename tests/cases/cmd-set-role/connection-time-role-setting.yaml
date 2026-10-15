@@ -1,0 +1,42 @@
+# RESET ROLE returns to the connection-time role (ALTER DATABASE ... SET role), not to the session user; SET ROLE NONE returns to the session user.
+id: cmd-set-role.connection-time-role-setting
+title: RESET ROLE restores the connection-time role from ALTER DATABASE SET role, while SET ROLE NONE restores session_user
+family: cmd-set-role
+tier: extended
+feature_ids: [set-role, reset-role, set-role-none, alter-database, connection-time-setting, reconnect]
+required_capabilities: [roles, set-role, reset-role, reconnect, alter-database, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#description (RESET ROLE sets the connection-time setting from ALTER DATABASE, if any)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_db_r LOGIN
+steps:
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET role = sr_db_r', current_database()); END $$
+    expect: ok
+  - reconnect: true
+  - sql: |
+      SELECT current_user = 'sr_db_r' AS login_role_applied
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT current_user = 'sr_db_r' AS reset_to_connection_setting
+    expect: rows
+    order: ordered
+  - sql: |
+      SET ROLE NONE
+    expect: ok
+  - sql: |
+      SELECT current_user = session_user AS none_to_session_user
+    expect: rows
+    order: ordered
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I RESET role', current_database()); END $$
+    expect: ok
+  - sql: |
+      DROP ROLE sr_db_r
+    expect: ok

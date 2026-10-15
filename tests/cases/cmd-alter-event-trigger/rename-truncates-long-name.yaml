@@ -1,0 +1,21 @@
+# Names longer than NAMEDATALEN-1 (63 bytes) are truncated with a NOTICE, not rejected.
+id: cmd-alter-event-trigger.rename-truncates-long-name
+title: RENAME TO a 70-character name stores the first 63 characters with a NOTICE
+family: cmd-alter-event-trigger
+tier: extended
+feature_ids: [alter-event-trigger, event-triggers, identifier-length]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger (RENAME TO new_name)"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard RENAME TO aet_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    expect: notice
+    comment: 70 characters; truncated to 63 with NOTICE
+  - sql: |
+      SELECT length(evtname) AS n, left(evtname, 4) AS prefix FROM pg_event_trigger
+    expect: rows

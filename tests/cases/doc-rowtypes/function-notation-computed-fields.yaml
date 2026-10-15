@@ -1,0 +1,42 @@
+# Documented equivalence of field notation and function notation: field(table) and table.field are
+# interchangeable, and a function over a composite argument can be called as somefunc(c),
+# somefunc(c.*) or c.somefunc to act as a computed field.
+id: doc-rowtypes.function-notation-computed-fields
+title: Field notation, function notation and computed-field notation select the same values
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, function-notation, computed-fields, sql-functions]
+required_capabilities: [create-table, insert, select, create-function-sql, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-usage"
+sessions: [a]
+setup: |
+  CREATE TABLE inventory_item (name text, supplier_id integer, price numeric);
+  INSERT INTO inventory_item VALUES ('fuzzy dice', 42, 1.99), ('pan', 7, 12.50), ('spoon', 3, 0.50);
+  CREATE FUNCTION price(inventory_item) RETURNS numeric LANGUAGE sql AS 'SELECT $1.price';
+  CREATE FUNCTION somefunc(inventory_item) RETURNS text LANGUAGE sql AS 'SELECT $1.name || ''!''';
+steps:
+  - sql: |
+      SELECT c.name FROM inventory_item c WHERE c.price > 1000 ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: no row matches; equivalent forms below
+  - sql: |
+      SELECT c.name FROM inventory_item c WHERE c.price > 1
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT name(c) FROM inventory_item c WHERE price(c) > 1
+    expect: rows
+    order: multiset
+    comment: name(c) and price(c) are field notation written as function calls
+  - sql: |
+      SELECT somefunc(c) AS a, somefunc(c.*) AS b, c.somefunc AS c_field FROM inventory_item c ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: three spellings of one computed field
+  - sql: |
+      SELECT c.somefunc FROM inventory_item c WHERE c.supplier_id = 42
+    expect: rows
+    order: multiset

@@ -1,0 +1,47 @@
+# Documented JSON_VALUE: scalar extraction, RETURNING conversion, ON EMPTY and ON ERROR defaults, and JSON null versus SQL NULL.
+id: doc-functions-json.sql-json-json-value
+title: JSON_VALUE scalar extraction with RETURNING, ON EMPTY and ON ERROR handling
+family: doc-functions-json
+tier: core
+feature_ids: [sql-json-query-functions, json-value, json-on-empty, json-on-error, json-returning]
+required_capabilities: [select, jsonb, jsonpath]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-sqljson-query (JSON_VALUE)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT JSON_VALUE(jsonb '"123.45"', '$' RETURNING float) AS documented_float,
+             JSON_VALUE(jsonb '"03:04 2015-02-01"', '$.datetime("HH24:MI YYYY-MM-DD")' RETURNING date) AS documented_date,
+             JSON_VALUE(jsonb '[1,2]', 'strict $[$off]' PASSING 1 AS off) AS passing_index,
+             JSON_VALUE(jsonb '[1,2]', 'strict $[*]' DEFAULT 9 ON ERROR) AS default_on_error
+    expect: rows
+    comment: "documented examples"
+  - sql: |
+      SELECT JSON_VALUE(jsonb '{"a": null}', '$.a') IS NULL AS json_null_to_sql_null,
+             JSON_QUERY(jsonb '{"a": null}', '$.a') AS query_keeps_json_null
+    expect: rows
+    comment: "documented: JSON_VALUE returns SQL NULL for a JSON null"
+  - sql: |
+      SELECT JSON_VALUE(jsonb '{"a": [1]}', '$.a') IS NULL AS non_scalar_default_null
+    expect: rows
+    comment: "default ON ERROR is NULL, so a non-scalar result becomes NULL"
+  - sql: |
+      SELECT JSON_VALUE(jsonb '{"a": [1]}', '$.a' ERROR ON ERROR) AS non_scalar_error
+    expect: error
+    sqlstate: "2203F"
+  - sql: |
+      SELECT JSON_VALUE(jsonb '{"a": 1}', '$.zz' DEFAULT 'none' ON EMPTY) AS empty_default
+    expect: rows
+  - sql: |
+      SELECT JSON_VALUE(jsonb '{"a": 1}', '$.zz' ERROR ON EMPTY) AS empty_error
+    expect: error
+    sqlstate: "22035"
+  - sql: |
+      SELECT JSON_VALUE(jsonb '{"a": "x"}', '$.a' RETURNING int DEFAULT -1 ON ERROR) AS cast_default,
+             JSON_VALUE(jsonb '{"a": 1}', '$.a' RETURNING int ERROR ON ERROR) AS cast_ok
+    expect: rows
+  - sql: |
+      SELECT JSON_VALUE(jsonb '{"a": "x"}', '$.a' RETURNING int ERROR ON ERROR) AS cast_error
+    expect: error
+    sqlstate: "22P02"

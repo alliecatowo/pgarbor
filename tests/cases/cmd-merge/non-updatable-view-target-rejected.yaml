@@ -1,0 +1,38 @@
+# A view that is not automatically updatable (DISTINCT) cannot be a MERGE target without INSTEAD OF triggers; the auto-updatable view accepts inserts.
+id: cmd-merge.non-updatable-view-target-rejected
+title: MERGE into a DISTINCT view without INSTEAD OF triggers fails; an auto-updatable view accepts INSERT
+family: cmd-merge
+tier: core
+feature_ids: [merge, views, auto-updatable-view, delete, insert, errors]
+required_capabilities: [create-table, insert, select, delete, merge, views]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Parameters: target_table_name, view must be automatically updatable or have INSTEAD OF triggers)"
+setup: |
+  CREATE TABLE tgt (id integer PRIMARY KEY, a integer);
+  INSERT INTO tgt VALUES (1, 10), (2, 20);
+  CREATE VIEW dv AS SELECT DISTINCT a FROM tgt;
+  CREATE VIEW av AS SELECT id, a FROM tgt WHERE id > 0;
+steps:
+  - sql: |
+      MERGE INTO dv
+      USING (VALUES (10)) s(a)
+      ON dv.a = s.a
+      WHEN MATCHED THEN
+        DELETE
+    expect: error
+    sqlstate: "55000"
+    comment: views containing DISTINCT are not automatically updatable
+  - sql: |
+      MERGE INTO av
+      USING (VALUES (3)) s(x)
+      ON av.id = s.x
+      WHEN NOT MATCHED THEN
+        INSERT (id, a) VALUES (s.x, 30)
+    expect: ok
+    comment: auto-updatable view; MERGE 1 and the row lands in tgt
+  - sql: |
+      SELECT id, a FROM tgt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect (1,10), (2,20), (3,30)

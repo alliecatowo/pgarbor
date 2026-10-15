@@ -1,0 +1,35 @@
+# COMMIT makes the transaction's changes permanent and visible; an open transaction's writes are discarded when its session ends.
+id: cmd-commit.basic-durable
+title: COMMIT persists the transaction's rows across reconnect while an uncommitted transaction is lost
+family: cmd-commit
+tier: core
+feature_ids: [commit, begin, transactions, insert, select]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/commit.sgml#sql-commit (Description; Examples: To commit the current transaction and make all changes permanent)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 'one'), (2, 'two')
+    expect: ok
+  - sql: |
+      COMMIT;
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (3, 'three')
+    expect: ok
+  - reconnect: true
+    comment: the open transaction is ended by the disconnect, so its row is discarded
+  - sql: |
+      SELECT id, name FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,43 @@
+# A schema-qualified name creates the family in that schema; an unqualified name uses the first schema on search_path.
+id: cmd-create-opfamily.schema-qualified-and-search-path
+title: Schema-qualified names and search_path decide where the family is created
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, schema-qualified-name, search-path, default-schema]
+required_capabilities: [create-operator-family, create-schema, catalog-introspection, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Description: schema name given -> that schema; otherwise current schema; Parameters: name can be schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cof_qa;
+  CREATE SCHEMA cof_qb
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY cof_qa.fam_q USING btree
+    expect: ok
+  - sql: |
+      SET search_path = cof_qb, public
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY fam_q USING btree
+    expect: ok
+    comment: unqualified, so it lands in cof_qb (the first search_path schema)
+  - sql: |
+      RESET search_path
+    expect: ok
+  - sql: |
+      SELECT n.nspname, f.opfname, am.amname
+      FROM pg_opfamily f
+      JOIN pg_am am ON am.oid = f.opfmethod
+      JOIN pg_namespace n ON n.oid = f.opfnamespace
+      WHERE f.opfname = 'fam_q'
+      ORDER BY n.nspname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP OPERATOR FAMILY cof_qa.fam_q USING btree;
+      DROP OPERATOR FAMILY cof_qb.fam_q USING btree;
+      DROP SCHEMA cof_qa;
+      DROP SCHEMA cof_qb
+    expect: ok

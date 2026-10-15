@@ -1,0 +1,40 @@
+# A column list is only valid together with ANALYZE, and each named column must exist.
+id: cmd-vacuum.column-list-requires-analyze
+title: "VACUUM column list needs ANALYZE and existing column names"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, analyze, column-list, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE vcl (id int4, v int4);
+  INSERT INTO vcl VALUES (1, 10), (2, 20);
+steps:
+  - sql: |
+      VACUUM vcl (v)
+    expect: error
+    sqlstate: "0A000"
+    comment: a column list without ANALYZE is rejected
+  - sql: |
+      VACUUM (ANALYZE) vcl (nope)
+    expect: error
+    sqlstate: "42703"
+    comment: unknown column in the list
+  - sql: |
+      VACUUM (ANALYZE) vcl (v)
+    expect: ok
+  - sql: |
+      VACUUM (ANALYZE, FULL) vcl (v)
+    expect: ok
+    comment: FULL with ANALYZE and a column list is allowed
+  - sql: |
+      VACUUM FULL ANALYZE vcl (v)
+    expect: ok
+    comment: same in legacy syntax
+  - sql: |
+      SELECT id, v FROM vcl ORDER BY id
+    expect: rows
+    order: ordered

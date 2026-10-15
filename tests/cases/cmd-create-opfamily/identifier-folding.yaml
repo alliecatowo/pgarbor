@@ -1,0 +1,41 @@
+# Unquoted names fold to lower case, quoted names keep case, and the index method name is an identifier that folds the same way.
+id: cmd-create-opfamily.identifier-folding
+title: Unquoted family and index method names fold to lower case; quoted names do not
+family: cmd-create-opfamily
+tier: core
+feature_ids: [create-operator-family, identifiers, case-folding, index-method]
+required_capabilities: [create-operator-family, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opfamily.sgml#sql-createopfamily (Parameters: name, index_method)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE OPERATOR FAMILY BTREE_UP USING BTREE
+    expect: ok
+    comment: folds to btree_up for the family and btree for the method
+  - sql: |
+      CREATE OPERATOR FAMILY "MixedCase" USING hash
+    expect: ok
+  - sql: |
+      CREATE OPERATOR FAMILY cof_quoted USING "btree"
+    expect: ok
+    comment: quoted lower-case method name is the same method
+  - sql: |
+      CREATE OPERATOR FAMILY cof_quoted2 USING "BTREE"
+    expect: error
+    sqlstate: "42704"
+    comment: quoted upper-case method name does not exist
+  - sql: |
+      SELECT f.opfname, am.amname
+      FROM pg_opfamily f
+      JOIN pg_am am ON am.oid = f.opfmethod
+      WHERE f.opfname IN ('btree_up', 'MixedCase', 'mixedcase', 'cof_quoted', 'cof_quoted2', 'BTREE_UP')
+    expect: rows
+    order: multiset
+    comment: btree_up, MixedCase and cof_quoted exist; mixedcase and BTREE_UP do not
+  - sql: |
+      DROP OPERATOR FAMILY btree_up USING btree;
+      DROP OPERATOR FAMILY "MixedCase" USING hash;
+      DROP OPERATOR FAMILY cof_quoted USING btree
+    expect: ok

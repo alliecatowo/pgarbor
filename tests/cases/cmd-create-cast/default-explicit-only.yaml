@@ -1,0 +1,39 @@
+# Without an AS clause a cast is explicit-only: CAST / :: work, but function resolution and assignments do not use it.
+id: cmd-create-cast.default-explicit-only
+title: "A cast declared without AS is invoked only by explicit cast requests"
+family: cmd-create-cast
+tier: core
+feature_ids: [create-cast, explicit-cast, assignment-cast]
+required_capabilities: [create-type, create-cast, create-function-sql, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_cast.sgml#sql-createcast-description (explicit cast request by default)"
+sessions: [a]
+setup: |
+  CREATE TYPE eo_meters AS (v numeric);
+  CREATE FUNCTION eo_int_to_meters(int4) RETURNS eo_meters LANGUAGE sql AS $$ SELECT ROW($1::numeric)::eo_meters $$;
+  CREATE FUNCTION eo_meters_val(eo_meters) RETURNS numeric LANGUAGE sql AS $$ SELECT ($1).v $$;
+  CREATE TABLE eo_t (m eo_meters);
+steps:
+  - sql: |
+      CREATE CAST (int4 AS eo_meters) WITH FUNCTION eo_int_to_meters(int4)
+    expect: ok
+  - sql: |
+      SELECT (CAST(5 AS eo_meters)).v AS explicit_cast, (5::int4::eo_meters).v AS double_colon
+    expect: rows
+  - sql: |
+      SELECT eo_meters_val(5)
+    expect: error
+    sqlstate: "42883"
+    comment: function argument resolution does not apply a non-implicit cast
+  - sql: |
+      INSERT INTO eo_t SELECT 7
+    expect: error
+    sqlstate: "42804"
+    comment: no assignment cast, so storing an integer into a composite column fails
+  - sql: |
+      INSERT INTO eo_t VALUES (CAST(7 AS eo_meters))
+    expect: ok
+  - sql: |
+      SELECT (m).v AS v FROM eo_t
+    expect: rows

@@ -1,0 +1,30 @@
+# Equality on the leading column plus an inequality on the next column (and range on the leading column with equality after).
+id: doc-indexes-multicolumn.equality-then-inequality
+title: Equality on a leading column with inequality on the next column returns exact rows
+family: doc-indexes-multicolumn
+tier: core
+feature_ids: [multicolumn-index, btree-index, where-clause, range-predicates]
+required_capabilities: [create-table, insert, select, create-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (equality constraints on leading columns plus inequality on the next column)"
+sessions: [a]
+setup: |
+  CREATE TABLE test2 (major int, minor int, name varchar);
+  CREATE INDEX test2_mm_idx ON test2 (major, minor);
+  INSERT INTO test2 VALUES (1, 1, 'a'), (1, 2, 'b'), (2, 1, NULL), (2, 2, 'd'), (NULL, 1, 'e'), (1, NULL, 'f')
+steps:
+  - sql: |
+      SELECT name FROM test2 WHERE major = 2 AND minor > 1 ORDER BY name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT major, minor, name FROM test2 WHERE major = 1 AND minor >= 1 AND minor <= 2 ORDER BY minor, name
+    expect: rows
+    order: ordered
+    comment: both bounds on the second column after equality on the first
+  - sql: |
+      SELECT major, minor, name FROM test2 WHERE major > 1 AND minor = 1 ORDER BY major
+    expect: rows
+    order: ordered
+    comment: inequality on the leading column with equality on the trailing one; NULL major never matches

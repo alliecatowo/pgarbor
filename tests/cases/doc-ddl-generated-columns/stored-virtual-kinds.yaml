@@ -1,0 +1,39 @@
+# VIRTUAL is the default kind; STORED and VIRTUAL are recorded in pg_attribute.attgenerated
+# ('s' or 'v'). Both kinds read back the computed value.
+id: doc-ddl-generated-columns.stored-virtual-kinds
+title: Default kind is virtual; explicit STORED and VIRTUAL keywords are recorded in the catalog
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, virtual-generated-columns, stored-generated-columns, catalog]
+required_capabilities: [create-table, insert, select, generated-columns, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE kinds (
+          x int,
+          d int GENERATED ALWAYS AS (x + 1),
+          v int GENERATED ALWAYS AS (x + 1) VIRTUAL,
+          s int GENERATED ALWAYS AS (x + 1) STORED
+      )
+    expect: ok
+  - sql: |
+      SELECT attname, attgenerated FROM pg_attribute
+      WHERE attrelid = 'kinds'::regclass AND attnum > 0
+      ORDER BY attnum
+    expect: rows
+    order: ordered
+    comment: no clause gives virtual, so d is 'v' like the explicit VIRTUAL column; s is 's'
+  - sql: |
+      INSERT INTO kinds (x) VALUES (1), (10)
+    expect: ok
+  - sql: |
+      SELECT x, d, v, s FROM kinds ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) FILTER (WHERE d = v AND v = s) AS all_equal FROM kinds
+    expect: rows
+    comment: all three kinds compute the same value for every row

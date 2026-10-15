@@ -1,0 +1,26 @@
+# A new name longer than NAMEDATALEN-1 (63 bytes) is truncated with a notice rather than rejected; the stored name is the 63-byte prefix.
+id: cmd-alter-schema.rename-long-name-truncated
+title: RENAME TO a name over 63 bytes is truncated with a notice
+family: cmd-alter-schema
+tier: core
+feature_ids: [alter-schema, rename, identifier-length, notices]
+required_capabilities: [create-schema, alter-schema, select, errors]
+provenance:
+  source: hand
+  ref: "ref/alter_schema.sgml#sql-alterschema (Parameters: new_name); PG18 identifier length rules"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cmd_as_len;
+steps:
+  - sql: |
+      ALTER SCHEMA cmd_as_len RENAME TO cmd_as_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789abcdefgh
+    expect: notice
+    compare_message: false
+    comment: 79-character name is truncated to 63 bytes
+  - sql: |
+      SELECT nspname, length(nspname) FROM pg_namespace WHERE nspname LIKE 'cmd_as_abcdef%'
+    expect: rows
+    comment: stored name is the 63-byte prefix
+  - sql: |
+      DROP SCHEMA cmd_as_abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123
+    expect: ok

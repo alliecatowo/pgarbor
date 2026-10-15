@@ -1,0 +1,48 @@
+# OWNER TO CURRENT_USER / CURRENT_ROLE / SESSION_USER: CURRENT_* follow SET ROLE, SESSION_USER does not.
+id: cmd-alter-collation.owner-keywords
+title: "ALTER COLLATION OWNER TO accepts CURRENT_USER, CURRENT_ROLE and SESSION_USER with SET ROLE in effect"
+family: cmd-alter-collation
+tier: core
+feature_ids: [alter-collation, owner, set-role, session-user]
+required_capabilities: [create-role, create-collation, alter-collation, set-role, icu-provider, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_collation.sgml#sql-altercollation (OWNER TO { new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER })"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_kw_owner;
+  CREATE COLLATION cmd_kw (provider = icu, locale = 'und-x-icu');
+steps:
+  - sql: |
+      ALTER COLLATION cmd_kw OWNER TO cmd_kw_owner
+    expect: ok
+  - sql: |
+      SET ROLE cmd_kw_owner
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_kw OWNER TO CURRENT_ROLE
+    expect: ok
+    comment: CURRENT_ROLE is cmd_kw_owner here
+  - sql: |
+      SELECT pg_get_userbyid(collowner) = 'cmd_kw_owner' AS is_current_role FROM pg_collation WHERE collname = 'cmd_kw'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER COLLATION cmd_kw OWNER TO SESSION_USER
+    expect: error
+    sqlstate: "42501"
+    compare_message: false
+    comment: SESSION_USER is the login role, and cmd_kw_owner is not a member of it, so SET ROLE to it is refused; message names the login role, so it is not compared
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      ALTER COLLATION cmd_kw OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(collowner) = session_user AS is_session_user FROM pg_collation WHERE collname = 'cmd_kw'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE cmd_kw_owner
+    expect: ok

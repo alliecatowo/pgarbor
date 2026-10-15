@@ -1,0 +1,43 @@
+# Documented example: CREATE COLLATION german FROM ... copies an existing collation as an independent object.
+id: cmd-create-collation.doc-example-from-existing
+title: "CREATE COLLATION FROM copies properties, survives dropping the source, and rejects unknown sources"
+family: cmd-create-collation
+tier: core
+feature_ids: [create-collation, copy-collation, drop-collation, icu-provider]
+required_capabilities: [create-collation, drop-collation, icu-provider, collate-clause, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_collation.sgml#sql-createcollation (FROM existing_collation; Examples)"
+sessions: [a]
+setup: |
+  CREATE COLLATION cmd_cc_src (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+steps:
+  - sql: |
+      CREATE COLLATION cmd_cc_copy FROM cmd_cc_src
+    expect: ok
+  - sql: |
+      SELECT c.collprovider = s.collprovider AS same_provider, c.collisdeterministic = s.collisdeterministic AS same_determinism, c.collcollate IS NOT DISTINCT FROM s.collcollate AS same_collate, c.oid <> s.oid AS independent FROM pg_collation c, pg_collation s WHERE c.collname = 'cmd_cc_copy' AND s.collname = 'cmd_cc_src'
+    expect: rows
+    order: ordered
+    comment: the copy has the same properties but is a separate catalog row
+  - sql: |
+      DROP COLLATION cmd_cc_src
+    expect: ok
+  - sql: |
+      SELECT 'abc' = 'ABC' COLLATE cmd_cc_copy AS still_nondeterministic
+    expect: rows
+    order: ordered
+    comment: the copy keeps working after the source is dropped
+  - sql: |
+      CREATE COLLATION cmd_cc_fromc FROM "C"
+    expect: ok
+  - sql: |
+      SELECT 'a' COLLATE cmd_cc_fromc < 'B' COLLATE cmd_cc_fromc AS lt_c_order
+    expect: rows
+    order: ordered
+    comment: copying the C collation gives byte order, so a sorts after B
+  - sql: |
+      CREATE COLLATION cmd_cc_fromx FROM cmd_cc_nope
+    expect: error
+    sqlstate: "42704"
+    comment: the source collation must exist

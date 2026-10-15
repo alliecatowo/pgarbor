@@ -1,0 +1,32 @@
+# BEGIN/END only group statements; a function does not start or commit a transaction.
+id: doc-plpgsql-structure.block-not-a-transaction
+title: A function body block does not commit; the caller's transaction decides
+family: doc-plpgsql-structure
+tier: core
+feature_ids: [plpgsql, transactions, block-structure]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-structure (BEGIN/END are not transaction control)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int);
+  CREATE FUNCTION fins() RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO t VALUES (1);
+    RETURN 1;
+  END $$;
+steps:
+  - sql: |
+      BEGIN;
+      SELECT fins();
+      ROLLBACK;
+      SELECT count(*) AS n FROM t
+    expect: rows
+    comment: the insert is undone by the caller's ROLLBACK
+  - sql: |
+      BEGIN;
+      SELECT fins();
+      COMMIT;
+      SELECT count(*) AS n FROM t
+    expect: rows

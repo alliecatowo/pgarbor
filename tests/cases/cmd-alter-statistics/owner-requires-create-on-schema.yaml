@@ -1,0 +1,62 @@
+# The new owner must hold CREATE on the statistics object's schema; granting it makes the same transfer succeed.
+id: cmd-alter-statistics.owner-requires-create-on-schema
+title: "ALTER STATISTICS OWNER TO requires CREATE on the object's schema for the new owner"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, owner, schema-create-privilege, privileges]
+required_capabilities: [create-table, alter-statistics, extended-statistics, roles, grant, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (Description: new owning role must have CREATE on the statistics object's schema)"
+sessions: [a]
+setup: |
+  CREATE ROLE ast_oc_a;
+  CREATE ROLE ast_oc_b;
+  CREATE TABLE ast_oc (a int, b int);
+  CREATE STATISTICS ast_oc_s1 (ndistinct) ON a, b FROM ast_oc;
+  ALTER STATISTICS ast_oc_s1 OWNER TO ast_oc_a;
+  GRANT ast_oc_b TO ast_oc_a;
+steps:
+  - sql: |
+      SET ROLE ast_oc_a
+    expect: ok
+  - sql: |
+      ALTER STATISTICS ast_oc_s1 OWNER TO ast_oc_b
+    expect: error
+    sqlstate: "42501"
+    comment: ast_oc_b has no CREATE privilege on public
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT CREATE ON SCHEMA public TO ast_oc_b
+    expect: ok
+  - sql: |
+      SET ROLE ast_oc_a
+    expect: ok
+  - sql: |
+      ALTER STATISTICS ast_oc_s1 OWNER TO ast_oc_b
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(stxowner) = 'ast_oc_b' FROM pg_statistic_ext WHERE stxname = 'ast_oc_s1'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER STATISTICS ast_oc_s1 OWNER TO CURRENT_USER
+    expect: ok
+    comment: cleanup
+  - sql: |
+      REVOKE CREATE ON SCHEMA public FROM ast_oc_b
+    expect: ok
+  - sql: |
+      REVOKE ast_oc_b FROM ast_oc_a
+    expect: ok
+  - sql: |
+      DROP ROLE ast_oc_b
+    expect: ok
+  - sql: |
+      DROP ROLE ast_oc_a
+    expect: ok

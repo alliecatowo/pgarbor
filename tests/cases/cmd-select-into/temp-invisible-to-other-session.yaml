@@ -1,0 +1,38 @@
+# A temporary table created by SELECT INTO is private to its session; another session can use the same name for its own.
+id: cmd-select-into.temp-invisible-to-other-session
+title: SELECT INTO TEMP is invisible to other sessions, which may reuse the name
+family: cmd-select-into
+tier: core
+feature_ids: [select-into, temporary-tables, multi-session]
+required_capabilities: [select, select-into, temp-tables, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/select_into.sgml#parameters (TEMPORARY or TEMP)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      SELECT 1 AS v INTO TEMP iso_tmp
+    expect: ok
+  - session: b
+    sql: |
+      SELECT v FROM iso_tmp
+    expect: error
+    sqlstate: "42P01"
+    comment: b cannot see a's temporary table
+  - session: b
+    sql: |
+      SELECT 2 AS v INTO TEMP iso_tmp
+    expect: ok
+    comment: same name is free in session b
+  - session: b
+    sql: |
+      SELECT v FROM iso_tmp
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      SELECT v FROM iso_tmp
+    expect: rows
+    order: ordered
+    comment: a still sees its own row, value 1

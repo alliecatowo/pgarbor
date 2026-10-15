@@ -1,0 +1,44 @@
+# The WHERE clause of DO UPDATE limits which conflicting rows are updated. Conflicting rows that fail the
+# condition are locked but are not updated and are not returned. A NULL condition is not true.
+id: cmd-insert.on-conflict-update-where
+title: ON CONFLICT DO UPDATE WHERE filters updates, skipped rows are not returned, NULL condition is false
+family: cmd-insert
+tier: core
+feature_ids: [insert, on-conflict, upsert, where-clause, returning]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-on-conflict (condition; Examples: DO UPDATE ... WHERE d.zipcode <> '21201')"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did int PRIMARY KEY, dname text, zipcode text);
+  INSERT INTO distributors VALUES (8, 'Old Anvil', '10001'), (9, 'Blocked', '21201'), (11, 'No zip', NULL);
+steps:
+  - sql: |
+      INSERT INTO distributors AS d (did, dname, zipcode) VALUES (8, 'Anvil Distribution', '30301')
+      ON CONFLICT (did) DO UPDATE
+        SET dname = EXCLUDED.dname || ' (formerly ' || d.dname || ')'
+        WHERE d.zipcode <> '21201'
+      RETURNING did, dname
+    expect: rows
+    comment: the row is updated because its zipcode is not 21201
+  - sql: |
+      INSERT INTO distributors AS d (did, dname, zipcode) VALUES (9, 'Replacement', '30301')
+      ON CONFLICT (did) DO UPDATE
+        SET dname = EXCLUDED.dname
+        WHERE d.zipcode <> '21201'
+      RETURNING did, dname
+    expect: rows
+    comment: the conflicting row is locked but not updated, so it is not returned and INSERT 0 0 is reported
+  - sql: |
+      INSERT INTO distributors AS d (did, dname, zipcode) VALUES (11, 'Replacement', '30301')
+      ON CONFLICT (did) DO UPDATE
+        SET dname = EXCLUDED.dname
+        WHERE d.zipcode <> '21201'
+      RETURNING did, dname
+    expect: rows
+    comment: NULL <> '21201' is NULL, which is not true, so no update happens
+  - sql: |
+      SELECT did, dname, zipcode FROM distributors ORDER BY did
+    expect: rows
+    order: ordered

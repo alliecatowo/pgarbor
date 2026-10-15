@@ -1,0 +1,37 @@
+# json input checks only \u syntax; jsonb rejects \u0000 and malformed surrogates, folds valid pairs.
+id: doc-datatype-json.json-unicode-escapes
+title: json accepts \u0000 and lone surrogates syntactically while jsonb rejects them and folds valid pairs
+family: doc-datatype-json
+tier: core
+feature_ids: [json, jsonb, unicode-escapes, surrogate-pairs]
+required_capabilities: [select, json, jsonb, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#datatype-json (Unicode escapes paragraphs; JSON Primitive Types table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '"\u0000"'::json AS j_nul
+    expect: rows
+    comment: json input function does not reject \u0000
+  - sql: |
+      SELECT '"\u0000"'::jsonb
+    expect: error
+    sqlstate: "22P05"
+    comment: jsonb rejects \u0000 because text cannot hold it
+  - sql: |
+      SELECT '"😀"'::jsonb AS folded
+    expect: rows
+    comment: a valid surrogate pair is folded into one character for storage
+  - sql: |
+      SELECT '"\ud83d"'::jsonb
+    expect: error
+    sqlstate: "22P02"
+    comment: a lone high surrogate is rejected by jsonb
+  - sql: |
+      SELECT '"\ud83d"'::json AS j_lone
+    expect: rows
+    comment: json only checks \u syntax, so a lone surrogate is stored as written
+  - sql: |
+      SELECT jsonb_typeof('"A"'::jsonb) AS t, '"A"'::jsonb #>> '{}' AS text_value
+    expect: rows

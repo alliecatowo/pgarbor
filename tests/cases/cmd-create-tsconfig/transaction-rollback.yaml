@@ -1,0 +1,32 @@
+# Documented behavior of a catalog object: CREATE TEXT SEARCH CONFIGURATION is transactional; rollback removes it and commit keeps it.
+id: cmd-create-tsconfig.transaction-rollback
+title: "CREATE TEXT SEARCH CONFIGURATION inside a rolled-back transaction leaves no configuration behind"
+family: cmd-create-tsconfig
+tier: core
+feature_ids: [create-text-search-configuration, transactions, rollback]
+required_capabilities: [create-text-search-configuration, transactions, text-search, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsconfig.sgml#sql-createtsconfig (command creates catalog entries)"
+sessions: [a]
+steps:
+  - sql: |
+      BEGIN;
+      CREATE TEXT SEARCH CONFIGURATION tsc_txn_rb (COPY = english);
+      SELECT count(*) FROM pg_ts_config WHERE cfgname = 'tsc_txn_rb';
+      ROLLBACK
+    expect: ok
+    comment: the SELECT inside the transaction sees the new configuration
+  - sql: |
+      SELECT count(*) FROM pg_ts_config WHERE cfgname = 'tsc_txn_rb'
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN;
+      CREATE TEXT SEARCH CONFIGURATION tsc_txn_ok (COPY = english);
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_ts_config WHERE cfgname = 'tsc_txn_ok'
+    expect: rows
+    order: ordered

@@ -1,0 +1,44 @@
+# The name may be schema-qualified; an unqualified name resolves only through search_path.
+id: cmd-drop-materialized-view.schema-qualified-name
+title: DROP MATERIALIZED VIEW honors schema-qualified names and does not search other schemas
+family: cmd-drop-materialized-view
+tier: core
+feature_ids: [drop-materialized-view, schemas, search-path]
+required_capabilities: [create-schema, create-materialized-view, drop-materialized-view, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_materialized_view.sgml#sql-dropmaterializedview (name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA sq_s;
+  CREATE MATERIALIZED VIEW sq_s.snap AS SELECT 6 AS x;
+  CREATE MATERIALIZED VIEW public.snap AS SELECT 2 AS x;
+  CREATE MATERIALIZED VIEW sq_s.only_in_s AS SELECT 9 AS x;
+steps:
+  - sql: |
+      DROP MATERIALIZED VIEW sq_s.snap
+    expect: ok
+  - sql: |
+      SELECT x FROM public.snap
+    expect: rows
+    order: ordered
+    comment: the same-named view in public is untouched
+  - sql: |
+      DROP MATERIALIZED VIEW only_in_s
+    expect: error
+    sqlstate: "42P01"
+    comment: sq_s is not on the default search_path
+  - sql: |
+      DROP MATERIALIZED VIEW snap
+    expect: ok
+    comment: unqualified name resolves to public.snap
+  - sql: |
+      SELECT to_regclass('sq_s.snap') IS NULL AS s_gone, to_regclass('public.snap') IS NULL AS p_gone
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP MATERIALIZED VIEW sq_s.only_in_s
+    expect: ok
+  - sql: |
+      DROP SCHEMA sq_s
+    expect: ok

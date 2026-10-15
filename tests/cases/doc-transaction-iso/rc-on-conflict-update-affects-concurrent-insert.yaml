@@ -1,0 +1,40 @@
+# Read Committed: INSERT ... ON CONFLICT DO UPDATE acts on a row inserted by a concurrent transaction once it commits.
+id: doc-transaction-iso.rc-on-conflict-update-affects-concurrent-insert
+title: INSERT ON CONFLICT DO UPDATE updates a conflicting row committed by a concurrent transaction
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, read-committed, insert, on-conflict, update]
+required_capabilities: [create-table, insert, select, update, transactions, multi-session, constraints]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#xact-read-committed"
+sessions: [a, b]
+setup: |
+  CREATE TABLE doc_oc (k int4 PRIMARY KEY, n int4 NOT NULL);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      INSERT INTO doc_oc VALUES (1, 1)
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO doc_oc VALUES (1, 100) ON CONFLICT (k) DO UPDATE SET n = doc_oc.n + EXCLUDED.n RETURNING k, n
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    comment: the conflicting row is updated, returning 101
+  - session: b
+    sql: |
+      SELECT k, n FROM doc_oc ORDER BY k
+    expect: rows
+    order: ordered

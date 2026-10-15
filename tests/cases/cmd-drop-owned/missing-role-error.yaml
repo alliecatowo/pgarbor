@@ -1,0 +1,31 @@
+# Naming a role that does not exist is an error, and it is raised before any object is dropped.
+id: cmd-drop-owned.missing-role-error
+title: "DROP OWNED with an unknown role fails with undefined_object and drops nothing"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, errors, role-lookup]
+required_capabilities: [roles, drop-role, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-synopsis"
+sessions: [a]
+setup: |
+  CREATE ROLE dmiss_r1;
+  CREATE TABLE dmiss_t (a int4);
+  ALTER TABLE dmiss_t OWNER TO dmiss_r1;
+steps:
+  - sql: |
+      DROP OWNED BY dmiss_nobody
+    expect: error
+    sqlstate: "42704"
+    comment: the role name must exist
+  - sql: |
+      DROP OWNED BY dmiss_r1, dmiss_nobody
+    expect: error
+    sqlstate: "42704"
+    comment: one unknown name in the list fails the whole command
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname = 'dmiss_t'
+    expect: rows
+    order: multiset
+    comment: the table owned by dmiss_r1 was not dropped by the failed command

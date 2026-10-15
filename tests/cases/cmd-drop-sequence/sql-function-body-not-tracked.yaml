@@ -1,0 +1,24 @@
+# A SQL-language function body that names the sequence as text is not a tracked dependency, so the drop succeeds and the function fails later.
+id: cmd-drop-sequence.sql-function-body-not-tracked
+title: DROP SEQUENCE succeeds despite a SQL function naming it in its body; calling the function then fails with 42P01
+family: cmd-drop-sequence
+tier: core
+feature_ids: [drop-sequence, sql-functions, dependencies, errors]
+required_capabilities: [sequences, create-function-sql, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_sequence.sgml#sql-dropsequence (Description: a sequence is refused only when objects depend on it)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE fseq START 7;
+  CREATE FUNCTION fget() RETURNS bigint LANGUAGE sql AS $$ SELECT nextval('fseq') $$;
+steps:
+  - sql: |
+      DROP SEQUENCE fseq
+    expect: ok
+    comment: the function body is stored as text and is not a dependency
+  - sql: |
+      SELECT fget()
+    expect: error
+    sqlstate: "42P01"
+    comment: the body is resolved at call time and the sequence is gone

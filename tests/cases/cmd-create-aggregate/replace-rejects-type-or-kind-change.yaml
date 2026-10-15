@@ -1,0 +1,34 @@
+# CREATE OR REPLACE AGGREGATE cannot change the result type or the kind (ordinary, ordered-set).
+# A rejected replacement leaves the existing definition in place.
+id: cmd-create-aggregate.replace-rejects-type-or-kind-change
+title: "CREATE OR REPLACE AGGREGATE rejects a changed result type or a changed aggregate kind"
+family: cmd-create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, create-or-replace, errors]
+required_capabilities: [create-table, insert, select, aggregates, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate (description: replacing an existing definition)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE AGGREGATE rt (int4) (sfunc = int4pl, stype = int4, finalfunc = numeric);
+  CREATE AGGREGATE kk (int4) (sfunc = int4pl, stype = int4, initcond = '0');
+steps:
+  - sql: |
+      CREATE OR REPLACE AGGREGATE rt (int4) (sfunc = int4pl, stype = int4)
+    expect: error
+    sqlstate: "42P13"
+    comment: dropping the final function would change the result type from numeric to integer
+  - sql: |
+      SELECT pg_typeof(rt(x))::text FROM t
+    expect: rows
+    comment: the original definition is still in effect
+  - sql: |
+      CREATE OR REPLACE AGGREGATE kk (ORDER BY int4) (sfunc = int4pl, stype = int4, initcond = '0')
+    expect: error
+    sqlstate: "42809"
+    comment: an ordinary aggregate cannot be replaced by an ordered-set aggregate
+  - sql: |
+      SELECT kk(x) FROM t
+    expect: rows

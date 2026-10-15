@@ -1,0 +1,41 @@
+# format_type, to_regtype/to_regtypemod/to_regclass/to_regnamespace/to_regrole NULL-on-missing behavior, and the error path of a plain regtype cast.
+id: doc-functions-info.format-type-regtype-helpers
+title: format_type round-trip and to_reg* lookups that return NULL instead of raising
+family: doc-functions-info
+tier: core
+feature_ids: [format-type, regtype, to-regtype, typmod]
+required_capabilities: [select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (System Catalog Information Functions: format_type, to_regtype, to_regtypemod)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT format_type(23, NULL) AS i4,
+             format_type(25, NULL) AS txt,
+             format_type(1043, 36) AS vc32,
+             format_type(to_regtype('varchar(32)'), to_regtypemod('varchar(32)')) AS roundtrip,
+             to_regtypemod('varchar(32)') AS mod_vc32,
+             to_regtypemod('text') AS no_mod
+    expect: rows
+    comment: documented example yields 'character varying(32)'; no modifier yields -1
+  - sql: |
+      SELECT to_regtype('nosuchtype_fi') IS NULL AS missing_type,
+             to_regclass('nosuch_rel_fi') IS NULL AS missing_rel,
+             to_regnamespace('nosuch_ns_fi') IS NULL AS missing_ns,
+             to_regrole('nosuch_role_fi') IS NULL AS missing_role
+    expect: rows
+    comment: the to_reg* helpers return NULL rather than raising for unknown names
+  - sql: |
+      SELECT to_regnamespace('public') = 'public'::regnamespace AS public_ns
+    expect: rows
+  - sql: |
+      SELECT 'nosuchtype_fi'::regtype
+    expect: error
+    sqlstate: "42704"
+    comment: the plain cast, unlike to_regtype, raises for a missing type
+  - sql: |
+      SELECT to_regtype('syntax error ((')
+    expect: error
+    sqlstate: "42601"
+    comment: documented, a syntax error in the string raises even for to_regtype

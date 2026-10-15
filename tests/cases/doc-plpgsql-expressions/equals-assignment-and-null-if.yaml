@@ -1,0 +1,39 @@
+# "=" is accepted as a synonym for ":="; IF conditions with NULL operands are not true and take the other branch.
+id: doc-plpgsql-expressions.equals-assignment-and-null-if
+title: Equals sign assignment and NULL comparisons in IF expressions
+family: doc-plpgsql-expressions
+tier: core
+feature_ids: [plpgsql, expressions, null-handling, if-statement, assignment]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-statements-assignment (Equal (=) can be used instead of :=)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, NULL);
+  CREATE FUNCTION compare_ints(x int, y int) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    IF x < y THEN
+      RETURN 'lt';
+    ELSIF x IS NULL OR y IS NULL THEN
+      RETURN 'null';
+    ELSE
+      RETURN 'ge';
+    END IF;
+  END $$;
+  CREATE FUNCTION name_of(k int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE v text;
+  BEGIN
+    v = name FROM t WHERE id = k;
+    RETURN coalesce(v, 'NULLNAME');
+  END $$;
+steps:
+  - sql: |
+      SELECT compare_ints(1, 2) AS a, compare_ints(3, 2) AS b, compare_ints(NULL, 2) AS c
+    expect: rows
+    comment: x < NULL is NULL, not true, so the ELSIF branch decides
+  - sql: |
+      SELECT name_of(1) AS n1, name_of(3) AS n3, name_of(99) AS n99
+    expect: rows
+    comment: a NULL column value and a no-row query both end up as the coalesced constant

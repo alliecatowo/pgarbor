@@ -1,0 +1,41 @@
+# Read Committed: the documented website.hits example. A concurrent DELETE re-evaluates WHERE against the updated row and matches nothing.
+id: doc-transaction-iso.rc-website-hits-update-requalifies
+title: READ COMMITTED DELETE skips a row whose concurrent update moved it out of the WHERE clause
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, read-committed, update, delete, row-locks]
+required_capabilities: [create-table, insert, select, update, delete, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#xact-read-committed"
+sessions: [a, b]
+setup: |
+  CREATE TABLE website (id int4 PRIMARY KEY, hits int4 NOT NULL);
+  INSERT INTO website VALUES (1, 9), (2, 10);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE website SET hits = hits + 1
+    expect: ok
+  - session: b
+    sql: |
+      DELETE FROM website WHERE hits = 10
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: DELETE 0 - the row is now 11 and no longer matches
+  - session: b
+    sql: |
+      SELECT id, hits FROM website ORDER BY id
+    expect: rows
+    order: ordered

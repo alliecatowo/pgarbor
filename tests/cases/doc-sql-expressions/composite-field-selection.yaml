@@ -1,0 +1,58 @@
+# Field selection on a composite-typed column and on function results, plus the documented parentheses requirement.
+id: doc-sql-expressions.composite-field-selection
+title: Field selection on composite columns and function results requires parentheses
+family: doc-sql-expressions
+tier: core
+feature_ids: [field-selection, composite-types, function-result-subscripts, errors]
+required_capabilities: [select, create-table, insert, create-type, create-function]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-field-selection"
+sessions: [a]
+setup: |
+  CREATE TYPE cpair AS (a int4, b text);
+  CREATE TABLE tcomp (id int4, cc cpair, ar int4[]);
+  INSERT INTO tcomp VALUES (1, ROW(7, 'seven')::cpair, ARRAY[4,5,6]);
+  CREATE FUNCTION mkrow() RETURNS cpair AS 'SELECT ROW(9, ''nine'')::cpair' LANGUAGE SQL;
+  CREATE FUNCTION mkarr() RETURNS int4[] AS 'SELECT ARRAY[1,2,3]' LANGUAGE SQL;
+steps:
+  - sql: |
+      SELECT (cc).a AS a, (cc).b AS b FROM tcomp
+    expect: rows
+    order: ordered
+    comment: parentheses are required so that cc is read as a column, not a table
+  - sql: |
+      SELECT (tcomp.cc).a AS a FROM tcomp
+    expect: rows
+    order: ordered
+    comment: a qualified column of composite type, in parentheses
+  - sql: |
+      SELECT (cc).* FROM tcomp
+    expect: rows
+    order: ordered
+    comment: .* on a composite value expands to all of its fields
+  - sql: |
+      SELECT (mkrow()).b AS b, (mkrow()).a AS a
+    expect: rows
+    order: ordered
+    comment: a function result of composite type, in parentheses
+  - sql: |
+      SELECT (mkarr())[2] AS e
+    expect: rows
+    order: ordered
+    comment: subscripting a function result requires the parentheses
+  - sql: |
+      SELECT (cc).c FROM tcomp
+    expect: error
+    sqlstate: "42703"
+    comment: no field named c in cpair
+  - sql: |
+      SELECT cc.a FROM tcomp
+    expect: error
+    sqlstate: "42P01"
+    comment: without parentheses, cc is taken as a table name
+  - sql: |
+      SELECT tcomp.cc.a FROM tcomp
+    expect: error
+    sqlstate: "42P01"
+    comment: the parentheses are required even when the composite column is table-qualified

@@ -1,0 +1,42 @@
+# REASSIGN OWNED does not touch privileges granted to the old role on objects it does not own.
+id: cmd-reassign-owned.granted-privileges-kept
+title: "REASSIGN OWNED keeps privileges granted to the old role on objects owned by others"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, grant, privileges]
+required_capabilities: [roles, grant, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-notes"
+sessions: [a]
+setup: |
+  CREATE ROLE ro5_old;
+  CREATE ROLE ro5_new;
+  CREATE ROLE ro5_g;
+  CREATE TABLE ro5_t (a int4);
+  INSERT INTO ro5_t VALUES (1), (2);
+  GRANT SELECT ON ro5_t TO ro5_old;
+  CREATE TABLE ro5_u (a int4);
+  ALTER TABLE ro5_u OWNER TO ro5_old;
+  GRANT SELECT ON ro5_u TO ro5_g;
+steps:
+  - sql: |
+      SELECT has_table_privilege('ro5_old', 'ro5_t', 'SELECT') AS old_on_t, has_table_privilege('ro5_g', 'ro5_u', 'SELECT') AS g_on_u
+    expect: rows
+    order: ordered
+  - sql: |
+      REASSIGN OWNED BY ro5_old TO ro5_new
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('ro5_old', 'ro5_t', 'SELECT') AS old_on_t, has_table_privilege('ro5_g', 'ro5_u', 'SELECT') AS g_on_u
+    expect: rows
+    order: ordered
+    comment: the grant on ro5_t (owned by the superuser) stays; ro5_u moved owner but ro5_g keeps its grant
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro5_u'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE ro5_t; DROP OWNED BY ro5_old, ro5_new, ro5_g; DROP ROLE ro5_old; DROP ROLE ro5_new; DROP ROLE ro5_g
+    expect: ok
+    comment: cleanup

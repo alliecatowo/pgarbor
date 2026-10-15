@@ -1,0 +1,44 @@
+# REPLACE with a dictionary that no mapping uses is a silent no-op; a nonexistent dictionary on either side is an error.
+id: cmd-alter-tsconfig.replace-noop-and-errors
+title: "ALTER MAPPING REPLACE is a no-op when the old dictionary is unused and errors on missing dictionaries"
+family: cmd-alter-tsconfig
+tier: core
+feature_ids: [alter-text-search-configuration, alter-mapping-replace, errors]
+required_capabilities: [create-text-search-dictionary, create-text-search-configuration, alter-text-search-configuration, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (ALTER MAPPING REPLACE substitutes wherever old_dictionary appears)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY english (template = snowball, language = english);
+  CREATE TEXT SEARCH DICTIONARY swedish (template = snowball, language = swedish);
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING REPLACE english WITH swedish
+    expect: ok
+    comment: no mapping uses english, so nothing changes
+  - sql: |
+      SELECT DISTINCT d.dictname
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING REPLACE nosuch WITH english
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING REPLACE simple WITH nosuch
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING REPLACE simple WITH english
+    expect: ok
+    comment: every mapping that used simple now uses english
+  - sql: |
+      SELECT DISTINCT d.dictname
+        FROM pg_ts_config_map m JOIN pg_ts_dict d ON d.oid = m.mapdict
+       WHERE m.mapcfg = 'my_config'::regconfig
+    expect: rows
+    order: multiset

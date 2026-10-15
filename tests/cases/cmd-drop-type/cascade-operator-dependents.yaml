@@ -1,0 +1,35 @@
+# CASCADE drops the function and operator that use a composite type as argument types.
+id: cmd-drop-type.cascade-operator-dependents
+title: CASCADE on a composite type also drops the operator and its support function
+family: cmd-drop-type
+tier: core
+feature_ids: [drop-type, cascade, create-operator, create-function]
+required_capabilities: [drop-type, create-type, create-function, create-operator, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_type.sgml#sql-droptype (CASCADE)"
+sessions: [a]
+setup: |
+  CREATE TYPE ov AS (a int4);
+  CREATE FUNCTION ovf(ov, ov) RETURNS bool LANGUAGE sql AS 'SELECT true';
+  CREATE OPERATOR === (LEFTARG = ov, RIGHTARG = ov, PROCEDURE = ovf);
+steps:
+  - sql: |
+      DROP TYPE ov
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT count(*) AS operators FROM pg_operator WHERE oprname = '==='
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TYPE ov CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) AS operators FROM pg_operator WHERE oprname = '==='
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_regprocedure('ovf(ov,ov)') IS NULL AS fn_gone
+    expect: rows
+    order: ordered

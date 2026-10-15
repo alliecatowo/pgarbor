@@ -1,0 +1,57 @@
+# ALTER INDEX ... SET storage parameter validation: unknown name, fillfactor bounds (10..100 inclusive), non-numeric and valueless values.
+id: cmd-alter-index.storage-params-errors
+title: SET rejects unknown storage parameters and out-of-range or malformed fillfactor values
+family: cmd-alter-index
+tier: core
+feature_ids: [alter-index, storage-parameters, fillfactor, boundaries, errors]
+required_capabilities: [create-table, create-index, alter-index, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (SET storage_parameter; value: number or word per parameter)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE INDEX t_v_idx ON t (v);
+steps:
+  - sql: |
+      ALTER INDEX t_v_idx SET (no_such_option = 1)
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized storage parameter
+  - sql: |
+      ALTER INDEX t_v_idx SET (fillfactor = 9)
+    expect: error
+    sqlstate: "22023"
+    comment: fillfactor below its minimum of 10
+  - sql: |
+      ALTER INDEX t_v_idx SET (fillfactor = 101)
+    expect: error
+    sqlstate: "22023"
+    comment: fillfactor above its maximum of 100
+  - sql: |
+      ALTER INDEX t_v_idx SET (fillfactor = 'abc')
+    expect: error
+    sqlstate: "22023"
+  - sql: |
+      ALTER INDEX t_v_idx SET (fillfactor)
+    expect: error
+    sqlstate: "22023"
+    comment: an integer option without a value is parsed as the boolean true and rejected
+  - sql: |
+      ALTER INDEX t_v_idx SET (fillfactor = 10)
+    expect: ok
+    comment: lower bound is inclusive
+  - sql: |
+      ALTER INDEX t_v_idx SET (fillfactor = 100)
+    expect: ok
+    comment: upper bound is inclusive
+  - sql: |
+      ALTER INDEX t_v_idx SET (fillfactor = 100), SET (no_such_option = 1)
+    expect: error
+    sqlstate: "22023"
+    comment: one bad option in a comma list fails the whole statement
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 't_v_idx'::regclass
+    expect: rows
+    order: ordered
+    comment: the failed statement left the last successful value (100) in place

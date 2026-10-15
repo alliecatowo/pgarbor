@@ -1,0 +1,58 @@
+# LOCK TABLE a, b is processed one table at a time in the order written. With NOWAIT, a failure on
+# the second table aborts the transaction, but the first table's lock remains held until ROLLBACK.
+id: cmd-lock.list-nowait-failure-keeps-earlier-lock
+title: "Multi-table LOCK with NOWAIT: failure on the second table keeps the first lock until rollback"
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, lock-modes, nowait, transactions, multi-session, errors]
+required_capabilities: [create-table, lock-table, transactions, multi-session, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (Parameters: name, NOWAIT)"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE t_list1 (a int4);
+  CREATE TABLE t_list2 (a int4);
+steps:
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE t_list2 IN EXCLUSIVE MODE
+    expect: ok
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE t_list1, t_list2 IN ACCESS EXCLUSIVE MODE NOWAIT
+    expect: error
+    sqlstate: "55P03"
+    comment: t_list1 is locked first, then t_list2 fails
+  - session: a
+    sql: |
+      SELECT 1
+    expect: error
+    sqlstate: "25P02"
+  - session: b
+    sql: |
+      LOCK TABLE t_list1 IN ACCESS SHARE MODE NOWAIT
+    expect: error
+    sqlstate: "55P03"
+    comment: a's aborted transaction still holds ACCESS EXCLUSIVE on t_list1
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE t_list1 IN ACCESS SHARE MODE NOWAIT
+    expect: ok
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok

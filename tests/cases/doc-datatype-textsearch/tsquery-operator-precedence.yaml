@@ -1,0 +1,48 @@
+# tsquery operators: ! binds tightest, then <->, then &, then |; parentheses override.
+id: doc-datatype-textsearch.tsquery-operator-precedence
+title: tsquery Boolean operators and their precedence
+family: doc-datatype-textsearch
+tier: core
+feature_ids: [tsquery, tsquery-boolean, operator-precedence, negation]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-textsearch (In the absence of parentheses, ! (NOT) binds most tightly, <-> next, then & (AND), with | (OR) binding the least tightly)"
+sessions: [a]
+setup: |
+  CREATE TABLE tq_docs (id int4 PRIMARY KEY, v tsvector);
+  INSERT INTO tq_docs VALUES
+    (1, 'fat:1 rat:2 cat:3'::tsvector),
+    (2, 'fat:1 rat:2'::tsvector),
+    (3, 'fat:1 cat:2'::tsvector),
+    (4, 'dog:1 cat:2'::tsvector),
+    (5, 'fat:1'::tsvector),
+    (6, 'dog:1'::tsvector);
+steps:
+  - sql: |
+      SELECT 'fat & (rat | cat)'::tsquery, 'fat & rat & ! cat'::tsquery
+    expect: rows
+    comment: parentheses and negation are printed as written
+  - sql: |
+      SELECT 'fat | rat & cat'::tsquery = 'fat | (rat & cat)'::tsquery AS and_binds_tighter_than_or
+    expect: rows
+  - sql: |
+      SELECT 'fat & rat | cat'::tsquery = '(fat & rat) | cat'::tsquery AS and_before_or
+    expect: rows
+  - sql: |
+      SELECT id FROM tq_docs WHERE v @@ 'fat & (rat | cat)'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM tq_docs WHERE v @@ 'fat & rat & !cat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM tq_docs WHERE v @@ 'dog | fat & cat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered
+    comment: parses as dog | (fat & cat), so rows 4 and 6 match via dog
+  - sql: |
+      SELECT id FROM tq_docs WHERE v @@ '!fat'::tsquery ORDER BY id
+    expect: rows
+    order: ordered

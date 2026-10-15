@@ -1,0 +1,45 @@
+# Documented batching idiom: CTE selects a bounded set of ctids FOR UPDATE; repeat until no rows remain.
+id: cmd-update.ctid-batch-limit
+title: Batched UPDATE through a LIMITed CTE on ctid converges to all matching rows
+family: cmd-update
+tier: extended
+feature_ids: [update, cte, ctid, limit, for-update]
+required_capabilities: [create-table, insert, select, update, with-clause, row-locks]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#update-limit (CTE with FOR UPDATE LIMIT and self-join on ctid)"
+sessions: [a]
+setup: |
+  CREATE TABLE work_item (id int PRIMARY KEY, status text, num_retries int, retry_timestamp int);
+  INSERT INTO work_item SELECT g, 'active', g, g FROM generate_series(1, 12) g
+steps:
+  - sql: |
+      WITH exceeded_max_retries AS (
+        SELECT w.ctid FROM work_item AS w
+          WHERE w.status = 'active' AND w.num_retries > 10
+          ORDER BY w.retry_timestamp
+          FOR UPDATE
+          LIMIT 5
+      )
+      UPDATE work_item SET status = 'failed'
+        FROM exceeded_max_retries AS emr
+        WHERE work_item.ctid = emr.ctid
+    expect: ok
+    comment: only 2 rows qualify, so LIMIT 5 is not reached
+  - sql: |
+      WITH exceeded_max_retries AS (
+        SELECT w.ctid FROM work_item AS w
+          WHERE w.status = 'active' AND w.num_retries > 10
+          ORDER BY w.retry_timestamp
+          FOR UPDATE
+          LIMIT 5
+      )
+      UPDATE work_item SET status = 'failed'
+        FROM exceeded_max_retries AS emr
+        WHERE work_item.ctid = emr.ctid
+    expect: ok
+    comment: nothing left to update, count 0 and not an error
+  - sql: |
+      SELECT id, status FROM work_item ORDER BY id
+    expect: rows
+    order: ordered

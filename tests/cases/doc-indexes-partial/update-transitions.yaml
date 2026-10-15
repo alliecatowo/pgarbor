@@ -1,0 +1,37 @@
+# Uniqueness on UPDATE: a row that moves into the predicate is checked; a row that moves out releases its key.
+id: doc-indexes-partial.update-transitions
+title: UPDATE moves rows into and out of a partial unique index predicate
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, unique-index, update, boolean-type, errors]
+required_capabilities: [create-table, create-index, unique-index, insert, update, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial-ex3 (uniqueness among rows that satisfy the predicate)"
+sessions: [a]
+setup: |
+  CREATE TABLE tests (subject text, target text, success boolean, note text);
+  CREATE UNIQUE INDEX tests_success_constraint ON tests (subject, target) WHERE success;
+  INSERT INTO tests VALUES ('s1', 't1', true, 'first'), ('s1', 't1', false, 'f1'), ('s1', 't1', false, 'f2');
+steps:
+  - sql: |
+      UPDATE tests SET success = true WHERE note = 'f1'
+    expect: error
+    sqlstate: "23505"
+    comment: f1 moves into the predicate while 'first' already holds the key
+  - sql: |
+      UPDATE tests SET success = false WHERE note = 'first'
+    expect: ok
+    comment: the row named first moves out of the predicate and releases the key
+  - sql: |
+      UPDATE tests SET success = true WHERE note = 'f1'
+    expect: ok
+    comment: the key is now free, so f1 can take it
+  - sql: |
+      SELECT note, success FROM tests ORDER BY note
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE tests SET note = 'renamed' WHERE note = 'f2'
+    expect: ok
+    comment: updating a column outside the key and predicate leaves uniqueness unchanged

@@ -1,0 +1,40 @@
+# CREATE TABLE AS evaluates the query once; later source changes do not reach the new table, unlike a view.
+id: cmd-create-table-as.snapshot-not-tracking
+title: CREATE TABLE AS snapshots query results while a view re-evaluates
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, views, snapshot-semantics]
+required_capabilities: [create-table-as, create-table, insert, update, delete, select, views]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (Description: evaluates the query just once)"
+sessions: [a]
+setup: |
+  CREATE TABLE src (id int4 PRIMARY KEY, amount int4 NOT NULL);
+  INSERT INTO src VALUES (1, 10), (2, 20), (3, 30);
+steps:
+  - sql: |
+      CREATE TABLE snap AS SELECT id, amount FROM src
+    expect: ok
+  - sql: |
+      CREATE VIEW live AS SELECT id, amount FROM src
+    expect: ok
+  - sql: |
+      UPDATE src SET amount = amount + 1 WHERE id = 1
+    expect: ok
+  - sql: |
+      DELETE FROM src WHERE id = 3
+    expect: ok
+  - sql: |
+      INSERT INTO src VALUES (4, 40)
+    expect: ok
+  - sql: |
+      SELECT id, amount FROM snap ORDER BY id
+    expect: rows
+    order: ordered
+    comment: table keeps the original three rows and values
+  - sql: |
+      SELECT id, amount FROM live ORDER BY id
+    expect: rows
+    order: ordered
+    comment: view reflects the current source

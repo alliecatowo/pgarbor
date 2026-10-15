@@ -1,0 +1,55 @@
+# Schema visibility inquiry: pg_table_is_visible and pg_function_is_visible under the default and modified search_path, including shadowing.
+id: doc-functions-info.visibility-search-path-shadowing
+title: Schema visibility functions with search_path shadowing for tables and functions
+family: doc-functions-info
+tier: core
+feature_ids: [schema-visibility, search-path, create-schema, create-function]
+required_capabilities: [create-table, create-schema, create-function-sql, select, search-path]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (Schema Visibility Inquiry Functions)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA vis_s;
+  CREATE TABLE public.vis_t (a int);
+  CREATE TABLE vis_s.vis_t (b text);
+  CREATE FUNCTION public.vis_f(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION vis_s.vis_f(int) RETURNS int LANGUAGE sql AS 'SELECT $1 + 1';
+steps:
+  - sql: |
+      SELECT n.nspname, pg_table_is_visible(c.oid) AS visible
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relname = 'vis_t'
+      ORDER BY n.nspname
+    expect: rows
+    order: ordered
+    comment: vis_s is not on the default search path, so only public.vis_t is visible
+  - sql: |
+      SELECT n.nspname, pg_function_is_visible(p.oid) AS visible
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE p.proname = 'vis_f'
+      ORDER BY n.nspname
+    expect: rows
+    order: ordered
+  - sql: |
+      SET search_path = vis_s, public
+    expect: ok
+  - sql: |
+      SELECT n.nspname, pg_table_is_visible(c.oid) AS visible
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relname = 'vis_t'
+      ORDER BY n.nspname
+    expect: rows
+    order: ordered
+    comment: vis_s.vis_t now shadows public.vis_t
+  - sql: |
+      SELECT n.nspname, pg_function_is_visible(p.oid) AS visible
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE p.proname = 'vis_f'
+      ORDER BY n.nspname
+    expect: rows
+    order: ordered
+    comment: same argument types, so the earlier schema shadows the later one
+  - sql: |
+      RESET search_path
+    expect: ok

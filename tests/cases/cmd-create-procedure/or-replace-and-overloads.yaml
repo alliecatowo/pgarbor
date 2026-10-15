@@ -1,0 +1,55 @@
+# CREATE OR REPLACE keeps the name and argument types; a changed input parameter name is rejected;
+# a different argument type list creates a new, overloaded procedure rather than replacing.
+id: cmd-create-procedure.or-replace-and-overloads
+title: CREATE OR REPLACE replaces only on identical name and argument types; overloads coexist
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, or-replace, overloading, call]
+required_capabilities: [create-table, insert, select, create-procedure, call]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure-description"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE tbl (a int)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE dup(a int) LANGUAGE sql AS 'INSERT INTO tbl VALUES (1)'
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE dup(a int) LANGUAGE sql AS 'INSERT INTO tbl VALUES (2)'
+    expect: error
+    sqlstate: "42723"
+    comment: same name and same argument types already exist
+  - sql: |
+      CREATE OR REPLACE PROCEDURE dup(x int) LANGUAGE sql AS 'INSERT INTO tbl VALUES (2)'
+    expect: error
+    sqlstate: "42P13"
+    comment: OR REPLACE cannot rename an input parameter
+  - sql: |
+      CREATE OR REPLACE PROCEDURE dup(a int) LANGUAGE sql AS 'INSERT INTO tbl VALUES (3)'
+    expect: ok
+  - sql: |
+      CALL dup(0)
+    expect: ok
+  - sql: |
+      SELECT a FROM tbl ORDER BY a
+    expect: rows
+    order: ordered
+    comment: only the replaced body ran
+  - sql: |
+      CREATE OR REPLACE PROCEDURE dup(a text) LANGUAGE sql AS 'INSERT INTO tbl VALUES (4)'
+    expect: ok
+    comment: different argument types is a new overload, not a replacement
+  - sql: |
+      SELECT pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname = 'dup' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      CALL dup('x'::text)
+    expect: ok
+  - sql: |
+      SELECT a FROM tbl ORDER BY a
+    expect: rows
+    order: ordered

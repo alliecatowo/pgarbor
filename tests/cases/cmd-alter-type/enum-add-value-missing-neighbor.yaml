@@ -1,0 +1,33 @@
+# A BEFORE or AFTER neighbor that is not an existing enum label is rejected, and the new label is not added.
+id: cmd-alter-type.enum-add-value-missing-neighbor
+title: "ADD VALUE with an unknown BEFORE or AFTER neighbor fails and adds nothing"
+family: cmd-alter-type
+tier: core
+feature_ids: [alter-type, enum-type, enum-add-value, enum-neighbor]
+required_capabilities: [create-type, alter-type, enum-type, select, order-by]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_type.sgml#sql-altertype (neighbor_enum_value: the existing enum value that the new value should be added immediately before or after)"
+sessions: [a]
+setup: |
+  CREATE TYPE colors AS ENUM ('red', 'green');
+steps:
+  - sql: |
+      ALTER TYPE colors ADD VALUE 'teal' AFTER 'nope'
+    expect: error
+    sqlstate: "22023"
+    comment: AFTER neighbor must be an existing label
+  - sql: |
+      ALTER TYPE colors ADD VALUE 'teal' BEFORE 'nope'
+    expect: error
+    sqlstate: "22023"
+    comment: BEFORE neighbor must be an existing label
+  - sql: |
+      SELECT 'teal'::colors
+    expect: error
+    sqlstate: "22P02"
+    comment: the failed ADD VALUE left no label behind
+  - sql: |
+      SELECT v, n FROM unnest(enum_range(NULL::colors)) WITH ORDINALITY AS t(v, n) ORDER BY n
+    expect: rows
+    order: ordered

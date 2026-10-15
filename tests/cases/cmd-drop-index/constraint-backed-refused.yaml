@@ -1,0 +1,39 @@
+# An index that backs a UNIQUE or PRIMARY KEY constraint cannot be dropped, with RESTRICT (default) or CASCADE.
+id: cmd-drop-index.constraint-backed-refused
+title: DROP INDEX refuses indexes that support UNIQUE and PRIMARY KEY constraints even with CASCADE
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, unique-constraint, primary-key, cascade, restrict]
+required_capabilities: [create-table, create-index, alter-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (CONCURRENTLY caveat: an index that supports a UNIQUE or PRIMARY KEY constraint cannot be dropped this way; CASCADE/RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE accounts (id int4 PRIMARY KEY, email text, handle text);
+  ALTER TABLE accounts ADD CONSTRAINT accounts_email_key UNIQUE (email);
+steps:
+  - sql: |
+      DROP INDEX accounts_email_key
+    expect: error
+    sqlstate: "2BP01"
+    comment: default RESTRICT refuses; the hint says to drop the constraint instead
+  - sql: |
+      DROP INDEX accounts_email_key RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      DROP INDEX accounts_email_key CASCADE
+    expect: error
+    sqlstate: "2BP01"
+    comment: CASCADE does not drop the constraint that depends on the index
+  - sql: |
+      DROP INDEX accounts_pkey
+    expect: error
+    sqlstate: "2BP01"
+    comment: the primary key index is protected the same way
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE conrelid = 'accounts'::regclass ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: both constraints are still present after the refused drops

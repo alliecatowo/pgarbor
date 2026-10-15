@@ -1,0 +1,50 @@
+# A CREATEROLE role may drop a role only with ADMIN OPTION on it; dropping a superuser requires superuser.
+id: cmd-drop-role.createrole-admin-option-required
+title: "CREATEROLE alone cannot drop roles; ADMIN OPTION on the target allows it; superuser targets stay protected"
+family: cmd-drop-role
+tier: core
+feature_ids: [drop-role, createrole, admin-option, superuser, errors]
+required_capabilities: [roles, set-role, grant, errors, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_role.sgml#sql-droprole-description (CREATEROLE and ADMIN OPTION; superuser role requires superuser)"
+sessions: [a]
+setup: |
+  CREATE ROLE drr_cr CREATEROLE LOGIN;
+  CREATE ROLE drr_victim;
+  CREATE ROLE drr_su SUPERUSER;
+steps:
+  - sql: |
+      SET ROLE drr_cr
+    expect: ok
+  - sql: |
+      DROP ROLE drr_victim
+    expect: error
+    sqlstate: "42501"
+    comment: CREATEROLE without ADMIN OPTION on the target is not enough
+  - sql: |
+      DROP ROLE drr_su
+    expect: error
+    sqlstate: "42501"
+    comment: only a superuser may drop a superuser role
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT drr_victim TO drr_cr WITH ADMIN OPTION
+    expect: ok
+  - sql: |
+      SET ROLE drr_cr
+    expect: ok
+  - sql: |
+      DROP ROLE drr_victim
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT count(*) AS present FROM pg_roles WHERE rolname = 'drr_victim'
+    expect: rows
+  - sql: |
+      DROP ROLE drr_su, drr_cr
+    expect: ok

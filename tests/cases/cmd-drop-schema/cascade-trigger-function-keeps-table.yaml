@@ -1,0 +1,41 @@
+# A trigger in public that runs a function from the dropped schema is removed by CASCADE; the table stays.
+id: cmd-drop-schema.cascade-trigger-function-keeps-table
+title: DROP SCHEMA CASCADE removes a trigger in another schema whose function lives in the dropped schema
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, cascade, triggers, plpgsql]
+required_capabilities: [create-schema, create-table, create-function, triggers, insert, select, drop-schema, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Parameters: CASCADE drops objects that depend on the schema's objects)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA tf;
+  CREATE FUNCTION tf.scale() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.a := NEW.a * 10; RETURN NEW; END $$;
+  CREATE TABLE public.tt (a int);
+  CREATE TRIGGER tt_scale BEFORE INSERT ON public.tt FOR EACH ROW EXECUTE FUNCTION tf.scale();
+steps:
+  - sql: |
+      INSERT INTO public.tt VALUES (1)
+    expect: ok
+  - sql: |
+      DROP SCHEMA tf
+    expect: error
+    sqlstate: "2BP01"
+    comment: the trigger depends on tf.scale
+  - sql: |
+      DROP SCHEMA tf CASCADE
+    expect: notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_trigger WHERE tgname = 'tt_scale'
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO public.tt VALUES (2)
+    expect: ok
+    comment: without the trigger the value is stored unchanged
+  - sql: |
+      SELECT a FROM public.tt ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the first row was scaled to 10 by the trigger before the drop; the second is stored as 2

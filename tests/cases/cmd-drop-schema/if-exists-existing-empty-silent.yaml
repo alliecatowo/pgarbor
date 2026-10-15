@@ -1,0 +1,36 @@
+# IF EXISTS on an existing empty schema drops it silently; the name can then be created again.
+id: cmd-drop-schema.if-exists-existing-empty-silent
+title: DROP SCHEMA IF EXISTS on an existing empty schema is a plain drop with no notice, and the name is reusable
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, if-exists, create-schema, schema-reuse]
+required_capabilities: [create-schema, select, notices, drop-schema]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Parameters: IF EXISTS does not throw an error; a notice is issued only when the schema does not exist)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cycle_s;
+steps:
+  - sql: |
+      DROP SCHEMA IF EXISTS cycle_s
+    expect: ok
+    comment: the schema exists, so no notice is issued
+  - sql: |
+      CREATE SCHEMA cycle_s
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_namespace WHERE nspname = 'cycle_s'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP SCHEMA cycle_s
+    expect: ok
+  - sql: |
+      DROP SCHEMA IF EXISTS cycle_s
+    expect: notice
+    comment: the second drop finds nothing, so IF EXISTS issues a notice instead of an error
+  - sql: |
+      SELECT count(*) AS n FROM pg_namespace WHERE nspname = 'cycle_s'
+    expect: rows
+    order: ordered

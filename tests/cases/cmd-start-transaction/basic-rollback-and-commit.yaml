@@ -1,0 +1,44 @@
+# START TRANSACTION opens a transaction block: ROLLBACK discards its writes, COMMIT keeps them across reconnect.
+id: cmd-start-transaction.basic-rollback-and-commit
+title: START TRANSACTION block is discarded by ROLLBACK and kept by COMMIT
+family: cmd-start-transaction
+tier: core
+feature_ids: [start-transaction, rollback, commit, transactions, insert]
+required_capabilities: [create-table, insert, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/start_transaction.sgml#sql-start-transaction (Description: begins a new transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+steps:
+  - sql: |
+      START TRANSACTION
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, 'one'), (2, 'two')
+    expect: ok
+  - sql: |
+      SELECT id, name FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the block sees its own uncommitted rows
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: rolled back, so zero rows remain
+  - sql: |
+      START TRANSACTION;
+      INSERT INTO t VALUES (3, 'three');
+      SELECT id, name FROM t ORDER BY id;
+      COMMIT
+    expect: ok
+  - reconnect: true
+  - sql: |
+      SELECT id, name FROM t ORDER BY id
+    expect: rows
+    order: ordered

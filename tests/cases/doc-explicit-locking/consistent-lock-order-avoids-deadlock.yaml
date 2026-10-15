@@ -1,0 +1,48 @@
+# Locking rows in one consistent order makes the second transaction wait instead of deadlock.
+id: doc-explicit-locking.consistent-lock-order-avoids-deadlock
+title: Two transactions locking rows in the same order queue without deadlock
+family: doc-explicit-locking
+tier: core
+feature_ids: [select-for-update, row-locks, deadlock-avoidance, transactions, multi-session]
+required_capabilities: [create-table, insert, select, row-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-deadlocks (best defense: acquire locks in a consistent order)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t WHERE id = 1 FOR UPDATE
+    expect: rows
+  - session: b
+    sql: |
+      SELECT id FROM t WHERE id = 1 FOR UPDATE
+    async: true
+    expect_blocked: true
+    comment: same first row, so b queues behind a
+  - session: a
+    sql: |
+      SELECT id FROM t WHERE id = 2 FOR UPDATE
+    expect: rows
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok

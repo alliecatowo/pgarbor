@@ -1,0 +1,52 @@
+# INSERT ... VALUES: single row, multirow VALUES, DEFAULT in the VALUES list, and DEFAULT VALUES.
+id: cmd-insert.values-and-default-values
+title: Single-row, multirow VALUES, DEFAULT entries and DEFAULT VALUES insert defaults
+family: cmd-insert
+tier: core
+feature_ids: [insert, values, default-values, column-defaults]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-insert (Examples: single row, DEFAULT, DEFAULT VALUES, multirow VALUES)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (code char(5) PRIMARY KEY, title varchar(40) NOT NULL, did int NOT NULL,
+                      date_prod date DEFAULT '1900-01-01', kind varchar(10), len interval DEFAULT '90 minutes');
+steps:
+  - sql: |
+      INSERT INTO films VALUES ('UA502', 'Bananas', 105, '1971-07-13', 'Comedy', '82 minutes')
+    expect: ok
+  - sql: |
+      INSERT INTO films (code, title, did, date_prod, kind) VALUES ('T_601', 'Yojimbo', 106, '1961-06-16', 'Drama')
+    expect: ok
+    comment: len omitted, so it takes its declared default
+  - sql: |
+      INSERT INTO films VALUES ('UA503', 'Bananas II', 105, DEFAULT, 'Comedy', '82 minutes')
+    expect: ok
+  - sql: |
+      INSERT INTO films (code, title, did, date_prod, kind) VALUES ('T_602', 'Yojimbo II', 106, DEFAULT, 'Drama')
+    expect: ok
+  - sql: |
+      INSERT INTO films (code, title, did, date_prod, kind) VALUES
+        ('B6717', 'Tampopo', 110, '1985-02-10', 'Comedy'),
+        ('HG120', 'The Dinner Game', 140, DEFAULT, 'Comedy')
+    expect: ok
+    comment: multirow VALUES reports INSERT 0 2
+  - sql: |
+      INSERT INTO films DEFAULT VALUES
+    expect: error
+    sqlstate: "23502"
+    comment: code is the NOT NULL primary key with no default, so DEFAULT VALUES fails
+  - sql: |
+      CREATE TABLE dv (a int DEFAULT 10, b text DEFAULT 'x', c timestamp DEFAULT NULL);
+      INSERT INTO dv DEFAULT VALUES;
+      INSERT INTO dv DEFAULT VALUES
+    expect: ok
+  - sql: |
+      SELECT code, title, did, date_prod, kind, len FROM films ORDER BY code
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT a, b, c IS NULL AS c_null FROM dv
+    expect: rows
+    order: multiset

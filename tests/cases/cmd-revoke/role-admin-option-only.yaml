@@ -1,0 +1,30 @@
+# REVOKE ADMIN OPTION FOR removes only the right to grant the role; the membership itself remains.
+id: cmd-revoke.role-admin-option-only
+title: REVOKE ADMIN OPTION FOR keeps role membership but clears the admin option
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, role-membership, admin-option, roles, catalog-introspection]
+required_capabilities: [create-table, select, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-description (REVOKE [ { ADMIN | INHERIT | SET } OPTION FOR ] role_name)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvo_admins;
+  CREATE ROLE rvo_joe;
+  GRANT rvo_admins TO rvo_joe WITH ADMIN OPTION;
+steps:
+  - sql: |
+      REVOKE ADMIN OPTION FOR rvo_admins FROM rvo_joe
+    expect: ok
+  - sql: |
+      SELECT r.rolname, m.admin_option
+      FROM pg_auth_members m
+      JOIN pg_roles r ON r.oid = m.roleid
+      JOIN pg_roles u ON u.oid = m.member
+      WHERE u.rolname = 'rvo_joe'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT pg_has_role('rvo_joe', 'rvo_admins', 'MEMBER') AS still_member
+    expect: rows

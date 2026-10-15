@@ -1,0 +1,46 @@
+id: cmd-declare.query-restrictions-and-errors
+title: DECLARE accepts only SELECT or VALUES queries, and binds the query at declaration time
+family: cmd-declare
+tier: core
+feature_ids: [declare-cursor, values, errors, aborted-transaction]
+required_capabilities: [create-table, insert, select, transactions, cursors, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare (Parameters: query is a SELECT or VALUES command)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE v CURSOR FOR VALUES (1, 'x'), (2, 'y')
+    expect: ok
+  - sql: |
+      FETCH ALL FROM v
+    expect: rows
+    order: ordered
+  - sql: |
+      DECLARE m CURSOR FOR INSERT INTO t VALUES (9, 'nine') RETURNING id
+    expect: error
+    sqlstate: "42601"
+    comment: a data-modifying statement is not a SELECT or VALUES query
+  - sql: |
+      DECLARE u CURSOR FOR SELECT nonexistent_col FROM t
+    expect: error
+    sqlstate: "42703"
+    comment: the query is analyzed when DECLARE runs
+  - sql: |
+      SELECT count(*) AS n FROM pg_cursors
+    expect: error
+    sqlstate: "25P02"
+    comment: the failed DECLARE aborted the transaction block
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM pg_cursors
+    expect: rows
+    comment: no cursor survived the rollback

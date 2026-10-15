@@ -1,0 +1,38 @@
+# A prefix operator has no left operand: write NONE on the left. NONE on the right names a postfix operator,
+# which is not supported, so that lookup fails with 42601 rather than 42883.
+id: cmd-alter-operator.prefix-none-left
+title: "ALTER OPERATOR addresses a prefix operator with NONE on the left and rejects NONE on the right"
+family: cmd-alter-operator
+tier: extended
+feature_ids: [alter-operator, prefix-operators, restrict-selectivity, errors]
+required_capabilities: [alter-operator, create-operator, create-function-sql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#parameters (left_type: write NONE if the operator has no left operand)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_pfx_neg(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT -$1 $$;
+  CREATE OPERATOR ^^^ (RIGHTARG = int8, PROCEDURE = cmd_ao_pfx_neg);
+steps:
+  - sql: |
+      ALTER OPERATOR ^^^ (NONE, int8) SET (RESTRICT = NONE)
+    expect: ok
+  - sql: |
+      SELECT oprname, oprkind, oprleft = 0 AS no_left_type
+      FROM pg_operator WHERE oprname = '^^^' AND oprnamespace = 'public'::regnamespace
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ^^^ 5::int8 AS negated
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR ^^^ (int8, NONE) SET (RESTRICT = NONE)
+    expect: error
+    sqlstate: "42601"
+    comment: NONE on the right means a postfix operator, which is not supported
+  - sql: |
+      ALTER OPERATOR ^^^ (int8, int8) SET (RESTRICT = NONE)
+    expect: error
+    sqlstate: "42883"
+    comment: no binary ^^^ exists

@@ -1,0 +1,31 @@
+# DROP STATISTICS removes the statistics object only; the table and its rows remain.
+id: cmd-drop-statistics.basic-drop-keeps-table
+title: DROP STATISTICS removes the object from pg_statistic_ext and leaves the table intact
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, extended-statistics]
+required_capabilities: [create-table, extended-statistics, drop-statistics, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics (Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_basic (a int, b int);
+  INSERT INTO ds_basic VALUES (1, 1), (2, 2), (3, 3);
+  CREATE STATISTICS ds_basic_ab ON a, b FROM ds_basic;
+steps:
+  - sql: |
+      SELECT stxname FROM pg_statistic_ext WHERE stxrelid = 'ds_basic'::regclass ORDER BY stxname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP STATISTICS ds_basic_ab
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxname = 'ds_basic_ab'
+    expect: rows
+  - sql: |
+      SELECT a, b FROM ds_basic ORDER BY a
+    expect: rows
+    order: ordered
+    comment: the table and its rows are untouched

@@ -1,0 +1,41 @@
+# Doc example: range type with subtype_diff; bounds, containment and the default multirange type.
+id: cmd-create-type.range-float8-doc-example
+title: "Range type from the docs: float8 subtype with subtype_diff, bounds and multirange"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, range-types, multirange-types, select, errors]
+required_capabilities: [create-type, range-types, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype-range (Examples: float8_range)"
+steps:
+  - sql: |
+      CREATE TYPE float8_range AS RANGE (subtype = float8, subtype_diff = float8mi)
+    expect: ok
+  - sql: |
+      SELECT lower(r) AS lo, upper(r) AS hi, lower_inc(r) AS lo_inc, upper_inc(r) AS hi_inc
+      FROM (SELECT '[1,5)'::float8_range AS r) s
+    expect: rows
+  - sql: |
+      SELECT '[1,5)'::float8_range @> 4.5::float8 AS has_45, '[1,5)'::float8_range @> 5::float8 AS has_5
+    expect: rows
+  - sql: |
+      SELECT '{[1,2),[3,4)}'::float8_multirange::text AS mr
+    expect: rows
+    comment: the multirange type is created automatically with the name float8_multirange
+  - sql: |
+      SELECT typname FROM pg_type WHERE typname = 'float8_multirange'
+    expect: rows
+  - sql: |
+      SELECT isempty('[2,2)'::float8_range) AS empty_half_open, isempty('[2,2]'::float8_range) AS closed_point
+    expect: rows
+  - sql: |
+      CREATE TYPE float8_range AS RANGE (subtype = float8)
+    expect: error
+    sqlstate: "42710"
+    comment: type name already in use
+  - sql: |
+      CREATE TYPE bad_diff_range AS RANGE (subtype = float8, subtype_diff = nosuchfn)
+    expect: error
+    sqlstate: "42883"
+    comment: subtype_diff must name an existing function taking two subtype values

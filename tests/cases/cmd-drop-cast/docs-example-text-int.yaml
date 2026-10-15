@@ -1,0 +1,35 @@
+# DROP CAST removes a user-defined cast; the documented example drops the text to int cast, after which the built-in I/O conversion still applies to explicit casts.
+id: cmd-drop-cast.docs-example-text-int
+title: "Documented example DROP CAST (text AS int) removes the cast and leaves I/O conversion intact"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, create-cast, explicit-cast, io-conversion-cast]
+required_capabilities: [create-cast, create-function-sql, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-examples"
+sessions: [a]
+setup: |
+  CREATE FUNCTION dc_text_to_int(text) RETURNS int4 LANGUAGE sql IMMUTABLE AS $$ SELECT 0 $$;
+  CREATE CAST (text AS int4) WITH FUNCTION dc_text_to_int(text) AS ASSIGNMENT;
+steps:
+  - sql: |
+      SELECT CAST('5' AS int4) AS before_drop
+    expect: rows
+    comment: the user cast's function returns 0 while the cast exists
+  - sql: |
+      DROP CAST (text AS int)
+    expect: ok
+  - sql: |
+      SELECT CAST('5' AS int4) AS after_drop
+    expect: rows
+    comment: with the cast gone, the automatic I/O conversion parses 5
+  - sql: |
+      DROP CAST (text AS int)
+    expect: error
+    sqlstate: "42704"
+    comment: the second drop of the same pair fails without IF EXISTS
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'text'::regtype AND casttarget = 'int4'::regtype
+    expect: rows
+    order: multiset

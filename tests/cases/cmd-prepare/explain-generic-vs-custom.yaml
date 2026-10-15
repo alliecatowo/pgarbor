@@ -1,0 +1,39 @@
+# EXPLAIN EXECUTE shows $n in a generic plan and the supplied value in a custom plan.
+id: cmd-prepare.explain-generic-vs-custom
+title: EXPLAIN EXECUTE shows parameter symbols for a generic plan and values for a custom plan
+family: cmd-prepare
+tier: extended
+feature_ids: [prepare, execute, explain, plan-cache-mode, generic-plan, custom-plan]
+required_capabilities: [create-table, prepared-statements, explain, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/prepare.sgml#sql-prepare-notes (EXPLAIN EXECUTE)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (a int, b text)
+steps:
+  - sql: |
+      SET plan_cache_mode = force_generic_plan
+    expect: ok
+  - sql: |
+      PREPARE g (int) AS SELECT b FROM foo WHERE a = $1
+    expect: ok
+  - sql: |
+      EXPLAIN (COSTS OFF) EXECUTE g(1)
+    expect: rows
+    order: ordered
+    comment: Filter shows $1
+  - sql: |
+      SET plan_cache_mode = force_custom_plan
+    expect: ok
+  - sql: |
+      PREPARE c (int) AS SELECT b FROM foo WHERE a = $1
+    expect: ok
+  - sql: |
+      EXPLAIN (COSTS OFF) EXECUTE c(1)
+    expect: rows
+    order: ordered
+    comment: Filter shows the literal 1
+  - sql: |
+      RESET plan_cache_mode
+    expect: ok

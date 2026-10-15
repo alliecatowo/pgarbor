@@ -1,0 +1,48 @@
+id: cmd-fetch.fetch-negative-count-reverses-direction
+title: A negative FORWARD or BACKWARD count changes the sense of the direction
+family: cmd-fetch
+tier: core
+feature_ids: [fetch, fetch-forward, fetch-backward, fetch-negative-count, scroll-cursor]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/fetch.sgml#sql-fetch (Parameters: count)"
+sessions: [a]
+setup: |
+  CREATE TABLE nums (n int4 PRIMARY KEY);
+  INSERT INTO nums VALUES (1), (2), (3), (4), (5);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c SCROLL CURSOR FOR SELECT n FROM nums ORDER BY n
+    expect: ok
+  - sql: |
+      FETCH 4 FROM c
+    expect: rows
+    order: ordered
+    comment: rows 1 through 4, cursor on row 4
+  - sql: |
+      FETCH -2 FROM c
+    expect: rows
+    order: ordered
+    comment: a bare negative count fetches backward, rows 3 and 2
+  - sql: |
+      FETCH FORWARD -1 FROM c
+    expect: rows
+    order: ordered
+    comment: FORWARD -1 is BACKWARD 1, row 1
+  - sql: |
+      FETCH BACKWARD -1 FROM c
+    expect: rows
+    order: ordered
+    comment: BACKWARD -1 is FORWARD 1, row 2
+  - sql: |
+      FETCH BACKWARD -10 FROM c
+    expect: rows
+    order: ordered
+    comment: BACKWARD -10 scans forward past the end, returns the remaining rows 3, 4, 5
+  - sql: |
+      COMMIT
+    expect: ok

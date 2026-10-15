@@ -1,0 +1,36 @@
+id: cmd-create-materialized-view.column-list-errors
+title: Too many column names, duplicate column names and duplicate output names are rejected
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, column-names, errors]
+required_capabilities: [create-table, insert, select, create-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (1);
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_many (a, b, c) AS SELECT id, id FROM t
+    expect: error
+    sqlstate: "42601"
+    comment: more column names than query columns
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_dup_list (a, a) AS SELECT id, id FROM t
+    expect: error
+    sqlstate: "42701"
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_dup_out AS SELECT 1 AS x, 2 AS x
+    expect: error
+    sqlstate: "42701"
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname IN ('mv_many', 'mv_dup_list', 'mv_dup_out')
+    expect: rows
+    order: ordered
+    comment: failed creations leave nothing behind

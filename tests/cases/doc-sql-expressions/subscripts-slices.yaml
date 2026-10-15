@@ -1,0 +1,44 @@
+# Subscripts and slices: out-of-range results, rounding of subscripts, parentheses rules, and multidimensional access.
+id: doc-sql-expressions.subscripts-slices
+title: Array subscripts and slices including out-of-range, rounding and parenthesization rules
+family: doc-sql-expressions
+tier: core
+feature_ids: [subscripts, array-slices, array-types]
+required_capabilities: [select, insert, create-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-subscripts"
+sessions: [a]
+setup: |
+  CREATE TABLE arrt (f1 int4[], f2 int4[][]);
+  INSERT INTO arrt VALUES (ARRAY[1,2,3], ARRAY[[1,2],[3,4]]);
+steps:
+  - sql: |
+      SELECT (ARRAY[10,20,30])[2] AS a, (ARRAY[10,20,30])[4] AS b, (ARRAY[10,20,30])[0] AS c
+    expect: rows
+    order: ordered
+    comment: out-of-range subscripts yield NULL
+  - sql: |
+      SELECT ARRAY[10,20,30][4]
+    expect: error
+    sqlstate: "42601"
+    comment: an unparenthesized array constructor cannot be subscripted directly
+  - sql: |
+      SELECT (ARRAY[1,2,3,4,5])[2:3] AS s, (ARRAY[1,2,3])[5:6] AS e
+    expect: rows
+    order: ordered
+    comment: a slice entirely outside the array is empty
+  - sql: |
+      SELECT (ARRAY[1,2,3])[1.5] AS r15, (ARRAY[1,2,3])[1.4] AS r14, (ARRAY[1,2,3])[2.5] AS r25
+    expect: rows
+    order: ordered
+    comment: subscripts are rounded to the nearest integer
+  - sql: |
+      SELECT (ARRAY[[1,2],[3,4]])[2][1] AS d2, (ARRAY[[1,2],[3,4]])[1:2][2:2] AS sl2d
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT f1[2] AS a, f1[2:3] AS s, f2[2][2] AS d, f2[1:2][1] AS col1 FROM arrt
+    expect: rows
+    order: ordered
+    comment: column references may be subscripted without parentheses

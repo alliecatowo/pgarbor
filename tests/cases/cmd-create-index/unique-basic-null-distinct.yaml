@@ -1,0 +1,35 @@
+# CREATE UNIQUE INDEX enforces uniqueness on insert; NULLs are distinct by default so several NULL keys are allowed.
+id: cmd-create-index.unique-basic-null-distinct
+title: Unique B-tree index rejects duplicate keys but allows repeated NULLs by default
+family: cmd-create-index
+tier: core
+feature_ids: [create-index, unique-index, null-semantics, insert]
+required_capabilities: [create-table, create-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Parameters: UNIQUE; Parameters: NULLS DISTINCT; Examples: unique B-tree index on title)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, director text, rating int4);
+  INSERT INTO films VALUES (1, 'Jim Story', 'A', 5), (2, 'Other', 'B', 3), (3, NULL, 'C', 4);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX title_idx ON films (title)
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'films' ORDER BY indexname
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO films VALUES (4, 'Jim Story', 'D', 1)
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate non-null key violates the unique index
+  - sql: |
+      INSERT INTO films VALUES (4, NULL, 'D', 1), (5, NULL, 'E', 2)
+    expect: ok
+    comment: NULLS DISTINCT is the default, so several NULL titles are accepted
+  - sql: |
+      SELECT id, title FROM films WHERE title IS NULL ORDER BY id
+    expect: rows
+    order: ordered

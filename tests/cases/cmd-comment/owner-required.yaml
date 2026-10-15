@@ -1,0 +1,79 @@
+# Only the owner (or a superuser) may comment on an object: GRANT ALL does not confer that right, and the owner and a superuser can set comments.
+id: cmd-comment.owner-required
+title: Non-owners cannot COMMENT on a table, column or function even with ALL privileges; owner and superuser can
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-privileges, comment-owner, comment-superuser]
+required_capabilities: [comment, roles, create-table, create-function, sql-functions, set-role, privileges, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-desc (For most kinds of object, only the object's owner can set the comment; Of course, a superuser can comment on anything)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_cm_owner
+    expect: ok
+  - sql: |
+      CREATE ROLE cmd_cm_other
+    expect: ok
+  - sql: |
+      CREATE TABLE cmd_owned_t (id int4)
+    expect: ok
+  - sql: |
+      CREATE FUNCTION cmd_owned_f() RETURNS int4 LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      ALTER TABLE cmd_owned_t OWNER TO cmd_cm_owner
+    expect: ok
+  - sql: |
+      GRANT ALL ON cmd_owned_t TO cmd_cm_other
+    expect: ok
+  - sql: |
+      SET ROLE cmd_cm_other
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE cmd_owned_t IS 'by a non-owner'
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      COMMENT ON COLUMN cmd_owned_t.id IS 'column by a non-owner'
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      COMMENT ON FUNCTION cmd_owned_f() IS 'function by a non-owner'
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SET ROLE cmd_cm_owner
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE cmd_owned_t IS 'by the owner'
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmd_owned_t'::regclass, 'pg_class') AS descr
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE cmd_owned_t IS 'by a superuser'
+    expect: ok
+    comment: the session role is a superuser, which may comment on any object
+  - sql: |
+      SELECT obj_description('cmd_owned_t'::regclass, 'pg_class') AS descr
+    expect: rows
+  - sql: |
+      DROP FUNCTION cmd_owned_f()
+    expect: ok
+  - sql: |
+      DROP TABLE cmd_owned_t
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_cm_owner
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_cm_other
+    expect: ok

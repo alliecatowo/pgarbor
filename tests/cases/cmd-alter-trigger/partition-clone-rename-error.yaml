@@ -1,0 +1,30 @@
+# A clone trigger on a partition cannot be renamed directly; the rename must be made on the partitioned table.
+id: cmd-alter-trigger.partition-clone-rename-error
+title: "RENAME of a partition's clone trigger is rejected with a hint to rename the parent trigger"
+family: cmd-alter-trigger
+tier: core
+feature_ids: [alter-trigger, rename, partitioning, triggers, errors]
+required_capabilities: [create-table, select, triggers, partitioning, plpgsql, create-function, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_trigger.sgml#sql-altertrigger (Description, RENAME: corresponding clone triggers are renamed too)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ath_noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+  CREATE TABLE pt (id int4, v text) PARTITION BY RANGE (id);
+  CREATE TABLE pt1 PARTITION OF pt FOR VALUES FROM (0) TO (10);
+  CREATE TRIGGER pt_row AFTER INSERT ON pt FOR EACH ROW EXECUTE FUNCTION ath_noop();
+steps:
+  - sql: |
+      ALTER TRIGGER pt_row ON pt1 RENAME TO pt1_direct
+    expect: error
+    sqlstate: "0A000"
+    comment: clone triggers are renamed only through the partitioned table; hint says so
+  - sql: |
+      SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: all names unchanged
+  - sql: |
+      ALTER TRIGGER pt_row ON pt RENAME TO pt_renamed
+    expect: ok

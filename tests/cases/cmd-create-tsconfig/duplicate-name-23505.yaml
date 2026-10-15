@@ -1,0 +1,33 @@
+# Documented: a configuration name must be unique within its schema; the same name in another schema is allowed.
+id: cmd-create-tsconfig.duplicate-name-23505
+title: "Duplicate configuration name in one schema fails with unique_violation; another schema may reuse it"
+family: cmd-create-tsconfig
+tier: core
+feature_ids: [create-text-search-configuration, unique-name, schema-scope]
+required_capabilities: [create-text-search-configuration, create-schema, text-search, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsconfig.sgml#sql-createtsconfig (Parameters: name; schema scope in Description)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA tsc_other;
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_dup (PARSER = default)
+    expect: ok
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_dup (COPY = english)
+    expect: error
+    sqlstate: "23505"
+    comment: the oracle reports pg_ts_config_cfgname_index, a unique violation, not duplicate_object
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_other.tsc_dup (COPY = english)
+    expect: ok
+    comment: the same name in a different schema is a different configuration
+  - sql: |
+      SELECT n.nspname, c.cfgname
+        FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace
+       WHERE c.cfgname = 'tsc_dup'
+       ORDER BY n.nspname
+    expect: rows
+    order: ordered

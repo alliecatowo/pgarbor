@@ -1,0 +1,44 @@
+# ALTER RULE requires owning the table: a non-owner gets insufficient_privilege, and the owner can rename the rule.
+id: cmd-alter-rule.owner-only
+title: ALTER RULE needs table ownership; a non-owner gets insufficient_privilege
+family: cmd-alter-rule
+tier: extended
+feature_ids: [alter-rule, rename, owner, privileges, roles, errors]
+required_capabilities: [roles, create-table, create-rule, set-session-authorization, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_rule.sgml#description (you must own the table or view that the rule applies to)"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS ar_owner;
+  DROP ROLE IF EXISTS ar_other;
+  CREATE ROLE ar_owner;
+  CREATE ROLE ar_other;
+  CREATE TABLE ar_emp (id int4);
+  CREATE RULE r_own AS ON INSERT TO ar_emp DO INSTEAD NOTHING;
+  ALTER TABLE ar_emp OWNER TO ar_owner;
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION ar_other
+    expect: ok
+  - sql: |
+      ALTER RULE r_own ON ar_emp RENAME TO r_stolen
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION ar_owner
+    expect: ok
+  - sql: |
+      ALTER RULE r_own ON ar_emp RENAME TO r_mine
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT rulename FROM pg_rules WHERE tablename = 'ar_emp' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only the owner's rename took effect

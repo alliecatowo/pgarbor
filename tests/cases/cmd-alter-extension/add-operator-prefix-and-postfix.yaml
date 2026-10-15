@@ -1,0 +1,33 @@
+# A prefix operator is written with NONE as the left type; the postfix form is rejected by the parser because PostgreSQL 18 has no postfix operators.
+id: cmd-alter-extension.add-operator-prefix-and-postfix
+title: ADD OPERATOR uses NONE for the missing argument of a prefix operator and rejects postfix syntax
+family: cmd-alter-extension
+tier: extended
+feature_ids: [alter-extension, add-member, operators, prefix-operators, errors]
+required_capabilities: [create-extension, create-function, create-operator, alter-extension, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (left_type, right_type: NONE for a prefix operator)"
+sessions: [a]
+setup: |
+  CREATE EXTENSION hstore;
+  CREATE FUNCTION pneg(int) RETURNS int LANGUAGE sql AS 'SELECT -$1';
+  CREATE OPERATOR ~~~ (PROCEDURE = pneg, RIGHTARG = int);
+steps:
+  - sql: |
+      ALTER EXTENSION hstore ADD OPERATOR ~~~ (NONE, int)
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD OPERATOR ~~~ (int, NONE)
+    expect: error
+    sqlstate: "42601"
+    comment: postfix operators are not supported in PostgreSQL 18
+  - sql: |
+      ALTER EXTENSION hstore ADD OPERATOR ~~~ (NONE, int)
+    expect: error
+    sqlstate: "55000"
+    comment: already a member
+  - sql: |
+      DROP OPERATOR ~~~ (NONE, int)
+    expect: error
+    sqlstate: "2BP01"

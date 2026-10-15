@@ -1,0 +1,36 @@
+# A single-value expression whose SELECT returns more than one row is a run-time error (cardinality violation).
+id: doc-plpgsql-expressions.more-than-one-row-error
+title: Expression returning more than one row raises 21000 in assignment and IF
+family: doc-plpgsql-expressions
+tier: core
+feature_ids: [plpgsql, expressions, errors, if-statement]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "plpgsql.sgml#plpgsql-expressions (The SELECT must produce a single column, and not more than one row)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, NULL);
+  CREATE FUNCTION assign_many() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE v int;
+  BEGIN
+    v := id FROM t;
+    RETURN v;
+  END $$;
+  CREATE FUNCTION if_many() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    IF id > 1 FROM t THEN
+      RETURN 'yes';
+    END IF;
+    RETURN 'no';
+  END $$;
+steps:
+  - sql: |
+      SELECT assign_many()
+    expect: error
+    sqlstate: "21000"
+  - sql: |
+      SELECT if_many()
+    expect: error
+    sqlstate: "21000"

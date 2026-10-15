@@ -1,0 +1,31 @@
+# A list of names is one command: if any name fails, none of the listed objects are dropped.
+id: cmd-drop-statistics.multi-name-atomic
+title: Comma-separated DROP STATISTICS is all-or-nothing when one listed name is missing
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, extended-statistics]
+required_capabilities: [create-table, extended-statistics, drop-statistics]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics (Synopsis: name [, ...])"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_atom (a int, b int, c int);
+  CREATE STATISTICS ds_atom_s1 ON a, b FROM ds_atom;
+  CREATE STATISTICS ds_atom_s2 ON b, c FROM ds_atom;
+steps:
+  - sql: |
+      DROP STATISTICS ds_atom_s1, ds_nope
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT stxname FROM pg_statistic_ext WHERE stxrelid = 'ds_atom'::regclass ORDER BY stxname
+    expect: rows
+    order: ordered
+    comment: ds_atom_s1 survives the failed command
+  - sql: |
+      DROP STATISTICS ds_atom_s1, ds_atom_s2
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxrelid = 'ds_atom'::regclass
+    expect: rows

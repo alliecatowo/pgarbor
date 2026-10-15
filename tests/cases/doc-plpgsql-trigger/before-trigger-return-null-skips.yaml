@@ -1,0 +1,51 @@
+# Row-level BEFORE triggers returning NULL skip the row for INSERT and DELETE; the rows-affected count excludes skipped rows.
+id: doc-plpgsql-trigger.before-trigger-return-null-skips
+title: BEFORE INSERT returning NULL drops the row; BEFORE DELETE returning NULL keeps it
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, before-triggers, plpgsql, return-null, delete, insert]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, update, delete, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (row-level BEFORE trigger returning null; usual idiom of returning OLD in DELETE triggers)"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, note text);
+  CREATE FUNCTION skip_odd() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      IF NEW.id % 2 = 1 THEN
+          RETURN NULL;
+      END IF;
+      RETURN NEW;
+  END $$;
+  CREATE TRIGGER skip_odd BEFORE INSERT ON items
+      FOR EACH ROW EXECUTE FUNCTION skip_odd();
+  CREATE FUNCTION keep_marked() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      IF OLD.note = 'keep' THEN
+          RETURN NULL;
+      END IF;
+      RETURN OLD;
+  END $$;
+  CREATE TRIGGER keep_marked BEFORE DELETE ON items
+      FOR EACH ROW EXECUTE FUNCTION keep_marked();
+steps:
+  - sql: |
+      INSERT INTO items VALUES (1, 'odd'), (2, 'even'), (3, 'odd'), (4, 'even')
+    expect: ok
+    comment: command tag reports 2 rows, since the odd rows were skipped
+  - sql: |
+      SELECT id, note FROM items ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE items SET note = 'keep' WHERE id = 2
+    expect: ok
+  - sql: |
+      DELETE FROM items
+    expect: ok
+    comment: the BEFORE DELETE trigger returning NULL keeps row 2; row 4 is deleted
+  - sql: |
+      SELECT id, note FROM items ORDER BY id
+    expect: rows
+    order: ordered

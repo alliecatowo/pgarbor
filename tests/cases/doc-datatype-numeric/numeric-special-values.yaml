@@ -1,0 +1,34 @@
+# Numeric Infinity and NaN: input spellings, arithmetic results, equality and sort order, and no infinity in a constrained column.
+id: doc-datatype-numeric.numeric-special-values
+title: Numeric Infinity and NaN inputs, arithmetic, NaN equality and ordering, and typmod rejection of Infinity
+family: doc-datatype-numeric
+tier: core
+feature_ids: [numeric, special-values, nan, infinity, ordering, errors]
+required_capabilities: [create-table, insert, select, errors, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-numeric-decimal (special values)"
+sessions: [a]
+setup: |
+  CREATE TABLE tsp (id int4, v numeric);
+  CREATE TABLE tsi (v numeric(5,2));
+  INSERT INTO tsp VALUES (1, 'Infinity'), (2, '-inf'), (3, 'NaN'), (4, '-Infinity'), (5, 0), (6, 'inf'), (7, 'nan');
+steps:
+  - sql: |
+      SELECT id, v FROM tsp ORDER BY v, id
+    expect: rows
+    order: ordered
+    comment: NaN sorts greater than all non-NaN values
+  - sql: |
+      SELECT 'NaN'::numeric = 'NaN'::numeric AS nan_eq,
+             'NaN'::numeric > 'Infinity'::numeric AS nan_gt,
+             'Infinity'::numeric - 'Infinity'::numeric AS inf_minus_inf,
+             'NaN'::numeric ^ 0 AS nan_pow0,
+             'Infinity'::numeric + 1 AS inf_plus,
+             'Infinity'::numeric + 'Infinity'::numeric AS inf_plus_inf
+    expect: rows
+  - sql: |
+      INSERT INTO tsi VALUES ('Infinity')
+    expect: error
+    sqlstate: "22003"
+    comment: infinity can only be stored in an unconstrained numeric column

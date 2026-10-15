@@ -1,0 +1,59 @@
+id: cmd-fetch.fetch-empty-result-and-null-values
+title: FETCH from an empty result returns zero rows in every direction; NULL column values come back as NULL
+family: cmd-fetch
+tier: core
+feature_ids: [fetch, null-semantics, fetch-first, fetch-all, empty-result]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/fetch.sgml#sql-fetch (Description: no such row returns an empty result)"
+sessions: [a]
+setup: |
+  CREATE TABLE empty_t (id int4, note text);
+  CREATE TABLE opt (id int4, note text, score numeric(6,2));
+  INSERT INTO opt VALUES (1, NULL, NULL), (2, '', 0), (NULL, 'x', 1.5);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE ec SCROLL CURSOR FOR SELECT id, note FROM empty_t
+    expect: ok
+  - sql: |
+      FETCH FIRST FROM ec
+    expect: rows
+    order: ordered
+    comment: no rows in the result
+  - sql: |
+      FETCH LAST FROM ec
+    expect: rows
+    order: ordered
+  - sql: |
+      FETCH RELATIVE 0 FROM ec
+    expect: rows
+    order: ordered
+  - sql: |
+      FETCH FORWARD 3 FROM ec
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE oc SCROLL CURSOR FOR SELECT id, note, score FROM opt ORDER BY id NULLS LAST
+    expect: ok
+  - sql: |
+      FETCH ALL FROM oc
+    expect: rows
+    order: ordered
+    comment: NULL id sorts last, NULL note and NULL score are returned as NULL, empty string stays distinct
+  - sql: |
+      FETCH FIRST FROM oc
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok

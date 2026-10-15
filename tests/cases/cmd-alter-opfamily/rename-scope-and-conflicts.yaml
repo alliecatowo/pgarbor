@@ -1,0 +1,44 @@
+# RENAME TO conflicts only within the same access method; renaming to the current name is still a conflict.
+id: cmd-alter-opfamily.rename-scope-and-conflicts
+title: RENAME TO conflicts only within one access method and rejects the family's own name
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, rename, name-uniqueness, errors]
+required_capabilities: [alter-operator-family, create-operator-family, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (RENAME TO new_name)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_ren_a USING btree;
+  CREATE OPERATOR FAMILY cmd_aof_ren_b USING btree;
+  CREATE OPERATOR FAMILY cmd_aof_ren_a USING gist;
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_ren_a USING btree RENAME TO cmd_aof_ren_b
+    expect: error
+    sqlstate: "42710"
+    comment: a btree family with that name already exists
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_ren_a USING btree RENAME TO cmd_aof_ren_a
+    expect: error
+    sqlstate: "42710"
+    comment: renaming to the current name still collides with itself
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_ren_a USING btree RENAME TO cmd_aof_ren_c
+    expect: ok
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_ren_a USING gist RENAME TO cmd_aof_ren_b
+    expect: ok
+    comment: the gist family has no btree namesake, so the name is free for it
+  - sql: |
+      SELECT f.opfname, am.amname
+      FROM pg_opfamily f JOIN pg_am am ON am.oid = f.opfmethod
+      WHERE f.opfname LIKE 'cmd_aof_ren%'
+      ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_ren_zz USING btree RENAME TO cmd_aof_ren_y
+    expect: error
+    sqlstate: "42704"

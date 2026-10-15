@@ -1,0 +1,44 @@
+# Multirange type naming: automatic names from the range name, and an explicit multirange_type_name.
+id: cmd-create-type.range-multirange-naming
+title: "Multirange type names: automatic suffix rules and explicit multirange_type_name"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, range-types, multirange-types, catalog-introspection, errors]
+required_capabilities: [create-type, range-types, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype-range (multirange_type_name)"
+steps:
+  - sql: |
+      CREATE TYPE textrng AS RANGE (subtype = text, collation = "C")
+    expect: ok
+    comment: no 'range' substring in the name, so _multirange is appended
+  - sql: |
+      CREATE TYPE rng2 AS RANGE (subtype = int4)
+    expect: ok
+  - sql: |
+      CREATE TYPE mr_named AS RANGE (subtype = int4, multirange_type_name = 'my_mr_custom')
+    expect: ok
+  - sql: |
+      SELECT typname, typtype FROM pg_type
+      WHERE typname IN ('textrng_multirange', 'rng2_multirange', 'my_mr_custom', 'mr_named_multirange')
+      ORDER BY typname
+    expect: rows
+    order: ordered
+    comment: mr_named_multirange is never created when a name is given explicitly
+  - sql: |
+      CREATE TYPE myrange AS RANGE (subtype = int4)
+    expect: ok
+  - sql: |
+      SELECT typname FROM pg_type WHERE typname IN ('mymultirange', 'myrange_multirange') ORDER BY typname
+    expect: rows
+    order: ordered
+    comment: the substring 'range' is replaced by 'multirange'
+  - sql: |
+      SELECT '{[1,3),[5,7)}'::my_mr_custom @> 6 AS has_6, '{[1,3)}'::rng2_multirange @> 3 AS has_3
+    expect: rows
+  - sql: |
+      CREATE TYPE mr_dup AS RANGE (subtype = int4, multirange_type_name = 'rng2_multirange')
+    expect: error
+    sqlstate: "42710"
+    comment: the explicit multirange name collides with an existing type

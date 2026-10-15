@@ -1,0 +1,33 @@
+# Without IF EXISTS, a missing rule is an undefined_object error; rules are scoped to their table.
+id: cmd-drop-rule.missing-rule-error
+title: DROP RULE on a missing rule fails with undefined_object, including a rule that exists on another table
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-rule, errors]
+required_capabilities: [create-table, create-rule, drop-rule, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (IF EXISTS negated)"
+sessions: [a]
+setup: |
+  CREATE TABLE m1 (a int4);
+  CREATE TABLE m2 (a int4);
+  CREATE RULE only_m1 AS ON INSERT TO m1 DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      DROP RULE never_created ON m1
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP RULE only_m1 ON m2
+    expect: error
+    sqlstate: "42704"
+    comment: the rule belongs to m1, so it does not exist for m2
+  - sql: |
+      DROP RULE only_m1 ON m1
+    expect: ok
+  - sql: |
+      DROP RULE only_m1 ON m1
+    expect: error
+    sqlstate: "42704"
+    comment: already dropped

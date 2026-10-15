@@ -1,0 +1,44 @@
+# DROP TYPE is transactional: a rolled-back drop leaves the type in place; a committed drop removes it.
+id: cmd-drop-type.transaction-rollback-and-commit
+title: DROP TYPE inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-drop-type
+tier: core
+feature_ids: [drop-type, transactions, create-type]
+required_capabilities: [drop-type, create-type, transactions, select]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-droptype.html; transactional DDL"
+sessions: [a]
+setup: |
+  CREATE TYPE tx AS (a int4);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TYPE tx
+    expect: ok
+  - sql: |
+      SELECT to_regtype('tx') IS NULL AS dropped_in_txn
+    expect: rows
+    order: ordered
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT to_regtype('tx') IS NOT NULL AS back_after_rollback
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TYPE tx
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT to_regtype('tx') IS NULL AS gone_after_commit
+    expect: rows
+    order: ordered

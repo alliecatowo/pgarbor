@@ -1,0 +1,40 @@
+# WITH clause may supply the data source as a named subquery; WITH RECURSIVE is explicitly not supported by MERGE.
+id: cmd-merge.with-cte-source-recursive-rejected
+title: MERGE accepts a non-recursive WITH source and rejects WITH RECURSIVE
+family: cmd-merge
+tier: core
+feature_ids: [merge, with-clause, cte, update, syntax-restriction]
+required_capabilities: [create-table, insert, select, update, merge, with]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Parameters: with_query; note that WITH RECURSIVE is not supported)"
+setup: |
+  CREATE TABLE pt (id integer PRIMARY KEY, a integer);
+  INSERT INTO pt VALUES (1, 10), (2, 20);
+steps:
+  - sql: |
+      WITH src AS (SELECT 1 AS id, 99 AS v)
+      MERGE INTO pt t
+      USING src
+      ON t.id = src.id
+      WHEN MATCHED THEN
+        UPDATE SET a = src.v
+      RETURNING t.id, t.a
+    expect: rows
+    order: multiset
+    comment: expect (1, 99)
+  - sql: |
+      WITH RECURSIVE r AS (SELECT 1 AS id)
+      MERGE INTO pt t
+      USING r
+      ON t.id = r.id
+      WHEN MATCHED THEN
+        DELETE
+    expect: error
+    sqlstate: "42601"
+    comment: WITH RECURSIVE is not supported for MERGE
+  - sql: |
+      SELECT id, a FROM pt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: expect (1,99), (2,20); the rejected statement deleted nothing

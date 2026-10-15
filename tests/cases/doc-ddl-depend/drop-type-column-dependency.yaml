@@ -1,0 +1,35 @@
+# A table column of an enum type depends on the type: DROP TYPE is refused, and CASCADE drops the column
+# (not the table) while the rest of the table stays.
+id: doc-ddl-depend.drop-type-column-dependency
+title: DROP TYPE refused by a table column of that type; CASCADE drops only the column
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-type, drop-column, user-defined-types, drop-cascade, dependency-tracking]
+required_capabilities: [create-table, create-type, insert, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (dependency of a column on its type)"
+sessions: [a]
+setup: |
+  CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple');
+  CREATE TABLE my_colors (color rainbow, note text);
+  INSERT INTO my_colors VALUES ('red', 'apple');
+steps:
+  - sql: |
+      DROP TYPE rainbow
+    expect: error
+    sqlstate: "2BP01"
+    comment: DETAIL column color of table my_colors depends on type rainbow
+  - sql: |
+      SELECT color FROM my_colors
+    expect: rows
+  - sql: |
+      DROP TYPE rainbow CASCADE
+    expect: ok
+  - sql: |
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'my_colors' ORDER BY ordinal_position
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT note FROM my_colors
+    expect: rows

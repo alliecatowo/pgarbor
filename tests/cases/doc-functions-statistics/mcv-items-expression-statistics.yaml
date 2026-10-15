@@ -1,0 +1,26 @@
+# MCV statistics on an expression: the item values are the expression results.
+id: doc-functions-statistics.mcv-items-expression-statistics
+title: MCV items of an expression statistics object report expression values
+family: doc-functions-statistics
+tier: extended
+feature_ids: [pg-mcv-list-items, mcv-statistics, expression-statistics, analyze]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE qe (a int, d int);
+  ALTER TABLE qe SET (autovacuum_enabled = false);
+  INSERT INTO qe SELECT i % 4, i % 3 FROM generate_series(1, 200) g(i);
+  INSERT INTO qe VALUES (NULL, NULL), (NULL, 1);
+  CREATE STATISTICS qe_expr (mcv) ON (a + 1), d FROM qe;
+steps:
+  - sql: |
+      ANALYZE qe
+    expect: ok
+  - sql: |
+      SELECT m.values, m.nulls FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'qe_expr' ORDER BY m.values::text, m.nulls::text
+    expect: rows
+    order: ordered
+    comment: the first column is the value of (a + 1)

@@ -1,0 +1,63 @@
+# EXTRACT and date_part on timestamp, date, time and interval for the documented field names.
+id: doc-functions-datetime.date-part-extract-fields
+title: EXTRACT and date_part return documented field values for timestamp, date, time and interval
+family: doc-functions-datetime
+tier: core
+feature_ids: [extract, date-part, field-names, interval-fields, week-numbering, julian-day]
+required_capabilities: [select, date-type, timestamp, interval]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime-extract (EXTRACT, date_part; field list)"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT date_part('hour', timestamp '2001-02-16 20:38:40') AS doc_hour,
+             date_part('month', interval '2 years 3 months') AS doc_month_iv,
+             extract(hour from timestamp '2001-02-16 20:38:40') AS ex_hour,
+             extract(month from interval '2 years 3 months') AS ex_month_iv
+    expect: rows
+    order: multiset
+    comment: documented values 20 and 3; date_part and EXTRACT are the same function
+  - sql: |
+      SELECT extract(century from timestamp '2001-02-16 20:38:40') AS century,
+             extract(decade from timestamp '2001-02-16 20:38:40') AS decade,
+             extract(millennium from timestamp '2001-02-16 20:38:40') AS millennium,
+             extract(quarter from timestamp '2001-08-16 20:38:40') AS quarter,
+             extract(dow from timestamp '2001-02-16 20:38:40') AS dow,
+             extract(doy from timestamp '2001-02-16 20:38:40') AS doy,
+             extract(isodow from date '2001-02-18') AS isodow_sunday,
+             extract(julian from date '2001-02-16') AS julian
+    expect: rows
+    order: multiset
+    comment: 2001-02-16 is a Friday (dow 5, doy 47); 2001-02-18 is a Sunday (isodow 7); julian day 2451957
+  - sql: |
+      SELECT extract(century from date '2000-12-31') AS c_2000, extract(century from date '2001-01-01') AS c_2001,
+             extract(week from timestamp '2005-01-01') AS week_2005_01_01,
+             extract(isoyear from date '2005-01-01') AS isoyear_2005_01_01,
+             extract(year from date '0001-01-01 BC') AS year_bc
+    expect: rows
+    order: multiset
+    comment: centuries roll over at year 2001; ISO week of 2005-01-01 is week 53 of ISO year 2004; there is no year 0 so 0001 BC is -1
+  - sql: |
+      SELECT extract(epoch from timestamp '1970-01-02 00:00:00') AS ts_epoch,
+             extract(epoch from timestamptz '2001-02-16 20:38:40+05:30') AS tz_epoch,
+             extract(epoch from date '1970-01-01') AS date_epoch,
+             extract(epoch from time '01:00:00') AS time_epoch,
+             extract(epoch from interval '2 days 3 hours') AS iv_epoch
+    expect: rows
+    order: multiset
+    comment: epoch is seconds since 1970-01-01 00:00 UTC for timestamps; for an interval it is the total length in seconds, days counted as 86400 seconds
+  - sql: |
+      SELECT extract(day from interval '40 days 1 minute') AS iv_day,
+             extract(hour from interval '40 days 1 minute') AS iv_hour,
+             extract(minute from interval '40 days 1 minute') AS iv_minute,
+             extract(second from interval '40 days 1.5 seconds') AS iv_second,
+             extract(microseconds from time '17:12:28.5') AS t_micro,
+             extract(milliseconds from time '17:12:28.5') AS t_milli,
+             extract(hour from timetz '12:00:00+03') AS timetz_hour
+    expect: rows
+    order: multiset
+    comment: interval fields are not normalized into each other (hour 0, not 960); seconds field includes fractional seconds; microseconds is the seconds field times 1e6

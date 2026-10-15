@@ -1,0 +1,41 @@
+# Session-level advisory locks ignore transaction semantics: they survive ROLLBACK and need explicit unlock.
+id: doc-explicit-locking.advisory-session-lock-survives-rollback
+title: Session-level advisory lock acquired in a rolled-back transaction is still held
+family: doc-explicit-locking
+tier: core
+feature_ids: [advisory-locks, transactions, multi-session]
+required_capabilities: [advisory-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#advisory-locks (session-level requests do not honor transaction semantics)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      SELECT pg_advisory_lock(42)
+    expect: rows
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(42) AS acquired
+    expect: rows
+    comment: still held by a after its rollback
+  - session: a
+    sql: |
+      SELECT pg_advisory_unlock(42) AS released
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_try_advisory_lock(42) AS acquired
+    expect: rows
+  - session: b
+    sql: |
+      SELECT pg_advisory_unlock(42) AS released
+    expect: rows

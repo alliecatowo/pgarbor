@@ -1,0 +1,37 @@
+# A REPEATABLE READ snapshot is not frozen until the first query, so an explicit lock taken first can see a newer commit.
+id: doc-applevel-consistency.repeatable-read-lock-before-snapshot
+title: Explicit lock before the first query lets REPEATABLE READ see a commit made after BEGIN
+family: doc-applevel-consistency
+tier: core
+feature_ids: [repeatable-read, lock-table, mvcc-snapshot]
+required_capabilities: [create-table, insert, select, update, transactions, isolation-levels, lock-table, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE acct SET balance = 999 WHERE id = 1
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE acct IN SHARE MODE
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: snapshot is taken here, after the lock, so 999 is visible
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

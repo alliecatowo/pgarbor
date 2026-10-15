@@ -1,0 +1,30 @@
+# CREATE TRANSFORM is transactional: visible inside the transaction, gone after ROLLBACK.
+id: cmd-create-transform.rollback-discards-transform
+title: "A CREATE TRANSFORM inside a transaction is visible to that transaction and discarded by ROLLBACK"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, transactions, rollback]
+required_capabilities: [create-transform, create-function, create-type, transactions, select]
+provenance:
+  source: hand
+  ref: "PG18 sql-createtransform.html; transactional DDL"
+sessions: [a]
+setup: |
+  CREATE TYPE ct_t AS (a int);
+  CREATE FUNCTION ct_to_t(val internal) RETURNS ct_t LANGUAGE internal IMMUTABLE STRICT AS 'record_recv';
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (TO SQL WITH FUNCTION ct_to_t(internal))
+    expect: ok
+  - sql: |
+      SELECT count(*) AS inside_tx FROM pg_transform WHERE trftype = 'ct_t'::regtype
+    expect: rows
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) AS after_rollback FROM pg_transform WHERE trftype = 'ct_t'::regtype
+    expect: rows

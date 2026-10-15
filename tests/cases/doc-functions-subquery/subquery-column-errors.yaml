@@ -1,0 +1,43 @@
+# Documented shape errors: an IN/ANY subquery must return exactly one column (or as many as the row constructor).
+id: doc-functions-subquery.column-count-errors
+title: Subquery column-count mismatches and non-Boolean quantified operators raise their documented errors
+family: doc-functions-subquery
+tier: core
+feature_ids: [in-subquery, any-subquery, row-constructor, errors]
+required_capabilities: [create-table, insert, select, subquery, row-constructor, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (IN, row_constructor IN, Single-Row Comparison)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+steps:
+  - sql: |
+      SELECT 1 IN (SELECT col1, col2 FROM tab1) AS too_many
+    expect: error
+    sqlstate: "42601"
+    comment: expression IN (subquery) must return exactly one column
+  - sql: |
+      SELECT (1, 2) IN (SELECT 1) AS too_few
+    expect: error
+    sqlstate: "42601"
+    comment: row constructor width must match the subquery width
+  - sql: |
+      SELECT (1, 2) = (SELECT col1 FROM tab1 LIMIT 1) AS mism
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT 1 IN (SELECT 'x'::text) AS typemix
+    expect: error
+    sqlstate: "42883"
+    comment: no integer = text operator exists
+  - sql: |
+      SELECT 1 + ANY (SELECT col1 FROM tab1) AS p
+    expect: error
+    sqlstate: "42804"
+    comment: the ANY operator must yield Boolean
+  - sql: |
+      SELECT 1 IN (SELECT col1 FROM tab1 WHERE col1 > 100) AS still_ok
+    expect: rows
+    comment: a shape-valid empty subquery is not an error

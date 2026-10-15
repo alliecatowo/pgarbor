@@ -1,0 +1,41 @@
+# Privileges that do not apply to an object type are rejected with SQLSTATE 0LP01 and nothing is granted.
+id: cmd-grant.invalid-privilege-type-errors
+title: Privileges not applicable to the object type (EXECUTE on tables, INSERT on sequences, TEMP on schemas) fail with 0LP01
+family: cmd-grant
+tier: core
+feature_ids: [grant, privileges, errors, syntax]
+required_capabilities: [create-table, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-objects (the possible privileges per object type)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_pt_r;
+  CREATE TABLE cgg_pt (a int4);
+  CREATE SEQUENCE cgg_ps;
+  CREATE SCHEMA cgg_pts;
+steps:
+  - sql: |
+      GRANT EXECUTE ON TABLE cgg_pt TO cgg_pt_r
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      GRANT INSERT ON SEQUENCE cgg_ps TO cgg_pt_r
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      GRANT EXECUTE ON LANGUAGE sql TO cgg_pt_r
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      GRANT TEMP ON SCHEMA cgg_pts TO cgg_pt_r
+    expect: error
+    sqlstate: "0LP01"
+    comment: TEMPORARY applies to databases, not schemas
+  - sql: |
+      GRANT SELECT ON cgg_pt TO cgg_pt_r
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('cgg_pt_r', 'cgg_pt', 'SELECT') AS sel, has_table_privilege('cgg_pt_r', 'cgg_pt', 'INSERT') AS ins
+    expect: rows
+    order: ordered

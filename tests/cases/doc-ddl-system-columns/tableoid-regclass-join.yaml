@@ -1,0 +1,31 @@
+# tableoid identifies the containing table; joining it to pg_class yields the table name.
+id: doc-ddl-system-columns.tableoid-regclass-join
+title: tableoid names the containing table and joins to pg_class.oid
+family: doc-ddl-system-columns
+tier: core
+feature_ids: [system-columns, tableoid, catalog-join]
+required_capabilities: [create-table, insert, select, union, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-system-columns (tableoid; can be joined against pg_class oid)"
+setup: |
+  CREATE TABLE alpha (x int4);
+  CREATE TABLE beta (x int4);
+  INSERT INTO alpha VALUES (1), (2);
+  INSERT INTO beta VALUES (3);
+steps:
+  - sql: |
+      SELECT tableoid::regclass::text AS tbl, x FROM alpha ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c.relname, p.x
+      FROM (SELECT tableoid, x FROM alpha UNION ALL SELECT tableoid, x FROM beta) AS p
+      JOIN pg_class c ON c.oid = p.tableoid
+      ORDER BY p.x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x FROM beta WHERE tableoid = 'beta'::regclass
+    expect: rows
+    order: ordered

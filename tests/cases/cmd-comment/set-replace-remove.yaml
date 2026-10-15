@@ -1,0 +1,56 @@
+# COMMENT ON TABLE stores, replaces, and removes a comment. An empty string and NULL both remove it, and removing an absent comment is not an error.
+id: cmd-comment.set-replace-remove
+title: COMMENT ON TABLE sets, replaces, and removes a comment with '' or NULL
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-table, comment-remove, comment-replace]
+required_capabilities: [comment, create-table, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-desc (stores, replaces, or removes); ref/comment.sgml#sql-comment-params-string-literal; ref/comment.sgml#sql-comment-examples (mytable example)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE mytable (id int4 PRIMARY KEY, c1 int4)
+    expect: ok
+  - sql: |
+      SELECT obj_description('mytable'::regclass, 'pg_class') IS NULL AS no_comment_initially
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE mytable IS 'This is my table.'
+    expect: ok
+  - sql: |
+      SELECT obj_description('mytable'::regclass, 'pg_class') AS descr
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE mytable IS 'Replaced comment'
+    expect: ok
+  - sql: |
+      SELECT obj_description('mytable'::regclass, 'pg_class') AS descr, (SELECT count(*) FROM pg_description WHERE objoid = 'mytable'::regclass AND classoid = 'pg_class'::regclass AND objsubid = 0) AS stored_rows
+    expect: rows
+    comment: only one comment string is stored per object
+  - sql: |
+      COMMENT ON TABLE mytable IS ''
+    expect: ok
+  - sql: |
+      SELECT obj_description('mytable'::regclass, 'pg_class') IS NULL AS removed_by_empty_string
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE mytable IS 'Set again'
+    expect: ok
+  - sql: |
+      COMMENT ON TABLE mytable IS NULL
+    expect: ok
+  - sql: |
+      SELECT obj_description('mytable'::regclass, 'pg_class') IS NULL AS removed_by_null
+    expect: rows
+  - sql: |
+      COMMENT ON TABLE mytable IS NULL
+    expect: ok
+    comment: removing a comment that is already absent is a no-op
+  - sql: |
+      COMMENT ON TABLE mytable IS 'final comment'
+    expect: ok
+  - sql: |
+      SELECT obj_description('mytable'::regclass, 'pg_class') AS descr
+    expect: rows

@@ -1,0 +1,65 @@
+# Docs Examples: cross-data-type operators and support functions added to a btree family, then removed again.
+# The docs use the built-in integer_ops family; this case uses a private family with the same entries.
+id: cmd-alter-opfamily.docs-example-add-drop
+title: Docs example adds int4/int2 cross-type operators and functions to a btree family, then drops them
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, operator-family, btree, cross-type-operators, add-drop-members]
+required_capabilities: [alter-operator-family, create-operator-family, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (Examples)"
+sessions: [a]
+setup: |
+  CREATE OPERATOR FAMILY cmd_aof_ops USING btree;
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_ops USING btree ADD
+        OPERATOR 1 < (int4, int2) ,
+        OPERATOR 2 <= (int4, int2) ,
+        OPERATOR 3 = (int4, int2) ,
+        OPERATOR 4 >= (int4, int2) ,
+        OPERATOR 5 > (int4, int2) ,
+        FUNCTION 1 btint42cmp(int4, int2) ,
+        OPERATOR 1 < (int2, int4) ,
+        OPERATOR 2 <= (int2, int4) ,
+        OPERATOR 3 = (int2, int4) ,
+        OPERATOR 4 >= (int2, int4) ,
+        OPERATOR 5 > (int2, int4) ,
+        FUNCTION 1 btint24cmp(int2, int4)
+    expect: ok
+  - sql: |
+      SELECT o.amopstrategy, o.amoplefttype::regtype AS lefttype, o.amoprighttype::regtype AS righttype, o.amopopr::regoperator AS operator, o.amoppurpose
+      FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily
+      WHERE f.opfname = 'cmd_aof_ops'
+      ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+    comment: ten search operators, all loose members (no operator class)
+  - sql: |
+      SELECT p.amprocnum, p.amproclefttype::regtype AS lefttype, p.amprocrighttype::regtype AS righttype, p.amproc::regproc AS fn
+      FROM pg_amproc p JOIN pg_opfamily f ON f.oid = p.amprocfamily
+      WHERE f.opfname = 'cmd_aof_ops'
+      ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_ops USING btree DROP
+        OPERATOR 1 (int4, int2) ,
+        OPERATOR 2 (int4, int2) ,
+        OPERATOR 3 (int4, int2) ,
+        OPERATOR 4 (int4, int2) ,
+        OPERATOR 5 (int4, int2) ,
+        FUNCTION 1 (int4, int2) ,
+        OPERATOR 1 (int2, int4) ,
+        OPERATOR 2 (int2, int4) ,
+        OPERATOR 3 (int2, int4) ,
+        OPERATOR 4 (int2, int4) ,
+        OPERATOR 5 (int2, int4) ,
+        FUNCTION 1 (int2, int4)
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_amop o JOIN pg_opfamily f ON f.oid = o.amopfamily WHERE f.opfname = 'cmd_aof_ops') AS ops,
+             (SELECT count(*) FROM pg_amproc p JOIN pg_opfamily f ON f.oid = p.amprocfamily WHERE f.opfname = 'cmd_aof_ops') AS procs
+    expect: rows
+    comment: the family itself remains; all members are gone

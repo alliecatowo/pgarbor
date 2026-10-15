@@ -1,0 +1,41 @@
+# %TYPE in a parameter type resolves to the column type at definition time; the procedure keeps that
+# signature even after the column type changes.
+id: cmd-create-procedure.type-pct-reference
+title: Parameter types written as table_column%TYPE resolve at creation and keep their signature
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, pct-type, call, alter-table]
+required_capabilities: [create-table, insert, select, create-procedure, call, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (argtype, %TYPE)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE t (id int4, label text)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE pty(x t.id%TYPE, y t.label%TYPE) LANGUAGE sql AS 'INSERT INTO t VALUES (x, y)'
+    expect: ok
+    compare_message: false
+    comment: resolves to integer and text (emits a NOTICE)
+  - sql: |
+      SELECT pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p WHERE p.proname = 'pty'
+    expect: rows
+  - sql: |
+      CALL pty(9, 'nine')
+    expect: ok
+  - sql: |
+      ALTER TABLE t ALTER COLUMN id TYPE int8
+    expect: ok
+  - sql: |
+      CALL pty(10, 'ten')
+    expect: ok
+  - sql: |
+      SELECT pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p WHERE p.proname = 'pty'
+    expect: rows
+    comment: signature is still integer after the column changed to int8
+  - sql: |
+      SELECT id, label FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,43 @@
+# ON CONFLICT DO UPDATE checks the existing row against UPDATE USING and raises an error instead of silently skipping it.
+id: cmd-create-policy.on-conflict-update-checks-existing-row
+title: "INSERT ON CONFLICT DO UPDATE errors when the existing row fails UPDATE USING"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, insert-on-conflict, update, errors]
+required_capabilities: [create-table, insert, select, update, rls, roles, insert-on-conflict]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy-update (ON CONFLICT DO UPDATE paragraph)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_oc;
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, -5), (2, 3);
+  GRANT ALL ON t TO pgarbor_case_cp_oc;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p_ins ON t FOR INSERT TO pgarbor_case_cp_oc WITH CHECK (true);
+  CREATE POLICY p_upd ON t FOR UPDATE TO pgarbor_case_cp_oc USING (v > 0) WITH CHECK (true);
+  CREATE POLICY p_sel ON t FOR SELECT TO pgarbor_case_cp_oc USING (true);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_oc
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2, 9) ON CONFLICT (id) DO UPDATE SET v = excluded.v
+    expect: ok
+    comment: the existing row passes USING, so the update path runs
+  - sql: |
+      INSERT INTO t VALUES (1, 9) ON CONFLICT (id) DO UPDATE SET v = excluded.v
+    expect: error
+    sqlstate: "42501"
+    comment: the existing row fails USING, and unlike a plain UPDATE this is an error, not a skip
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t; DROP ROLE pgarbor_case_cp_oc
+    expect: ok

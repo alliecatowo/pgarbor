@@ -1,0 +1,40 @@
+# Parentheses around an index expression are required unless it is a plain function call.
+id: doc-indexes-expressional.index-parentheses-syntax
+title: Index expressions need parentheses unless they are a function call
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, create-index, syntax, errors]
+required_capabilities: [create-table, create-index, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (parentheses can be omitted for a function call)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, col1 text, first_name text, last_name text);
+steps:
+  - sql: |
+      CREATE INDEX t_lower_noparens ON t (lower(col1))
+    expect: ok
+    comment: a bare function call needs no extra parentheses
+  - sql: |
+      CREATE INDEX t_concat_noparens ON t (first_name || ' ' || last_name)
+    expect: error
+    sqlstate: "42601"
+    comment: an operator expression without parentheses is a syntax error
+  - sql: |
+      CREATE INDEX t_cast_noparens ON t (col1::text)
+    expect: error
+    sqlstate: "42601"
+    comment: a cast is an expression too, so it also needs parentheses
+  - sql: |
+      CREATE INDEX t_concat_parens ON t ((first_name || ' ' || last_name))
+    expect: ok
+  - sql: |
+      CREATE INDEX t_lower_double_parens ON t ((lower(col1)))
+    expect: ok
+    comment: extra parentheses around a function call are also accepted
+  - sql: |
+      SELECT count(*) FROM pg_catalog.pg_class WHERE relname IN ('t_lower_noparens', 't_concat_parens', 't_lower_double_parens') AND relkind = 'i'
+    expect: rows
+    order: multiset
+    comment: only the three accepted indexes exist

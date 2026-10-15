@@ -1,0 +1,38 @@
+# Argument identity ignores OUT parameters and accepts IN, argname and aggregate argmode prefixes:
+# only the input types form the signature, so ALTER ROUTINE fo(int) finds fo(IN a int, OUT b int).
+id: cmd-alter-routine.out-args-identity
+title: ALTER ROUTINE identifies a routine by its input argument types, ignoring OUT parameters and argnames
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, function-identity, out-parameters]
+required_capabilities: [create-function, create-aggregate, alter-function, aggregates, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: [argmode] [argname] argtype)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION fo(IN a int, OUT b int) LANGUAGE sql AS 'SELECT $1';
+  CREATE AGGREGATE agg1(int) (SFUNC = int4pl, STYPE = int4, INITCOND = '0');
+steps:
+  - sql: |
+      ALTER ROUTINE fo(int) RENAME TO fo2
+    expect: ok
+  - sql: |
+      SELECT fo2(7) AS r
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE fo2(IN a int) RENAME TO fo3
+    expect: ok
+    comment: argmode IN and argname are ignored for identity
+  - sql: |
+      ALTER ROUTINE agg1(IN int) RENAME TO agg2
+    expect: ok
+  - sql: |
+      SELECT agg2(v) AS total FROM (VALUES (1), (2), (3)) AS t(v)
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT proname, prokind FROM pg_proc WHERE proname IN ('fo', 'fo2', 'fo3', 'agg1', 'agg2') AND pronamespace = 'public'::regnamespace ORDER BY 1
+    expect: rows
+    order: ordered

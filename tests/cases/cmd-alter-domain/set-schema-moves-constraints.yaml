@@ -1,0 +1,45 @@
+# SET SCHEMA moves the domain and its constraints into the new schema; unqualified references then fail.
+id: cmd-alter-domain.set-schema-moves-constraints
+title: "ALTER DOMAIN SET SCHEMA moves the domain and its CHECK constraint to the target schema"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, set-schema, check-constraint, schemas]
+required_capabilities: [create-schema, create-domain, alter-domain, select, constraints, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (SET SCHEMA; Examples)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA customers;
+  CREATE DOMAIN zipcode AS text CONSTRAINT zipchk CHECK (char_length(VALUE) = 5);
+steps:
+  - sql: |
+      ALTER DOMAIN zipcode SET SCHEMA customers
+    expect: ok
+  - sql: |
+      SELECT n.nspname AS schema_name, t.typname AS domain_name
+      FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+      WHERE t.typname = 'zipcode'
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c.conname, n.nspname AS schema_name
+      FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE c.contypid = 'customers.zipcode'::regtype
+      ORDER BY c.conname
+    expect: rows
+    order: ordered
+    comment: the CHECK constraint moved with the domain
+  - sql: |
+      SELECT '12345'::customers.zipcode AS v
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT '1234'::customers.zipcode
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      ALTER DOMAIN zipcode SET SCHEMA customers
+    expect: error
+    sqlstate: "42704"
+    comment: the unqualified name no longer resolves on the search_path

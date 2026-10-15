@@ -1,0 +1,38 @@
+# Dropping a cast that was never created fails with undefined_object for both a missing cast between existing types and a missing type name.
+id: cmd-drop-cast.missing-cast-error
+title: "DROP CAST of a nonexistent cast or unknown type fails with undefined_object"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, errors]
+required_capabilities: [create-type, errors, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+setup: |
+  CREATE TYPE mc_x AS (v int);
+  CREATE TYPE mc_y AS (v int);
+steps:
+  - sql: |
+      DROP CAST (mc_x AS mc_y)
+    expect: error
+    sqlstate: "42704"
+    comment: both types exist, no cast is defined between them
+  - sql: |
+      DROP CAST (mc_x AS mc_y)
+    expect: error
+    sqlstate: "42704"
+    comment: repeating the failing drop changes nothing
+  - sql: |
+      DROP CAST (mc_missing AS mc_y)
+    expect: error
+    sqlstate: "42704"
+    comment: an unknown source type is reported as type does not exist
+  - sql: |
+      DROP CAST (mc_x AS mc_missing)
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'mc_x'::regtype OR casttarget = 'mc_y'::regtype
+    expect: rows
+    order: multiset

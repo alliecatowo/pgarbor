@@ -1,0 +1,36 @@
+# ON UPDATE CASCADE copies a changed referenced key into referencing rows; ON DELETE SET NULL nulls the referencing column.
+id: doc-ddl-constraints.on-update-cascade-and-set-null
+title: ON UPDATE CASCADE propagates key changes and ON DELETE SET NULL nulls dangling references
+family: doc-ddl-constraints
+tier: core
+feature_ids: [foreign-keys, foreign-key-actions, on-update-cascade, set-null, update, delete, select]
+required_capabilities: [create-table, constraints, foreign-keys, foreign-key-actions, primary-key, insert, update, delete, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Foreign Keys, ON UPDATE)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id integer PRIMARY KEY);
+  CREATE TABLE child (
+      id integer PRIMARY KEY,
+      pid integer REFERENCES parent ON UPDATE CASCADE ON DELETE SET NULL
+  );
+  INSERT INTO parent VALUES (1), (2);
+  INSERT INTO child VALUES (10, 1), (11, 2)
+steps:
+  - sql: |
+      UPDATE parent SET id = 5 WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM child ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the update cascaded into the referencing row
+  - sql: |
+      DELETE FROM parent WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM child ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the dangling reference is set to NULL

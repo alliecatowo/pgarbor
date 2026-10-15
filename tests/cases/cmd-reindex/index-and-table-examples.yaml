@@ -1,0 +1,48 @@
+# Documented examples: REINDEX INDEX my_index and REINDEX TABLE my_table keep data and lookups intact.
+id: cmd-reindex.index-and-table-examples
+title: REINDEX INDEX and REINDEX TABLE rebuild indexes without changing query results
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-index, reindex-table, indexes, select]
+required_capabilities: [create-table, create-index, insert, select, reindex]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Examples: Rebuild a single index; Rebuild all the indexes on the table)"
+sessions: [a]
+setup: |
+  CREATE TABLE my_table (id int4 PRIMARY KEY, code text, v int4);
+  CREATE INDEX my_index ON my_table (v);
+  INSERT INTO my_table VALUES (1, 'a', 30), (2, 'b', 10), (3, 'c', NULL), (4, NULL, 20);
+steps:
+  - sql: |
+      SELECT id FROM my_table WHERE v = 20 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: index lookup before the rebuild
+  - sql: |
+      REINDEX INDEX my_index
+    expect: ok
+  - sql: |
+      SELECT id FROM my_table WHERE v = 20 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: same answer after rebuilding the index
+  - sql: |
+      REINDEX TABLE my_table
+    expect: ok
+  - sql: |
+      SELECT id, code, v FROM my_table ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM my_table WHERE v IS NULL ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL keys are still indexed and findable by IS NULL
+  - sql: |
+      INSERT INTO my_table VALUES (5, 'e', 10)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS n FROM my_table WHERE v = 10
+    expect: rows
+    comment: new rows are visible through the rebuilt index

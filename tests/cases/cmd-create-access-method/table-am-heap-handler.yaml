@@ -1,0 +1,40 @@
+# CREATE ACCESS METHOD ... TYPE TABLE with a table_am_handler; tables created USING it report that method in pg_class.
+id: cmd-create-access-method.table-am-heap-handler
+title: TYPE TABLE access method wraps heap_tableam_handler and tables created USING it survive reconnect
+family: cmd-create-access-method
+tier: core
+feature_ids: [create-access-method, table-access-method, create-table, insert, select]
+required_capabilities: [create-table, insert, select, create-access-method, table-access-method]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_access_method.sgml#sql-create-access-method (Parameters: access_method_type TABLE, handler_function table_am_handler)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ACCESS METHOD myam TYPE TABLE HANDLER heap_tableam_handler
+    expect: ok
+  - sql: |
+      SELECT amname, amtype FROM pg_am WHERE amname = 'myam'
+    expect: rows
+    order: ordered
+    comment: amtype 't' marks a table access method
+  - sql: |
+      CREATE TABLE t (id int4, v text) USING myam
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (2, 'b'), (1, 'a')
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT c.relname, am.amname FROM pg_class c JOIN pg_am am ON am.oid = c.relam WHERE c.relname = 't'
+    expect: rows
+    order: ordered
+    comment: the relation records the custom access method
+  - reconnect: true
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

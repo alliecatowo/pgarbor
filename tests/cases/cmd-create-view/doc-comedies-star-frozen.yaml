@@ -1,0 +1,33 @@
+# Documented example: a view over SELECT * freezes its column list when it is created.
+id: cmd-create-view.doc-comedies-star-frozen
+title: View defined with SELECT star keeps only the columns present at creation time
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, select-star, where, alter-table]
+required_capabilities: [create-table, insert, select, alter-table, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview-examples (Create a view consisting of all comedy films)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text, classification text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy', 'U'), (2, 'B', 'Comedy', 'PG'), (3, 'C', 'Drama', 'U'), (4, 'D', 'Comedy', 'R');
+steps:
+  - sql: |
+      CREATE VIEW comedies AS SELECT * FROM films WHERE kind = 'Comedy'
+    expect: ok
+  - sql: |
+      SELECT id, title, kind, classification FROM comedies ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE films ADD COLUMN extra int4
+    expect: ok
+  - sql: |
+      SELECT count(*) AS ncols FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'comedies'
+    expect: rows
+    comment: the star expansion was fixed at creation so the added column is not part of the view
+  - sql: |
+      SELECT * FROM comedies ORDER BY id
+    expect: rows
+    order: ordered

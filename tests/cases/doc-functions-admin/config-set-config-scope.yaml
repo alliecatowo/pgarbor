@@ -1,0 +1,46 @@
+# set_config with is_local=true reverts at transaction end; is_local=false persists past COMMIT
+# but is reverted by ROLLBACK. Custom placeholder settings read back as empty string once reverted.
+id: doc-functions-admin.config-set-config-scope
+title: set_config is_local scope and rollback of session-level values
+family: doc-functions-admin
+tier: core
+feature_ids: [set-config, custom-guc, transactions, rollback]
+required_capabilities: [select, transactions, guc]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-admin-set (set_config is_local: value applies only during the current transaction)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT set_config('app.sess', 'one', false)
+    expect: rows
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT set_config('app.loc', 'inner', true), set_config('app.sess', 'two', false)
+    expect: rows
+  - sql: |
+      SELECT current_setting('app.loc') AS loc, current_setting('app.sess') AS sess
+    expect: rows
+    comment: both values are visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT current_setting('app.sess') AS sess, current_setting('app.loc', true) AS loc
+    expect: rows
+    comment: the non-local change is undone by ROLLBACK and the local one is gone
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT set_config('app.sess', 'three', false)
+    expect: rows
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_setting('app.sess')
+    expect: rows
+    comment: a non-local change made in a committed transaction persists for the session

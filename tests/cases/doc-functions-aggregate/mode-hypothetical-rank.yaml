@@ -1,0 +1,54 @@
+# mode ignores NULLs; hypothetical-set rank, dense_rank, percent_rank and cume_dist with NULL ordering and empty input.
+id: doc-functions-aggregate.mode-hypothetical-rank
+title: mode ignores NULLs and the hypothetical-set rank family sorts NULLs last and counts the hypothetical row
+family: doc-functions-aggregate
+tier: core
+feature_ids: [mode, hypothetical-set-aggregate, rank-hypothetical, dense-rank-hypothetical, percent-rank-hypothetical, cume-dist-hypothetical]
+required_capabilities: [select, aggregates, within-group, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate (mode; Hypothetical-Set Aggregate Functions: 'Unlike most built-in aggregates, these aggregates are not strict')"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT mode() WITHIN GROUP (ORDER BY x) AS m FROM (VALUES (2), (2), (3), (NULL), (NULL), (NULL)) v(x)
+    expect: rows
+    comment: NULLs are ignored, so the most frequent non-null value is 2
+  - sql: |
+      SELECT mode() WITHIN GROUP (ORDER BY x) AS m FROM (VALUES (NULL::int)) v(x)
+    expect: rows
+    comment: mode of only NULL inputs is NULL
+  - sql: |
+      SELECT rank(3) WITHIN GROUP (ORDER BY x) AS r, dense_rank(3) WITHIN GROUP (ORDER BY x) AS dr,
+             percent_rank(3) WITHIN GROUP (ORDER BY x) AS pr, cume_dist(3) WITHIN GROUP (ORDER BY x) AS cd
+      FROM (VALUES (1), (2), (3), (3), (5)) v(x)
+    expect: rows
+    comment: the hypothetical 3 is inserted as a peer of the existing 3s, so rank is 3 and dense_rank is 3
+  - sql: |
+      SELECT rank(NULL) WITHIN GROUP (ORDER BY x) AS r, dense_rank(NULL) WITHIN GROUP (ORDER BY x) AS dr
+      FROM (VALUES (1), (NULL), (2)) v(x)
+    expect: rows
+    comment: the NULL hypothetical value is not strict and sorts last under NULLS LAST
+  - sql: |
+      SELECT rank(2) WITHIN GROUP (ORDER BY x) AS r FROM (VALUES (1), (2), (3)) v(x)
+    expect: rows
+    comment: a hypothetical value equal to an existing value ranks at the first peer
+  - sql: |
+      SELECT cume_dist(0) WITHIN GROUP (ORDER BY x) AS cd, percent_rank(0) WITHIN GROUP (ORDER BY x) AS pr
+      FROM (VALUES (1), (2), (3)) v(x)
+    expect: rows
+    comment: a value below all inputs has percent_rank 0 and cume_dist 1/(N+1)
+  - sql: |
+      SELECT percent_rank(5) WITHIN GROUP (ORDER BY x) AS a, percent_rank(1) WITHIN GROUP (ORDER BY x) AS b
+      FROM (VALUES (1)) v(x)
+    expect: rows
+    comment: with one input row, percent_rank is 1 above it and 0 at it
+  - sql: |
+      SELECT rank(3) WITHIN GROUP (ORDER BY x) AS r FROM (SELECT 1 AS x WHERE false) v
+    expect: rows
+    comment: the hypothetical row alone has rank 1
+  - sql: |
+      SELECT rank(4, 5) WITHIN GROUP (ORDER BY x) FROM (VALUES (1)) v(x)
+    expect: error
+    sqlstate: "42883"
+    comment: the number of direct arguments must match the number of ORDER BY columns

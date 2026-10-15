@@ -1,0 +1,36 @@
+# A unique multicolumn index is enforced on the key pair; INCLUDE columns do not take part in uniqueness.
+id: doc-indexes-multicolumn.unique-include-key-columns
+title: Unique multicolumn index with INCLUDE enforces uniqueness on the key pair only
+family: doc-indexes-multicolumn
+tier: core
+feature_ids: [multicolumn-index, unique-index, include-columns]
+required_capabilities: [create-table, insert, select, create-index, unique-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/indices.sgml#indexes-multicolumn (multiple key columns independent of INCLUDE columns)"
+sessions: [a]
+setup: |
+  CREATE TABLE u (a int, b int, c text);
+  CREATE UNIQUE INDEX u_ab ON u (a, b) INCLUDE (c);
+  INSERT INTO u VALUES (1, 1, 'x'), (1, 2, 'y')
+steps:
+  - sql: |
+      INSERT INTO u VALUES (1, 1, 'z')
+    expect: error
+    sqlstate: "23505"
+    comment: same key pair, different INCLUDE value, still a duplicate
+  - sql: |
+      INSERT INTO u VALUES (1, 3, NULL)
+    expect: ok
+  - sql: |
+      INSERT INTO u VALUES (1, 3, 'q')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO u VALUES (2, 1, 'x')
+    expect: ok
+    comment: same INCLUDE value, different key pair, allowed
+  - sql: |
+      SELECT a, b, c FROM u ORDER BY a, b
+    expect: rows
+    order: ordered

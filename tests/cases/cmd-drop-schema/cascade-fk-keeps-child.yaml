@@ -1,0 +1,41 @@
+# CASCADE drops a foreign key that references the dropped schema, but the referencing table and its rows survive.
+id: cmd-drop-schema.cascade-fk-keeps-child
+title: DROP SCHEMA CASCADE removes a foreign key from a table in another schema while keeping that table and its rows
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, cascade, foreign-keys, cross-schema-dependencies]
+required_capabilities: [create-schema, create-table, foreign-key, insert, select, drop-schema, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Parameters: CASCADE drops objects that depend on the schema's objects)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA parents;
+  CREATE SCHEMA kids;
+  CREATE TABLE parents.p (id int PRIMARY KEY);
+  CREATE TABLE kids.c (id int PRIMARY KEY, pid int REFERENCES parents.p (id));
+  INSERT INTO parents.p VALUES (1);
+  INSERT INTO kids.c VALUES (10, 1);
+steps:
+  - sql: |
+      DROP SCHEMA parents
+    expect: error
+    sqlstate: "2BP01"
+    comment: the foreign key in kids depends on parents.p
+  - sql: |
+      DROP SCHEMA parents CASCADE
+    expect: notice
+  - sql: |
+      SELECT id, pid FROM kids.c ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the child table and its row survive the cascade
+  - sql: |
+      SELECT count(*) AS fks FROM pg_constraint WHERE conrelid = 'kids.c'::regclass AND contype = 'f'
+    expect: rows
+    order: ordered
+    comment: only the foreign key is removed
+  - sql: |
+      INSERT INTO kids.c VALUES (11, 999)
+    expect: ok
+    comment: with the foreign key gone, a pid that matches no parent is accepted

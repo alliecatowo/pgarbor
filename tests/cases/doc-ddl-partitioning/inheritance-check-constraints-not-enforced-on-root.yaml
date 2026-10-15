@@ -1,0 +1,34 @@
+# Table inheritance only enforces CHECK constraints on the child they are attached to. A row inserted
+# into the root without a routing trigger is stored in the root (which has no CHECK), and a
+# child-level CHECK rejects rows that do not match it.
+id: doc-ddl-partitioning.inheritance-check-constraints-not-enforced-on-root
+title: Child CHECK constraints guard only the child; root inserts without a trigger stay in the root
+family: doc-ddl-partitioning
+tier: extended
+feature_ids: [inheritance, check-constraints, partitioning-by-inheritance]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning-inheritance (constraints on child tables; root table should carry no CHECK constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE ic_root (id int, outlet_id int);
+  CREATE TABLE ic_100 (CHECK (outlet_id >= 100 AND outlet_id < 200)) INHERITS (ic_root);
+  CREATE TABLE ic_200 (CHECK (outlet_id >= 200 AND outlet_id < 300)) INHERITS (ic_root);
+steps:
+  - sql: |
+      INSERT INTO ic_root VALUES (1, 150), (2, 999)
+    expect: ok
+    comment: no trigger, so the root keeps both rows; the root has no CHECK
+  - sql: |
+      SELECT tableoid::regclass::text AS tbl, id, outlet_id FROM ic_root ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO ic_100 VALUES (3, 250)
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT count(*) AS child_rows FROM ic_100
+    expect: rows
+    order: ordered

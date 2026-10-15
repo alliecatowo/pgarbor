@@ -1,0 +1,60 @@
+# A constraint trigger defined DEFERRABLE INITIALLY DEFERRED runs at COMMIT, not at the end of the
+# statement. An exception it raises at COMMIT aborts the transaction.
+id: doc-trigger-definition.constraint-trigger-deferred-to-commit
+title: Deferred constraint trigger fires at COMMIT and its exception aborts the commit
+family: doc-trigger-definition
+tier: extended
+feature_ids: [triggers, constraint-triggers, deferred-constraints, transactions, plpgsql, errors]
+required_capabilities: [create-table, create-function, insert, select, plpgsql, triggers, transactions, error-sqlstate]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (constraint trigger; execution deferred to end of transaction)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int);
+  CREATE TABLE fired (id int);
+  CREATE FUNCTION check_fn() RETURNS trigger AS $$
+  BEGIN
+    IF NEW.id = 99 THEN
+      RAISE EXCEPTION 'id 99 not allowed';
+    END IF;
+    INSERT INTO fired VALUES (NEW.id);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE CONSTRAINT TRIGGER t_deferred AFTER INSERT ON t
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION check_fn();
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1), (2)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM fired
+    expect: rows
+    comment: the deferred trigger has not run yet
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id FROM fired ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (99)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "P0001"
+    comment: the RAISE in the deferred trigger makes COMMIT fail and the transaction is rolled back
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

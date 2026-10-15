@@ -1,0 +1,41 @@
+id: cmd-move.move-count-matches-fetch
+title: MOVE skips the same rows that FETCH would return, and the MOVE count equals the FETCH row count
+family: cmd-move
+tier: core
+feature_ids: [move, fetch, declare-cursor, transactions]
+required_capabilities: [create-table, insert, select, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/move.sgml#sql-move (Description: works exactly like FETCH except it does not return rows; Outputs)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four'), (5, 'five'), (6, 'six'), (7, 'seven');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE d1 CURSOR FOR SELECT id FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      FETCH FORWARD 2 FROM d1
+    expect: rows
+    order: ordered
+    comment: rows 1 and 2
+  - sql: |
+      MOVE 2 FROM d1
+    expect: ok
+    comment: skips rows 3 and 4, command tag MOVE 2
+  - sql: |
+      FETCH FORWARD 10 FROM d1
+    expect: rows
+    order: ordered
+    comment: rows 5, 6 and 7 only
+  - sql: |
+      MOVE 10 FROM d1
+    expect: ok
+    comment: nothing left, MOVE 0
+  - sql: |
+      COMMIT
+    expect: ok

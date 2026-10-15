@@ -1,0 +1,36 @@
+# Multiple CHECK constraints fire in alphabetical order by constraint name; the first failing name is reported.
+id: cmd-create-domain.check-alphabetical-order
+title: Multiple domain CHECK constraints are tested in name order and the first failure is reported
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, check-constraint, constraint-name]
+required_capabilities: [create-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (CHECK, alphabetical order)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dz AS int CONSTRAINT z_chk CHECK (VALUE <> 1) CONSTRAINT a_chk CHECK (VALUE <> 1);
+  CREATE DOMAIN dmulti AS int CONSTRAINT b_chk CHECK (VALUE > 0) CONSTRAINT a_chk CHECK (VALUE < 100);
+steps:
+  - sql: |
+      SELECT '1'::dz
+    expect: error
+    sqlstate: "23514"
+    comment: both z_chk and a_chk fail; a_chk is tested first and named in the error
+  - sql: |
+      SELECT '2'::dz AS v
+    expect: rows
+  - sql: |
+      SELECT '200'::dmulti
+    expect: error
+    sqlstate: "23514"
+    comment: only a_chk fails
+  - sql: |
+      SELECT '-5'::dmulti
+    expect: error
+    sqlstate: "23514"
+    comment: only b_chk fails
+  - sql: |
+      SELECT '50'::dmulti AS v
+    expect: rows

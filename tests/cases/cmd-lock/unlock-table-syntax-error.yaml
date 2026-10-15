@@ -1,0 +1,47 @@
+# The docs state there is no UNLOCK TABLE; locks end only at transaction end. The statement is a
+# syntax error and aborts the surrounding transaction, which ROLLBACK then ends.
+id: cmd-lock.unlock-table-syntax-error
+title: UNLOCK TABLE is not a command; the lock stays until the transaction ends
+family: cmd-lock
+tier: core
+feature_ids: [lock-table, transactions, errors]
+required_capabilities: [create-table, lock-table, transactions, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/lock.sgml#sql-lock (Description: no UNLOCK TABLE command)"
+  license: PostgreSQL
+sessions: [a, b]
+setup: |
+  CREATE TABLE t_unlock (a int4);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE t_unlock IN ACCESS EXCLUSIVE MODE
+    expect: ok
+  - session: a
+    sql: |
+      UNLOCK TABLE t_unlock
+    expect: error
+    sqlstate: "42601"
+  - session: b
+    sql: |
+      LOCK TABLE t_unlock IN ACCESS SHARE MODE NOWAIT
+    expect: error
+    sqlstate: "55P03"
+    comment: the failed UNLOCK did not release the lock
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      LOCK TABLE t_unlock IN ACCESS SHARE MODE NOWAIT
+    expect: ok
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok

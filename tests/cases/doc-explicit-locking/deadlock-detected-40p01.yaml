@@ -1,0 +1,48 @@
+# Quarantined: the documented deadlock example. Docs state the victim is not predictable, so the expected
+# error step cannot be pinned to one session without an oracle-side victim-agnostic check.
+id: doc-explicit-locking.deadlock-detected-40p01
+title: Two row-lock holders waiting on each other trigger deadlock_detected
+family: doc-explicit-locking
+tier: core
+feature_ids: [row-locks, deadlock, update, transactions, multi-session]
+required_capabilities: [create-table, insert, update, row-locks, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-deadlocks (accounts example)"
+quarantine:
+  reason: "victim selection is intentionally unpredictable (docs) and depends on deadlock_timeout timing; needs a victim-agnostic check before recording"
+sessions: [a, b]
+setup: |
+  CREATE TABLE accounts (acctnum int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO accounts VALUES (11111, 0), (22222, 0);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE accounts SET balance = balance + 100 WHERE acctnum = 11111
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE accounts SET balance = balance + 100 WHERE acctnum = 22222
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE accounts SET balance = balance - 100 WHERE acctnum = 11111
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      UPDATE accounts SET balance = balance - 100 WHERE acctnum = 22222
+    expect: any
+    comment: one of a or b is aborted with 40P01
+  - session: b
+    wait: true
+    expect: any
+    comment: the other side of the deadlock; expect any because the victim is not predictable

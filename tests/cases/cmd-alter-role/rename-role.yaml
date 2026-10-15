@@ -1,0 +1,42 @@
+# RENAME TO moves a role to a free name; collisions, unknown roles and the session user are refused.
+id: cmd-alter-role.rename-role
+title: ALTER ROLE RENAME TO renames a role and refuses collisions and the session user
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, rename, errors]
+required_capabilities: [roles, catalog-introspection, select, errors, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-desc (second variant: renaming a role)"
+sessions: [a]
+notes: "The session-user case uses DO with format so the role name is the connected role. PostgreSQL refuses it, so no role is renamed."
+steps:
+  - sql: |
+      CREATE ROLE alr_old;
+      CREATE ROLE alr_taken
+    expect: ok
+  - sql: |
+      ALTER ROLE alr_old RENAME TO alr_new
+    expect: ok
+  - sql: |
+      SELECT rolname FROM pg_roles WHERE rolname IN ('alr_old', 'alr_new') ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROLE alr_new RENAME TO alr_taken
+    expect: error
+    sqlstate: "42710"
+    comment: the new name is already in use
+  - sql: |
+      ALTER ROLE alr_missing RENAME TO alr_x
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER ROLE %I RENAME TO %I', session_user, 'alr_session_renamed'); END $$
+    expect: error
+    sqlstate: "0A000"
+    comment: the current session user cannot be renamed
+  - sql: |
+      DROP ROLE alr_new;
+      DROP ROLE alr_taken
+    expect: ok

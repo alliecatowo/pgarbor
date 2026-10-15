@@ -1,0 +1,55 @@
+# GROUP BY basics, aggregates over groups, GROUPING SETS, CUBE, ROLLUP and the GROUPING() function,
+# plus the empty grouping set.
+id: doc-queries-table-expressions.group-by-grouping-sets
+title: GROUP BY, GROUPING SETS, CUBE, ROLLUP and GROUPING() produce documented group rows
+family: doc-queries-table-expressions
+tier: core
+feature_ids: [group-by, having, grouping-sets, cube, rollup, grouping-function, aggregates]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "~/develop/reference/postgres-18/doc/src/sgml/queries.sgml#queries-group and #queries-grouping-sets"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (x text, y int4);
+  INSERT INTO test1 VALUES ('a', 3), ('c', 2), ('b', 5), ('a', 1);
+steps:
+  - sql: |
+      SELECT x FROM test1 GROUP BY x
+    expect: rows
+    order: multiset
+    comment: a, b, c
+  - sql: |
+      SELECT x, sum(y) FROM test1 GROUP BY x
+    expect: rows
+    order: multiset
+    comment: a = 4, b = 5, c = 2
+  - sql: |
+      SELECT x, sum(y) FROM test1 GROUP BY x HAVING sum(y) >= 4
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT x, y FROM test1 GROUP BY GROUPING SETS ((x), (y))
+    expect: rows
+    order: multiset
+    comment: one row per distinct x and per distinct y, with NULL for the other column
+  - sql: |
+      SELECT x, y, count(*) FROM test1 GROUP BY CUBE (x, y)
+    expect: rows
+    order: multiset
+    comment: 4 (x,y) + 3 (x) + 4 (y) + 1 () = 12 rows
+  - sql: |
+      SELECT x, y, count(*) FROM test1 GROUP BY ROLLUP (x, y)
+    expect: rows
+    order: multiset
+    comment: 4 (x,y) + 3 (x) + 1 () = 8 rows
+  - sql: |
+      SELECT x, y, GROUPING(x, y) AS g, count(*) FROM test1 GROUP BY ROLLUP (x, y) ORDER BY g, x, y
+    expect: rows
+    order: ordered
+    comment: GROUPING returns a bit mask; 0 for detail rows, 1 for x-only subtotals, 3 for the grand total
+  - sql: |
+      SELECT sum(y) FROM test1 GROUP BY ()
+    expect: rows
+    order: multiset
+    comment: the empty grouping set yields one row over all input rows, sum 11

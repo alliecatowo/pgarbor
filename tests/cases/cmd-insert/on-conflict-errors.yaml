@@ -1,0 +1,52 @@
+# Documented error conditions for ON CONFLICT: DO UPDATE requires a conflict target, the target must name
+# existing columns / constraints / unique indexes, and one proposed row may not affect the same row twice.
+id: cmd-insert.on-conflict-errors
+title: ON CONFLICT error conditions - missing target, bad column, bad constraint, no arbiter, cardinality
+family: cmd-insert
+tier: core
+feature_ids: [insert, on-conflict, upsert, errors]
+required_capabilities: [create-table, insert, select, on-conflict, unique-index]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/insert.sgml#sql-on-conflict (conflict_target must be provided for DO UPDATE; deterministic statement; arbiter inference)"
+sessions: [a]
+setup: |
+  CREATE TABLE distributors (did int PRIMARY KEY, dname text, zipcode text);
+  CREATE TABLE plain (a int, b text);
+  INSERT INTO distributors VALUES (5, 'Gizmo', NULL);
+steps:
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (5, 'x') ON CONFLICT DO UPDATE SET dname = EXCLUDED.dname
+    expect: error
+    sqlstate: "42601"
+    comment: DO UPDATE must be given a conflict_target
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (5, 'x') ON CONFLICT (nosuch) DO NOTHING
+    expect: error
+    sqlstate: "42703"
+    comment: the conflict target names a column that does not exist
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (5, 'x') ON CONFLICT ON CONSTRAINT nosuch DO NOTHING
+    expect: error
+    sqlstate: "42704"
+    comment: the named constraint does not exist
+  - sql: |
+      INSERT INTO plain (a, b) VALUES (1, 'x') ON CONFLICT (a) DO NOTHING
+    expect: error
+    sqlstate: "42P10"
+    comment: no unique index or constraint on plain.a, so no arbiter can be inferred
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (5, 'first'), (5, 'second')
+      ON CONFLICT (did) DO UPDATE SET dname = EXCLUDED.dname
+    expect: error
+    sqlstate: "21000"
+    comment: two proposed rows share the arbiter key, so one existing row would be affected twice
+  - sql: |
+      INSERT INTO distributors (did, dname) VALUES (6, 'a'), (6, 'b') ON CONFLICT (did) DO NOTHING
+    expect: ok
+    comment: the second proposed row conflicts with the first and is skipped, so no error is raised
+  - sql: |
+      SELECT did, dname, zipcode FROM distributors ORDER BY did
+    expect: rows
+    order: ordered
+    comment: row 5 is unchanged after the 21000 failure, and row 6 holds the first proposed value 'a'

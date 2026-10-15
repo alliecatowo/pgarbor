@@ -1,0 +1,39 @@
+# Enum labels are case sensitive and whitespace is significant (datatype.sgml#datatype-enum-implementation-details).
+id: doc-datatype-enum.labels-case-and-space-sensitive
+title: Enum label matching is case sensitive and keeps leading and inner spaces
+family: doc-datatype-enum
+tier: core
+feature_ids: [enum-labels, case-sensitivity, whitespace-significance, enum-input-validation]
+required_capabilities: [create-type, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-enum-implementation-details"
+sessions: [a]
+setup: |
+  CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+  CREATE TYPE happiness AS ENUM ('happy', 'very happy', 'ecstatic');
+  CREATE TABLE person (name text, current_mood mood)
+steps:
+  - sql: |
+      INSERT INTO person VALUES ('Moe', 'happy')
+    expect: ok
+  - sql: |
+      SELECT name FROM person WHERE current_mood = 'HAPPY'
+    expect: error
+    sqlstate: "22P02"
+    comment: "HAPPY is not happy"
+  - sql: |
+      SELECT ' happy'::mood
+    expect: error
+    sqlstate: "22P02"
+    comment: leading space is part of the literal
+  - sql: |
+      SELECT 'very  happy'::happiness
+    expect: error
+    sqlstate: "22P02"
+    comment: double inner space is not the label 'very happy'
+  - sql: |
+      SELECT 'very happy'::happiness::text AS label
+    expect: rows
+    order: multiset
+    comment: exact label with one inner space is accepted

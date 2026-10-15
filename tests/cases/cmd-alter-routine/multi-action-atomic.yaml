@@ -1,0 +1,36 @@
+# One ALTER ROUTINE with several actions is a single statement: if any action fails (here ROWS on a
+# non-set function), none of the earlier actions take effect.
+id: cmd-alter-routine.multi-action-atomic
+title: A multi-action ALTER ROUTINE is atomic; a failing action leaves all attributes unchanged
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, volatility, parallel, cost, atomicity]
+required_capabilities: [create-function, alter-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: action [ ... ])"
+sessions: [a]
+setup: |
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      SELECT provolatile, proparallel, procost, prorows FROM pg_proc WHERE proname = 'foo' ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROUTINE foo(integer) STABLE PARALLEL SAFE COST 10 ROWS 5
+    expect: error
+    sqlstate: "22023"
+    comment: ROWS is not applicable to a function that does not return a set
+  - sql: |
+      SELECT provolatile, proparallel, procost, prorows FROM pg_proc WHERE proname = 'foo' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: nothing from the failed statement is applied
+  - sql: |
+      ALTER ROUTINE foo(integer) STABLE PARALLEL SAFE COST 10
+    expect: ok
+  - sql: |
+      SELECT provolatile, proparallel, procost, prorows FROM pg_proc WHERE proname = 'foo' ORDER BY 1
+    expect: rows
+    order: ordered

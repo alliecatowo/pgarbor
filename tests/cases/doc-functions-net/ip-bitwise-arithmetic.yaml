@@ -1,0 +1,51 @@
+# Bitwise NOT/AND/OR and offset arithmetic on inet values, including the documented examples.
+id: doc-functions-net.ip-bitwise-arithmetic
+title: Bitwise NOT, AND, OR and integer offset arithmetic on inet, including overflow errors
+family: doc-functions-net
+tier: core
+feature_ids: [inet-operators, bitwise-operators, inet-arithmetic]
+required_capabilities: [select, inet, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-net (IP Address Operators table: ~, &, |, +, -)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT ~ inet '192.168.1.6' AS bit_not, inet '192.168.1.6' & inet '0.0.0.255' AS bit_and, inet '192.168.1.6' | inet '0.0.0.255' AS bit_or
+    expect: rows
+    order: multiset
+    comment: documented examples 63.87.254.249, 0.0.0.6, 192.168.1.255
+  - sql: |
+      SELECT inet '192.168.1.6' + 25 AS plus_int, inet '192.168.1.43' - 36 AS minus_int, 200 + inet '::ffff:fff0:1' AS int_plus_v6
+    expect: rows
+    order: multiset
+    comment: documented examples 192.168.1.31, 192.168.1.7, ::ffff:255.240.0.201
+  - sql: |
+      SELECT inet '192.168.1.43' - inet '192.168.1.19' AS addr_diff, inet '::1' - inet '::ffff:1' AS v6_diff
+    expect: rows
+    order: multiset
+    comment: documented examples 24 and -4294901760 (the result of inet - inet is bigint)
+  - sql: |
+      SELECT pg_typeof(inet '192.168.1.43' - inet '192.168.1.19') AS diff_type, pg_typeof(inet '192.168.1.6' + 25) AS plus_type
+    expect: rows
+    order: multiset
+    comment: inet minus inet yields bigint, inet plus or minus integer yields inet
+  - sql: |
+      SELECT inet '10.0.0.0' + 0 AS plus_zero, inet '10.0.0.5' - 5 AS back_to_start, inet '255.255.255.255/8' - 0 AS keeps_mask
+    expect: rows
+    order: multiset
+    comment: zero offset is identity; the netmask is preserved by offset arithmetic
+  - sql: |
+      SELECT inet '192.168.1.5' + 9223372036854775807 AS overflow_up
+    expect: error
+    sqlstate: "22003"
+    comment: address arithmetic past the end of the address space is out of range
+  - sql: |
+      SELECT inet '10.0.0.1' - 9223372036854775807 AS overflow_down
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT inet '192.168.1.1' - inet '::1' AS mixed_family_diff
+    expect: error
+    sqlstate: "22023"
+    comment: subtraction of addresses of different sizes is rejected

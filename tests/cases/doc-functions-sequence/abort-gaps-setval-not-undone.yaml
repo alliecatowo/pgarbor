@@ -1,0 +1,35 @@
+# nextval values consumed by an aborted transaction are not reclaimed; setval effects survive ROLLBACK.
+id: doc-functions-sequence.abort-gaps-setval-not-undone
+title: Aborted transactions leave gaps from nextval, and setval state changes are not rolled back
+family: doc-functions-sequence
+tier: core
+feature_ids: [nextval, setval, transactions, rollback, gaps]
+required_capabilities: [sequences, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (sequences cannot be used to obtain gapless sequences; setval not undone on rollback)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_gap;
+  CREATE SEQUENCE s_tx;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT nextval('s_gap') AS v
+    expect: rows
+  - sql: |
+      SELECT setval('s_tx', 100) AS v
+    expect: rows
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT nextval('s_gap') AS v
+    expect: rows
+    comment: the value 1 consumed by the aborted transaction is not reclaimed, so this is a gap
+  - sql: |
+      SELECT nextval('s_tx') AS v
+    expect: rows
+    comment: the setval made before ROLLBACK is still in effect

@@ -1,0 +1,53 @@
+# Inheritance: a child without a GENERATED clause copies the parent's generation; a child may
+# override the expression, and the stored value uses the child's expression while a virtual
+# value read through the parent uses the parent's expression.
+id: doc-ddl-generated-columns.inheritance-expressions
+title: Inherited generated columns copy the parent expression, and stored values follow the physical table
+family: doc-ddl-generated-columns
+tier: core
+feature_ids: [generated-columns, inheritance, stored-generated-columns, virtual-generated-columns]
+required_capabilities: [create-table, insert, select, inherits, generated-columns]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ddl.sgml#ddl-generated-columns"
+sessions: [a]
+setup: |
+  CREATE TABLE gp (x int, s int GENERATED ALWAYS AS (x + 1) STORED, v int GENERATED ALWAYS AS (x * 2) VIRTUAL);
+  CREATE TABLE gc (x int, s int GENERATED ALWAYS AS (x * 100) STORED, v int GENERATED ALWAYS AS (x * 1000) VIRTUAL) INHERITS (gp);
+  CREATE TABLE gauto (x int) INHERITS (gp);
+  INSERT INTO gp (x) VALUES (2);
+  INSERT INTO gc (x) VALUES (2);
+  INSERT INTO gauto (x) VALUES (5)
+steps:
+  - sql: |
+      SELECT tableoid::regclass::text AS src, x, s, v FROM gp
+    expect: rows
+    order: multiset
+    comment: the gc row keeps s=200 from its own stored expression but v=4 from the parent's virtual expression
+  - sql: |
+      SELECT x, s, v FROM ONLY gp
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT x, s, v FROM gc
+    expect: rows
+    order: multiset
+    comment: "named child table: its own stored and virtual expressions apply"
+  - sql: |
+      SELECT x, s, v FROM gauto
+    expect: rows
+    order: multiset
+    comment: a child column without GENERATED copies the parent's generation expressions
+  - sql: |
+      CREATE TABLE gplain (x int, s int)
+    expect: ok
+  - sql: |
+      CREATE TABLE gbad_plain_parent (x int, s int GENERATED ALWAYS AS (x) STORED) INHERITS (gplain)
+    expect: error
+    sqlstate: "42611"
+    comment: a generated child column cannot inherit from a non-generated parent column
+  - sql: |
+      CREATE TABLE gbad_kind (x int, s int GENERATED ALWAYS AS (x * 100) VIRTUAL) INHERITS (gp)
+    expect: error
+    sqlstate: "42611"
+    comment: a child with the other generation kind (virtual under stored parent) is rejected

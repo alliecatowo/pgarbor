@@ -1,0 +1,38 @@
+# Standard deviation and variance: population vs sample forms, result types, single-row and empty-input NULLs.
+id: doc-functions-aggregate.stddev-variance
+title: stddev and variance families - population vs sample, result types, and degenerate inputs
+family: doc-functions-aggregate
+tier: core
+feature_ids: [stddev, stddev-pop, stddev-samp, variance, var-pop, var-samp, aggregate-result-types]
+required_capabilities: [select, aggregates, float8, numeric, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-aggregate-statistics-table (stddev, stddev_pop, stddev_samp, variance, var_pop, var_samp: 'for real or double precision, otherwise numeric')"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT stddev(x) AS sd, stddev_samp(x) AS sds, stddev_pop(x) AS sdp,
+             variance(x) AS vr, var_samp(x) AS vs, var_pop(x) AS vp
+      FROM (VALUES (2.0::float8), (4), (4), (4), (5), (5), (7), (9)) v(x)
+    expect: rows
+    comment: the classic example has population variance 4 and population stddev 2; stddev is an alias of stddev_samp and variance of var_samp
+  - sql: |
+      SELECT pg_typeof(stddev(x)) AS t_int, pg_typeof(var_pop(x)) AS t_int2,
+             pg_typeof(var_pop(x::float4)) AS t_real
+      FROM (VALUES (1::int4), (3)) v(x)
+    expect: rows
+    comment: integer input gives numeric, real input gives double precision
+  - sql: |
+      SELECT var_pop(x) AS vp, var_samp(x) AS vs, stddev_pop(x) AS sp, stddev_samp(x) AS ss
+      FROM (VALUES (1::numeric), (3)) v(x)
+    expect: rows
+    comment: numeric population variance is 1 and sample variance is 2
+  - sql: |
+      SELECT stddev_samp(x) AS ss, var_samp(x) AS vs, var_pop(x) AS vp, stddev_pop(x) AS sp
+      FROM (VALUES (5.0::float8)) v(x)
+    expect: rows
+    comment: sample forms are NULL for one row, population forms are 0
+  - sql: |
+      SELECT stddev(x) AS sd, var_pop(x) AS vp FROM (SELECT 1.0::float8 AS x WHERE false) v
+    expect: rows
+    comment: zero rows gives NULL

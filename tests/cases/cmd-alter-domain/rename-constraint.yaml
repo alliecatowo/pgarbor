@@ -1,0 +1,43 @@
+# RENAME CONSTRAINT changes the catalog name only; the old name stops resolving and collisions are refused.
+id: cmd-alter-domain.rename-constraint
+title: "RENAME CONSTRAINT renames a domain CHECK, and collisions or unknown names raise errors"
+family: cmd-alter-domain
+tier: core
+feature_ids: [alter-domain, rename-constraint, check-constraint]
+required_capabilities: [create-domain, alter-domain, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_domain.sgml#sql-alterdomain (RENAME CONSTRAINT)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN zipcode AS text CONSTRAINT zipchk CHECK (char_length(VALUE) = 5);
+  ALTER DOMAIN zipcode ADD CONSTRAINT zc_other CHECK (VALUE <> 'x');
+steps:
+  - sql: |
+      ALTER DOMAIN zipcode RENAME CONSTRAINT zipchk TO zip_check
+    expect: ok
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE contypid = 'zipcode'::regtype ORDER BY conname
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER DOMAIN zipcode DROP CONSTRAINT zipchk
+    expect: error
+    sqlstate: "42704"
+    comment: the old name no longer exists
+  - sql: |
+      ALTER DOMAIN zipcode RENAME CONSTRAINT zip_check TO zc_other
+    expect: error
+    sqlstate: "42710"
+    comment: zc_other is already taken on this domain
+  - sql: |
+      ALTER DOMAIN zipcode RENAME CONSTRAINT nosuch TO other_name
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER DOMAIN zipcode DROP CONSTRAINT zip_check
+    expect: ok
+  - sql: |
+      SELECT conname FROM pg_constraint WHERE contypid = 'zipcode'::regtype ORDER BY conname
+    expect: rows
+    order: ordered

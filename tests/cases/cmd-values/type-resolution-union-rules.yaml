@@ -1,0 +1,38 @@
+# The column type of a multi-row VALUES list is determined by UNION type resolution over all rows.
+# Unknown-typed literals adopt the other rows' type; int and numeric resolve to numeric.
+id: cmd-values.type-resolution-union-rules
+title: VALUES column type follows UNION type resolution across rows, including NULLs and unknown literals
+family: cmd-values
+tier: core
+feature_ids: [values, type-resolution, nulls]
+required_capabilities: [values, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/values.sgml#sql-values (Description: column types determined like UNION; typeconv-union-case)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT DISTINCT pg_typeof(column1)::text AS t FROM (VALUES (1), (2.5)) v
+    expect: rows
+    order: multiset
+    comment: integer and numeric combine to numeric
+  - sql: |
+      SELECT DISTINCT pg_typeof(column1)::text AS t FROM (VALUES (1), (NULL)) v
+    expect: rows
+    order: multiset
+    comment: NULL does not change the resolved integer type
+  - sql: |
+      SELECT DISTINCT pg_typeof(column1)::text AS t FROM (VALUES ('abc'), ('def')) v
+    expect: rows
+    order: multiset
+    comment: all unknown literals resolve to text
+  - sql: |
+      SELECT DISTINCT pg_typeof(column1)::text AS t FROM (VALUES (NULL), (NULL)) v
+    expect: rows
+    order: multiset
+    comment: all-NULL unknown column resolves to text
+  - sql: |
+      SELECT column1, pg_typeof(column1)::text AS t FROM (VALUES (1.5::real), (2)) v ORDER BY column1
+    expect: rows
+    order: ordered
+    comment: real and integer combine to real

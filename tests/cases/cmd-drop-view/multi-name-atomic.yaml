@@ -1,0 +1,32 @@
+# DROP VIEW with a list is all-or-nothing: one missing name raises an error and drops none of the others.
+id: cmd-drop-view.multi-name-atomic
+title: DROP VIEW with a name list fails as a whole when one name is missing, dropping nothing
+family: cmd-drop-view
+tier: core
+feature_ids: [drop-view, multiple-names, errors]
+required_capabilities: [create-view, drop-view, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_view.sgml#sql-dropview (name [, ...])"
+sessions: [a]
+setup: |
+  CREATE VIEW ma_v1 AS SELECT 1 AS x;
+  CREATE VIEW ma_v2 AS SELECT 2 AS x;
+steps:
+  - sql: |
+      DROP VIEW ma_v1, ma_v2, ma_missing
+    expect: error
+    sqlstate: "42P01"
+    comment: view "ma_missing" does not exist
+  - sql: |
+      SELECT to_regclass('ma_v1') IS NULL AS v1_gone, to_regclass('ma_v2') IS NULL AS v2_gone
+    expect: rows
+    order: ordered
+    comment: neither listed view was dropped
+  - sql: |
+      DROP VIEW ma_v1, ma_v2
+    expect: ok
+  - sql: |
+      SELECT to_regclass('ma_v1') IS NULL AS v1_gone, to_regclass('ma_v2') IS NULL AS v2_gone
+    expect: rows
+    order: ordered

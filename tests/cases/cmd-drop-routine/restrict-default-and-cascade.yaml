@@ -1,0 +1,41 @@
+# RESTRICT is the default and refuses to drop a routine that a view depends on; CASCADE drops the view too.
+id: cmd-drop-routine.restrict-default-and-cascade
+title: "DROP ROUTINE refuses a depended-on routine by default and drops dependents with CASCADE"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, cascade, restrict, dependencies]
+required_capabilities: [create-function, create-view, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-parameters (CASCADE, RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION rc_f(integer) RETURNS int LANGUAGE sql AS 'SELECT $1';
+  CREATE VIEW rc_v AS SELECT rc_f(1) AS x;
+steps:
+  - sql: |
+      DROP ROUTINE rc_f(integer)
+    expect: error
+    sqlstate: "2BP01"
+    comment: RESTRICT is the default
+  - sql: |
+      DROP ROUTINE rc_f(integer) RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'rc_f'
+    expect: rows
+    order: multiset
+    comment: the refused drops left the routine in place
+  - sql: |
+      DROP ROUTINE rc_f(integer) CASCADE
+    expect: ok
+    comment: the dependent view is dropped with a notice
+  - sql: |
+      SELECT count(*) AS n FROM pg_class WHERE relname = 'rc_v'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname = 'rc_f'
+    expect: rows
+    order: multiset

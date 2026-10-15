@@ -1,0 +1,30 @@
+# RESTRICT and CASCADE both drop a rule that has no dependents; a missing rule still errors under CASCADE.
+id: cmd-drop-rule.cascade-restrict-no-dependents
+title: DROP RULE accepts explicit RESTRICT or CASCADE when nothing depends on the rule
+family: cmd-drop-rule
+tier: core
+feature_ids: [drop-rule, create-rule, cascade, restrict]
+required_capabilities: [create-table, create-rule, drop-rule, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (CASCADE | RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE TABLE cr_t (a int4);
+  CREATE RULE cr_one AS ON INSERT TO cr_t DO INSTEAD NOTHING;
+  CREATE RULE cr_two AS ON INSERT TO cr_t DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      DROP RULE cr_one ON cr_t RESTRICT
+    expect: ok
+  - sql: |
+      DROP RULE cr_two ON cr_t CASCADE
+    expect: ok
+  - sql: |
+      DROP RULE cr_two ON cr_t CASCADE
+    expect: error
+    sqlstate: "42704"
+    comment: CASCADE does not suppress the missing-rule error (only IF EXISTS does)
+  - sql: |
+      SELECT count(*) FROM pg_rules WHERE tablename = 'cr_t'
+    expect: rows

@@ -1,0 +1,40 @@
+# Documented workaround: a domain over the composite type carries CHECK constraints, which then
+# apply to values stored in columns of that domain.
+id: doc-rowtypes.domain-over-composite-enforces-check
+title: A domain over a composite type enforces its CHECK constraint wherever the domain is used
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, domains, check-constraints]
+required_capabilities: [create-type, create-domain, create-table, insert, select, composite-types, constraints]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-declare"
+sessions: [a]
+setup: |
+  CREATE TYPE pair2 AS (a integer, b text);
+  CREATE DOMAIN pair2_pos AS pair2 CHECK ((VALUE).a > 0);
+  CREATE TABLE holder (v pair2_pos);
+steps:
+  - sql: |
+      SELECT ROW(-1, 'bad')::pair2 AS plain_composite_ok
+    expect: rows
+    comment: the plain composite type does not check
+  - sql: |
+      SELECT (ROW(1, 'ok')::pair2_pos).a AS domain_ok
+    expect: rows
+  - sql: |
+      SELECT (ROW(-1, 'bad')::pair2_pos).a
+    expect: error
+    sqlstate: "23514"
+    comment: the domain CHECK rejects the value on cast
+  - sql: |
+      INSERT INTO holder VALUES (ROW(2, 'z'))
+    expect: ok
+  - sql: |
+      INSERT INTO holder VALUES (ROW(0, 'z'))
+    expect: error
+    sqlstate: "23514"
+  - sql: |
+      SELECT (v).a, (v).b FROM holder
+    expect: rows
+    order: multiset

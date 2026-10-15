@@ -1,0 +1,31 @@
+# Changing the owner of one large object leaves the owners of other objects untouched.
+id: cmd-alter-large-object.isolation-per-object
+title: OWNER TO changes only the named large object
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, large-objects]
+required_capabilities: [large-objects, roles, catalog-introspection, select]
+provenance:
+  source: hand
+  ref: "alter_large_object.sgml: operates on one large_object_oid"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_iso_role
+    expect: ok
+  - sql: |
+      SELECT lo_create(931201), lo_create(931202)
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 931201 OWNER TO cmd_alo_iso_role
+    expect: ok
+  - sql: |
+      SELECT m.oid, r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid IN (931201, 931202) ORDER BY m.oid
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT lo_unlink(931201), lo_unlink(931202)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_iso_role
+    expect: ok

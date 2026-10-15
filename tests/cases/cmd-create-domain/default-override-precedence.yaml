@@ -1,0 +1,35 @@
+# Column DEFAULT overrides the domain DEFAULT; a domain without DEFAULT yields NULL on omitted columns.
+id: cmd-create-domain.default-override-precedence
+title: Domain DEFAULT applies to omitted columns unless the column declares its own default
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, domain-default, column-default]
+required_capabilities: [create-domain, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (DEFAULT expression)"
+sessions: [a]
+setup: |
+  CREATE DOMAIN dflt AS int4 DEFAULT 7;
+  CREATE DOMAIN dnone AS int4;
+  CREATE TABLE tdef (
+    id int4 PRIMARY KEY,
+    dom_only dflt,
+    col_over dflt DEFAULT 9,
+    no_default_dom dnone,
+    plain int4
+  );
+steps:
+  - sql: |
+      INSERT INTO tdef (id) VALUES (1)
+    expect: ok
+    comment: omitted columns take the domain default, the column default, or NULL
+  - sql: |
+      INSERT INTO tdef (id, dom_only) VALUES (2, 100)
+    expect: ok
+    comment: an explicit value always wins over any default
+  - sql: |
+      SELECT id, dom_only, col_over, no_default_dom IS NULL AS nd_null, plain IS NULL AS plain_null
+      FROM tdef ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,33 @@
+# Quoted new names keep their case; unquoted names fold to lower case when matched or stored.
+id: cmd-alter-event-trigger.rename-quoted-case-preserved
+title: RENAME TO preserves quoted case and folds unquoted identifiers to lower case
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard RENAME TO "AetMixedCase"
+    expect: ok
+  - sql: |
+      ALTER EVENT TRIGGER aetmixedcase DISABLE
+    expect: error
+    sqlstate: '42704'
+    comment: unquoted name folds to aetmixedcase, which does not exist
+  - sql: |
+      ALTER EVENT TRIGGER "AetMixedCase" DISABLE
+    expect: ok
+  - sql: |
+      ALTER EVENT TRIGGER "AetMixedCase" RENAME TO AET_Folded
+    expect: ok
+    comment: unquoted target is stored as aet_folded
+  - sql: |
+      SELECT evtname, CASE evtenabled WHEN 'D' THEN 'disabled' ELSE 'other' END AS mode FROM pg_event_trigger ORDER BY evtname
+    expect: rows
+    order: ordered

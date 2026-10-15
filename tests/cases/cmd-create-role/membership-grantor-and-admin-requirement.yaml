@@ -1,0 +1,58 @@
+# IN ROLE needs ADMIN on the group; the membership it creates records the executing role as grantor.
+id: cmd-create-role.membership-grantor-and-admin-requirement
+title: IN ROLE by a CREATEROLE role fails without ADMIN on the group and records the executing role as grantor once it has ADMIN
+family: cmd-create-role
+tier: core
+feature_ids: [create-role, role-membership, grantor, admin-option, errors, session-authorization]
+required_capabilities: [roles, catalog-introspection, select, role-membership, session-authorization]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_role.sgml#notes (membership grants have the executing role as grantor); IN ROLE clause"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE ccr_g
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_c CREATEROLE
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION ccr_c
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_n1 IN ROLE ccr_g
+    expect: error
+    sqlstate: "42501"
+    comment: ccr_c lacks ADMIN OPTION on ccr_g, so it may not grant membership in it
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      GRANT ccr_g TO ccr_c WITH ADMIN OPTION
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION ccr_c
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_n2 IN ROLE ccr_g
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT r.rolname AS role, m.rolname AS member, am.admin_option, am.inherit_option, am.set_option,
+             am.grantor = 'ccr_c'::regrole AS granted_by_ccr_c
+        FROM pg_auth_members am
+        JOIN pg_roles r ON r.oid = am.roleid
+        JOIN pg_roles m ON m.oid = am.member
+       WHERE r.rolname = 'ccr_g' AND m.rolname IN ('ccr_c', 'ccr_n2')
+       ORDER BY member
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(*) AS n1_exists FROM pg_roles WHERE rolname = 'ccr_n1'
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ccr_n2, ccr_c, ccr_g
+    expect: ok

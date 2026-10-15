@@ -1,0 +1,30 @@
+# Documented: a copy inherits whatever the source has; copying a parser-only configuration yields a configuration with no mappings, and copies can be copied again.
+id: cmd-create-tsconfig.copy-from-parser-only-config
+title: "COPY of a parser-only configuration has no mappings, and a copy of a copy keeps the parser"
+family: cmd-create-tsconfig
+tier: core
+feature_ids: [create-text-search-configuration, copy-option, parser-option]
+required_capabilities: [create-text-search-configuration, text-search, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsconfig.sgml#sql-createtsconfig (Description: an existing configuration can be copied)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH CONFIGURATION tsc_empty_src (PARSER = default);
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_empty_copy (COPY = tsc_empty_src)
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'tsc_empty_copy'::regconfig
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_copy_of_copy (COPY = tsc_empty_copy)
+    expect: ok
+  - sql: |
+      SELECT p.prsname
+        FROM pg_ts_config c JOIN pg_ts_parser p ON p.oid = c.cfgparser
+       WHERE c.cfgname = 'tsc_copy_of_copy'
+    expect: rows
+    order: ordered

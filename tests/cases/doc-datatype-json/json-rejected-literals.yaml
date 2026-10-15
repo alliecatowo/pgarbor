@@ -1,0 +1,48 @@
+# Literals RFC 7159 forbids are rejected by both types, and jsonb also rejects numbers outside numeric's range.
+id: doc-datatype-json.json-rejected-literals
+title: NaN, True, leading-dot numbers and trailing commas are rejected; out-of-range numbers fail only for jsonb
+family: doc-datatype-json
+tier: core
+feature_ids: [json, jsonb, json-input-validation, json-numbers]
+required_capabilities: [select, json, jsonb, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#datatype-json (JSON Primitive Types and Corresponding PostgreSQL Types table)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT '1e1000000'::json AS j_big
+    expect: rows
+    comment: json does not check numeric range (RFC 7159 implementation-defined)
+  - sql: |
+      SELECT '1e1000000'::jsonb
+    expect: error
+    sqlstate: "22003"
+    comment: jsonb numbers must fit the numeric type
+  - sql: |
+      SELECT 'NaN'::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT '{"a": NaN}'::jsonb
+    expect: error
+    sqlstate: "22P02"
+    comment: NaN and infinity are not JSON numbers
+  - sql: |
+      SELECT 'True'::jsonb
+    expect: error
+    sqlstate: "22P02"
+    comment: only lowercase true and false are accepted
+  - sql: |
+      SELECT '.1'::json
+    expect: error
+    sqlstate: "22P02"
+    comment: SQL/JSON path accepts .1 but JSON text does not
+  - sql: |
+      SELECT '[1, 2,]'::json
+    expect: error
+    sqlstate: "22P02"
+  - sql: |
+      SELECT 'null'::jsonb IS NULL AS is_sql_null
+    expect: rows
+    comment: a JSON null is not an SQL NULL

@@ -1,0 +1,38 @@
+# The documented role-removal workflow: DROP ROLE is refused while the role owns objects or holds privileges; DROP OWNED then DROP ROLE succeeds.
+id: cmd-drop-owned.prepare-role-removal
+title: "DROP ROLE fails while the role owns objects or holds privileges; DROP OWNED then DROP ROLE succeeds"
+family: cmd-drop-owned
+tier: core
+feature_ids: [drop-owned, drop-role, role-removal, dependencies]
+required_capabilities: [roles, drop-role, privileges, grant, create-table, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_owned.sgml#sql-drop-owned-notes (DROP OWNED is used to prepare for the removal of roles)"
+sessions: [a]
+setup: |
+  CREATE ROLE dpr_r;
+  CREATE TABLE dpr_t (a int4);
+  ALTER TABLE dpr_t OWNER TO dpr_r;
+  CREATE TABLE dpr_shared (a int4);
+  GRANT SELECT ON dpr_shared TO dpr_r;
+steps:
+  - sql: |
+      DROP ROLE dpr_r
+    expect: error
+    sqlstate: "2BP01"
+    comment: the role still owns a table and holds a privilege
+  - sql: |
+      DROP OWNED BY dpr_r
+    expect: ok
+  - sql: |
+      DROP ROLE dpr_r
+    expect: ok
+  - sql: |
+      SELECT count(*) AS roles FROM pg_roles WHERE rolname = 'dpr_r'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT relname FROM pg_class WHERE relname IN ('dpr_t', 'dpr_shared') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: the table owned by the role is gone; the table it only had a privilege on remains

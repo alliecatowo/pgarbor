@@ -1,0 +1,42 @@
+# Table membership: removing a non-member, adding a member once, the second ADD, and a dropped member table are each checked; a missing table is undefined_table.
+id: cmd-alter-extension.add-table-membership
+title: ADD TABLE makes a table undroppable until the extension drops it, and rejects duplicates and missing tables
+family: cmd-alter-extension
+tier: core
+feature_ids: [alter-extension, add-member, drop-member, tables, errors]
+required_capabilities: [create-extension, create-table, insert, alter-extension, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (ADD/DROP member_object, TABLE)"
+sessions: [a]
+setup: |
+  CREATE EXTENSION hstore;
+  CREATE TABLE tt (id int4);
+  INSERT INTO tt VALUES (1), (2);
+steps:
+  - sql: |
+      ALTER EXTENSION hstore DROP TABLE tt
+    expect: error
+    sqlstate: "55000"
+    comment: tt is not a member yet
+  - sql: |
+      ALTER EXTENSION hstore ADD TABLE tt
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore ADD TABLE tt
+    expect: error
+    sqlstate: "55000"
+    comment: already a member
+  - sql: |
+      DROP TABLE tt
+    expect: error
+    sqlstate: "2BP01"
+  - sql: |
+      SELECT id FROM tt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the member table keeps its rows
+  - sql: |
+      ALTER EXTENSION hstore ADD TABLE no_such_table
+    expect: error
+    sqlstate: "42P01"

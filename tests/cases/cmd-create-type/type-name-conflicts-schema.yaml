@@ -1,0 +1,56 @@
+# Type name uniqueness: schema-qualified creation, same name in another schema, conflicts with tables and domains.
+id: cmd-create-type.type-name-conflicts-schema
+title: "Type name conflicts with existing types, tables, domains and schemas"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, create-schema, create-table, create-domain, namespace, errors]
+required_capabilities: [create-type, create-schema, create-table, create-domain, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype (Description: schema and name uniqueness)"
+steps:
+  - sql: |
+      CREATE SCHEMA cts
+    expect: ok
+  - sql: |
+      CREATE TYPE cts.ct_in_schema AS (k int4, v text)
+    expect: ok
+  - sql: |
+      SELECT n.nspname, t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typname = 'ct_in_schema'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TYPE cts.ct_in_schema AS (k int4)
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      CREATE SCHEMA cts2
+    expect: ok
+  - sql: |
+      CREATE TYPE cts2.ct_in_schema AS (k int4)
+    expect: ok
+    comment: the same name is allowed in a different schema
+  - sql: |
+      SELECT count(*) AS n FROM pg_type WHERE typname = 'ct_in_schema'
+    expect: rows
+  - sql: |
+      CREATE TYPE nosch.bad AS (k int4)
+    expect: error
+    sqlstate: "3F000"
+    comment: schema does not exist
+  - sql: |
+      CREATE TABLE tbl_comp (a int)
+    expect: ok
+  - sql: |
+      CREATE TYPE tbl_comp AS ENUM ('q')
+    expect: error
+    sqlstate: "42710"
+    comment: every table has a row type, so the name is taken
+  - sql: |
+      CREATE DOMAIN dom1 AS int
+    expect: ok
+  - sql: |
+      CREATE TYPE dom1 AS (x int)
+    expect: error
+    sqlstate: "42710"
+    comment: domains share the type namespace

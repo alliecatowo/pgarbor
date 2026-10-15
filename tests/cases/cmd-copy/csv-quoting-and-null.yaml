@@ -1,0 +1,35 @@
+# CSV output quoting rules: values containing the delimiter, quote, CR or LF are quoted and embedded quotes are doubled; NULL is unquoted, the empty string is quoted.
+id: cmd-copy.csv-quoting-and-null
+title: "COPY CSV output: quoting of delimiter, quote and newline; NULL versus empty string"
+family: cmd-copy
+tier: core
+feature_ids: [copy, copy-to, copy-csv-format, copy-quoting, copy-null-string]
+required_capabilities: [create-table, insert, select, copy]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/copy.sgml#sql-copy-csv-format"
+sessions: [a]
+setup: |
+  CREATE TABLE cv (id int4, a text, b text, n numeric(6,2));
+  INSERT INTO cv VALUES
+    (1, 'plain', 'x', 1.50),
+    (2, 'has,comma', 'say "hi"', NULL),
+    (3, '', NULL, 0),
+    (4, E'line1\nline2', E'tab\there', 2),
+    (5, '\N', 'back\slash', NULL);
+steps:
+  - sql: |
+      COPY (SELECT id, a, b, n FROM cv ORDER BY id) TO STDOUT (FORMAT csv)
+    expect: ok
+    order: ordered
+    comment: NULL is unquoted and empty; the empty string is "" ; tab and backslash are not special in CSV
+  - sql: |
+      COPY (SELECT id, a, b, n FROM cv ORDER BY id) TO STDOUT (FORMAT csv, NULL 'NA')
+    expect: ok
+    order: ordered
+    comment: a custom NULL string is written unquoted; a data value equal to it would be quoted
+  - sql: |
+      COPY (SELECT a FROM cv WHERE id = 5) TO STDOUT (FORMAT csv, NULL '\N')
+    expect: ok
+    order: ordered
+    comment: the value \N equals the NULL string, so it is quoted on output

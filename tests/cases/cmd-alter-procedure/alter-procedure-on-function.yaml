@@ -1,0 +1,33 @@
+# ALTER PROCEDURE on a name that is a function (not a procedure) is rejected with 42809; the
+# same statement still works on a real procedure.
+id: cmd-alter-procedure.alter-procedure-on-function
+title: ALTER PROCEDURE on a function raises 42809 and leaves the function unchanged
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, procedures, function-identity, errors]
+required_capabilities: [create-function, create-procedure, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Parameters: name; Description)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION fn_only(integer) RETURNS integer LANGUAGE SQL AS 'SELECT $1';
+  CREATE PROCEDURE pr_only(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE fn_only(integer) RENAME TO fn_renamed
+    expect: error
+    sqlstate: "42809"
+    comment: fn_only(integer) is a function
+  - sql: |
+      ALTER PROCEDURE fn_only(integer) SECURITY DEFINER
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      ALTER PROCEDURE pr_only(integer) RENAME TO pr_renamed
+    expect: ok
+  - sql: |
+      SELECT proname, prokind FROM pg_proc WHERE proname IN ('fn_only', 'fn_renamed', 'pr_renamed') ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: expect fn_only f and pr_renamed p; the function kept its name

@@ -1,0 +1,40 @@
+# jsonb subscript UPDATE must fail when an existing intermediate value is a scalar or a JSON null; rows stay unchanged.
+id: doc-datatype-json.jsonb-subscript-assign-errors
+title: jsonb subscript assignment through a number, string or JSON null raises 22023 and leaves rows unchanged
+family: doc-datatype-json
+tier: core
+feature_ids: [jsonb, jsonb-subscripting, jsonb-subscript-assign]
+required_capabilities: [create-table, insert, select, update, jsonb, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/json.sgml#jsonb-subscripting (traversal of non-object intermediate values)"
+sessions: [a]
+setup: |
+  CREATE TABLE sae (id int4 PRIMARY KEY, jf jsonb);
+  INSERT INTO sae VALUES (1, '{"a": 1}'), (2, '"str"'), (3, 'null'), (4, '{"a": {"b": 1}}');
+steps:
+  - sql: |
+      UPDATE sae SET jf['a']['b']['c'] = '1' WHERE id = 1
+    expect: error
+    sqlstate: "22023"
+    comment: doc example - 'a' holds a number, so traversal cannot proceed
+  - sql: |
+      UPDATE sae SET jf['a'] = '1' WHERE id = 2
+    expect: error
+    sqlstate: "22023"
+    comment: a string root cannot be traversed
+  - sql: |
+      UPDATE sae SET jf['a'] = '1' WHERE id = 3
+    expect: error
+    sqlstate: "22023"
+    comment: a JSON null root is not an SQL NULL and is not auto-created
+  - sql: |
+      UPDATE sae SET jf['a']['b']['c'] = '1' WHERE id = 4
+    expect: error
+    sqlstate: "22023"
+    comment: the failing intermediate is a number at depth two
+  - sql: |
+      SELECT id, jf FROM sae ORDER BY id
+    expect: rows
+    order: ordered
+    comment: failed statements changed nothing

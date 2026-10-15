@@ -1,0 +1,42 @@
+# Two operator classes in the same schema can share a name only for different index methods; the same name in another schema is allowed.
+id: cmd-create-opclass.name-unique-per-schema-and-method
+title: "Operator class names are unique per schema and index method"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, create-schema, btree, hash, catalog-introspection, errors]
+required_capabilities: [create-operator-class, create-schema, create-type, create-function, create-operator, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Description: Two operator classes in the same schema)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_eq(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a = ($2).a';
+  CREATE FUNCTION cr_pt_gt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a > ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE OPERATOR = (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_eq);
+  CREATE OPERATOR > (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_gt);
+  CREATE SCHEMA cr_nm_s2;
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_nm FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_nm FOR TYPE cr_pt USING hash AS OPERATOR 1 =
+    expect: ok
+    comment: same name, different index method, same schema
+  - sql: |
+      CREATE OPERATOR CLASS cr_nm_s2.cr_nm FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+    comment: same name and method, different schema
+  - sql: |
+      CREATE OPERATOR CLASS cr_nm FOR TYPE cr_pt USING btree AS OPERATOR 1 <
+    expect: error
+    sqlstate: "42710"
+    comment: same schema and same index method as the first cr_nm
+  - sql: |
+      SELECT n.nspname, am.amname, o.opcname FROM pg_opclass o JOIN pg_namespace n ON n.oid = o.opcnamespace JOIN pg_am am ON am.oid = o.opcmethod WHERE o.opcname = 'cr_nm' ORDER BY 1, 2
+    expect: rows
+    order: ordered

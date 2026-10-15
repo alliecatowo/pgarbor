@@ -1,0 +1,33 @@
+# A CREATE TABLE AS whose query fails to bind creates no table, and a missing FROM relation is 42P01.
+id: cmd-create-table-as.undefined-source-atomic
+title: CREATE TABLE AS with an unknown column or relation fails and leaves no table
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, errors, name-resolution]
+required_capabilities: [create-table-as, create-table, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (query must be valid; table created from its result)"
+sessions: [a]
+setup: |
+  CREATE TABLE real_src (a int4);
+  INSERT INTO real_src VALUES (1);
+steps:
+  - sql: |
+      CREATE TABLE bad_col AS SELECT nosuchcol FROM real_src
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      CREATE TABLE bad_rel AS SELECT 1 AS one FROM no_such_table
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT count(*) FROM pg_class WHERE relname IN ('bad_col', 'bad_rel')
+    expect: rows
+    comment: neither table exists after the failed statements
+  - sql: |
+      CREATE TABLE good_after AS SELECT a FROM real_src
+    expect: ok
+  - sql: |
+      SELECT a FROM good_after
+    expect: rows

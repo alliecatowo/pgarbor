@@ -1,0 +1,51 @@
+# READ UNCOMMITTED is accepted but behaves like READ COMMITTED: no dirty reads.
+id: doc-transaction-iso.read-uncommitted-behaves-as-read-committed
+title: READ UNCOMMITTED never returns uncommitted data and reports its requested level
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, read-uncommitted, read-committed, update, guc]
+required_capabilities: [create-table, insert, select, update, transactions, multi-session, catalog]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#transaction-iso"
+sessions: [a, b]
+setup: |
+  CREATE TABLE doc_ru (id int4 PRIMARY KEY, v text NOT NULL);
+  INSERT INTO doc_ru VALUES (1, 'old');
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE doc_ru SET v = 'uncommitted' WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN ISOLATION LEVEL READ UNCOMMITTED
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM doc_ru ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no dirty read
+  - session: b
+    sql: |
+      SHOW transaction_isolation
+    expect: rows
+    comment: read uncommitted is reported as requested
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, v FROM doc_ru ORDER BY id
+    expect: rows
+    order: ordered

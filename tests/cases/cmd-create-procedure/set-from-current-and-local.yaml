@@ -1,0 +1,62 @@
+# SET FROM CURRENT captures the value at CREATE time. Inside a procedure with a SET clause, SET LOCAL is
+# undone at exit, while a plain SET overrides the clause and persists after exit.
+id: cmd-create-procedure.set-from-current-and-local
+title: SET FROM CURRENT captures creation-time value; SET LOCAL is undone but plain SET persists
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, set-clause, set-from-current, set-local, call, plpgsql]
+required_capabilities: [create-table, select, create-procedure, call, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (SET FROM CURRENT, SET LOCAL)"
+sessions: [a]
+steps:
+  - sql: |
+      SET work_mem = '3MB'
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE wm_fc(INOUT v text) LANGUAGE plpgsql SET work_mem FROM CURRENT AS $$
+      BEGIN
+        v := current_setting('work_mem');
+      END $$
+    expect: ok
+  - sql: |
+      SET work_mem = '5MB'
+    expect: ok
+  - sql: |
+      CALL wm_fc('x')
+    expect: rows
+    comment: the value captured at CREATE time (3MB) applies inside the call
+  - sql: |
+      SELECT current_setting('work_mem') AS wm
+    expect: rows
+    comment: 5MB restored
+  - sql: |
+      CREATE PROCEDURE wm_local(INOUT v text) LANGUAGE plpgsql SET work_mem = '1MB' AS $$
+      BEGIN
+        SET LOCAL work_mem = '7MB';
+        v := current_setting('work_mem');
+      END $$
+    expect: ok
+  - sql: |
+      CALL wm_local('x')
+    expect: rows
+    comment: SET LOCAL inside takes effect for the call
+  - sql: |
+      SELECT current_setting('work_mem') AS wm
+    expect: rows
+    comment: SET LOCAL effect is restricted to the procedure; 5MB remains
+  - sql: |
+      CREATE PROCEDURE wm_plain(INOUT v text) LANGUAGE plpgsql SET work_mem = '1MB' AS $$
+      BEGIN
+        SET work_mem = '8MB';
+        v := current_setting('work_mem');
+      END $$
+    expect: ok
+  - sql: |
+      CALL wm_plain('x')
+    expect: rows
+  - sql: |
+      SELECT current_setting('work_mem') AS wm
+    expect: rows
+    comment: a plain SET overrides the clause and persists after exit

@@ -1,0 +1,62 @@
+# Under READ COMMITTED each statement takes a fresh snapshot: rows committed by another session appear, uncommitted ones do not.
+id: cmd-start-transaction.read-committed-sees-new-commit
+title: READ COMMITTED block sees rows committed by another session but not uncommitted ones
+family: cmd-start-transaction
+tier: core
+feature_ids: [start-transaction, read-committed, isolation-level, mvcc, transactions]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/start_transaction.sgml#sql-start-transaction (synopsis: ISOLATION LEVEL READ COMMITTED)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'one');
+steps:
+  - session: a
+    sql: |
+      START TRANSACTION ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (2, 'two')
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: 2, the committed insert is visible to the next statement
+  - session: b
+    sql: |
+      START TRANSACTION
+    expect: ok
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (3, 'three')
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: still 2, the row from b is uncommitted
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: 3 after b commits
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

@@ -1,0 +1,41 @@
+# Table-level multi-column PRIMARY KEY: uniqueness applies to the pair, and each key column is implicitly NOT NULL.
+id: cmd-create-table.composite-primary-key
+title: Multi-column PRIMARY KEY enforces uniqueness of the pair and NOT NULL on each key column
+family: cmd-create-table
+tier: core
+feature_ids: [create-table, primary-key, composite-key, not-null]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_table.sgml#sql-createtable-examples (Define a primary key table constraint for the table films)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE films (
+          code        char(5),
+          title       varchar(40),
+          did         integer,
+          date_prod   date,
+          kind        varchar(10),
+          len         interval hour to minute,
+          CONSTRAINT code_title PRIMARY KEY(code,title)
+      )
+    expect: ok
+  - sql: |
+      INSERT INTO films (code, title, did) VALUES ('A', 'x', 1), ('A', 'y', 2), ('B', 'x', 3)
+    expect: ok
+    comment: same code with a different title is a distinct key
+  - sql: |
+      INSERT INTO films (code, title, did) VALUES ('A', 'x', 4)
+    expect: error
+    sqlstate: "23505"
+    comment: the pair (A, x) already exists
+  - sql: |
+      INSERT INTO films (code, title, did) VALUES (NULL, 'z', 5)
+    expect: error
+    sqlstate: "23502"
+    comment: primary key columns cannot be NULL
+  - sql: |
+      SELECT trim(code) AS code, title, did FROM films ORDER BY code, title
+    expect: rows
+    order: ordered

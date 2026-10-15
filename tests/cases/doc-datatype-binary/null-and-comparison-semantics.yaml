@@ -1,0 +1,40 @@
+# NULL bytea is distinct from the empty string; empty and bare-\x values are equal; zero octet is not empty.
+id: doc-datatype-binary.null-and-comparison-semantics
+title: bytea NULL, empty and zero-octet values compare and sort with standard SQL NULL semantics
+family: doc-datatype-binary
+tier: core
+feature_ids: [bytea, null-semantics, comparison-operators, ordering]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-binary (binary strings vs zero octets; operations process the actual bytes)"
+sessions: [a]
+setup: |
+  CREATE TABLE bv (id int PRIMARY KEY, b bytea);
+  INSERT INTO bv VALUES (1, NULL), (2, ''), (3, '\x00'), (4, '\x')
+steps:
+  - sql: |
+      SELECT id, b, b IS NULL AS is_null, length(b) AS len FROM bv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM bv WHERE b = '' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: empty string and bare \x are equal; NULL and zero octet are not
+  - sql: |
+      SELECT id FROM bv WHERE b <> '' ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL rows drop out of a <> comparison
+  - sql: |
+      SELECT id FROM bv WHERE b IS DISTINCT FROM '' ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, b FROM bv ORDER BY b NULLS FIRST, id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT count(b) AS non_null, count(*) AS all_rows, '\x00'::bytea = ''::bytea AS zero_eq_empty, NULL::bytea = '\x'::bytea AS null_eq_empty FROM bv
+    expect: rows

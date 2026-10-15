@@ -1,0 +1,49 @@
+# SELECT INTO without STRICT assigns the first row (well-defined only with ORDER BY), assigns NULLs and
+# FOUND false when there is no row, and assigns a record variable from the result columns.
+id: doc-plpgsql-statements.select-into-first-row
+title: SELECT INTO without STRICT takes the first ordered row, NULLs on no rows, and sets FOUND
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, select-into, found, record-variables, order-by]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-sql-onerow"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('bo', 20), ('cy', 20);
+  CREATE FUNCTION f_first(p int) RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE n text;
+  BEGIN
+    SELECT empname INTO n FROM emp WHERE salary = p ORDER BY empname;
+    RETURN coalesce(n, '<null>') || ' ' || FOUND::text;
+  END $$;
+  CREATE FUNCTION f_first_record() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r record;
+  BEGIN
+    SELECT * INTO r FROM emp WHERE salary = 20 ORDER BY empname DESC;
+    RETURN r.empname || ':' || r.salary::text || ' ' || FOUND::text;
+  END $$;
+  CREATE FUNCTION f_no_row_record() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE r record;
+  BEGIN
+    SELECT * INTO r FROM emp WHERE false;
+    RETURN coalesce(r.empname, '<null>') || ' ' || FOUND::text;
+  END $$;
+steps:
+  - sql: |
+      SELECT f_first(20) AS first_match
+    expect: rows
+    comment: rows are ordered by name, so the first matching row is bo
+  - sql: |
+      SELECT f_first(99) AS no_match
+    expect: rows
+    comment: no row leaves the target NULL and FOUND false
+  - sql: |
+      SELECT f_first_record() AS record_first
+    expect: rows
+    comment: a record variable configures itself to the result columns
+  - sql: |
+      SELECT f_no_row_record() AS record_empty
+    expect: rows

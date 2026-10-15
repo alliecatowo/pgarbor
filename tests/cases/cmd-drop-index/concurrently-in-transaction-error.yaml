@@ -1,0 +1,41 @@
+# DROP INDEX CONCURRENTLY is refused inside a transaction block with 25001, while a plain DROP INDEX is allowed there.
+id: cmd-drop-index.concurrently-in-transaction-error
+title: DROP INDEX CONCURRENTLY inside BEGIN fails with 25001 and plain DROP INDEX works in the block
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, concurrently, transactions, errors]
+required_capabilities: [create-table, create-index, select, transactions, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (CONCURRENTLY caveats: regular DROP INDEX can be run in a transaction block, DROP INDEX CONCURRENTLY cannot)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales_table (id int4 PRIMARY KEY, quantity int4);
+  CREATE INDEX sales_quantity_index ON sales_table (quantity);
+  CREATE INDEX sales_id_qty_index ON sales_table (id, quantity);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP INDEX CONCURRENTLY sales_quantity_index
+    expect: error
+    sqlstate: "25001"
+    comment: the error aborts the open transaction block, so the next step is ROLLBACK
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP INDEX sales_quantity_index
+    expect: ok
+    comment: the plain form is allowed in a transaction block
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'sales_table' ORDER BY indexname
+    expect: rows
+    order: ordered

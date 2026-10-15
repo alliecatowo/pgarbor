@@ -1,0 +1,29 @@
+# NULL in an INCLUDE payload column is stored and returned as NULL, distinct from the empty string.
+id: doc-indexes-index-only-scans.null-payload-values
+title: NULL and empty-string payload values read back from a covering index distinctly
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, include-columns, null-semantics]
+required_capabilities: [create-table, create-index, insert, select, nulls]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (INCLUDE payload columns are stored in the index and returned without a heap visit)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab (x int, y text);
+  CREATE INDEX tab_x_y ON tab (x) INCLUDE (y);
+  INSERT INTO tab VALUES (1, NULL), (2, ''), (3, 'z');
+steps:
+  - sql: |
+      SELECT x, y, y IS NULL AS y_null FROM tab WHERE x = 1
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT x FROM tab WHERE x = 2 AND y IS NOT NULL
+    expect: rows
+    order: ordered
+    comment: the empty string is not NULL
+  - sql: |
+      SELECT x FROM tab WHERE y IS NULL ORDER BY x
+    expect: rows
+    order: ordered

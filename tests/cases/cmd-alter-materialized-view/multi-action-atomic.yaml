@@ -1,0 +1,45 @@
+# A single ALTER MATERIALIZED VIEW may list several actions; if any one fails, none of them is applied.
+id: cmd-alter-materialized-view.multi-action-atomic
+title: "Comma-separated ALTER actions apply together and roll back together on failure"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, multiple-actions, atomicity]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (action [, ... ])"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_ma_base (id int4, v int4);
+  INSERT INTO amv_ma_base VALUES (1, 1), (2, 2);
+  CREATE MATERIALIZED VIEW amv_ma_mv AS SELECT id, v FROM amv_ma_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ma_mv SET (fillfactor = 60), ALTER COLUMN id SET STATISTICS 100, ALTER COLUMN v SET (n_distinct = 7)
+    expect: ok
+    comment: three action kinds in one statement
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'amv_ma_mv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT attname, attstattarget FROM pg_attribute
+       WHERE attrelid = 'amv_ma_mv'::regclass AND attnum > 0 AND NOT attisdropped
+       ORDER BY attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ma_mv SET (fillfactor = 70), ALTER COLUMN v SET (n_distinct = 9), SET (bogus = 1)
+    expect: error
+    sqlstate: "22023"
+    comment: the failing third action aborts the whole statement
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'amv_ma_mv'::regclass
+    expect: rows
+    order: ordered
+    comment: fillfactor is still 60, the failed statement applied nothing
+  - sql: |
+      SELECT attoptions FROM pg_attribute WHERE attrelid = 'amv_ma_mv'::regclass AND attname = 'v'
+    expect: rows
+    order: ordered
+    comment: n_distinct 9 from the failed statement was not applied

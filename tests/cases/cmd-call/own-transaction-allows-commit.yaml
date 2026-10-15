@@ -1,0 +1,29 @@
+# Documented: transaction control statements are allowed in a called procedure when CALL runs in
+# its own transaction (here, an autocommit statement).
+id: cmd-call.own-transaction-allows-commit
+title: A procedure that COMMITs succeeds when CALL is its own autocommit statement
+family: cmd-call
+tier: core
+feature_ids: [call, procedures, transactions, commit]
+required_capabilities: [create-table, insert, select, create-procedure, call, plpgsql, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/call.sgml#sql-call (Notes: transaction control)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v text);
+  CREATE PROCEDURE p_tx() LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO t VALUES (9, 'tx');
+    COMMIT;
+    INSERT INTO t VALUES (10, 'after');
+  END $$;
+steps:
+  - sql: |
+      CALL p_tx()
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both inserts committed; the second was in the new transaction the procedure opened

@@ -1,0 +1,32 @@
+# ONLY restricts UPDATE to the named parent; a plain name or "*" also updates inheriting children.
+id: cmd-update.only-vs-inherited-descendants
+title: UPDATE ONLY skips inheriting child tables, plain and star forms include them
+family: cmd-update
+tier: core
+feature_ids: [update, inheritance, only-clause]
+required_capabilities: [create-table, insert, select, update, inheritance]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (table_name: ONLY, and optional * to include descendants)"
+sessions: [a]
+setup: |
+  CREATE TABLE cities (name text, population int);
+  CREATE TABLE capitals (state char(2)) INHERITS (cities);
+  INSERT INTO cities VALUES ('a', 1), ('b', 2);
+  INSERT INTO capitals VALUES ('c', 3, 'CA')
+steps:
+  - sql: |
+      UPDATE ONLY cities SET population = population + 10
+    expect: ok
+    comment: updates a and b only, count 2
+  - sql: |
+      UPDATE cities SET population = population + 100 WHERE name = 'c'
+    expect: ok
+    comment: the inheriting child is included by default, count 1
+  - sql: |
+      UPDATE cities * SET population = population + 1000 WHERE name = 'c'
+    expect: ok
+  - sql: |
+      SELECT tableoid::regclass AS tbl, name, population FROM cities ORDER BY name
+    expect: rows
+    order: ordered

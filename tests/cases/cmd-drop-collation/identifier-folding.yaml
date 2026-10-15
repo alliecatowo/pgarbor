@@ -1,0 +1,36 @@
+# Collation names follow identifier rules: unquoted names fold to lower case in DROP COLLATION too.
+id: cmd-drop-collation.identifier-folding
+title: "DROP COLLATION folds unquoted names and matches quoted names exactly"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, identifiers, quoting]
+required_capabilities: [create-collation, drop-collation, icu-provider, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-syntax-lexical.html (identifiers and key words); drop_collation.sgml#sql-dropcollation"
+sessions: [a]
+setup: |
+  CREATE COLLATION "MixedCase" (provider = icu, locale = 'und-x-icu');
+  CREATE COLLATION dc_fold (provider = icu, locale = 'und-x-icu');
+steps:
+  - sql: |
+      DROP COLLATION MixedCase
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted MixedCase folds to mixedcase, which does not exist
+  - sql: |
+      DROP COLLATION "DC_FOLD"
+    expect: error
+    sqlstate: "42704"
+    comment: quoted name is case sensitive; dc_fold is stored in lower case
+  - sql: |
+      DROP COLLATION DC_FOLD
+    expect: ok
+    comment: unquoted name folds to dc_fold and matches
+  - sql: |
+      DROP COLLATION "MixedCase"
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_collation WHERE collname IN ('MixedCase', 'mixedcase', 'dc_fold')
+    expect: rows
+    order: ordered

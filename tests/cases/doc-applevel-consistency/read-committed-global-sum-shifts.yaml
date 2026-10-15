@@ -1,0 +1,38 @@
+# Two successive aggregate checks in READ COMMITTED can disagree when another transaction commits between them.
+id: doc-applevel-consistency.read-committed-global-sum-shifts
+title: Successive SUM checks in READ COMMITTED reflect a concurrent insert
+family: doc-applevel-consistency
+tier: core
+feature_ids: [read-committed, aggregates, mvcc-snapshot]
+required_capabilities: [create-table, insert, select, transactions, isolation-levels, aggregates, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      SELECT sum(balance) AS total, count(*) AS n FROM acct
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      INSERT INTO acct VALUES (3, 50)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT sum(balance) AS total, count(*) AS n FROM acct
+    expect: rows
+    order: ordered
+    comment: second check includes the committed 50 that the first check did not count
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

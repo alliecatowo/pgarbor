@@ -1,0 +1,41 @@
+# DISTINCT ON keeps the first row per group under ORDER BY, treats NULL as one group, and rejects mismatched ORDER BY.
+id: cmd-select.distinct-on-first-row
+title: DISTINCT ON keeps the first row per group, groups NULLs together, rejects mismatched ORDER BY
+family: cmd-select
+tier: core
+feature_ids: [select, distinct, distinct-on, order-by]
+required_capabilities: [create-table, insert, select, order-by, distinct]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-distinct (DISTINCT ON example and rules)"
+sessions: [a]
+setup: |
+  CREATE TABLE sales (region text, month int4, amount int4);
+  INSERT INTO sales VALUES
+    ('east', 1, 10), ('east', 2, 30), ('east', 3, 20),
+    ('west', 1, 5), ('west', 2, 50),
+    (NULL, 1, 7);
+steps:
+  - sql: |
+      SELECT DISTINCT ON (region) region, month, amount
+      FROM sales
+      ORDER BY region, amount DESC
+    expect: rows
+    order: ordered
+    comment: first row per region under the ORDER BY; NULL region sorts last and forms its own group
+  - sql: |
+      SELECT DISTINCT ON (region) region, month
+      FROM sales
+      ORDER BY region, month DESC NULLS LAST
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT DISTINCT region FROM sales ORDER BY region
+    expect: rows
+    order: ordered
+    comment: NULLs are not distinct from each other, so one NULL row survives
+  - sql: |
+      SELECT DISTINCT ON (region) region, amount FROM sales ORDER BY amount
+    expect: error
+    sqlstate: "42P10"
+    comment: DISTINCT ON expressions must match the leading ORDER BY expressions

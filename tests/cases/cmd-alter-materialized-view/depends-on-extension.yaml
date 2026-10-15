@@ -1,0 +1,36 @@
+# DEPENDS ON EXTENSION records an extension dependency (deptype x); NO DEPENDS ON removes it; unknown extension fails.
+id: cmd-alter-materialized-view.depends-on-extension
+title: "ALTER MATERIALIZED VIEW DEPENDS ON and NO DEPENDS ON EXTENSION manage the extension dependency"
+family: cmd-alter-materialized-view
+tier: extended
+feature_ids: [alter-materialized-view, extensions, dependencies]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view, extensions, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (DEPENDS ON EXTENSION / NO DEPENDS ON EXTENSION)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_de_base (id int4);
+  CREATE MATERIALIZED VIEW amv_de_mv AS SELECT id FROM amv_de_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_de_mv DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      SELECT d.deptype FROM pg_depend d
+       WHERE d.objid = 'amv_de_mv'::regclass AND d.refclassid = 'pg_extension'::regclass
+    expect: rows
+    order: ordered
+    comment: deptype x means extension-member dependency
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_de_mv NO DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_depend d
+       WHERE d.objid = 'amv_de_mv'::regclass AND d.refclassid = 'pg_extension'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_de_mv DEPENDS ON EXTENSION amv_de_nosuchext
+    expect: error
+    sqlstate: "42704"

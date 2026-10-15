@@ -1,0 +1,38 @@
+# uuidv7(shift) moves the embedded timestamp by the given interval; the shift is optional and accepts a string literal.
+id: doc-functions-uuid.uuidv7-shift-interval
+title: uuidv7 optional interval shift moves the embedded timestamp
+family: doc-functions-uuid
+tier: core
+feature_ids: [uuid, uuidv7, uuidv7-shift, interval, uuid-extract-timestamp]
+required_capabilities: [select]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-uuid (uuidv7 (shift interval) row)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT (uuid_extract_timestamp(uuidv7(interval '1 hour'))
+              - uuid_extract_timestamp(uuidv7())) BETWEEN interval '59 minutes' AND interval '61 minutes' AS plus_hour
+    expect: rows
+    comment: a positive one-hour shift moves the timestamp about an hour forward
+  - sql: |
+      SELECT (uuid_extract_timestamp(uuidv7(interval '-1 day'))
+              - uuid_extract_timestamp(uuidv7())) BETWEEN interval '-24 hours 1 minute' AND interval '-23 hours 59 minutes' AS minus_day
+    expect: rows
+    comment: a negative shift moves the timestamp backward
+  - sql: |
+      SELECT uuid_extract_version(uuidv7('1 day')) AS v_literal, uuid_extract_version(uuidv7(interval '1 day 1 second')) AS v_compound
+    expect: rows
+    comment: an unknown-typed string literal is coerced to interval; the version stays 7
+  - sql: |
+      SELECT uuidv7(interval '0') IS NOT NULL AS zero_ok, uuid_extract_version(uuidv7(interval '0')) AS v_zero
+    expect: rows
+    comment: a zero shift is valid and yields version 7
+  - sql: |
+      SELECT uuidv7(interval '-1 day') < uuidv7() AS shifted_back_sorts_first
+    expect: rows
+    comment: the shifted value embeds an earlier timestamp, so it sorts before a current one
+  - sql: |
+      SELECT uuidv7() = uuidv7() AS equal_values
+    expect: rows
+    comment: two calls never return the same value

@@ -1,0 +1,39 @@
+# USING must name a TABLE access method (heap is the default); TABLESPACE must name an existing tablespace.
+id: cmd-create-table-as.access-method-and-tablespace
+title: CREATE TABLE AS USING accepts heap, rejects index methods and unknown names; TABLESPACE is checked
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, table-access-method, tablespace]
+required_capabilities: [create-table-as, create-table, select, table-access-method]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (USING method, TABLESPACE)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE am_heap USING heap AS SELECT 1 AS one
+    expect: ok
+  - sql: |
+      CREATE TABLE am_default AS SELECT 2 AS two
+    expect: ok
+  - sql: |
+      SELECT c.relname, a.amname FROM pg_class c JOIN pg_am a ON a.oid = c.relam
+      WHERE c.relname IN ('am_heap', 'am_default') ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE TABLE am_btree USING btree AS SELECT 3 AS three
+    expect: error
+    sqlstate: "55000"
+    comment: index access method is not of type TABLE
+  - sql: |
+      CREATE TABLE am_missing USING no_such_am AS SELECT 4 AS four
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TABLE ts_default TABLESPACE pg_default AS SELECT 5 AS five
+    expect: ok
+  - sql: |
+      CREATE TABLE ts_missing TABLESPACE no_such_ts AS SELECT 6 AS six
+    expect: error
+    sqlstate: "42704"

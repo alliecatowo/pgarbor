@@ -1,0 +1,41 @@
+# A sql_body function records its dependencies, so DROP TABLE without CASCADE is refused and
+# CASCADE drops the function too. A string-body function does not track this.
+id: cmd-create-function.sql-body-dependency-tracking
+title: sql_body functions depend on the tables they reference; DROP TABLE needs CASCADE and drops the function
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, sql-body, dependency-tracking, drop-cascade]
+required_capabilities: [create-function, create-table, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-description (sql_body tracks dependencies, DROP ... CASCADE)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE dep_t (id int)
+    expect: ok
+  - sql: |
+      CREATE FUNCTION dep_f() RETURNS bigint RETURN (SELECT count(*) FROM dep_t)
+    expect: ok
+  - sql: |
+      SELECT dep_f() AS v
+    expect: rows
+    comment: "0"
+  - sql: |
+      DROP TABLE dep_t
+    expect: error
+    sqlstate: "2BP01"
+    comment: dep_f depends on dep_t
+  - sql: |
+      SELECT count(*) AS still_there FROM dep_t
+    expect: rows
+    comment: the failed DROP changed nothing
+  - sql: |
+      DROP TABLE dep_t CASCADE
+    expect: ok
+    compare_message: false
+    comment: the cascade notice text names the dropped function; not compared
+  - sql: |
+      SELECT count(*) AS remaining FROM pg_proc WHERE proname = 'dep_f'
+    expect: rows
+    comment: "0"

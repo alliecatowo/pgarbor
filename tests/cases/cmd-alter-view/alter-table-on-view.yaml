@@ -1,0 +1,38 @@
+# Historical ALTER TABLE works on views for RENAME and column SET DEFAULT, but ADD COLUMN is not allowed on a view.
+id: cmd-alter-view.alter-table-on-view
+title: "ALTER TABLE on a view allows the equivalent rename and default forms but rejects ADD COLUMN"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, alter-table-compat, rename, default-values]
+required_capabilities: [create-table, insert, select, create-view, alter-view, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (Notes: ALTER TABLE can be used with views for the variants equivalent to ALTER VIEW)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_at (id int4 DEFAULT 1, cc int4);
+  CREATE VIEW av_atv AS SELECT id, cc FROM av_at;
+steps:
+  - sql: |
+      ALTER TABLE av_atv RENAME TO av_atv2
+    expect: ok
+  - sql: |
+      ALTER TABLE av_atv2 ALTER COLUMN cc SET DEFAULT 5
+    expect: ok
+  - sql: |
+      INSERT INTO av_atv2 (cc) VALUES (DEFAULT)
+    expect: ok
+  - sql: |
+      SELECT id, cc FROM av_at ORDER BY id
+    expect: rows
+    order: ordered
+    comment: id takes the base default 1 and cc takes the view default 5
+  - sql: |
+      ALTER TABLE av_atv2 ADD COLUMN zz int4
+    expect: error
+    sqlstate: "42809"
+    comment: ADD COLUMN is not one of the equivalent variants
+  - sql: |
+      SELECT viewname FROM pg_views WHERE viewname LIKE 'av_atv%' ORDER BY 1
+    expect: rows
+    order: ordered

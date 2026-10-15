@@ -1,0 +1,37 @@
+# A checkpoint does not commit or expose another session's uncommitted writes.
+id: cmd-checkpoint.uncommitted-rows-stay-invisible
+title: CHECKPOINT in one session does not make another session's uncommitted rows visible
+family: cmd-checkpoint
+tier: core
+feature_ids: [checkpoint, transactions, insert, select, multi-session]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/checkpoint.sgml#sql-checkpoint (Description)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+steps:
+  - session: a
+    sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - session: b
+    sql: |
+      CHECKPOINT
+    expect: ok
+    comment: CHECKPOINT takes no table locks and must not block
+  - session: b
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered

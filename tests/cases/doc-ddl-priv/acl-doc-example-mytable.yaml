@@ -1,0 +1,39 @@
+# The documented access-privilege example: PUBLIC, a named role, and column-level grants, shown in ACL form.
+id: doc-ddl-priv.acl-doc-example-mytable
+title: Documented mytable grants appear in relacl and attacl with owner-style grantor
+family: doc-ddl-priv
+tier: core
+feature_ids: [grant, revoke, column-privileges, acl, privileges, catalog-introspection]
+required_capabilities: [create-table, select, roles, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-priv (example: GRANT SELECT ON mytable TO PUBLIC; GRANT SELECT, UPDATE, INSERT ... TO admin; GRANT SELECT (col1), UPDATE (col1) ... TO miriam_rw)"
+sessions: [a]
+setup: |
+  CREATE ROLE ddp_ad_miriam;
+  CREATE ROLE ddp_ad_admin;
+  CREATE ROLE ddp_ad_rw;
+  CREATE TABLE ad_mytable (col1 int4, col2 text);
+  ALTER TABLE ad_mytable OWNER TO ddp_ad_miriam;
+  GRANT SELECT ON ad_mytable TO PUBLIC;
+  GRANT SELECT, UPDATE, INSERT ON ad_mytable TO ddp_ad_admin;
+  GRANT SELECT (col1), UPDATE (col1) ON ad_mytable TO ddp_ad_rw;
+steps:
+  - sql: |
+      SELECT relacl::text FROM pg_class WHERE oid = 'ad_mytable'::regclass
+    expect: rows
+    order: multiset
+    comment: the owner's entry lists every privilege including MAINTAIN (m); the empty grantee is PUBLIC
+  - sql: |
+      SELECT attname, attacl::text FROM pg_attribute WHERE attrelid = 'ad_mytable'::regclass AND attacl IS NOT NULL ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: only col1 has column-level entries
+  - sql: |
+      REVOKE SELECT ON ad_mytable FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT relacl::text FROM pg_class WHERE oid = 'ad_mytable'::regclass
+    expect: rows
+    order: multiset
+    comment: the PUBLIC entry is removed and the other grants are unchanged

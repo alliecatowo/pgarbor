@@ -1,0 +1,44 @@
+# The operator class name may be schema-qualified; an unqualified name goes into the current schema; a missing schema fails with 3F000.
+id: cmd-create-opclass.schema-qualified-name
+title: "Schema-qualified and search_path-placed operator class names; missing schema is 3F000"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, create-schema, search-path, catalog-introspection, errors]
+required_capabilities: [create-operator-class, create-schema, create-type, create-function, create-operator, search-path, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Parameters: name; Description: created in the specified schema, else current schema)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE SCHEMA cr_sq_s1;
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_sq_s1.cr_sq_ops FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+  - sql: |
+      SELECT n.nspname, o.opcname FROM pg_opclass o JOIN pg_namespace n ON n.oid = o.opcnamespace WHERE o.opcname = 'cr_sq_ops'
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OPERATOR CLASS cr_sq_nope.cr_sq_ops2 FOR TYPE cr_pt USING btree AS OPERATOR 1 <
+    expect: error
+    sqlstate: "3F000"
+    comment: schema cr_sq_nope does not exist
+  - sql: |
+      SET search_path TO cr_sq_s1, public
+    expect: ok
+  - sql: |
+      CREATE OPERATOR CLASS cr_sq_ops4 FOR TYPE cr_pt USING btree AS OPERATOR 1 <
+    expect: ok
+    comment: unqualified name goes into the first schema on search_path
+  - sql: |
+      SELECT n.nspname, o.opcname FROM pg_opclass o JOIN pg_namespace n ON n.oid = o.opcnamespace WHERE o.opcname IN ('cr_sq_ops', 'cr_sq_ops4') ORDER BY 2
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET search_path
+    expect: ok

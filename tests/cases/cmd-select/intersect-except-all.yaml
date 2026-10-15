@@ -1,0 +1,48 @@
+# INTERSECT and EXCEPT with and without ALL, duplicate multiplicities, and INTERSECT precedence over UNION.
+id: cmd-select.intersect-except-all
+title: INTERSECT and EXCEPT with duplicate multiplicities and INTERSECT precedence
+family: cmd-select
+tier: core
+feature_ids: [select, intersect, except, union]
+required_capabilities: [select, values, intersect, except]
+provenance:
+  source: pg-docs
+  ref: "ref/select.sgml#sql-intersect and ref/select.sgml#sql-except"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2)) AS a(x)
+      INTERSECT
+      SELECT x FROM (VALUES (1), (2), (2)) AS b(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: INTERSECT removes duplicates from the result
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2)) AS a(x)
+      INTERSECT ALL
+      SELECT x FROM (VALUES (1), (2), (2)) AS b(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: each row appears min(left count, right count) times
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2)) AS a(x)
+      EXCEPT ALL
+      SELECT x FROM (VALUES (1), (2), (2)) AS b(x)
+      ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: subtracts multiplicities
+  - sql: |
+      SELECT x FROM (VALUES (1), (1), (2)) AS a(x)
+      EXCEPT
+      SELECT x FROM (VALUES (1)) AS b(x)
+    expect: rows
+    order: multiset
+    comment: plain EXCEPT removes every copy of matching rows
+  - sql: |
+      SELECT 1 UNION SELECT 2 INTERSECT SELECT 2
+    expect: rows
+    order: multiset
+    comment: INTERSECT binds tighter than UNION, so the result is {1, 2}

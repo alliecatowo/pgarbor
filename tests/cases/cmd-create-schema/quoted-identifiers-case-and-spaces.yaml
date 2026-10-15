@@ -1,0 +1,36 @@
+# Quoted schema names keep case and may contain spaces; unquoted names fold to lower case, so MixedCase
+# collides with "mixedcase" but not with "MixedCase". Unquoted MixedCase is a duplicate of "mixedcase".
+id: cmd-create-schema.quoted-identifiers-case-and-spaces
+title: Quoted schema names are case-sensitive and may contain spaces; unquoted names fold to lower case
+family: cmd-create-schema
+tier: core
+feature_ids: [create-schema, identifiers, errors, create-table]
+required_capabilities: [create-schema, create-table, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_schema.sgml#sql-createschema (Parameters: schema_name)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA "MixedCase"
+    expect: ok
+  - sql: |
+      CREATE SCHEMA mixedcase
+    expect: ok
+    comment: distinct from "MixedCase"
+  - sql: |
+      CREATE SCHEMA MixedCase
+    expect: error
+    sqlstate: "42P06"
+    comment: unquoted MixedCase folds to mixedcase, which exists
+  - sql: |
+      CREATE SCHEMA "with space" CREATE TABLE "Tab" (id int4)
+    expect: ok
+  - sql: |
+      SELECT nspname FROM pg_namespace WHERE nspname IN ('MixedCase', 'mixedcase', 'with space') ORDER BY nspname
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'with space'
+    expect: rows
+    order: ordered

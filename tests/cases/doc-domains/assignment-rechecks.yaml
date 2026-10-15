@@ -1,0 +1,33 @@
+# Assigning an underlying-typed value to a domain column still runs the domain constraints.
+id: doc-domains.assignment-rechecks
+title: UPDATE to a value violating the domain CHECK fails and leaves rows unchanged
+family: doc-domains
+tier: core
+feature_ids: [domains, create-domain, update, check-constraint]
+required_capabilities: [create-domain, create-table, insert, update, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#domains"
+sessions: [a]
+setup: |
+  CREATE DOMAIN posint AS integer CHECK (VALUE > 0);
+  CREATE TABLE mytable (id posint);
+  INSERT INTO mytable VALUES (1), (2)
+steps:
+  - sql: |
+      UPDATE mytable SET id = 0
+    expect: error
+    sqlstate: "23514"
+    comment: plain integer literal assigned to the domain column is still checked
+  - sql: |
+      SELECT id FROM mytable ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the failed UPDATE changed nothing
+  - sql: |
+      UPDATE mytable SET id = 9 WHERE id = 2
+    expect: ok
+  - sql: |
+      SELECT id FROM mytable ORDER BY id
+    expect: rows
+    order: ordered

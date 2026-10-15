@@ -1,0 +1,42 @@
+# An implicit cast takes part in function argument resolution and assignments; after DROP CAST neither works, and a table row count is unchanged.
+id: cmd-drop-cast.implicit-cast-drop-removes-resolution
+title: "Dropping an implicit cast removes its use in function resolution and assignment"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, create-cast, implicit-cast, assignment-cast, function-resolution]
+required_capabilities: [create-type, create-cast, create-function-sql, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-description"
+sessions: [a]
+setup: |
+  CREATE TYPE ic_m AS (v int);
+  CREATE FUNCTION ic_f(int4) RETURNS ic_m LANGUAGE sql AS $$ SELECT ROW($1)::ic_m $$;
+  CREATE FUNCTION ic_take(ic_m) RETURNS text LANGUAGE sql AS $$ SELECT 'got' $$;
+  CREATE CAST (int4 AS ic_m) WITH FUNCTION ic_f(int4) AS IMPLICIT;
+  CREATE TABLE ic_t (m ic_m);
+steps:
+  - sql: |
+      SELECT ic_take(7) AS via_implicit
+    expect: rows
+  - sql: |
+      INSERT INTO ic_t SELECT 7
+    expect: ok
+  - sql: |
+      DROP CAST (int4 AS ic_m)
+    expect: ok
+  - sql: |
+      SELECT ic_take(7) AS after_drop
+    expect: error
+    sqlstate: "42883"
+    comment: function resolution no longer finds a cast from integer to ic_m
+  - sql: |
+      INSERT INTO ic_t SELECT 8
+    expect: error
+    sqlstate: "42804"
+    comment: assignment no longer has a cast from integer to ic_m
+  - sql: |
+      SELECT count(*) AS n FROM ic_t
+    expect: rows
+    order: multiset
+    comment: only the row inserted before the drop is present

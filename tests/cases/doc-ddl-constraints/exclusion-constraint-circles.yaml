@@ -1,0 +1,36 @@
+# The documented circles example: an exclusion constraint on overlap, where NULL does not conflict.
+id: doc-ddl-constraints.exclusion-constraint-circles
+title: EXCLUDE USING gist rejects overlapping circles and ignores NULL values
+family: doc-ddl-constraints
+tier: extended
+feature_ids: [exclusion-constraints, gist-index, circle-type, insert, select]
+required_capabilities: [create-table, constraints, exclusion-constraint, gist-index, circle-type, insert, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-constraints (Exclusion Constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE circles (
+      c circle,
+      EXCLUDE USING gist (c WITH &&)
+  )
+steps:
+  - sql: |
+      INSERT INTO circles VALUES ('<(0,0),1>'), ('<(5,5),1>')
+    expect: ok
+  - sql: |
+      INSERT INTO circles VALUES ('<(1,0),1>')
+    expect: error
+    sqlstate: "23P01"
+    comment: this circle overlaps the circle at the origin
+  - sql: |
+      INSERT INTO circles VALUES ('<(0,0),1>')
+    expect: error
+    sqlstate: "23P01"
+  - sql: |
+      INSERT INTO circles VALUES (NULL), (NULL)
+    expect: ok
+    comment: the && comparison yields NULL, which does not violate the exclusion
+  - sql: |
+      SELECT count(*), count(c) FROM circles
+    expect: rows

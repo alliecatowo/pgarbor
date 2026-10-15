@@ -1,0 +1,36 @@
+# Documented behaviour: creating a table also creates a composite type with the table's name, so
+# the name cannot be reused by CREATE TYPE and a same-named table cannot follow a composite type.
+id: doc-rowtypes.table-row-type-name-collision
+title: CREATE TABLE implicitly creates a row type that blocks CREATE TYPE of the same name
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, row-types, create-table, errors]
+required_capabilities: [create-table, create-type, composite-types, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-declare"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE tbl_row (a integer, b text)
+    expect: ok
+  - sql: |
+      CREATE TYPE tbl_row AS (x integer)
+    expect: error
+    sqlstate: "42710"
+    comment: the implicit row type already has this name
+  - sql: |
+      INSERT INTO tbl_row VALUES (1, 'one')
+    expect: ok
+  - sql: |
+      SELECT ROW(a, b)::tbl_row AS as_row FROM tbl_row
+    expect: rows
+    comment: the table's row type is usable as a composite type
+  - sql: |
+      CREATE TYPE standalone AS (a integer)
+    expect: ok
+  - sql: |
+      CREATE TABLE standalone (a integer)
+    expect: error
+    sqlstate: "42P07"
+    comment: a standalone composite type also owns its name

@@ -1,0 +1,29 @@
+# A partial index predicate may involve only columns of the indexed table; a subquery over another table is rejected.
+id: doc-indexes-partial.error-subquery-predicate
+title: Partial index predicate with a subquery over another table is rejected with SQLSTATE 0A000
+family: doc-indexes-partial
+tier: core
+feature_ids: [partial-index, create-index, predicate-definition, subquery, errors]
+required_capabilities: [create-table, create-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-partial (only columns of the table being indexed are involved)"
+sessions: [a]
+setup: |
+  CREATE TABLE ts (id int, created timestamptz);
+  CREATE TABLE other (x int);
+  INSERT INTO other VALUES (1), (2);
+steps:
+  - sql: |
+      CREATE INDEX bad_sub ON ts (id) WHERE id IN (SELECT x FROM other)
+    expect: error
+    sqlstate: "0A000"
+    comment: subqueries are not allowed in index predicates
+  - sql: |
+      CREATE INDEX ok_pred ON ts (id) WHERE id IN (1, 2)
+    expect: ok
+    comment: the same intent written with a literal list over the indexed table's own column is accepted
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'ts' ORDER BY indexname
+    expect: rows
+    order: ordered

@@ -1,0 +1,43 @@
+# The query may be parenthesized; only SELECT, TABLE, VALUES or EXECUTE are valid; INSERT and doubled WITH [NO] DATA are syntax errors.
+id: cmd-create-table-as.query-forms-and-syntax
+title: CREATE TABLE AS accepts parenthesized SELECT, TABLE and VALUES queries and rejects other statements
+family: cmd-create-table-as
+tier: core
+feature_ids: [create-table-as, query-forms, syntax-errors]
+required_capabilities: [create-table-as, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_table_as.sgml#sql-createtableas (query; Compatibility: parentheses optional)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4, tag text);
+  INSERT INTO base VALUES (1, 'p'), (2, 'q');
+steps:
+  - sql: |
+      CREATE TABLE q_paren AS (SELECT id FROM base WHERE id = 2)
+    expect: ok
+  - sql: |
+      SELECT id FROM q_paren
+    expect: rows
+    comment: parentheses around the query are optional and accepted
+  - sql: |
+      CREATE TABLE q_table AS TABLE base
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM q_table
+    expect: rows
+  - sql: |
+      CREATE TABLE q_values AS VALUES (7), (8)
+    expect: ok
+  - sql: |
+      CREATE TABLE q_insert AS INSERT INTO base VALUES (3, 'r')
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      CREATE TABLE q_double AS SELECT 1 AS one WITH NO DATA WITH NO DATA
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT count(*) FROM base
+    expect: rows
+    comment: the rejected INSERT was not executed as part of the table definition

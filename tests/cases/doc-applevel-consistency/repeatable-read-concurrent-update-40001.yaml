@@ -1,0 +1,50 @@
+# Under REPEATABLE READ, a waiter whose target row was updated by a committed concurrent transaction fails with 40001.
+id: doc-applevel-consistency.repeatable-read-concurrent-update-40001
+title: REPEATABLE READ update of a row changed by a concurrent committed update fails with 40001
+family: doc-applevel-consistency
+tier: core
+feature_ids: [repeatable-read, serialization-failure, row-locks, write-conflict]
+required_capabilities: [create-table, insert, select, update, transactions, isolation-levels, row-locks, errors, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE acct SET balance = 1 WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE acct SET balance = 2 WHERE id = 1
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: error
+    sqlstate: "40001"
+    comment: the row changed since b's snapshot; READ COMMITTED would re-evaluate instead
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered

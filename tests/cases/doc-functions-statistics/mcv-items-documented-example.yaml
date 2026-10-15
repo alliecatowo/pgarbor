@@ -1,0 +1,26 @@
+# pg_mcv_list_items: the documented query shape over a two-column MCV statistics object.
+id: doc-functions-statistics.mcv-items-documented-example
+title: pg_mcv_list_items reads the MCV items of a two-column statistics object after ANALYZE
+family: doc-functions-statistics
+tier: core
+feature_ids: [pg-mcv-list-items, mcv-statistics, analyze, extended-statistics]
+required_capabilities: [create-table, insert, analyze, extended-statistics, select, alter-table]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-statistics-mcv"
+sessions: [a]
+setup: |
+  CREATE TABLE stts (a int, b text);
+  ALTER TABLE stts SET (autovacuum_enabled = false);
+  INSERT INTO stts SELECT i % 3, CASE WHEN i % 2 = 0 THEN 'x' ELSE 'y' END FROM generate_series(1, 100) g(i);
+  INSERT INTO stts VALUES (NULL, NULL), (NULL, NULL), (1, NULL);
+  CREATE STATISTICS stts (mcv) ON a, b FROM stts;
+steps:
+  - sql: |
+      ANALYZE stts
+    expect: ok
+  - sql: |
+      SELECT m.* FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid), pg_mcv_list_items(stxdmcv) m WHERE stxname = 'stts' ORDER BY index
+    expect: rows
+    order: ordered
+    comment: documented query; the table is smaller than the ANALYZE sample so the MCV list is deterministic

@@ -1,0 +1,42 @@
+# UPDATE ... WHERE CURRENT OF updates the row most recently fetched from an open cursor.
+id: cmd-update.where-current-of-cursor
+title: WHERE CURRENT OF updates the row at the cursor position, one fetch at a time
+family: cmd-update
+tier: core
+feature_ids: [update, where-current-of, cursors]
+required_capabilities: [create-table, insert, select, update, cursors, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (WHERE CURRENT OF cursor_name; example c_films)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (code text PRIMARY KEY, kind text);
+  INSERT INTO films VALUES ('A', 'Drama'), ('B', 'Comedy'), ('C', 'Drama')
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c_films CURSOR FOR SELECT code, kind FROM films WHERE kind = 'Drama' ORDER BY code
+    expect: ok
+  - sql: |
+      FETCH NEXT FROM c_films
+    expect: rows
+  - sql: |
+      UPDATE films SET kind = 'Dramatic' WHERE CURRENT OF c_films
+    expect: ok
+    comment: updates A, the row just fetched
+  - sql: |
+      FETCH NEXT FROM c_films
+    expect: rows
+  - sql: |
+      UPDATE films SET kind = 'Dramatic' WHERE CURRENT OF c_films
+    expect: ok
+    comment: updates C
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT code, kind FROM films ORDER BY code
+    expect: rows
+    order: ordered

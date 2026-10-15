@@ -1,0 +1,31 @@
+# The documented GIN example: fastupdate can be disabled at create time and the index still answers array containment.
+id: cmd-create-index.gin-fastupdate-off
+title: GIN index with fastupdate off serves array containment and rejects a non-boolean value
+family: cmd-create-index
+tier: extended
+feature_ids: [create-index, gin, fastupdate, arrays]
+required_capabilities: [create-table, create-index, insert, select, errors, catalog-introspection, arrays]
+provenance:
+  source: pg-docs
+  ref: "ref/create_index.sgml#sql-createindex (Index Storage Parameters: fastupdate; Examples: CREATE INDEX gin_idx ... USING GIN (locations) WITH (fastupdate = off))"
+sessions: [a]
+setup: |
+  CREATE TABLE documents_table (id int4 PRIMARY KEY, locations text[]);
+  INSERT INTO documents_table VALUES (1, ARRAY['paris', 'rome']), (2, ARRAY['oslo']), (3, ARRAY['rome']);
+steps:
+  - sql: |
+      CREATE INDEX gin_idx ON documents_table USING GIN (locations) WITH (fastupdate = off)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'gin_idx'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM documents_table WHERE locations @> ARRAY['rome'] ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE INDEX f_gin_bad ON documents_table USING GIN (locations) WITH (fastupdate = maybe)
+    expect: error
+    sqlstate: "22023"
+    comment: a boolean storage parameter only accepts boolean spellings

@@ -1,0 +1,37 @@
+# CASCADE drops the dependent foreign key constraint but not the referencing table; the orders rows survive
+# and, with the constraint gone, orders accepts product numbers that no longer exist in products.
+id: doc-ddl-depend.drop-table-cascade-removes-fk-only
+title: DROP TABLE CASCADE drops only the referencing foreign key constraint, not the orders table
+family: doc-ddl-depend
+tier: core
+feature_ids: [drop-table, drop-cascade, foreign-keys, dependency-tracking]
+required_capabilities: [create-table, insert, select, drop-table, foreign-keys, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-depend (DROP TABLE products CASCADE: only the foreign key constraint is removed)"
+sessions: [a]
+setup: |
+  CREATE TABLE products (product_no integer PRIMARY KEY, name text);
+  CREATE TABLE orders (order_id integer PRIMARY KEY, product_no integer REFERENCES products (product_no), quantity integer);
+  INSERT INTO products VALUES (1, 'widget');
+  INSERT INTO orders VALUES (10, 1, 5);
+steps:
+  - sql: |
+      DROP TABLE products CASCADE
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM information_schema.table_constraints
+      WHERE table_name = 'orders' AND constraint_type = 'FOREIGN KEY'
+    expect: rows
+    comment: the foreign key constraint was dropped
+  - sql: |
+      SELECT to_regclass('orders') IS NOT NULL AS orders_exists, to_regclass('products') IS NULL AS products_gone
+    expect: rows
+  - sql: |
+      INSERT INTO orders VALUES (11, 999, 1)
+    expect: ok
+    comment: no FK any more, so a dangling product_no is accepted
+  - sql: |
+      SELECT order_id, product_no, quantity FROM orders ORDER BY order_id
+    expect: rows
+    order: ordered

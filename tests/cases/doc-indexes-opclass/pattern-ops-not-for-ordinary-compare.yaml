@@ -1,0 +1,40 @@
+# Documented: a pattern-ops index cannot serve ordinary < comparisons, but can serve LIKE and equality.
+id: doc-indexes-opclass.pattern-ops-not-for-ordinary-compare
+title: A text_pattern_ops index is not used for ordinary < but is used for LIKE
+family: doc-indexes-opclass
+tier: core
+feature_ids: [opclass, text-pattern-ops, explain, like]
+required_capabilities: [create-table, insert, create-index, explain, like]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-opclass (such queries cannot use the xxx_pattern_ops operator classes)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE pt (x text)
+    expect: ok
+  - sql: |
+      INSERT INTO pt SELECT 'abc' || g::text FROM generate_series(1, 200) g
+    expect: ok
+  - sql: |
+      CREATE INDEX pt_pattern ON pt (x text_pattern_ops)
+    expect: ok
+  - sql: |
+      ANALYZE pt
+    expect: ok
+  - sql: |
+      SET enable_seqscan = off
+    expect: ok
+  - sql: |
+      EXPLAIN (COSTS OFF) SELECT x FROM pt WHERE x < 'abc2'
+    expect: rows
+    order: ordered
+    comment: ordinary comparison cannot use the pattern index, so a sequential scan remains
+  - sql: |
+      EXPLAIN (COSTS OFF) SELECT x FROM pt WHERE x LIKE 'abc1%'
+    expect: rows
+    order: ordered
+    comment: LIKE can use the pattern index
+  - sql: |
+      RESET enable_seqscan
+    expect: ok

@@ -1,0 +1,49 @@
+# CREATE OR REPLACE assigns every property not named in the new command its default: SECURITY
+# and SET clause settings are reset rather than inherited, while the name and argument types must match.
+id: cmd-create-procedure.replace-resets-security-and-config
+title: CREATE OR REPLACE resets SECURITY mode and SET clause unless restated
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, or-replace, security-definer, set-clause]
+required_capabilities: [create-table, select, create-procedure, call]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure-description (OR REPLACE)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE PROCEDURE sd(a int) EXTERNAL SECURITY DEFINER LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      SELECT prosecdef FROM pg_proc WHERE proname = 'sd'
+    expect: rows
+    comment: definer security is on
+  - sql: |
+      CREATE OR REPLACE PROCEDURE sd(a int) SECURITY INVOKER LANGUAGE sql AS 'SELECT 2'
+    expect: ok
+  - sql: |
+      SELECT prosecdef FROM pg_proc WHERE proname = 'sd'
+    expect: rows
+  - sql: |
+      CREATE OR REPLACE PROCEDURE sd(a int) LANGUAGE sql AS 'SELECT 3'
+    expect: ok
+  - sql: |
+      SELECT prosecdef FROM pg_proc WHERE proname = 'sd'
+    expect: rows
+    comment: omitted clause means the default, invoker
+  - sql: |
+      CREATE PROCEDURE pv(x int) SET search_path = public LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      CREATE OR REPLACE PROCEDURE pv(x int) LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      SELECT proconfig IS NULL AS no_config FROM pg_proc WHERE proname = 'pv'
+    expect: rows
+    comment: the SET clause was not restated, so it is gone
+  - sql: |
+      CREATE OR REPLACE PROCEDURE pv(x int) SET search_path = pg_catalog LANGUAGE sql AS 'SELECT 1'
+    expect: ok
+  - sql: |
+      SELECT proconfig::text AS cfg FROM pg_proc WHERE proname = 'pv'
+    expect: rows

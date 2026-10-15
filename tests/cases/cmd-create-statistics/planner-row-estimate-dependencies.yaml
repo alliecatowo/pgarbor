@@ -1,0 +1,33 @@
+# The documented dependency example's purpose: the planner row estimate for correlated WHERE clauses is larger after statistics exist. Parallel workers are disabled to keep plans stable.
+id: cmd-create-statistics.planner-row-estimate-dependencies
+title: Planner row estimate for redundant WHERE clauses improves after dependency statistics
+family: cmd-create-statistics
+tier: extended
+feature_ids: [create-statistics, functional-dependencies, planner-estimates, explain]
+required_capabilities: [create-table, insert, extended-statistics, catalog-introspection, analyze, explain, planner-row-estimates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_statistics.sgml#sql-createstatistics-examples (functional dependency example t1, EXPLAIN)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1e (a int, b int);
+  INSERT INTO t1e SELECT i / 100, i / 500 FROM generate_series(1, 100000) s(i);
+  ANALYZE t1e;
+steps:
+  - sql: |
+      SET max_parallel_workers_per_gather = 0
+    expect: ok
+  - sql: |
+      EXPLAIN (COSTS ON) SELECT * FROM t1e WHERE a = 1 AND b = 0
+    expect: rows
+    comment: without statistics the independence assumption underestimates the row count
+  - sql: |
+      CREATE STATISTICS s1e (dependencies) ON a, b FROM t1e
+    expect: ok
+  - sql: |
+      ANALYZE t1e
+    expect: ok
+  - sql: |
+      EXPLAIN (COSTS ON) SELECT * FROM t1e WHERE a = 1 AND b = 0
+    expect: rows
+    comment: the estimate moves toward the true count of 100 rows

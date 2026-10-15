@@ -1,0 +1,59 @@
+# To assign an owner the caller must be able to SET ROLE to that owner; membership makes the same change succeed.
+id: cmd-alter-large-object.new-owner-needs-set-role
+title: OWNER TO a role the caller cannot SET ROLE to fails with insufficient_privilege until membership is granted
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, set-role, role-membership, errors]
+required_capabilities: [large-objects, roles, catalog-introspection, select, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_sr_from
+    expect: ok
+  - sql: |
+      CREATE ROLE cmd_alo_sr_to
+    expect: ok
+  - sql: |
+      SELECT lo_create(930301)
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 930301 OWNER TO cmd_alo_sr_from
+    expect: ok
+  - sql: |
+      SET ROLE cmd_alo_sr_from
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930301 OWNER TO cmd_alo_sr_to
+    expect: error
+    sqlstate: "42501"
+    comment: owner of the object, but no membership in cmd_alo_sr_to, so SET ROLE to it is refused
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      GRANT cmd_alo_sr_to TO cmd_alo_sr_from
+    expect: ok
+  - sql: |
+      SET ROLE cmd_alo_sr_from
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 930301 OWNER TO cmd_alo_sr_to
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930301
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(930301)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_sr_from
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_alo_sr_to
+    expect: ok

@@ -1,0 +1,52 @@
+# Unqualified names resolve to the first match in search_path; the same table name in two schemas
+# gives different results depending on path order, and qualified names bypass the path.
+id: doc-ddl-schemas.search-path-first-match
+title: Unqualified table names resolve to the first matching schema in search_path
+family: doc-ddl-schemas
+tier: core
+feature_ids: [search-path, qualified-names, current-schema, create-schema]
+required_capabilities: [create-schema, create-table, insert, select, guc]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-schemas-path (The first matching table in the search path is taken to be the one wanted)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE SCHEMA s1
+    expect: ok
+  - sql: |
+      CREATE SCHEMA s2
+    expect: ok
+  - sql: |
+      CREATE TABLE s1.t (id int4, src text)
+    expect: ok
+  - sql: |
+      CREATE TABLE s2.t (id int4, src text)
+    expect: ok
+  - sql: |
+      INSERT INTO s1.t VALUES (1, 's1')
+    expect: ok
+  - sql: |
+      INSERT INTO s2.t VALUES (2, 's2')
+    expect: ok
+  - sql: |
+      SET search_path TO s2
+    expect: ok
+  - sql: |
+      SELECT id, src FROM t
+    expect: rows
+    comment: only s2 is on the path, so the unqualified name finds s2.t
+  - sql: |
+      SET search_path TO s1, s2, public
+    expect: ok
+  - sql: |
+      SELECT id, src FROM t
+    expect: rows
+    comment: s1 comes first, so s1.t wins
+  - sql: |
+      SET search_path TO s1
+    expect: ok
+  - sql: |
+      SELECT id, src FROM s2.t
+    expect: rows
+    comment: a qualified name ignores the search path

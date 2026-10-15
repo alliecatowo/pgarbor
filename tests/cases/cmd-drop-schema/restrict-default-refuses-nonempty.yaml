@@ -1,0 +1,42 @@
+# DROP SCHEMA without a clause behaves as RESTRICT: refused while non-empty, allowed once empty.
+id: cmd-drop-schema.restrict-default-refuses-nonempty
+title: DROP SCHEMA with no clause and with RESTRICT both refuse a non-empty schema and succeed when empty
+family: cmd-drop-schema
+tier: core
+feature_ids: [drop-schema, restrict, errors, default-behavior]
+required_capabilities: [create-schema, create-table, insert, select, drop-table, drop-schema, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_schema.sgml#sql-dropschema (Parameters: RESTRICT is the default)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA rs;
+  CREATE TABLE rs.t (a int);
+  INSERT INTO rs.t VALUES (1);
+steps:
+  - sql: |
+      DROP SCHEMA rs
+    expect: error
+    sqlstate: "2BP01"
+    comment: the default is RESTRICT, which refuses to drop a schema that holds objects
+  - sql: |
+      DROP SCHEMA rs RESTRICT
+    expect: error
+    sqlstate: "2BP01"
+    comment: spelling RESTRICT explicitly gives the same refusal
+  - sql: |
+      SELECT a FROM rs.t
+    expect: rows
+    order: ordered
+    comment: both refused drops left the table and its row alone
+  - sql: |
+      DROP TABLE rs.t
+    expect: ok
+  - sql: |
+      DROP SCHEMA rs RESTRICT
+    expect: ok
+    comment: once the schema is empty, RESTRICT succeeds
+  - sql: |
+      SELECT to_regnamespace('rs') IS NULL AS schema_gone
+    expect: rows
+    order: ordered

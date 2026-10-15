@@ -1,0 +1,48 @@
+# A deferred foreign key is checked when COMMIT runs; a violation makes COMMIT fail and rolls the whole transaction back.
+id: cmd-commit.deferred-constraint-fails-at-commit
+title: COMMIT fails with a deferred foreign key violation and discards the transaction
+family: cmd-commit
+tier: core
+feature_ids: [commit, foreign-key, deferrable, constraints, transactions, insert]
+required_capabilities: [create-table, insert, select, transactions, constraints, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/commit.sgml#sql-commit (Description: changes become visible and durable; deferred constraints are checked at commit time)"
+sessions: [a]
+setup: |
+  CREATE TABLE parent (id int4 PRIMARY KEY);
+  CREATE TABLE child (id int4 PRIMARY KEY, pid int4 REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO child VALUES (1, 99)
+    expect: ok
+    comment: the check is deferred, so the orphan row is accepted for now
+  - sql: |
+      COMMIT
+    expect: error
+    sqlstate: "23503"
+    comment: the foreign key check runs during COMMIT and fails
+  - sql: |
+      SELECT count(*) AS n FROM child
+    expect: rows
+    order: ordered
+    comment: the failed commit rolled everything back
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      INSERT INTO parent VALUES (99)
+    expect: ok
+  - sql: |
+      INSERT INTO child VALUES (2, 99)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, pid FROM child ORDER BY id
+    expect: rows
+    order: ordered

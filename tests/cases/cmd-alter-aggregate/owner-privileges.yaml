@@ -1,0 +1,57 @@
+# ALTER AGGREGATE requires ownership; changing ownership requires SET ROLE rights on the new owner and
+# a nonexistent role is undefined_object. An owner may rename its own aggregate.
+id: cmd-alter-aggregate.owner-privileges
+title: "ALTER AGGREGATE needs ownership, SET ROLE rights for OWNER TO, and an existing role"
+family: cmd-alter-aggregate
+tier: extended
+feature_ids: [alter-aggregate, owner, roles, privileges, errors]
+required_capabilities: [roles, aggregates, create-aggregate, create-function, create-schema, alter-aggregate, set-session-authorization, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#description (ownership and OWNER TO restrictions)"
+setup: |
+  DROP SCHEMA IF EXISTS ow_s CASCADE;
+  DROP ROLE IF EXISTS ow_owner;
+  DROP ROLE IF EXISTS ow_other;
+  CREATE ROLE ow_owner;
+  CREATE ROLE ow_other;
+  CREATE SCHEMA ow_s;
+  GRANT USAGE, CREATE ON SCHEMA ow_s TO ow_owner, ow_other;
+  CREATE FUNCTION ow_s.sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE AGGREGATE ow_s.ow_agg(integer) (sfunc = ow_s.sf, stype = int8, initcond = '0');
+  ALTER AGGREGATE ow_s.ow_agg(integer) OWNER TO ow_owner;
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION ow_other
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE ow_s.ow_agg(integer) RENAME TO ow_agg2
+    expect: error
+    sqlstate: "42501"
+    comment: ow_other does not own the aggregate
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION ow_owner
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE ow_s.ow_agg(integer) OWNER TO nosuch_role
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER AGGREGATE ow_s.ow_agg(integer) OWNER TO ow_other
+    expect: error
+    sqlstate: "42501"
+    comment: ow_owner is not a member of ow_other, so it cannot SET ROLE to it
+  - sql: |
+      ALTER AGGREGATE ow_s.ow_agg(integer) RENAME TO ow_agg2
+    expect: ok
+    comment: the owner may rename within its schema
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT p.proname, pg_get_userbyid(p.proowner) AS owner FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'ow_s' AND p.proname IN ('ow_agg', 'ow_agg2') ORDER BY 1
+    expect: rows
+    order: ordered

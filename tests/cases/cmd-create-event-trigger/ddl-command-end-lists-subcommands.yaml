@@ -1,0 +1,37 @@
+# ddl_command_end fires after the command; pg_event_trigger_ddl_commands() lists every sub-command, including implicit indexes.
+id: cmd-create-event-trigger.ddl-command-end-lists-subcommands
+title: ddl_command_end trigger logs each sub-command, including the implicit primary-key index
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-ddl-command-end, primary-key]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, indexes, views]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE TABLE evlog (seq int4 GENERATED ALWAYS AS IDENTITY, evt text, tag text, note text);
+  CREATE FUNCTION log_end() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  DECLARE r record;
+  BEGIN
+    FOR r IN SELECT command_tag, object_type, object_identity FROM pg_event_trigger_ddl_commands() LOOP
+      INSERT INTO evlog (evt, tag, note)
+        VALUES (tg_event, tg_tag, r.command_tag || '|' || r.object_type || '|' || r.object_identity);
+    END LOOP;
+  END; $$;
+  CREATE EVENT TRIGGER x_end ON ddl_command_end
+    WHEN TAG IN ('CREATE TABLE', 'CREATE VIEW')
+    EXECUTE FUNCTION log_end();
+steps:
+  - sql: |
+      CREATE TABLE tt (a int4, b int4)
+    expect: ok
+  - sql: |
+      CREATE VIEW vv AS SELECT 1 AS x
+    expect: ok
+  - sql: |
+      CREATE TABLE tp (id int4 PRIMARY KEY)
+    expect: ok
+  - sql: |
+      SELECT evt, tag, note FROM evlog ORDER BY seq
+    expect: rows
+    order: ordered

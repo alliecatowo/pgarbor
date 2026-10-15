@@ -1,0 +1,39 @@
+# Composite attribute typmods apply on ROW casts; composite definition errors (duplicate attribute, unknown type).
+id: cmd-create-type.composite-typmod-and-definition-errors
+title: "Composite attribute type modifiers and composite definition errors"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, composite-types, typmod, select, errors]
+required_capabilities: [create-type, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype-composite (attribute data_type)"
+steps:
+  - sql: |
+      CREATE TYPE tmod AS (n numeric(5,2))
+    expect: ok
+  - sql: |
+      SELECT (ROW(1.23456)::tmod).n AS n, ROW(1.23456::numeric)::tmod::text AS txt
+    expect: rows
+    comment: the attribute typmod rounds the value to scale 2
+  - sql: |
+      CREATE TYPE tvc AS (v varchar(3))
+    expect: ok
+  - sql: |
+      SELECT ROW('abcd')::tvc::text AS txt
+    expect: rows
+    comment: explicit cast applies the varchar(3) length coercion, truncating the value
+  - sql: |
+      CREATE TYPE tmod AS (x int)
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      CREATE TYPE tdup AS (a int, a text)
+    expect: error
+    sqlstate: "42701"
+    comment: attribute name specified twice
+  - sql: |
+      CREATE TYPE tbad AS (n nosuchtype)
+    expect: error
+    sqlstate: "42704"
+    comment: unknown attribute data type

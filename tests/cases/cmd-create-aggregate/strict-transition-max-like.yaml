@@ -1,0 +1,29 @@
+# Strict transition function with state type equal to the argument type and no initcond:
+# NULL inputs are skipped, the first non-null value seeds the state (max-like), and an input
+# with no non-null values or no rows yields NULL.
+id: cmd-create-aggregate.strict-transition-max-like
+title: "Strict transition without initcond seeds state from first non-null input; empty or all-NULL yields NULL"
+family: cmd-create-aggregate
+tier: core
+feature_ids: [aggregates, create-aggregate, strict-transition, nulls]
+required_capabilities: [create-table, insert, select, aggregates]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_aggregate.sgml#sql-createaggregate-notes (strict transition function)"
+setup: |
+  CREATE TABLE t (g int4, x int4);
+  INSERT INTO t VALUES (1,1),(1,NULL),(2,5),(2,7);
+  CREATE AGGREGATE mymax (int4) (sfunc = int4larger, stype = int4);
+steps:
+  - sql: |
+      SELECT mymax(x) FROM t
+    expect: rows
+    comment: NULL row ignored, maximum of 1, 5, 7
+  - sql: |
+      SELECT mymax(x) FROM t WHERE false
+    expect: rows
+    comment: no rows gives NULL, since the initial state is null
+  - sql: |
+      SELECT mymax(x) FROM (VALUES (NULL::int4), (NULL::int4)) AS v(x)
+    expect: rows
+    comment: all-NULL inputs never call the transition function, so the result stays NULL

@@ -1,0 +1,33 @@
+# SS.MS and SS.US consume the digits after the point as a fraction of a second, not as a count of milliseconds.
+id: doc-functions-formatting.to-timestamp-fractional-seconds
+title: Fractional seconds in to_timestamp are read as decimal fractions of a second
+family: doc-functions-formatting
+tier: core
+feature_ids: [to-timestamp, fractional-seconds, millisecond-pattern, microsecond-pattern]
+required_capabilities: [select, timestamptz-type, timezone-setting]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-formatting-datetime (usage note on MS and US in to_timestamp)"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT
+        to_timestamp('2000-01-01 12.3', 'YYYY-MM-DD SS.MS') AS ms_one_digit,
+        to_timestamp('2000-01-01 12.30', 'YYYY-MM-DD SS.MS') AS ms_two_digits,
+        to_timestamp('2000-01-01 12.300', 'YYYY-MM-DD SS.MS') AS ms_three_digits,
+        to_timestamp('2000-01-01 12.003', 'YYYY-MM-DD SS.MS') AS ms_three_as_millis,
+        to_timestamp('2000-01-01 15:12:02.020.001230', 'YYYY-MM-DD HH24:MI:SS.MS.US') AS ms_then_us
+    expect: rows
+    order: multiset
+    comment: 12.3 means 12 + 0.3 seconds, so 12.3, 12.30 and 12.300 are the same instant; 12.003 is 12.003 seconds
+  - sql: |
+      SELECT
+        to_char(to_timestamp('2000-01-01 12.3', 'YYYY-MM-DD SS.MS'), 'SS.US') AS us_of_12_3,
+        to_char(to_timestamp('2000-01-01 12.003', 'YYYY-MM-DD SS.MS'), 'SS.MS') AS ms_of_12_003,
+        to_char(to_timestamp('2000-01-01 15:12:02.020.001230', 'YYYY-MM-DD HH24:MI:SS.MS.US'), 'HH24:MI:SS.US') AS hms_us
+    expect: rows
+    order: multiset
+    comment: the documented sum 2.020 + 0.001230 is 2.021230 seconds

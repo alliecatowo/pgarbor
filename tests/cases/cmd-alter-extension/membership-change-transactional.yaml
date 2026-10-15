@@ -1,0 +1,48 @@
+# Membership changes are transactional: a DROP member inside a rolled-back transaction is undone, and a committed one takes effect.
+id: cmd-alter-extension.membership-change-transactional
+title: ALTER EXTENSION membership changes follow transaction commit and rollback
+family: cmd-alter-extension
+tier: core
+feature_ids: [alter-extension, drop-member, transactions, dependencies]
+required_capabilities: [create-extension, create-function, alter-extension, transactions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_extension.sgml#sql-alterextension (DROP member_object)"
+sessions: [a]
+setup: |
+  CREATE EXTENSION hstore;
+  CREATE FUNCTION myfn(a int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+  ALTER EXTENSION hstore ADD FUNCTION myfn(int);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore DROP FUNCTION myfn(int)
+    expect: ok
+  - sql: |
+      SELECT count(*) AS members FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid WHERE e.extname = 'hstore' AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e' AND d.objid = 'myfn(int)'::regprocedure
+    expect: rows
+    order: ordered
+    comment: the change is visible inside its own transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      DROP FUNCTION myfn(int)
+    expect: error
+    sqlstate: "2BP01"
+    comment: rollback restored the membership
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      ALTER EXTENSION hstore DROP FUNCTION myfn(int)
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      DROP FUNCTION myfn(int)
+    expect: ok
+    comment: after commit the function is no longer a member and can be dropped

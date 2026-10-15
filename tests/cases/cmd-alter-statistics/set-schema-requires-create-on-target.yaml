@@ -1,0 +1,41 @@
+# A non-superuser owner moving an object into a schema needs CREATE on that schema.
+id: cmd-alter-statistics.set-schema-requires-create-on-target
+title: "ALTER STATISTICS SET SCHEMA by a non-superuser needs CREATE on the target schema"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, set-schema, privileges, schema-create-privilege]
+required_capabilities: [create-table, create-schema, alter-statistics, extended-statistics, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics (Description: CREATE privilege on the new schema)"
+sessions: [a]
+setup: |
+  CREATE ROLE ast_sc_u;
+  CREATE SCHEMA ast_sc_locked;
+  CREATE TABLE ast_sc (a int, b int);
+  CREATE STATISTICS ast_sc_s1 (ndistinct) ON a, b FROM ast_sc;
+  ALTER STATISTICS ast_sc_s1 OWNER TO ast_sc_u;
+steps:
+  - sql: |
+      SET ROLE ast_sc_u
+    expect: ok
+  - sql: |
+      ALTER STATISTICS ast_sc_s1 SET SCHEMA ast_sc_locked
+    expect: error
+    sqlstate: "42501"
+    comment: permission denied for schema ast_sc_locked
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT stxnamespace::regnamespace::text FROM pg_statistic_ext WHERE stxname = 'ast_sc_s1'
+    expect: rows
+    order: ordered
+    comment: the object stays in public
+  - sql: |
+      ALTER STATISTICS ast_sc_s1 OWNER TO CURRENT_USER
+    expect: ok
+    comment: cleanup
+  - sql: |
+      DROP ROLE ast_sc_u
+    expect: ok

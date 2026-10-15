@@ -1,0 +1,41 @@
+# Documented: COPY creates a configuration that copies the parser and the token mappings of an existing configuration; the copy is independent.
+id: cmd-create-tsconfig.copy-from-existing
+title: "CREATE TEXT SEARCH CONFIGURATION COPY copies parser and mappings, and the copy is independent of its source"
+family: cmd-create-tsconfig
+tier: core
+feature_ids: [create-text-search-configuration, copy-option, token-mappings, alter-text-search-configuration]
+required_capabilities: [create-text-search-configuration, alter-text-search-configuration, text-search, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_tsconfig.sgml#sql-createtsconfig (Description: an existing configuration can be copied; Notes: parser copied too)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION tsc_copy_english (COPY = english)
+    expect: ok
+  - sql: |
+      SELECT p.prsname
+        FROM pg_ts_config c JOIN pg_ts_parser p ON p.oid = c.cfgparser
+       WHERE c.cfgname = 'tsc_copy_english'
+    expect: rows
+    order: ordered
+    comment: parser selection is copied from english
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'tsc_copy_english'::regconfig)
+           = (SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'english'::regconfig) AS same_mapping_count
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT to_tsvector('tsc_copy_english', 'The quick brown foxes jumped')
+           = to_tsvector('english', 'The quick brown foxes jumped') AS same_vector
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION tsc_copy_english DROP MAPPING FOR asciiword
+    expect: ok
+  - sql: |
+      SELECT (SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'tsc_copy_english'::regconfig) AS copy_maps,
+             (SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'english'::regconfig) AS source_maps
+    expect: rows
+    order: ordered
+    comment: changing the copy does not touch the source configuration

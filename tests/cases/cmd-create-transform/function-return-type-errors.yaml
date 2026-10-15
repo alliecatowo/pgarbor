@@ -1,0 +1,37 @@
+# Documented: FROM SQL function must return internal; TO SQL function must return the transform data type.
+id: cmd-create-transform.function-return-type-errors
+title: "FROM SQL must return internal and TO SQL must return the transform type, otherwise CREATE TRANSFORM fails"
+family: cmd-create-transform
+tier: core
+feature_ids: [create-transform, transform-from-sql, transform-to-sql, function-signature-check]
+required_capabilities: [create-transform, create-function, create-type, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_transform.sgml#sql-createtransform-parameters"
+sessions: [a]
+setup: |
+  CREATE TYPE ct_t AS (a int);
+  CREATE FUNCTION ct_from(val internal) RETURNS internal LANGUAGE internal IMMUTABLE STRICT AS 'text_starts_with_support';
+  CREATE FUNCTION ct_to_int(val internal) RETURNS int4 LANGUAGE internal IMMUTABLE STRICT AS 'int4recv';
+  CREATE FUNCTION ct_to_t(val internal) RETURNS ct_t LANGUAGE internal IMMUTABLE STRICT AS 'record_recv';
+steps:
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (FROM SQL WITH FUNCTION ct_to_int(internal))
+    expect: error
+    sqlstate: "42P17"
+    comment: FROM SQL function returns int4, not internal
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (TO SQL WITH FUNCTION ct_from(internal))
+    expect: error
+    sqlstate: "42P17"
+    comment: TO SQL function returns internal, not the transform type ct_t
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (TO SQL WITH FUNCTION ct_to_int(internal))
+    expect: error
+    sqlstate: "42P17"
+  - sql: |
+      CREATE TRANSFORM FOR ct_t LANGUAGE sql (TO SQL WITH FUNCTION ct_to_t(internal))
+    expect: ok
+  - sql: |
+      SELECT count(*) AS transform_rows FROM pg_transform
+    expect: rows

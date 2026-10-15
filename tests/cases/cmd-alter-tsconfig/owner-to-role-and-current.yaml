@@ -1,0 +1,65 @@
+# OWNER TO accepts a role name, CURRENT_ROLE/CURRENT_USER and SESSION_USER; an unknown role is an error. Role cleaned up at the end.
+id: cmd-alter-tsconfig.owner-to-role-and-current
+title: "ALTER TEXT SEARCH CONFIGURATION OWNER TO accepts role names and the CURRENT_*/SESSION_USER keywords"
+family: cmd-alter-tsconfig
+tier: extended
+feature_ids: [alter-text-search-configuration, owner, owner-keywords, roles]
+required_capabilities: [create-role, create-text-search-configuration, alter-text-search-configuration, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsconfig.sgml#sql-altertsconfig (OWNER TO new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE ROLE atsc_owner;
+  CREATE TEXT SEARCH CONFIGURATION my_config (copy = simple);
+steps:
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config OWNER TO atsc_owner
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(cfgowner) = 'atsc_owner' AS is_role
+        FROM pg_ts_config WHERE cfgname = 'my_config'
+    expect: rows
+    order: multiset
+  - sql: |
+      SET ROLE atsc_owner
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config OWNER TO CURRENT_USER
+    expect: ok
+    comment: current user is atsc_owner, so ownership stays with it
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(cfgowner) = 'atsc_owner' AS still_role
+        FROM pg_ts_config WHERE cfgname = 'my_config'
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(cfgowner) = session_user AS is_session_user
+        FROM pg_ts_config WHERE cfgname = 'my_config'
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(cfgowner) = current_user AS is_current_role
+        FROM pg_ts_config WHERE cfgname = 'my_config'
+    expect: rows
+    order: multiset
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config OWNER TO atsc_nosuch_role
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION my_config OWNER TO CURRENT_USER
+    expect: ok
+    comment: hand ownership back so the role can be dropped
+  - sql: |
+      DROP ROLE atsc_owner
+    expect: ok

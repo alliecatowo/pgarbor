@@ -1,0 +1,40 @@
+# An unqualified name resolves through search_path, so only the first matching collation is dropped; a qualified name targets one schema.
+id: cmd-drop-collation.search-path-resolution
+title: "DROP COLLATION with an unqualified name drops the collation found first on search_path"
+family: cmd-drop-collation
+tier: core
+feature_ids: [drop-collation, search-path, schemas, qualified-names]
+required_capabilities: [create-schema, create-collation, drop-collation, icu-provider, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_collation.sgml#sql-dropcollation (name can be schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA dc_s1;
+  CREATE SCHEMA dc_s2;
+  CREATE COLLATION dc_s1.dup (provider = icu, locale = 'de-DE');
+  CREATE COLLATION dc_s2.dup (provider = icu, locale = 'de-DE');
+steps:
+  - sql: |
+      SET search_path = dc_s2, public
+    expect: ok
+  - sql: |
+      DROP COLLATION dup
+    expect: ok
+  - sql: |
+      SELECT n.nspname FROM pg_collation c JOIN pg_namespace n ON n.oid = c.collnamespace WHERE c.collname = 'dup' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only the dc_s1 copy remains
+  - sql: |
+      DROP COLLATION dc_s1.dup
+    expect: ok
+  - sql: |
+      SET search_path = public
+    expect: ok
+  - sql: |
+      DROP SCHEMA dc_s1
+    expect: ok
+  - sql: |
+      DROP SCHEMA dc_s2
+    expect: ok

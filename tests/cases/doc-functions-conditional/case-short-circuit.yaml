@@ -1,0 +1,34 @@
+# CASE does not evaluate arms that are not needed; an evaluated 1/0 raises division_by_zero.
+id: doc-functions-conditional.case-short-circuit
+title: CASE skips unneeded arms so guarded division by zero never runs
+family: doc-functions-conditional
+tier: core
+feature_ids: [case-expression, short-circuit-evaluation, division]
+required_capabilities: [select, create-table, insert, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-case (avoiding division by zero with CASE)"
+sessions: [a]
+setup: |
+  CREATE TABLE d (x int4, y int4);
+  INSERT INTO d VALUES (0, 10), (4, 10), (5, NULL);
+steps:
+  - sql: |
+      SELECT x, CASE WHEN x <> 0 THEN y / x > 1.5 ELSE false END AS guarded FROM d ORDER BY x
+    expect: rows
+    order: ordered
+    comment: documented guard pattern; x = 0 never divides
+  - sql: |
+      SELECT x, CASE WHEN x = 0 THEN NULL ELSE 10 / x END AS q FROM d WHERE x IN (0, 5) ORDER BY x
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT CASE WHEN true THEN 1 ELSE 1 / 0 END AS unreached
+    expect: rows
+    order: multiset
+    comment: the division sits in an arm that is never selected
+  - sql: |
+      SELECT CASE WHEN true THEN 1 / 0 ELSE 1 END AS taken
+    expect: error
+    sqlstate: "22012"
+    comment: the division is in the selected arm and fails

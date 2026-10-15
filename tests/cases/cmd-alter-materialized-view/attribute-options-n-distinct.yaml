@@ -1,0 +1,35 @@
+# ALTER COLUMN SET/RESET (attribute_option): n_distinct is accepted, unknown options are rejected, RESET clears them.
+id: cmd-alter-materialized-view.attribute-options-n-distinct
+title: "ALTER COLUMN SET and RESET attribute options on a materialized view column"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, attribute-options, n-distinct]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (ALTER COLUMN SET ( attribute_option = value ) / RESET)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_ao_base (id int4, tag text);
+  INSERT INTO amv_ao_base VALUES (1, 'a'), (2, 'b');
+  CREATE MATERIALIZED VIEW amv_ao_mv AS SELECT id, tag FROM amv_ao_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ao_mv ALTER COLUMN tag SET (n_distinct = 5)
+    expect: ok
+  - sql: |
+      SELECT attoptions FROM pg_attribute WHERE attrelid = 'amv_ao_mv'::regclass AND attname = 'tag'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ao_mv ALTER COLUMN tag SET (bogus_opt = 5)
+    expect: error
+    sqlstate: "22023"
+    comment: unrecognized attribute option
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_ao_mv ALTER COLUMN tag RESET (n_distinct)
+    expect: ok
+  - sql: |
+      SELECT attoptions IS NULL AS no_options FROM pg_attribute WHERE attrelid = 'amv_ao_mv'::regclass AND attname = 'tag'
+    expect: rows
+    order: ordered

@@ -1,0 +1,40 @@
+id: cmd-refresh-materialized-view.search-path-during-refresh
+title: search_path is pg_catalog, pg_temp while a refresh runs, and is restored afterwards
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, search-path, sql-functions]
+required_capabilities: [create-table, select, create-function, create-materialized-view, refresh-materialized-view, search-path]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (Notes: search_path temporarily changed)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION probe_sp() RETURNS text LANGUAGE sql AS $$ SELECT current_setting('search_path') $$;
+  CREATE MATERIALIZED VIEW mv_sp AS SELECT probe_sp() AS sp;
+steps:
+  - sql: |
+      SELECT sp FROM mv_sp
+    expect: rows
+    order: ordered
+    comment: populated at CREATE time under the session search_path
+  - sql: |
+      SHOW search_path
+    expect: rows
+    order: ordered
+  - sql: |
+      REFRESH MATERIALIZED VIEW mv_sp
+    expect: ok
+  - sql: |
+      SELECT sp FROM mv_sp
+    expect: rows
+    order: ordered
+    comment: the defining query observed pg_catalog, pg_temp
+  - sql: |
+      SHOW search_path
+    expect: rows
+    order: ordered
+    comment: session search_path restored after the refresh
+  - sql: |
+      SELECT current_setting('search_path') = '"$user", public' AS restored
+    expect: rows
+    order: ordered

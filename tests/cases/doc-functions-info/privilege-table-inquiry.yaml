@@ -1,0 +1,38 @@
+# has_table_privilege: documented privilege keywords, case and whitespace folding, WITH GRANT OPTION, OID input, and the PUBLIC pseudo-role.
+id: doc-functions-info.privilege-table-inquiry
+title: has_table_privilege with keyword folding, grant option, OID input and PUBLIC
+family: doc-functions-info
+tier: core
+feature_ids: [privilege-inquiry, grant, revoke, public-role]
+required_capabilities: [create-table, select, privileges]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (Access Privilege Inquiry Functions)"
+sessions: [a]
+setup: |
+  CREATE TABLE priv_t (id int);
+steps:
+  - sql: |
+      SELECT has_table_privilege('priv_t', 'select') AS sel,
+             has_table_privilege(current_user, 'priv_t', 'INSERT, SELECT WITH GRANT OPTION') AS ins_sel_go,
+             has_table_privilege('priv_t', ' SeLeCt , insert ') AS folded_spaces,
+             has_table_privilege('priv_t'::regclass::oid, 'DELETE') AS by_oid
+    expect: rows
+    comment: the owner holds every table privilege with grant option
+  - sql: |
+      SELECT has_table_privilege('public', 'priv_t', 'SELECT') AS public_before
+    expect: rows
+    comment: a new table grants nothing to PUBLIC
+  - sql: |
+      GRANT SELECT ON priv_t TO PUBLIC
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('public', 'priv_t', 'SELECT') AS public_after_grant
+    expect: rows
+  - sql: |
+      REVOKE SELECT ON priv_t FROM PUBLIC
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('public', 'priv_t', 'SELECT') AS public_after_revoke,
+             has_table_privilege('priv_t', 'SELECT') AS owner_still
+    expect: rows

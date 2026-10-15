@@ -1,0 +1,39 @@
+# ON SELECT rules are only for views, must be named "_RETURN", must be unconditional INSTEAD, and must have a single SELECT action.
+id: cmd-create-rule.view-select-return-rule
+title: ON SELECT rules attach only to views as an unconditional INSTEAD _RETURN SELECT
+family: cmd-create-rule
+tier: core
+feature_ids: [create-rule, select, views, return-rule, errors]
+required_capabilities: [create-table, create-view, create-rule, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_rule.sgml#(Description: ON SELECT rules can only be attached to views; must be named _RETURN; unconditional INSTEAD)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (a int4);
+  CREATE TABLE t2 (a int4);
+  INSERT INTO t2 VALUES (42);
+  CREATE VIEW v1 AS SELECT 1 AS x;
+steps:
+  - sql: |
+      CREATE RULE "_RETURN" AS ON SELECT TO t1 DO INSTEAD SELECT * FROM t2
+    expect: error
+    sqlstate: "42809"
+    comment: a table cannot carry an ON SELECT rule
+  - sql: |
+      CREATE OR REPLACE RULE "_RETURN" AS ON SELECT TO v1 WHERE true DO INSTEAD SELECT 3 AS x
+    expect: error
+    sqlstate: "0A000"
+    comment: the rule must be unconditional
+  - sql: |
+      CREATE OR REPLACE RULE "_RETURN" AS ON SELECT TO v1 DO ALSO SELECT 2 AS x
+    expect: error
+    sqlstate: "0A000"
+    comment: the rule must be INSTEAD
+  - sql: |
+      CREATE OR REPLACE RULE "_RETURN" AS ON SELECT TO v1 DO INSTEAD SELECT a AS x FROM t2
+    expect: ok
+  - sql: |
+      SELECT x FROM v1
+    expect: rows
+    comment: the view now returns the rule's SELECT, not the original constant 1

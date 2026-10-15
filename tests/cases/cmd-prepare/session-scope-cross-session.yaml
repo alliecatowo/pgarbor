@@ -1,0 +1,42 @@
+# Prepared statements belong to one session; the same name may be prepared independently in another session.
+id: cmd-prepare.session-scope-cross-session
+title: A prepared statement is invisible to another session, which may reuse its name
+family: cmd-prepare
+tier: core
+feature_ids: [prepare, execute, sessions, prepared-statements]
+required_capabilities: [select, prepared-statements, multi-session, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/prepare.sgml#sql-prepare (Description: session lifetime)"
+sessions: [a, b]
+steps:
+  - session: a
+    sql: |
+      PREPARE s AS SELECT 'one' AS v
+    expect: ok
+  - session: a
+    sql: |
+      EXECUTE s
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      EXECUTE s
+    expect: error
+    sqlstate: "26000"
+    comment: not visible in session b
+  - session: b
+    sql: |
+      PREPARE s AS SELECT 'two' AS v
+    expect: ok
+  - session: b
+    sql: |
+      EXECUTE s
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      EXECUTE s
+    expect: rows
+    order: ordered
+    comment: session a still has its own statement

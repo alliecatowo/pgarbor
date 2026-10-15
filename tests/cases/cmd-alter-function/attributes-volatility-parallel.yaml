@@ -1,0 +1,40 @@
+# Volatility, parallel safety, LEAKPROOF and security mode are set by ALTER FUNCTION; actions in
+# one statement combine, and omitted attributes are left alone.
+id: cmd-alter-function.attributes-volatility-parallel
+title: VOLATILITY, PARALLEL, LEAKPROOF and SECURITY attributes change independently via ALTER FUNCTION
+family: cmd-alter-function
+tier: core
+feature_ids: [alter-function, volatility, parallel-safety, leakproof, security-definer]
+required_capabilities: [create-function, alter-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_function.sgml#sql-alterfunction (Parameters: IMMUTABLE/STABLE/VOLATILE, PARALLEL, LEAKPROOF, SECURITY)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION attr1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+steps:
+  - sql: |
+      ALTER FUNCTION attr1(int) IMMUTABLE PARALLEL SAFE LEAKPROOF EXTERNAL SECURITY DEFINER
+    expect: ok
+  - sql: |
+      SELECT provolatile, proparallel, proleakproof, prosecdef FROM pg_proc WHERE proname = 'attr1'
+    expect: rows
+    comment: expect i / s / true / true
+  - sql: |
+      ALTER FUNCTION attr1(int) STABLE PARALLEL RESTRICTED NOT LEAKPROOF EXTERNAL SECURITY INVOKER
+    expect: ok
+  - sql: |
+      SELECT provolatile, proparallel, proleakproof, prosecdef FROM pg_proc WHERE proname = 'attr1'
+    expect: rows
+    comment: expect s / r / false / false
+  - sql: |
+      ALTER FUNCTION attr1(int) VOLATILE PARALLEL UNSAFE
+    expect: ok
+  - sql: |
+      SELECT provolatile, proparallel, proleakproof, prosecdef FROM pg_proc WHERE proname = 'attr1'
+    expect: rows
+    comment: expect v / u / false / false; LEAKPROOF and SECURITY were not mentioned and keep their values
+  - sql: |
+      ALTER FUNCTION attr1(int) PARALLEL BOGUS
+    expect: error
+    sqlstate: "42601"

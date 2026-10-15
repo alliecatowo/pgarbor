@@ -1,0 +1,39 @@
+# INSTEAD OF INSERT trigger on a view fires once per row. Returning NEW signals that the trigger did the
+# modification; a modified NEW becomes the row seen by INSERT ... RETURNING, but not the stored base row.
+id: doc-trigger-definition.instead-of-row-returns-new
+title: INSTEAD OF row trigger on a view performs the insert and its modified NEW feeds RETURNING
+family: doc-trigger-definition
+tier: core
+feature_ids: [triggers, instead-of-triggers, views, plpgsql, insert, returning]
+required_capabilities: [create-table, create-view, create-function, insert, select, plpgsql, triggers, returning]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-definition (INSTEAD OF triggers; return value of a row-level INSTEAD OF trigger)"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int PRIMARY KEY, val text);
+  CREATE VIEW v AS SELECT id, upper(val) AS val FROM base;
+  CREATE FUNCTION v_ins() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO base VALUES (NEW.id, lower(NEW.val));
+    NEW.val := upper(NEW.val);
+    RETURN NEW;
+  END
+  $$ LANGUAGE plpgsql;
+  CREATE TRIGGER v_ins_trg INSTEAD OF INSERT ON v FOR EACH ROW EXECUTE FUNCTION v_ins();
+steps:
+  - sql: |
+      INSERT INTO v VALUES (1, 'ABC'), (2, 'Def')
+    expect: ok
+  - sql: |
+      SELECT id, val FROM base ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO v VALUES (3, 'XyZ') RETURNING id, val
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id, val FROM base ORDER BY id
+    expect: rows
+    order: ordered

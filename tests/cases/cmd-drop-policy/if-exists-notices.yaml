@@ -1,0 +1,39 @@
+# IF EXISTS turns a missing policy, a missing table or a missing schema into a NOTICE instead of an error.
+id: cmd-drop-policy.if-exists-notices
+title: "DROP POLICY IF EXISTS skips missing policies, tables and schemas with a NOTICE"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, policies, errors, notices]
+required_capabilities: [create-table, select, rls, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p1 ON t USING (v > 0);
+steps:
+  - sql: |
+      DROP POLICY IF EXISTS p1 ON t
+    expect: ok
+    comment: the policy exists, so no notice is issued
+  - sql: |
+      DROP POLICY IF EXISTS p1 ON t
+    expect: notice
+    comment: policy does not exist; NOTICE and skip, no error
+  - sql: |
+      DROP POLICY IF EXISTS p1 ON no_such_table
+    expect: notice
+    comment: the relation is also skipped with a NOTICE
+  - sql: |
+      DROP POLICY IF EXISTS p1 ON no_such_schema.t
+    expect: notice
+    comment: a missing schema is skipped with a NOTICE too
+  - sql: |
+      DROP POLICY IF EXISTS p1 ON t CASCADE
+    expect: notice
+    comment: CASCADE does not change the outcome
+  - sql: |
+      SELECT count(*) AS n FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: nothing was dropped or created by the skipped statements

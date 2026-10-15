@@ -1,0 +1,49 @@
+# Plain VACUUM refreshes reltuples but collects no column statistics; the ANALYZE option adds pg_stats rows for the named or all columns.
+id: cmd-vacuum.analyze-statistics
+title: "VACUUM ANALYZE collects statistics only for the requested columns"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, analyze, column-list, catalog-introspection]
+required_capabilities: [create-table, insert, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Description: VACUUM ANALYZE; Parameters: ANALYZE, column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE vst (id int4, v int4, w int4);
+  INSERT INTO vst SELECT g, g % 7, g FROM generate_series(1, 50) g;
+steps:
+  - sql: |
+      SELECT count(*) FROM pg_stats WHERE schemaname = 'public' AND tablename = 'vst'
+    expect: rows
+    order: ordered
+    comment: no statistics before any VACUUM
+  - sql: |
+      VACUUM vst
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_stats WHERE schemaname = 'public' AND tablename = 'vst'
+    expect: rows
+    order: ordered
+    comment: plain VACUUM does not collect column statistics
+  - sql: |
+      SELECT reltuples, relpages FROM pg_class WHERE oid = 'vst'::regclass
+    expect: rows
+    order: ordered
+    comment: plain VACUUM updates the row estimate and page count
+  - sql: |
+      VACUUM (ANALYZE) vst (v, w)
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'vst' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: only the listed columns have statistics
+  - sql: |
+      VACUUM ANALYZE vst
+    expect: ok
+  - sql: |
+      SELECT attname FROM pg_stats WHERE schemaname = 'public' AND tablename = 'vst' ORDER BY attname
+    expect: rows
+    order: ordered
+    comment: without a column list every column is analyzed

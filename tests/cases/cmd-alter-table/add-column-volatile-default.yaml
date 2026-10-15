@@ -1,0 +1,31 @@
+# A volatile DEFAULT is evaluated per existing row when ADD COLUMN runs, so existing rows receive distinct values.
+id: cmd-alter-table.add-column-volatile-default
+title: "ADD COLUMN with a volatile DEFAULT evaluates the default for each existing row"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, add-column, column-default, volatile-default, sequences]
+required_capabilities: [create-table, sequences, alter-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable-notes (volatile DEFAULT causes a table rewrite)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE ids;
+  CREATE TABLE orders_v (k int4);
+  INSERT INTO orders_v VALUES (10), (20), (30);
+steps:
+  - sql: |
+      ALTER TABLE orders_v ADD COLUMN id int4 DEFAULT nextval('ids')
+    expect: ok
+    comment: volatile default, so each existing row gets its own value
+  - sql: |
+      SELECT count(DISTINCT id) AS distinct_ids, min(id) AS lo, max(id) AS hi, sum(id) AS total FROM orders_v
+    expect: rows
+  - sql: |
+      INSERT INTO orders_v (k) VALUES (40)
+    expect: ok
+  - sql: |
+      SELECT id FROM orders_v WHERE k = 40
+    expect: rows
+    order: ordered
+    comment: the next row continues the sequence

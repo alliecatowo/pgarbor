@@ -1,0 +1,35 @@
+# DROP INDEX accepts a comma-separated list; if any name is missing the whole statement fails and nothing is dropped.
+id: cmd-drop-index.multiple-names-atomic
+title: DROP INDEX with several names drops them all, and a missing name aborts the whole list
+family: cmd-drop-index
+tier: core
+feature_ids: [drop-index, multiple-names, errors]
+required_capabilities: [create-table, create-index, select, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_index.sgml#sql-dropindex (Synopsis: name [, ...])"
+sessions: [a]
+setup: |
+  CREATE TABLE orders (id int4 PRIMARY KEY, cust int4, sku text, qty int4);
+  CREATE INDEX o_cust ON orders (cust);
+  CREATE INDEX o_sku ON orders (sku);
+  CREATE INDEX o_qty ON orders (qty);
+steps:
+  - sql: |
+      DROP INDEX o_cust, o_sku, no_such_index
+    expect: error
+    sqlstate: "42704"
+    comment: the missing name fails the statement
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'orders' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: no index was dropped by the failed statement
+  - sql: |
+      DROP INDEX o_cust, o_sku, o_qty
+    expect: ok
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'orders' ORDER BY indexname
+    expect: rows
+    order: ordered
+    comment: only the primary key index remains

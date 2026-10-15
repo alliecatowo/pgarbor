@@ -1,0 +1,41 @@
+# Only the owner may RENAME or change the owner of a conversion; a non-owner gets 42501 and nothing changes.
+id: cmd-alter-conversion.non-owner-denied
+title: A non-owner cannot rename or re-own a conversion
+family: cmd-alter-conversion
+tier: core
+feature_ids: [alter-conversion, privileges, rename, owner, errors]
+required_capabilities: [alter-conversion, create-conversion, create-role, set-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_conversion.sgml#sql-alterconversion (Description: You must own the conversion)"
+sessions: [a]
+setup: |
+  CREATE ROLE alter_conv_nonown;
+  CREATE CONVERSION nonown_conv FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+steps:
+  - sql: |
+      SET ROLE alter_conv_nonown
+    expect: ok
+  - sql: |
+      ALTER CONVERSION nonown_conv RENAME TO nonown_renamed
+    expect: error
+    sqlstate: "42501"
+    comment: must own the conversion
+  - sql: |
+      ALTER CONVERSION nonown_conv OWNER TO alter_conv_nonown
+    expect: error
+    sqlstate: "42501"
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT conname, pg_get_userbyid(conowner) AS owner FROM pg_conversion WHERE conname LIKE 'nonown%' ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: name and owner are unchanged
+  - sql: |
+      DROP CONVERSION nonown_conv
+    expect: ok
+  - sql: |
+      DROP ROLE alter_conv_nonown
+    expect: ok

@@ -1,0 +1,29 @@
+# Documented examples: SET to DEFAULT, RETURNING with old.<col>, and the parenthesized column-list form.
+id: cmd-update.weather-default-row-syntax
+title: UPDATE sets a column to DEFAULT, returns old values, and supports row-constructor assignment
+family: cmd-update
+tier: core
+feature_ids: [update, set-default, returning, old-values, row-assignment]
+required_capabilities: [create-table, insert, select, update, returning]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/update.sgml#SQL-UPDATE (Examples: prcp = DEFAULT; RETURNING ... old.prcp AS old_prcp; (temp_lo, temp_hi, prcp) = (..., DEFAULT))"
+sessions: [a]
+setup: |
+  CREATE TABLE weather (city text, date date, temp_lo int, temp_hi int, prcp real DEFAULT 0.25);
+  INSERT INTO weather VALUES ('San Francisco', '2003-07-03', 10, 20, 0.5), ('San Francisco', '2003-07-04', 11, 21, 1.0)
+steps:
+  - sql: |
+      UPDATE weather SET temp_lo = temp_lo + 1, temp_hi = temp_lo + 15, prcp = DEFAULT
+        WHERE city = 'San Francisco' AND date = '2003-07-03'
+        RETURNING temp_lo, temp_hi, prcp, old.prcp AS old_prcp
+    expect: rows
+    comment: temp_hi uses the old temp_lo (10 + 15 = 25), prcp takes the column default
+  - sql: |
+      UPDATE weather SET (temp_lo, temp_hi, prcp) = (temp_lo + 1, temp_lo + 15, DEFAULT)
+        WHERE city = 'San Francisco' AND date = '2003-07-03'
+    expect: ok
+  - sql: |
+      SELECT city, date, temp_lo, temp_hi, prcp FROM weather ORDER BY date
+    expect: rows
+    order: ordered

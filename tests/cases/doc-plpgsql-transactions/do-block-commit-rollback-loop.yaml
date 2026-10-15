@@ -1,0 +1,47 @@
+# Same COMMIT/ROLLBACK loop run from an anonymous DO block, plus the zero-iteration boundary.
+id: doc-plpgsql-transactions.do-block-commit-rollback-loop
+title: DO block COMMIT/ROLLBACK loop, including a zero-iteration loop
+family: doc-plpgsql-transactions
+tier: core
+feature_ids: [plpgsql, do-block, commit, rollback, transaction-management]
+required_capabilities: [create-table, insert, select, plpgsql, transactions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-transactions"
+sessions: [a]
+setup: |
+  CREATE TABLE test1 (a int4);
+steps:
+  - sql: |
+      DO $$
+      BEGIN
+          FOR i IN 0..4 LOOP
+              INSERT INTO test1 (a) VALUES (i);
+              IF i % 2 = 0 THEN
+                  COMMIT;
+              ELSE
+                  ROLLBACK;
+              END IF;
+          END LOOP;
+      END;
+      $$
+    expect: ok
+  - sql: |
+      SELECT a FROM test1 ORDER BY a
+    expect: rows
+    order: ordered
+  - sql: |
+      DO $$
+      BEGIN
+          FOR i IN 1..0 LOOP
+              COMMIT;
+          END LOOP;
+          INSERT INTO test1 VALUES (100);
+      END;
+      $$
+    expect: ok
+    comment: a zero-iteration loop never reaches COMMIT; the trailing INSERT is still committed at block end
+  - sql: |
+      SELECT a FROM test1 ORDER BY a
+    expect: rows
+    order: ordered

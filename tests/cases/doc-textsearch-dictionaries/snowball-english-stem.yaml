@@ -1,0 +1,45 @@
+# Snowball template: stems English words, lower-cases unknown words (it recognizes everything), and honors the optional StopWords list.
+id: doc-textsearch-dictionaries.snowball-stemmer
+title: snowball dictionary stems, recognizes every token, and requires a Language
+family: doc-textsearch-dictionaries
+tier: core
+feature_ids: [text-search-dictionary, snowball-template, stemming, stop-words, errors]
+required_capabilities: [create-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/textsearch.sgml#textsearch-dictionaries (Snowball Dictionary)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY my_snow (TEMPLATE = snowball, Language = english, StopWords = english)
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('my_snow', 'skies') AS plural,
+             ts_lexize('my_snow', 'foxes') AS plural2,
+             ts_lexize('my_snow', 'running') AS gerund,
+             ts_lexize('my_snow', 'the') AS stop_word,
+             ts_lexize('my_snow', 'XYZZY') AS unknown_word
+    expect: rows
+    comment: unknown words are still returned (lower-cased and stemmed where possible); the stop word gives {}
+  - sql: |
+      SELECT ts_lexize('english_stem', 'skies') AS builtin_plural,
+             ts_lexize('english_stem', 'the') AS builtin_stop_word
+    expect: rows
+    comment: the predefined english_stem definition behaves the same way
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY ss_nostop (TEMPLATE = snowball, Language = english)
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('ss_nostop', 'the') AS no_stop_list, ts_lexize('ss_nostop', 'Hello') AS folded
+    expect: rows
+    comment: without a StopWords file nothing is discarded as a stop word
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY bad_snow (TEMPLATE = snowball, Language = klingon)
+    expect: error
+    sqlstate: "42704"
+    comment: no stemmer exists for the language
+  - sql: |
+      CREATE TEXT SEARCH DICTIONARY bad_snow2 (TEMPLATE = snowball)
+    expect: error
+    sqlstate: "22023"
+    comment: Language is required

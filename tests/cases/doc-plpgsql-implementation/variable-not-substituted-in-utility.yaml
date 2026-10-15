@@ -1,0 +1,39 @@
+# Variable substitution works in DELETE, but a utility statement (SET) treats the variable name as a literal
+# identifier, so the statement fails at run time.
+id: doc-plpgsql-implementation.variable-not-substituted-in-utility
+title: Variables are not substituted into utility statements such as SET
+family: doc-plpgsql-implementation
+tier: extended
+feature_ids: [plpgsql, variable-substitution, guc, delete]
+required_capabilities: [create-table, insert, select, delete, create-function, plpgsql, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Plan Caching)"
+sessions: [a]
+setup: |
+  CREATE TABLE accts (id int);
+  INSERT INTO accts VALUES (1), (2), (3);
+  CREATE FUNCTION util_var() RETURNS void AS $$
+  DECLARE v text := 'work_mem';
+  BEGIN
+    SET v = '1MB';
+  END;
+  $$ LANGUAGE plpgsql;
+  CREATE FUNCTION sub_var(v int) RETURNS void AS $$
+  BEGIN
+    DELETE FROM accts WHERE id = v;
+  END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT util_var()
+    expect: error
+    sqlstate: "42704"
+    comment: SET v names a configuration parameter called v, not the local variable
+  - sql: |
+      SELECT sub_var(2)
+    expect: rows
+  - sql: |
+      SELECT id FROM accts ORDER BY id
+    expect: rows
+    order: ordered

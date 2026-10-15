@@ -1,0 +1,35 @@
+# pg_get_serial_sequence for serial and identity columns, case handling of the table and column arguments, and error paths.
+id: doc-functions-info.serial-sequence-lookup
+title: pg_get_serial_sequence finds serial and identity sequences with documented case rules
+family: doc-functions-info
+tier: core
+feature_ids: [pg-get-serial-sequence, serial, identity, sequences]
+required_capabilities: [create-table, identity, sequences, select, insert]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-info (Object Information: pg_get_serial_sequence)"
+sessions: [a]
+setup: |
+  CREATE TABLE "Ser_T" (id serial PRIMARY KEY, "ID2" int);
+  CREATE TABLE ident_t (id int GENERATED ALWAYS AS IDENTITY, v text);
+  INSERT INTO "Ser_T" ("ID2") VALUES (10), (20);
+steps:
+  - sql: |
+      SELECT pg_get_serial_sequence('"Ser_T"', 'id') AS serial_seq,
+             pg_get_serial_sequence('ident_t', 'id') AS identity_seq,
+             pg_get_serial_sequence('"Ser_T"', 'ID2') IS NULL AS plain_col_null
+    expect: rows
+    comment: the table argument is parsed as SQL, the column argument is literal; a non-serial column yields NULL
+  - sql: |
+      SELECT currval(pg_get_serial_sequence('"Ser_T"', 'id')) AS last_serial
+    expect: rows
+    comment: documented usage pattern; two setup inserts through the default leave currval at 2
+  - sql: |
+      SELECT pg_get_serial_sequence('Ser_T', 'id')
+    expect: error
+    sqlstate: "42P01"
+    comment: unquoted table name is lowercased to ser_t, which does not exist
+  - sql: |
+      SELECT pg_get_serial_sequence('ident_t', 'nosuch_col')
+    expect: error
+    sqlstate: "42703"

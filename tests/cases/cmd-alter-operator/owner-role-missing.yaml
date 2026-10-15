@@ -1,0 +1,24 @@
+# OWNER TO a role that does not exist is refused, and the operator keeps its owner.
+id: cmd-alter-operator.owner-role-missing
+title: "ALTER OPERATOR OWNER TO an unknown role fails with 42704 and changes nothing"
+family: cmd-alter-operator
+tier: core
+feature_ids: [alter-operator, owner, errors]
+required_capabilities: [alter-operator, create-operator, create-function-sql, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_operator.sgml#synopsis (OWNER TO new_owner)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_ao_ro_lt(int8, int8) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT $1 < $2 $$;
+  CREATE OPERATOR <<< (LEFTARG = int8, RIGHTARG = int8, PROCEDURE = cmd_ao_ro_lt);
+steps:
+  - sql: |
+      ALTER OPERATOR <<< (int8, int8) OWNER TO cmd_ao_no_such_role
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT pg_get_userbyid(oprowner) = session_user AS still_session_owner
+      FROM pg_operator WHERE oprname = '<<<' AND oprleft = 'int8'::regtype AND oprright = 'int8'::regtype
+    expect: rows
+    order: ordered

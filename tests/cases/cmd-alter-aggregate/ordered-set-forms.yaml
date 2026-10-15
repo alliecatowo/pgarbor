@@ -1,0 +1,50 @@
+# The ORDER BY form and the flat comma form both reference an ordered-set aggregate; the direct and
+# aggregated argument lists must be given in the same order.
+id: cmd-alter-aggregate.ordered-set-forms
+title: "ALTER AGGREGATE accepts ordered-set signatures in ORDER BY and comma form, and rejects reversed ones"
+family: cmd-alter-aggregate
+tier: core
+feature_ids: [alter-aggregate, ordered-set-aggregates, set-schema, rename]
+required_capabilities: [aggregates, ordered-set-aggregates, create-aggregate, create-function, create-schema, alter-aggregate, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_aggregate.sgml#examples (mypercentile ORDER BY and comma forms)"
+setup: |
+  DROP SCHEMA IF EXISTS os_s CASCADE;
+  CREATE FUNCTION os_sf(int8, int4) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+  CREATE FUNCTION os_ff(int8, float8) RETURNS float8 LANGUAGE sql IMMUTABLE AS $$ SELECT $1 * $2 $$;
+  CREATE AGGREGATE os_pct(float8 ORDER BY integer) (sfunc = os_sf, stype = int8, finalfunc = os_ff);
+steps:
+  - sql: |
+      SELECT os_pct(0.5) WITHIN GROUP (ORDER BY x) FROM generate_series(1, 4) AS g(x)
+    expect: rows
+    comment: sum 10 scaled by the direct argument 0.5
+  - sql: |
+      ALTER AGGREGATE os_pct(float8 ORDER BY integer) RENAME TO os_pct2
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE os_pct2(float8, integer) RENAME TO os_pct
+    expect: ok
+    comment: the comma form names the same aggregate
+  - sql: |
+      ALTER AGGREGATE os_pct(integer ORDER BY float8) RENAME TO os_x
+    expect: error
+    sqlstate: "42883"
+    comment: direct and aggregated lists are reversed
+  - sql: |
+      CREATE SCHEMA os_s
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE os_pct(float8, integer) SET SCHEMA os_s
+    expect: ok
+  - sql: |
+      ALTER AGGREGATE os_s.os_pct(float8 ORDER BY integer) SET SCHEMA public
+    expect: ok
+  - sql: |
+      SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = 'os_pct' ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT os_pct(0.5) WITHIN GROUP (ORDER BY x) FROM generate_series(1, 4) AS g(x)
+    expect: rows
+    comment: unchanged result after the round trip through os_s

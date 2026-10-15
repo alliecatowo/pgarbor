@@ -1,0 +1,42 @@
+# INSERT policy WITH CHECK is applied to the proposed row even when ON CONFLICT DO NOTHING would skip it.
+id: cmd-create-policy.on-conflict-do-nothing-checks-proposed
+title: "ON CONFLICT DO NOTHING still checks the proposed row against the INSERT policy"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, insert-on-conflict, errors]
+required_capabilities: [create-table, insert, select, rls, roles, insert-on-conflict]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy-insert (ON CONFLICT DO NOTHING/UPDATE paragraph)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_dn;
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  INSERT INTO t VALUES (1, 1);
+  GRANT ALL ON t TO pgarbor_case_cp_dn;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p_ins ON t FOR INSERT TO pgarbor_case_cp_dn WITH CHECK (v > 0);
+  CREATE POLICY p_sel ON t FOR SELECT TO pgarbor_case_cp_dn USING (true);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_dn
+    expect: ok
+  - sql: |
+      INSERT INTO t VALUES (1, -1) ON CONFLICT DO NOTHING
+    expect: error
+    sqlstate: "42501"
+    comment: the proposed row is checked even though it conflicts and would be skipped
+  - sql: |
+      INSERT INTO t VALUES (1, 2) ON CONFLICT (id) DO NOTHING
+    expect: ok
+    comment: a passing proposed row that conflicts is skipped with no row inserted
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t; DROP ROLE pgarbor_case_cp_dn
+    expect: ok

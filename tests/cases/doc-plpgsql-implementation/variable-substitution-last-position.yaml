@@ -1,0 +1,29 @@
+# Variable substitution only applies where a value is syntactically allowed: the first foo is a table name,
+# the second a column, the third a function name, so only the last foo is the PL/pgSQL parameter.
+id: doc-plpgsql-implementation.variable-substitution-last-position
+title: Parameter named like the table and column is substituted only in value position
+family: doc-plpgsql-implementation
+tier: core
+feature_ids: [plpgsql, variable-substitution, insert, function-call]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, sql-functions]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-implementation (PL/pgSQL under the Hood: Variable Substitution)"
+sessions: [a]
+setup: |
+  CREATE TABLE foo (foo int4);
+  CREATE FUNCTION foo(int4) RETURNS int4 AS $$ SELECT $1 * 10 $$ LANGUAGE sql;
+  CREATE FUNCTION bad_style(foo int4) RETURNS void AS $$
+  BEGIN
+    INSERT INTO foo (foo) VALUES (foo(foo));
+  END;
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      SELECT bad_style(3)
+    expect: rows
+    comment: foo(foo) with parameter 3 calls the SQL function foo, inserting 30
+  - sql: |
+      SELECT foo FROM foo
+    expect: rows
+    order: multiset

@@ -1,0 +1,39 @@
+# After a drop, the same name and argument types can be created again with a different return type.
+# The new definition is what gets called; the old one is gone.
+id: cmd-drop-function.recreate-after-drop
+title: A dropped function can be recreated with the same signature and a different return type
+family: cmd-drop-function
+tier: core
+feature_ids: [drop-function, create-function, recreate, return-type]
+required_capabilities: [create-function, drop-function, sql-functions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_function.sgml#sql-dropfunction (Description); ref/create_function.sgml"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION rc(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      DROP FUNCTION rc(int)
+    expect: ok
+  - sql: |
+      CREATE FUNCTION rc(int) RETURNS text LANGUAGE sql AS 'select ($1)::text || ''!'''
+    expect: ok
+  - sql: |
+      SELECT rc(7)
+    expect: rows
+    order: ordered
+    comment: the new definition returns text '7!'
+  - sql: |
+      SELECT pg_get_function_result('rc(int)'::regprocedure)
+    expect: rows
+    order: ordered
+    comment: result type is text
+  - sql: |
+      DROP FUNCTION rc(int)
+    expect: ok
+  - sql: |
+      SELECT rc(7)
+    expect: error
+    sqlstate: "42883"

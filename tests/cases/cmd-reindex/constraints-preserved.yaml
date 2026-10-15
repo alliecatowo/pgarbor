@@ -1,0 +1,44 @@
+# Rebuilding primary-key and unique indexes keeps their constraints and their enforcement.
+id: cmd-reindex.constraints-preserved
+title: REINDEX keeps primary key and unique constraints enforced and NULLs allowed in unique columns
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-table, reindex-index, primary-key, unique-constraints, null-semantics, errors]
+required_capabilities: [create-table, create-index, insert, select, reindex, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Parameters: INDEX, TABLE); ref/create_index.sgml#sql-createindex (unique indexes allow multiple NULLs)"
+sessions: [a]
+setup: |
+  CREATE TABLE cu (id int4 PRIMARY KEY, email text UNIQUE, n int4);
+  INSERT INTO cu VALUES (1, 'a@x.test', 10), (2, NULL, 20), (3, NULL, NULL);
+steps:
+  - sql: |
+      REINDEX TABLE cu
+    expect: ok
+  - sql: |
+      REINDEX INDEX cu_pkey
+    expect: ok
+  - sql: |
+      INSERT INTO cu VALUES (1, 'b@x.test', 30)
+    expect: error
+    sqlstate: "23505"
+    comment: primary key still enforced
+  - sql: |
+      INSERT INTO cu VALUES (4, 'a@x.test', 40)
+    expect: error
+    sqlstate: "23505"
+    comment: unique constraint still enforced
+  - sql: |
+      INSERT INTO cu VALUES (5, NULL, 50)
+    expect: ok
+    comment: NULLs are not equal, so another NULL email is allowed
+  - sql: |
+      SELECT id, email, n FROM cu ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT conname, contype FROM pg_constraint WHERE conrelid = 'cu'::regclass ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: constraint names are unchanged by the rebuild

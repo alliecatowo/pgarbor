@@ -1,0 +1,54 @@
+# PERFORM evaluates a query and discards its rows, sets FOUND from the row count, runs side effects,
+# and accepts a WITH query in parentheses; a bare SELECT without a destination is rejected.
+id: doc-plpgsql-statements.perform-discards-sets-found
+title: PERFORM discards results, sets FOUND, runs side effects, and rejects a bare SELECT
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, perform, found, control-flow]
+required_capabilities: [plpgsql, create-function, create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-general-sql"
+sessions: [a]
+setup: |
+  CREATE TABLE emp (empname text, salary int);
+  INSERT INTO emp VALUES ('ann', 10), ('bo', 20), ('cy', 20);
+  CREATE TABLE log_rows (note text);
+  CREATE FUNCTION log_row() RETURNS int LANGUAGE plpgsql AS $$
+  BEGIN INSERT INTO log_rows VALUES ('called'); RETURN 42; END $$;
+  CREATE FUNCTION f_perform(p int) RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN
+    PERFORM * FROM emp WHERE salary = p;
+    IF FOUND THEN RETURN 'found'; ELSE RETURN 'none'; END IF;
+  END $$;
+  CREATE FUNCTION f_perform_side() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN PERFORM log_row(); RETURN FOUND::text; END $$;
+  CREATE FUNCTION f_perform_nomatch() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN PERFORM 1 FROM emp WHERE false; RETURN FOUND::text; END $$;
+  CREATE FUNCTION f_perform_cte() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN PERFORM (WITH w AS (SELECT 1 AS a) SELECT a FROM w); RETURN FOUND::text; END $$;
+  CREATE FUNCTION f_bare_select() RETURNS text LANGUAGE plpgsql AS $$
+  BEGIN SELECT 1; RETURN 'x'; END $$;
+steps:
+  - sql: |
+      SELECT f_perform(20) AS hit, f_perform(99) AS miss
+    expect: rows
+  - sql: |
+      SELECT f_perform_side() AS side_effect_found
+    expect: rows
+    comment: PERFORM log_row() runs the function and sets FOUND true for its one row
+  - sql: |
+      SELECT count(*) FROM log_rows
+    expect: rows
+    comment: the side effect of the discarded call is visible
+  - sql: |
+      SELECT f_perform_nomatch() AS no_rows_found
+    expect: rows
+  - sql: |
+      SELECT f_perform_cte() AS cte_found
+    expect: rows
+  - sql: |
+      SELECT f_bare_select()
+    expect: error
+    sqlstate: "42601"
+    comment: a SELECT that can return rows needs INTO or PERFORM

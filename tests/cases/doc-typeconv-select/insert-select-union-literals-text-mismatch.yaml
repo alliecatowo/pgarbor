@@ -1,0 +1,31 @@
+# The UNION-arm rule takes precedence over the INSERT destination rule, so all-literal UNION arms are text.
+id: doc-typeconv-select.insert-select-union-literals-text-mismatch
+title: UNION of literals inside INSERT ... SELECT resolves to text and mismatches an integer column
+family: doc-typeconv-select
+tier: core
+feature_ids: [insert, insert-select, union, type-resolution, errors]
+required_capabilities: [create-table, insert, select, union]
+provenance:
+  source: pg-docs
+  ref: "postgres-18 typeconv.sgml#typeconv-select (UNION exception applies before INSERT ... SELECT destination rule)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (i int4, v text)
+steps:
+  - sql: |
+      INSERT INTO t SELECT '7', 'a' UNION ALL SELECT '8', 'b'
+    expect: error
+    sqlstate: "42804"
+    comment: both arms are unknown so the first column becomes text, which cannot be assigned to integer
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: multiset
+  - sql: |
+      INSERT INTO t SELECT CAST('7' AS int4), 'a' UNION ALL SELECT CAST('8' AS int4), 'b'
+    expect: ok
+  - sql: |
+      SELECT i, v FROM t ORDER BY i
+    expect: rows
+    order: ordered
+    comment: an explicit cast makes the union column integer

@@ -1,0 +1,47 @@
+# A multi-subcommand ALTER TABLE is all-or-nothing: a failing subcommand rolls back the others, including a SET DEFAULT in the same statement.
+id: cmd-alter-table.alter-table-multi-subcommand-atomic
+title: "Multi-subcommand ALTER TABLE is atomic: one failing subcommand undoes the whole statement"
+family: cmd-alter-table
+tier: core
+feature_ids: [alter-table, add-column, column-default, check-constraint, atomicity, errors]
+required_capabilities: [create-table, alter-table, insert, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_table.sgml#sql-altertable (Notes: multiple changes in a single ALTER TABLE)"
+sessions: [a]
+setup: |
+  CREATE TABLE atom (k int4 NOT NULL);
+  INSERT INTO atom VALUES (1), (2);
+steps:
+  - sql: |
+      ALTER TABLE atom ADD COLUMN v1 int4, ADD COLUMN k int4
+    expect: error
+    sqlstate: "42701"
+    comment: the second subcommand fails, so v1 is not added either
+  - sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'atom'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER TABLE atom ADD COLUMN f int4 NOT NULL CHECK (f > 0) DEFAULT 0
+    expect: error
+    sqlstate: "23514"
+    comment: the existing rows would get 0, which violates the CHECK
+  - sql: |
+      ALTER TABLE atom ADD COLUMN f int4 NOT NULL DEFAULT 1 CHECK (f > 0)
+    expect: ok
+  - sql: |
+      ALTER TABLE atom ALTER COLUMN f SET DEFAULT 5, ALTER COLUMN nope DROP DEFAULT
+    expect: error
+    sqlstate: "42703"
+  - sql: |
+      SELECT column_default FROM information_schema.columns WHERE table_name = 'atom' AND column_name = 'f'
+    expect: rows
+    comment: the SET DEFAULT 5 was rolled back, so the default is still 1
+  - sql: |
+      ALTER TABLE atom ADD COLUMN g text DEFAULT 'g', ALTER COLUMN f SET DEFAULT 9
+    expect: ok
+  - sql: |
+      SELECT k, f, g FROM atom ORDER BY k
+    expect: rows
+    order: ordered

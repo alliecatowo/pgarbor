@@ -1,0 +1,44 @@
+# A REPEATABLE READ block keeps the snapshot from its first query, so another session's committed insert stays invisible until COMMIT.
+id: cmd-begin.snapshot-repeatable-read
+title: BEGIN ISOLATION LEVEL REPEATABLE READ keeps a fixed snapshot across a concurrent commit
+family: cmd-begin
+tier: core
+feature_ids: [begin, isolation-level, repeatable-read, snapshots, transactions, insert]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/begin.sgml#sql-begin (Description: isolation level as if SET TRANSACTION was executed); transaction-iso.sgml#XACT-REPEATABLE-READ"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - session: b
+    sql: |
+      INSERT INTO t VALUES (2)
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: session a still sees only row 1
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: after COMMIT the next statement sees row 2

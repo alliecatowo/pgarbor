@@ -1,0 +1,36 @@
+# On a view, the internal ON SELECT rule _RETURN cannot be renamed, but an ordinary INSERT rule on the view can.
+id: cmd-alter-rule.view-rule-rename
+title: ALTER RULE rejects the view's _RETURN rule and renames a DO INSTEAD rule on the view
+family: cmd-alter-rule
+tier: core
+feature_ids: [alter-rule, rename, rules, views, errors]
+required_capabilities: [create-table, create-view, create-rule, insert, select, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 alter_rule.sgml#description (the rule's table or view); errcode 42P17 for renaming an ON SELECT rule"
+sessions: [a]
+setup: |
+  CREATE TABLE base (id int4);
+  CREATE VIEW v AS SELECT id FROM base;
+  CREATE RULE v_ins AS ON INSERT TO v DO INSTEAD INSERT INTO base VALUES (NEW.id);
+steps:
+  - sql: |
+      ALTER RULE "_RETURN" ON v RENAME TO v_ret
+    expect: error
+    sqlstate: "42P17"
+    comment: the ON SELECT rule that defines the view cannot be renamed
+  - sql: |
+      ALTER RULE v_ins ON v RENAME TO v_insert_redirect
+    expect: ok
+  - sql: |
+      INSERT INTO v VALUES (7)
+    expect: ok
+  - sql: |
+      SELECT id FROM base ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the renamed rule still redirects the insert to base
+  - sql: |
+      SELECT tablename, rulename FROM pg_rules WHERE schemaname = 'public' ORDER BY 1, 2
+    expect: rows
+    order: ordered

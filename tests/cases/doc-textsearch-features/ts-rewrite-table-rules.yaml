@@ -1,0 +1,49 @@
+# Table-driven ts_rewrite: rules come from an SQL query that yields two tsquery columns; updating the
+# table changes the rewriting without reindexing; the containment filter prunes non-candidate rules.
+id: doc-textsearch-features.ts-rewrite-table-rules
+title: ts_rewrite with table-driven synonym rules, live rule updates and containment pruning
+family: doc-textsearch-features
+tier: core
+feature_ids: [ts-rewrite, tsquery-rewrite-rule, tsquery-containment]
+required_capabilities: [create-table, insert, update, select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-query-rewriting"
+setup: |
+  CREATE TABLE aliases (t tsquery PRIMARY KEY, s tsquery);
+  INSERT INTO aliases VALUES('a', 'c');
+steps:
+  - sql: |
+      SELECT ts_rewrite('a & b'::tsquery, 'SELECT t,s FROM aliases')::text AS r
+    expect: rows
+    order: ordered
+  - sql: |
+      DELETE FROM aliases
+    expect: ok
+  - sql: |
+      INSERT INTO aliases VALUES(to_tsquery('supernovae'), to_tsquery('supernovae|sn'))
+    expect: ok
+  - sql: |
+      SELECT ts_rewrite(to_tsquery('supernovae & crab'), 'SELECT * FROM aliases')::text AS r
+    expect: rows
+    order: ordered
+  - sql: |
+      UPDATE aliases
+      SET s = to_tsquery('supernovae|sn & !nebulae')
+      WHERE t = to_tsquery('supernovae')
+    expect: ok
+    comment: the rule is changed by DML, not by reindexing
+  - sql: |
+      SELECT ts_rewrite(to_tsquery('supernovae & crab'), 'SELECT * FROM aliases')::text AS r
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT ts_rewrite('a & b'::tsquery,
+                        'SELECT t,s FROM aliases WHERE ''a & b''::tsquery @> t')::text AS r_filtered
+    expect: rows
+    order: ordered
+    comment: only rules whose target is contained in the query are fed to the rewriter
+  - sql: |
+      SELECT ts_rewrite('a & b'::tsquery, 'SELECT t,s FROM aliases WHERE false')::text AS r_no_rules
+    expect: rows
+    order: ordered

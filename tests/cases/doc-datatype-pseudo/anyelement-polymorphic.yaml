@@ -1,0 +1,33 @@
+# anyelement binds to the argument type; all arguments and the result must agree (datatype.sgml#datatype-pseudotypes-table, extend-types-polymorphic).
+id: doc-datatype-pseudo.anyelement-polymorphic
+title: anyelement functions return their argument's type and reject mixed argument types
+family: doc-datatype-pseudo
+tier: core
+feature_ids: [pseudo-types, anyelement, polymorphic-functions]
+required_capabilities: [create-function-sql, select, errors]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-pseudotypes-table"
+sessions: [a]
+setup: |
+  CREATE FUNCTION ident(anyelement) RETURNS anyelement LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION two(anyelement, anyelement) RETURNS anyelement LANGUAGE sql AS 'SELECT $1'
+steps:
+  - sql: |
+      SELECT ident(1) AS i, ident('x'::text) AS t, ident(NULL::date) AS d
+    expect: rows
+    order: ordered
+    comment: NULL::date keeps the date type and yields SQL NULL
+  - sql: |
+      SELECT pg_typeof(ident(1.5))::text AS typ, pg_typeof(ident('2024-02-29'::date))::text AS dtyp
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT two(1, 2) AS same_type
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT two(1, 'x'::text)
+    expect: error
+    sqlstate: "42883"
+    comment: integer and text cannot both bind to anyelement

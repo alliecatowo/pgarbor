@@ -1,0 +1,55 @@
+# Special TG_* variables for a row trigger and a statement trigger, TG_ARGV indexing, and NEW/OLD being NULL where documented.
+id: doc-plpgsql-trigger.tg-variables-naming-and-argv
+title: TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, table name, TG_NARGS and TG_ARGV behave as documented
+family: doc-plpgsql-trigger
+tier: core
+feature_ids: [triggers, plpgsql, tg-variables, tg-argv, statement-triggers, row-triggers, null-handling]
+required_capabilities: [create-table, create-function, triggers, plpgsql, insert, update, delete, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-trigger (Triggers on Data Changes: TG_* variables)"
+sessions: [a]
+setup: |
+  CREATE TABLE tgt (id int);
+  CREATE TABLE tglog (
+      tg_name name, tg_when text, tg_level text, tg_op text,
+      tg_table text, tg_schema name, tg_relname name, relid_ok boolean,
+      nargs int, arg0 text, arg1 text, arg_oob_null boolean, arg_neg_null boolean,
+      new_is_null boolean, old_is_null boolean
+  );
+  CREATE FUNCTION tg_dump() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+      INSERT INTO tglog VALUES (
+          TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME, TG_TABLE_SCHEMA, TG_RELNAME,
+          TG_RELID = 'tgt'::regclass::oid, TG_NARGS, TG_ARGV[0], TG_ARGV[1],
+          TG_ARGV[2] IS NULL, TG_ARGV[-1] IS NULL, NEW IS NULL, OLD IS NULL);
+      IF TG_OP = 'DELETE' THEN
+          RETURN OLD;
+      END IF;
+      RETURN NEW;
+  END $$;
+  CREATE TRIGGER tg_b BEFORE INSERT OR UPDATE OR DELETE ON tgt
+      FOR EACH ROW EXECUTE FUNCTION tg_dump('first', 'second');
+  CREATE TRIGGER tg_s AFTER INSERT ON tgt
+      FOR EACH STATEMENT EXECUTE FUNCTION tg_dump('stmt');
+steps:
+  - sql: |
+      INSERT INTO tgt VALUES (1), (2)
+    expect: ok
+    comment: the BEFORE row trigger fires per row, the AFTER statement trigger once
+  - sql: |
+      UPDATE tgt SET id = id + 10
+    expect: ok
+  - sql: |
+      DELETE FROM tgt WHERE id = 11
+    expect: ok
+  - sql: |
+      SELECT tg_name, tg_when, tg_level, tg_op, tg_table, tg_schema, tg_relname, relid_ok, nargs, arg0, arg1, arg_oob_null, arg_neg_null, new_is_null, old_is_null FROM tglog
+    expect: rows
+    order: multiset
+    comment: TG_ARGV indexes below 0 or at/above TG_NARGS yield NULL; NEW is NULL for DELETE and statement triggers, OLD is NULL for INSERT and statement triggers
+  - sql: |
+      SELECT id FROM tgt ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the BEFORE DELETE trigger returned OLD, so the delete proceeded

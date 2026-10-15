@@ -1,0 +1,33 @@
+# Generated uuids as UNIQUE keys: a shifted uuidv7 and an unshifted one never collide, and random uuids fill a table without duplicate-key errors.
+id: doc-functions-uuid.generated-keys-unique
+title: Generated uuid keys fill a UNIQUE column without collision
+family: doc-functions-uuid
+tier: core
+feature_ids: [uuid, gen-random-uuid, uuidv7, unique-constraint, primary-key]
+required_capabilities: [create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-uuid (UUID Generation Functions)"
+sessions: [a]
+setup: |
+  CREATE TABLE gen_keys (k uuid UNIQUE NOT NULL, src text NOT NULL)
+steps:
+  - sql: |
+      INSERT INTO gen_keys SELECT gen_random_uuid(), 'random' FROM generate_series(1, 300)
+    expect: ok
+  - sql: |
+      INSERT INTO gen_keys SELECT uuidv7(), 'v7' FROM generate_series(1, 300)
+    expect: ok
+  - sql: |
+      INSERT INTO gen_keys SELECT uuidv7(interval '-1 day'), 'v7_shifted' FROM generate_series(1, 300)
+    expect: ok
+  - sql: |
+      SELECT src, count(*) AS n FROM gen_keys GROUP BY src ORDER BY src
+    expect: rows
+    order: ordered
+    comment: 300 rows per source
+  - sql: |
+      SELECT uuid_extract_version(k) AS v, count(*) AS n FROM gen_keys GROUP BY v ORDER BY v
+    expect: rows
+    order: ordered
+    comment: each source lands in its documented version

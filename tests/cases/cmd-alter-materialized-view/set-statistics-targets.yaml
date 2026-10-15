@@ -1,0 +1,36 @@
+# ALTER COLUMN SET STATISTICS boundary values: 0 is accepted, negative is rejected, above 10000 is clamped with a WARNING.
+id: cmd-alter-materialized-view.set-statistics-targets
+title: "ALTER COLUMN SET STATISTICS accepts 0, rejects -5, and clamps 10001 to 10000"
+family: cmd-alter-materialized-view
+tier: core
+feature_ids: [alter-materialized-view, statistics-target, boundaries]
+required_capabilities: [create-table, select, create-materialized-view, alter-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_materialized_view.sgml#sql-altermaterializedview (ALTER [ COLUMN ] column_name SET STATISTICS integer)"
+sessions: [a]
+setup: |
+  CREATE TABLE amv_st_base (id int4, v int4);
+  INSERT INTO amv_st_base VALUES (1, 1), (2, 2);
+  CREATE MATERIALIZED VIEW amv_st_mv AS SELECT id, v FROM amv_st_base;
+steps:
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_st_mv ALTER COLUMN id SET STATISTICS 0
+    expect: ok
+  - sql: |
+      SELECT attstattarget FROM pg_attribute WHERE attrelid = 'amv_st_mv'::regclass AND attname = 'id'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_st_mv ALTER id SET STATISTICS -5
+    expect: error
+    sqlstate: "22023"
+    comment: negative targets other than the default are rejected; COLUMN keyword omitted
+  - sql: |
+      ALTER MATERIALIZED VIEW amv_st_mv ALTER COLUMN v SET STATISTICS 10001
+    expect: ok
+    comment: emits WARNING lowering statistics target to 10000
+  - sql: |
+      SELECT attstattarget FROM pg_attribute WHERE attrelid = 'amv_st_mv'::regclass AND attname = 'v'
+    expect: rows
+    order: ordered

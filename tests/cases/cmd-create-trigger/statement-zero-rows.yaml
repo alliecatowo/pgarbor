@@ -1,0 +1,58 @@
+# FOR EACH STATEMENT is the default and fires once per statement, even when zero rows are modified.
+id: cmd-create-trigger.statement-zero-rows
+title: Default FOR EACH STATEMENT fires once even when the statement touches zero rows
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, statement-level-trigger, row-level-trigger, zero-row-statement, default-clause]
+required_capabilities: [create-table, insert, update, delete, select, plpgsql, triggers]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER description (FOR EACH STATEMENT default; zero-row statements)"
+setup: |
+  CREATE TABLE t (id int, v int);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  INSERT INTO t VALUES (1, 1), (2, 2);
+  CREATE FUNCTION log_fire() RETURNS trigger AS $$
+  BEGIN
+    INSERT INTO trig_log (msg) VALUES (TG_NAME || ' ' || TG_LEVEL || ' ' || TG_OP);
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER stmt_ins AFTER INSERT ON t EXECUTE FUNCTION log_fire()
+    expect: ok
+    comment: no FOR clause means FOR EACH STATEMENT
+  - sql: |
+      CREATE TRIGGER row_ins AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION log_fire()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER stmt_upd AFTER UPDATE ON t FOR EACH STATEMENT EXECUTE FUNCTION log_fire()
+    expect: ok
+  - sql: |
+      CREATE TRIGGER stmt_del AFTER DELETE ON t FOR EACH STATEMENT EXECUTE FUNCTION log_fire()
+    expect: ok
+  - sql: |
+      INSERT INTO t SELECT g, g FROM generate_series(1, 0) AS g
+    expect: ok
+    comment: inserts zero rows, stmt_ins fires once and row_ins does not
+  - sql: |
+      UPDATE t SET v = 0 WHERE id > 100
+    expect: ok
+    comment: matches zero rows, stmt_upd fires once
+  - sql: |
+      DELETE FROM t WHERE false
+    expect: ok
+    comment: stmt_del fires once
+  - sql: |
+      INSERT INTO t VALUES (3, 3)
+    expect: ok
+    comment: one row, stmt_ins and row_ins both fire
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT tgname, tgtype & 1 = 1 AS row_level FROM pg_trigger WHERE tgrelid = 't'::regclass AND NOT tgisinternal ORDER BY tgname
+    expect: rows
+    order: ordered

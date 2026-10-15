@@ -1,0 +1,39 @@
+# IGNORE NULLS / RESPECT NULLS and FROM LAST are documented as not implemented in PostgreSQL: they are syntax errors.
+id: doc-functions-window.null-treatment-unsupported
+title: IGNORE NULLS, RESPECT NULLS and nth_value FROM LAST are rejected by the parser
+family: doc-functions-window
+tier: extended
+feature_ids: [window-functions, lag, first-value, nth-value, null-treatment]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (RESPECT NULLS / IGNORE NULLS, FROM FIRST / FROM LAST)"
+setup: |
+  CREATE TABLE u (id int4 PRIMARY KEY, v text);
+  INSERT INTO u VALUES (1,'a'), (2,NULL), (3,'c');
+steps:
+  - sql: |
+      SELECT lag(v) IGNORE NULLS OVER (ORDER BY id) FROM u
+    expect: error
+    sqlstate: "42601"
+    comment: IGNORE NULLS is not implemented
+  - sql: |
+      SELECT lag(v) RESPECT NULLS OVER (ORDER BY id) FROM u
+    expect: error
+    sqlstate: "42601"
+    comment: RESPECT NULLS is not accepted either; the default behavior is always RESPECT NULLS
+  - sql: |
+      SELECT first_value(v) IGNORE NULLS OVER (ORDER BY id) FROM u
+    expect: error
+    sqlstate: "42601"
+    comment: the same restriction applies to first_value
+  - sql: |
+      SELECT nth_value(id, 2 FROM LAST) OVER (ORDER BY id) FROM u
+    expect: error
+    sqlstate: "42601"
+    comment: FROM LAST is not implemented; only FROM FIRST (the default) is accepted by PostgreSQL
+  - sql: |
+      SELECT id, lag(v) OVER (ORDER BY id) AS lg FROM u ORDER BY id
+    expect: rows
+    order: ordered
+    comment: default null handling returns the stored NULL as the lag value of the next row

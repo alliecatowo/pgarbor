@@ -1,0 +1,33 @@
+# NUMERIC(3,1) rounds on input (ties away from zero) and rejects values that round past the precision.
+id: doc-datatype-numeric.numeric-typmod-rounding
+title: NUMERIC(3,1) rounds to scale with ties away from zero and rejects values overflowing precision
+family: doc-datatype-numeric
+tier: core
+feature_ids: [numeric, typmod, rounding, errors]
+required_capabilities: [create-table, insert, select, errors, numeric]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/datatype.sgml#datatype-numeric-decimal"
+sessions: [a]
+setup: |
+  CREATE TABLE tr (v numeric(3,1));
+steps:
+  - sql: |
+      INSERT INTO tr VALUES (2.45), (-2.45), (99.94), (0.04), (-0.04)
+    expect: ok
+  - sql: |
+      SELECT v FROM tr ORDER BY v
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO tr VALUES (99.95)
+    expect: error
+    sqlstate: "22003"
+    comment: rounds to 100.0, which needs 3 digits left of the point
+  - sql: |
+      INSERT INTO tr VALUES (100)
+    expect: error
+    sqlstate: "22003"
+  - sql: |
+      SELECT count(*) FROM tr
+    expect: rows

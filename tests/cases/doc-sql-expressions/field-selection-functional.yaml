@@ -1,0 +1,61 @@
+# Field selection on composite values, .* expansion inside ROW, and functional-style calls of single-argument functions.
+id: doc-sql-expressions.field-selection-functional
+title: Field selection, row expansion and function-style notation on composite values
+family: doc-sql-expressions
+tier: core
+feature_ids: [field-selection, row-constructors, composite-types, function-call-notation, errors]
+required_capabilities: [select, insert, create-table, create-function]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/syntax.sgml#sql-expressions-field-selection"
+sessions: [a]
+setup: |
+  CREATE TABLE mytable (f1 int4, f2 float8, f3 text);
+  INSERT INTO mytable VALUES (1, 2.5, 'a'), (2, 3.5, 'b');
+  CREATE FUNCTION getf1(mytable) RETURNS int4 AS 'SELECT $1.f1' LANGUAGE SQL;
+steps:
+  - sql: |
+      SELECT (mytable.*).f3 FROM mytable WHERE f1 = 2
+    expect: rows
+    order: ordered
+    comment: parenthesized table-column field selection
+  - sql: |
+      SELECT (m).f3, m.f3 FROM mytable m WHERE f1 = 2
+    expect: rows
+    order: ordered
+    comment: parentheses can be dropped for a table reference
+  - sql: |
+      SELECT ROW(m.*, 42) AS r FROM mytable m WHERE f1 = 1
+    expect: rows
+    order: ordered
+    comment: rowvalue.* is expanded inside a row constructor
+  - sql: |
+      SELECT ROW(m, 42) AS r FROM mytable m WHERE f1 = 1
+    expect: rows
+    order: ordered
+    comment: without .* the row is nested as a single composite field
+  - sql: |
+      SELECT getf1(m.*) AS a, f1(m) AS b, m.getf1 AS c FROM mytable m WHERE f1 = 2
+    expect: rows
+    order: ordered
+    comment: col(table), table.col and col(table.*) are interchangeable for one-argument functions
+  - sql: |
+      SELECT getf1(ROW(1, 2.5, 'this is a test')::mytable) AS a
+    expect: rows
+    order: ordered
+    comment: the cast selects the single matching function
+  - sql: |
+      CREATE TYPE myrowtype AS (f1 int4, f2 text, f3 numeric)
+    expect: ok
+  - sql: |
+      CREATE FUNCTION getf1(myrowtype) RETURNS int4 AS 'SELECT $1.f1' LANGUAGE SQL
+    expect: ok
+  - sql: |
+      SELECT getf1(ROW(1, 2.5, 'this is a test'))
+    expect: error
+    sqlstate: "42725"
+    comment: with two candidate getf1 functions, an anonymous record argument is ambiguous
+  - sql: |
+      SELECT getf1(CAST(ROW(11, 'this is a test', 2.5) AS myrowtype)) AS a
+    expect: rows
+    order: ordered

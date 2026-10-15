@@ -1,0 +1,39 @@
+# Documented: varchar_pattern_ops supports LIKE with a btree index; results must match the unindexed plan.
+id: doc-indexes-opclass.pattern-ops-like-results
+title: varchar_pattern_ops index returns the same LIKE results as a sequential scan
+family: doc-indexes-opclass
+tier: core
+feature_ids: [opclass, text-pattern-ops, like, btree-index]
+required_capabilities: [create-table, insert, create-index, select, like]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-opclass (varchar_pattern_ops for LIKE; text_pattern_ops/varchar_pattern_ops/bpchar_pattern_ops)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE test_table (col varchar)
+    expect: ok
+  - sql: |
+      INSERT INTO test_table VALUES ('abc'), ('abd'), ('abc_x'), ('ab%'), ('Abc'), (''), (NULL), ('zzz')
+    expect: ok
+  - sql: |
+      CREATE INDEX test_index ON test_table (col varchar_pattern_ops)
+    expect: ok
+  - sql: |
+      SELECT col FROM test_table WHERE col LIKE 'ab%' ORDER BY col
+    expect: rows
+    order: ordered
+  - sql: |
+      SET enable_seqscan = off
+    expect: ok
+  - sql: |
+      SELECT col FROM test_table WHERE col LIKE 'ab%' ORDER BY col
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT col FROM test_table WHERE col LIKE 'ab\_%' ORDER BY col
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET enable_seqscan
+    expect: ok

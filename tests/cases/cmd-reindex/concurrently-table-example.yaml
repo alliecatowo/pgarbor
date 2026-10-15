@@ -1,0 +1,41 @@
+# Documented example: REINDEX TABLE CONCURRENTLY my_broken_table; writes keep working and index names are kept.
+id: cmd-reindex.concurrently-table-example
+title: REINDEX TABLE CONCURRENTLY keeps index names, validity and writable table
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-table, reindex-concurrently, indexes]
+required_capabilities: [create-table, create-index, insert, update, select, reindex, reindex-concurrently]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex (Examples: Rebuild indexes for a table, without blocking; Rebuilding Indexes Concurrently)"
+sessions: [a]
+setup: |
+  CREATE TABLE my_broken_table (id int4 PRIMARY KEY, k int4, note text);
+  CREATE INDEX my_broken_k ON my_broken_table (k);
+  INSERT INTO my_broken_table VALUES (1, 100, 'x'), (2, 200, NULL), (3, NULL, 'z');
+steps:
+  - sql: |
+      REINDEX TABLE CONCURRENTLY my_broken_table
+    expect: ok
+  - sql: |
+      SELECT c.relname, i.indisvalid, i.indisready
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'my_broken_table'::regclass
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+    comment: the transient _ccnew indexes are gone and the names are unchanged
+  - sql: |
+      UPDATE my_broken_table SET k = k + 1 WHERE id = 1
+    expect: ok
+  - sql: |
+      SELECT id, k, note FROM my_broken_table ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      REINDEX INDEX CONCURRENTLY my_broken_k
+    expect: ok
+  - sql: |
+      SELECT id FROM my_broken_table WHERE k = 101 ORDER BY id
+    expect: rows
+    order: ordered

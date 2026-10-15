@@ -1,0 +1,28 @@
+# SET name TO value and SET name = value are equivalent; the stored value survives reconnect.
+id: cmd-alter-database.set-to-and-equals-forms
+title: ALTER DATABASE SET accepts both TO and = forms and the value applies on reconnect
+family: cmd-alter-database
+tier: core
+feature_ids: [alter-database, guc-database-default, set-to-equals]
+required_capabilities: [guc, plpgsql, select]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_database.sgml#sql-alterdatabase (Synopsis: SET configuration_parameter { TO | = } value)"
+sessions: [a]
+steps:
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET statement_timeout TO ''5s''', current_database()); END $$;
+    expect: ok
+    comment: TO form with a quoted interval value
+  - sql: |
+      DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET work_mem = ''4MB''', current_database()); END $$;
+    expect: ok
+    comment: = form
+  - sql: |
+      SELECT s.setconfig AS cfg FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = current_database()
+    expect: rows
+  - reconnect: true
+  - sql: |
+      SELECT current_setting('statement_timeout') AS st, current_setting('work_mem') AS wm
+    expect: rows
+    comment: both values are session defaults in the new session

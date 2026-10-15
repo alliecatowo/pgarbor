@@ -1,0 +1,45 @@
+# FETCH with no direction is NEXT. Past the last row the target becomes NULL and FOUND is false.
+id: doc-plpgsql-cursors.fetch-past-end-found-null
+title: FETCH past the end sets the target to NULL and FOUND to false
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, fetch, found, null-semantics]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION fetch_twice_grp2() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c refcursor;
+    r text;
+    f1 boolean;
+    f2 boolean;
+  BEGIN
+    OPEN c FOR SELECT name FROM items WHERE grp = 2;
+    FETCH c INTO r;
+    f1 := FOUND;
+    FETCH c INTO r;
+    f2 := FOUND;
+    RETURN coalesce(r, 'NULL') || ' ' || f1 || ' ' || f2;
+  END $$;
+  CREATE FUNCTION fetch_empty() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE
+    c refcursor;
+    r text := 'unchanged';
+  BEGIN
+    OPEN c FOR SELECT name FROM items WHERE grp = 99;
+    FETCH c INTO r;
+    RETURN coalesce(r, 'NULL') || ' ' || FOUND;
+  END $$;
+steps:
+  - sql: |
+      SELECT fetch_twice_grp2()
+    expect: rows
+  - sql: |
+      SELECT fetch_empty()
+    expect: rows
+    comment: a cursor over zero rows still assigns NULL to the target

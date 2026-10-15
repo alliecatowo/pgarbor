@@ -1,0 +1,57 @@
+# Policy names are scoped to their table, so the same name can exist on several tables; a dropped name can be reused.
+id: cmd-drop-policy.per-table-scope-and-recreate
+title: "DROP POLICY affects only the named table and a dropped policy name can be created again"
+family: cmd-drop-policy
+tier: core
+feature_ids: [drop-policy, create-policy, policies, schemas]
+required_capabilities: [create-table, select, rls, catalog-introspection, schemas]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_policy.sgml#sql-droppolicy (name, table_name, schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE TABLE t1 (id int4);
+  CREATE TABLE t2 (id int4);
+  CREATE SCHEMA s2;
+  CREATE TABLE s2.t1 (id int4);
+  CREATE POLICY p ON t1 USING (id > 0);
+  CREATE POLICY p ON t2 USING (id > 1);
+  CREATE POLICY p ON s2.t1 USING (id > 2);
+steps:
+  - sql: |
+      SELECT polrelid::regclass::text AS tbl, polname FROM pg_policy ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: the same name p exists on three tables
+  - sql: |
+      DROP POLICY p ON t1
+    expect: ok
+  - sql: |
+      SELECT polrelid::regclass::text AS tbl, polname FROM pg_policy ORDER BY 1, 2
+    expect: rows
+    order: ordered
+    comment: only the policy on t1 was dropped
+  - sql: |
+      DROP POLICY p ON t1
+    expect: error
+    sqlstate: "42704"
+    comment: p is no longer defined on t1
+  - sql: |
+      CREATE POLICY p ON t1 USING (id > 5)
+    expect: ok
+    comment: the dropped name can be reused on the same table
+  - sql: |
+      DROP POLICY p ON s2.t1
+    expect: ok
+    comment: the schema-qualified table name selects s2.t1, not public.t1
+  - sql: |
+      SELECT polrelid::regclass::text AS tbl, polname FROM pg_policy ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP POLICY p ON t2
+    expect: ok
+  - sql: |
+      SELECT polrelid::regclass::text AS tbl, polname FROM pg_policy ORDER BY 1, 2
+    expect: rows
+    order: ordered

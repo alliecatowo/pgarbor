@@ -1,0 +1,48 @@
+# A SERIALIZABLE READ ONLY DEFERRABLE transaction may block when acquiring its snapshot while a read-write serializable transaction is active, then proceeds after it commits.
+id: cmd-set-transaction.deferrable-readonly-serializable-waits
+title: DEFERRABLE read-only serializable waits for an active read-write serializable transaction
+family: cmd-set-transaction
+tier: extended
+feature_ids: [set-transaction, deferrable, serializable, read-only, multi-session, blocking]
+required_capabilities: [create-table, insert, select, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: DEFERRABLE ... the transaction may block when first acquiring its snapshot)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY);
+  INSERT INTO t VALUES (1), (2);
+steps:
+  - session: b
+    sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE
+    expect: ok
+  - session: b
+    sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: b is an active read-write serializable transaction
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE
+    expect: ok
+  - session: a
+    sql: |
+      SELECT count(*) AS n FROM t
+    async: true
+    expect_blocked: true
+    comment: the safe snapshot waits for b to finish
+  - session: b
+    sql: |
+      COMMIT
+    expect: ok
+  - session: a
+    wait: true
+    expect: rows
+    order: ordered
+    comment: a proceeds with a safe snapshot and sees the committed rows
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok

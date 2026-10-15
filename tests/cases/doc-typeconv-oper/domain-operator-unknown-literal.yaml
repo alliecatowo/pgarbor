@@ -1,0 +1,36 @@
+# A custom operator declared on a domain is ignored for an unknown literal (resolution uses the base type text); an explicit cast selects it.
+id: doc-typeconv-oper.domain-operator-unknown-literal
+title: Custom operator on a domain type is skipped for unknown literals and used only with an explicit cast
+family: doc-typeconv-oper
+tier: core
+feature_ids: [operator-resolution, domains, create-operator, unknown-literals]
+required_capabilities: [create-table, insert, select, create-domain, create-operator, create-function-sql, text]
+provenance:
+  source: pg-docs
+  ref: "typeconv.sgml#typeconv-oper (example: Custom Operator on a Domain Type)"
+steps:
+  - sql: |
+      CREATE DOMAIN mytext AS text CHECK (VALUE <> '')
+    expect: ok
+  - sql: |
+      CREATE FUNCTION mytext_eq_text (mytext, text) RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'
+    expect: ok
+  - sql: |
+      CREATE OPERATOR = (procedure = mytext_eq_text, leftarg = mytext, rightarg = text)
+    expect: ok
+  - sql: |
+      CREATE TABLE mytable (val mytext)
+    expect: ok
+  - sql: |
+      INSERT INTO mytable VALUES ('bar')
+    expect: ok
+  - sql: |
+      SELECT val FROM mytable WHERE val = 'foo'
+    expect: rows
+    order: multiset
+    comment: text = text is used, so 'bar' does not match and zero rows return
+  - sql: |
+      SELECT val FROM mytable WHERE val = text 'foo'
+    expect: rows
+    order: multiset
+    comment: explicit text cast finds the mytext = text operator (exact match), which always returns true

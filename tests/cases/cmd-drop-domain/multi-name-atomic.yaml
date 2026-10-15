@@ -1,0 +1,33 @@
+# DROP DOMAIN with several names is all-or-nothing: one missing name aborts the statement and drops nothing.
+id: cmd-drop-domain.multi-name-atomic
+title: Multi-name DROP DOMAIN fails as a whole when one name is missing
+family: cmd-drop-domain
+tier: core
+feature_ids: [drop-domain, multiple-names]
+required_capabilities: [create-domain, drop-domain, select]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_domain.sgml#sql-dropdomain (synopsis: name [, ...])"
+sessions: [a]
+setup: |
+  CREATE DOMAIN d_one AS int4;
+  CREATE DOMAIN d_two AS int4;
+  CREATE DOMAIN d_three AS int4;
+steps:
+  - sql: |
+      DROP DOMAIN d_one, no_such_domain
+    expect: error
+    sqlstate: "42704"
+    comment: the error aborts the whole statement
+  - sql: |
+      SELECT to_regtype('d_one') IS NOT NULL AS d_one_present
+    expect: rows
+    order: ordered
+    comment: d_one, listed before the missing name, was not dropped
+  - sql: |
+      DROP DOMAIN d_two, d_three
+    expect: ok
+  - sql: |
+      SELECT to_regtype('d_two') IS NULL AS two_gone, to_regtype('d_three') IS NULL AS three_gone
+    expect: rows
+    order: ordered

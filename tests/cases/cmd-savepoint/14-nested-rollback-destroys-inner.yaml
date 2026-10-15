@@ -1,0 +1,42 @@
+# ROLLBACK TO an outer savepoint destroys savepoints established after it, so a later ROLLBACK TO the inner one fails.
+id: cmd-savepoint.nested-rollback-destroys-inner
+title: ROLLBACK TO an outer savepoint discards the inner savepoint, which can no longer be rolled back to
+family: cmd-savepoint
+tier: core
+feature_ids: [savepoint, rollback-to-savepoint, nested-savepoints, errors, begin, commit, insert, select]
+required_capabilities: [create-table, insert, select, transactions, savepoints, errors]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-savepoint.html (Description; Examples: nested savepoints)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (v int4);
+steps:
+  - sql: |
+      BEGIN;
+      INSERT INTO t VALUES (1);
+      SAVEPOINT a;
+      INSERT INTO t VALUES (2);
+      SAVEPOINT b;
+      INSERT INTO t VALUES (3);
+      ROLLBACK TO SAVEPOINT a
+    expect: ok
+  - sql: |
+      SELECT v FROM t ORDER BY v
+    expect: rows
+    order: ordered
+    comment: only row 1 remains
+  - sql: |
+      ROLLBACK TO SAVEPOINT b
+    expect: error
+    sqlstate: "3B001"
+    comment: b was established after a and was destroyed by ROLLBACK TO a
+  - sql: |
+      COMMIT
+    expect: ok
+    comment: COMMIT of an aborted block ends it as a ROLLBACK with no error; row 1 is not committed
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    order: ordered
+    comment: the whole block was rolled back, so zero rows

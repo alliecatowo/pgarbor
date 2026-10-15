@@ -1,0 +1,62 @@
+# GiST signatures are lossy: siglen 1 yields many false matches, rechecked to correct results, identical with or without index scans.
+id: doc-textsearch-indexes.gist-siglen-boundaries
+title: GiST siglen boundaries return exact results despite lossy signatures
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gist-index, siglen, lossy-index, recheck, tsvector-match]
+required_capabilities: [create-table, insert, select, create-index, gist-index, text-search, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (siglen, lossy GiST, recheck)"
+notes: "The docs say the default signature is 124 bytes and the maximum is 2024. siglen=1 forces hash collisions, so false positives must be filtered by the heap recheck. Index scans are forced with enable_seqscan off."
+steps:
+  - sql: |
+      CREATE TABLE docs (id int4 PRIMARY KEY, tsv tsvector)
+    expect: ok
+  - sql: |
+      INSERT INTO docs VALUES
+        (1, to_tsvector('english', 'alpha beta gamma')),
+        (2, to_tsvector('english', 'delta epsilon')),
+        (3, to_tsvector('english', 'zeta eta theta iota')),
+        (4, to_tsvector('english', 'kappa lambda mu')),
+        (5, NULL),
+        (6, to_tsvector('english', 'nu xi omicron pi rho'))
+    expect: ok
+  - sql: |
+      CREATE INDEX docs_sig1 ON docs USING GIST (tsv tsvector_ops (siglen = 1))
+    expect: ok
+  - sql: |
+      CREATE INDEX docs_sig2024 ON docs USING GIST (tsv tsvector_ops (siglen = 2024))
+    expect: ok
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'alpha & gamma') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'alpha & delta') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: both words exist in the table but never in one row, so zero rows despite lossy signatures
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'zeta | nu') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SET enable_seqscan = off
+    expect: ok
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'zeta | nu') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: same answer with index scan forced
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'alpha & delta') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'kappa | pi') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET enable_seqscan
+    expect: ok

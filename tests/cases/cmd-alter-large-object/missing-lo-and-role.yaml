@@ -1,0 +1,38 @@
+# Nonexistent large object and nonexistent new owner both fail with undefined_object (42704), each checked separately.
+id: cmd-alter-large-object.missing-lo-and-role
+title: ALTER LARGE OBJECT fails with undefined_object for a missing object OID or a missing role
+family: cmd-alter-large-object
+tier: core
+feature_ids: [alter-large-object, owner, errors]
+required_capabilities: [large-objects, roles, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE cmd_alo_miss_role
+    expect: ok
+  - sql: |
+      ALTER LARGE OBJECT 999930001 OWNER TO cmd_alo_miss_role
+    expect: error
+    sqlstate: "42704"
+    comment: no such large object
+  - sql: |
+      SELECT lo_create(930601)
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 930601 OWNER TO cmd_alo_no_such_role
+    expect: error
+    sqlstate: "42704"
+    comment: the object exists but the target role does not
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 930601
+    expect: rows
+    comment: failed ALTER leaves the owner unchanged
+  - sql: |
+      SELECT lo_unlink(930601)
+    expect: rows
+  - sql: |
+      DROP ROLE cmd_alo_miss_role
+    expect: ok

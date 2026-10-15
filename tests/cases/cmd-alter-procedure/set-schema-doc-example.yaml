@@ -1,0 +1,45 @@
+# SET SCHEMA moves a procedure to another schema when its signature is free there; a missing
+# target schema is 3F000, a same-signature procedure in the target is 42723.
+id: cmd-alter-procedure.set-schema-doc-example
+title: ALTER PROCEDURE SET SCHEMA moves a procedure, with missing-schema and signature-conflict errors
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, set-schema, procedures, call, namespace]
+required_capabilities: [create-schema, create-procedure, call, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Examples: SET SCHEMA accounting; Parameters: new_schema)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA accounting;
+  CREATE PROCEDURE insert_data(integer, integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+  CREATE PROCEDURE accounting.insert_data(text) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE insert_data(integer, integer) SET SCHEMA no_such_schema_sp
+    expect: error
+    sqlstate: "3F000"
+  - sql: |
+      ALTER PROCEDURE insert_data(integer, integer) SET SCHEMA accounting
+    expect: ok
+    comment: accounting has no insert_data(integer, integer), only insert_data(text)
+  - sql: |
+      SELECT pronamespace::regnamespace AS sch, pg_get_function_identity_arguments(oid) AS args FROM pg_proc WHERE proname = 'insert_data' ORDER BY 1, 2
+    expect: rows
+    order: ordered
+  - sql: |
+      CALL accounting.insert_data(1, 2)
+    expect: ok
+  - sql: |
+      CALL public.insert_data(1, 2)
+    expect: error
+    sqlstate: "42883"
+    comment: the procedure left public
+  - sql: |
+      CREATE PROCEDURE public.insert_data(integer, integer) LANGUAGE SQL AS $$ SELECT 1 $$
+    expect: ok
+  - sql: |
+      ALTER PROCEDURE public.insert_data(integer, integer) SET SCHEMA accounting
+    expect: error
+    sqlstate: "42723"
+    comment: accounting.insert_data(integer, integer) now exists

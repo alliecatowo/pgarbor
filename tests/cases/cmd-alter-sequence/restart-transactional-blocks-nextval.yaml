@@ -1,0 +1,43 @@
+# RESTART is transactional: a concurrent nextval blocks until the RESTART transaction ends, and a rollback restores the original position.
+id: cmd-alter-sequence.restart-transactional-blocks-nextval
+title: "RESTART inside a transaction blocks a concurrent nextval until rollback, which restores the sequence"
+family: cmd-alter-sequence
+tier: core
+feature_ids: [alter-sequence, restart, transactions, nextval, locks]
+required_capabilities: [sequences, transactions, multi-session, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_sequence.sgml#sql-altersequence (RESTART: transactional, blocks concurrent transactions)"
+sessions: [a, b]
+setup: |
+  CREATE SEQUENCE tx_seq;
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      ALTER SEQUENCE tx_seq RESTART WITH 500
+    expect: ok
+  - session: b
+    sql: |
+      SELECT nextval('tx_seq')
+    async: true
+    expect_blocked: true
+    comment: the concurrent nextval waits on the RESTART transaction
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    order: ordered
+    comment: after rollback the sequence is unchanged, so the value is 1
+  - session: b
+    sql: |
+      SELECT nextval('tx_seq')
+    expect: rows
+    order: ordered
+    comment: 2 follows the value returned to b

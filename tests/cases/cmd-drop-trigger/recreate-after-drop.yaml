@@ -1,0 +1,48 @@
+# After DROP TRIGGER the name is free again, so a new trigger with the same name can be created with a different function; a duplicate name while it exists is 42710.
+id: cmd-drop-trigger.recreate-after-drop
+title: "A dropped trigger name can be reused by a new trigger with a different function, and a duplicate name before the drop is 42710"
+family: cmd-drop-trigger
+tier: core
+feature_ids: [drop-trigger, create-trigger, triggers, errors]
+required_capabilities: [create-table, insert, select, create-function, plpgsql, triggers, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "doc/src/sgml/ref/drop_trigger.sgml#sql-droptrigger; doc/src/sgml/ref/create_trigger.sgml (trigger name must be unique per table)"
+sessions: [a]
+setup: |
+  CREATE TABLE trg_log (tg text, v text);
+  CREATE FUNCTION tg_v1() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME, 'v1');
+    RETURN NEW;
+  END
+  $$;
+  CREATE FUNCTION tg_v2() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO trg_log VALUES (TG_NAME, 'v2');
+    RETURN NEW;
+  END
+  $$;
+  CREATE TABLE t (id int4);
+  CREATE TRIGGER tg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION tg_v1();
+steps:
+  - sql: |
+      CREATE TRIGGER tg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION tg_v2()
+    expect: error
+    sqlstate: "42710"
+    comment: the name is still in use on this table
+  - sql: |
+      DROP TRIGGER tg ON t
+    expect: ok
+  - sql: |
+      CREATE TRIGGER tg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION tg_v2()
+    expect: ok
+    comment: the name is free after the drop
+  - sql: |
+      INSERT INTO t VALUES (1)
+    expect: ok
+  - sql: |
+      SELECT tg, v FROM trg_log ORDER BY tg, v
+    expect: rows
+    order: ordered
+    comment: only the new function ran

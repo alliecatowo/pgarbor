@@ -1,0 +1,29 @@
+# Renaming to a name already used in the same schema fails with 42710, including renaming to its own current name.
+id: cmd-alter-conversion.rename-conflict-errors
+title: RENAME TO an existing name in the same schema, or to its own name, fails with duplicate object
+family: cmd-alter-conversion
+tier: core
+feature_ids: [alter-conversion, rename, errors]
+required_capabilities: [alter-conversion, create-conversion, catalog-introspection, errors]
+provenance:
+  source: hand
+  ref: "PG18 alter_conversion.sgml RENAME TO new_name; name uniqueness per schema"
+sessions: [a]
+setup: |
+  CREATE CONVERSION conv_src FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+  CREATE CONVERSION conv_dst FOR 'LATIN1' TO 'UTF8' FROM iso8859_1_to_utf8;
+steps:
+  - sql: |
+      ALTER CONVERSION conv_src RENAME TO conv_dst
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      ALTER CONVERSION conv_src RENAME TO conv_src
+    expect: error
+    sqlstate: "42710"
+    comment: the name is already taken by the conversion itself
+  - sql: |
+      SELECT conname FROM pg_conversion WHERE conname IN ('conv_src', 'conv_dst') ORDER BY conname
+    expect: rows
+    order: ordered
+    comment: both conversions unchanged

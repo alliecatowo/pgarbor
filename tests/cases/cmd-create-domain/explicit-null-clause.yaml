@@ -1,0 +1,33 @@
+# The NULL clause is the default and is accepted; a NULL-allowing domain still enforces CHECK on non-null values.
+id: cmd-create-domain.explicit-null-clause
+title: Explicit NULL constraint permits NULL values, while CHECK still applies to non-null values
+family: cmd-create-domain
+tier: core
+feature_ids: [create-domain, null-constraint, check-constraint]
+required_capabilities: [create-domain, create-table, insert, select, constraints]
+provenance:
+  source: pg-docs
+  ref: "ref/create_domain.sgml#sql-createdomain (NULL)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE DOMAIN dnull_ok AS int NULL
+    expect: ok
+  - sql: |
+      CREATE DOMAIN dnull_chk AS int NULL CHECK (VALUE > 0)
+    expect: ok
+  - sql: |
+      CREATE TABLE tnull (v dnull_ok, w dnull_chk)
+    expect: ok
+  - sql: |
+      INSERT INTO tnull VALUES (NULL, NULL), (5, 6)
+    expect: ok
+  - sql: |
+      INSERT INTO tnull VALUES (1, -1)
+    expect: error
+    sqlstate: "23514"
+    comment: non-null values still go through the CHECK
+  - sql: |
+      SELECT v, w FROM tnull ORDER BY v NULLS LAST
+    expect: rows
+    order: ordered

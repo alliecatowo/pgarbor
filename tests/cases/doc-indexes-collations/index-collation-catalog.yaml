@@ -1,0 +1,34 @@
+# Per-column collation in pg_index.indcollation: 0 for a column without a collation, the collation
+# OID otherwise. Covers a multi-column index with a COLLATE on only one key and an expression index.
+id: doc-indexes-collations.index-collation-catalog
+title: pg_index.indcollation records the collation chosen for each index key
+family: doc-indexes-collations
+tier: core
+feature_ids: [indexes, collation, catalog-introspection, multicolumn-index, expression-index]
+required_capabilities: [create-table, insert, select, create-index, collation, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-collations (Indexes and Collations)"
+sessions: [a]
+setup: |
+  CREATE COLLATION "x" FROM "C";
+  CREATE COLLATION "y" (provider = icu, locale = 'und');
+  CREATE TABLE test1c (id integer, content varchar COLLATE "x", note text);
+  INSERT INTO test1c VALUES (1, 'b', 'p'), (2, 'B', 'q');
+  CREATE INDEX test1c_content_index ON test1c (content);
+steps:
+  - sql: |
+      CREATE INDEX multi1 ON test1c (id, content COLLATE "y")
+    expect: ok
+  - sql: |
+      CREATE INDEX expr1 ON test1c ((content COLLATE "y"))
+    expect: ok
+  - sql: |
+      SELECT i.relname, x.indnatts, COALESCE(c0.collname, '-') AS key1_collation, COALESCE(c1.collname, '-') AS key2_collation FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid LEFT JOIN pg_collation c0 ON c0.oid = x.indcollation[0] LEFT JOIN pg_collation c1 ON c1.oid = x.indcollation[1] WHERE i.relname IN ('test1c_content_index', 'multi1', 'expr1') ORDER BY i.relname
+    expect: rows
+    order: ordered
+    comment: id has collation 0 ('-'); the text key of multi1 and the expression key of expr1 carry y
+  - sql: |
+      SELECT id, content FROM test1c WHERE content > 'a' COLLATE "y" ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,33 @@
+# A non-owner with some privilege but no grant option: the REVOKE proceeds (with a warning) and revokes nothing it lacks grant options for.
+id: cmd-revoke.nonowner-partial-warning
+title: REVOKE ALL by a non-owner with only a plain privilege succeeds with a warning and revokes nothing
+family: cmd-revoke
+tier: core
+feature_ids: [revoke, privileges, ownership, grant-option, warnings]
+required_capabilities: [create-table, select, roles, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/revoke.sgml#sql-revoke-notes (REVOKE ALL PRIVILEGES forms will issue a warning message if no grant options are held)"
+sessions: [a]
+setup: |
+  CREATE ROLE rvp_owner;
+  CREATE ROLE rvp_s;
+  CREATE ROLE rvp_b;
+  CREATE TABLE rvp_t (id int4);
+  ALTER TABLE rvp_t OWNER TO rvp_owner;
+  GRANT SELECT ON rvp_t TO rvp_s;
+  GRANT SELECT ON rvp_t TO rvp_b;
+steps:
+  - sql: |
+      SET ROLE rvp_s
+    expect: ok
+  - sql: |
+      REVOKE ALL PRIVILEGES ON rvp_t FROM rvp_b
+    expect: ok
+    comment: emits a WARNING (no grant options held); no error
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT has_table_privilege('rvp_b', 'rvp_t', 'SELECT') AS b_still_has_select
+    expect: rows

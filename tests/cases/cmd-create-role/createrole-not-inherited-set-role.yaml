@@ -1,0 +1,48 @@
+# CREATEROLE is non-inheritable: a member with INHERIT does not gain it, but can use it after SET ROLE.
+id: cmd-create-role.createrole-not-inherited-set-role
+title: CREATEROLE is not inherited through membership; a member can create roles only after SET ROLE to the CREATEROLE role
+family: cmd-create-role
+tier: core
+feature_ids: [create-role, createrole, role-attributes, role-membership, set-role, inherit]
+required_capabilities: [roles, catalog-introspection, select, role-membership, session-authorization]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_role.sgml#notes (role attributes are non-inheritable); SET ROLE"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE ccr_crr CREATEROLE
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_inh
+    expect: ok
+  - sql: |
+      GRANT ccr_crr TO ccr_inh
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION ccr_inh
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_n3
+    expect: error
+    sqlstate: "42501"
+    comment: the CREATEROLE attribute is not inherited, so the member may not create roles
+  - sql: |
+      SET ROLE ccr_crr
+    expect: ok
+  - sql: |
+      CREATE ROLE ccr_n3
+    expect: ok
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      SELECT rolname, rolcreaterole FROM pg_roles WHERE rolname IN ('ccr_inh', 'ccr_n3') ORDER BY rolname
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE ccr_n3, ccr_inh, ccr_crr
+    expect: ok

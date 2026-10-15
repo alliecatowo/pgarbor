@@ -1,0 +1,39 @@
+# lag/lead: default offset 1 and NULL default, explicit offset and default, offset 0, NULL offset, type-compatibility error.
+id: doc-functions-window.lag-lead-offset-default
+title: lag and lead with omitted, explicit, zero and NULL offset/default arguments
+family: doc-functions-window
+tier: core
+feature_ids: [window-functions, lag, lead, null-semantics]
+required_capabilities: [create-table, insert, select, window-functions]
+provenance:
+  source: pg-docs
+  ref: "postgres-18/doc/src/sgml/func.sgml#functions-window (lag, lead)"
+setup: |
+  CREATE TABLE l (id int4 PRIMARY KEY, v text);
+  INSERT INTO l VALUES (1, 'a'), (2, NULL), (3, 'c'), (4, 'd');
+steps:
+  - sql: |
+      SELECT id, lag(v) OVER (ORDER BY id) AS lg, lead(v) OVER (ORDER BY id) AS ld FROM l ORDER BY id
+    expect: rows
+    order: ordered
+    comment: offset defaults to 1 and default to NULL; a NULL stored value is returned as-is (RESPECT NULLS)
+  - sql: |
+      SELECT id, lag(v, 2, 'zz') OVER (ORDER BY id) AS lg2, lead(v, 2, 'zz') OVER (ORDER BY id) AS ld2 FROM l ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rows beyond the partition edge get the explicit default
+  - sql: |
+      SELECT id, lag(id, 0) OVER (ORDER BY id) AS self FROM l ORDER BY id
+    expect: rows
+    order: ordered
+    comment: offset 0 evaluates the current row
+  - sql: |
+      SELECT id, lag(id, NULL::int) OVER (ORDER BY id) AS n FROM l ORDER BY id
+    expect: rows
+    order: ordered
+    comment: offset is evaluated per row and a NULL offset yields NULL
+  - sql: |
+      SELECT lag(id, 1, 'x') OVER (ORDER BY id) FROM l
+    expect: error
+    sqlstate: "22P02"
+    comment: default must be compatible with value; the literal 'x' is not an integer

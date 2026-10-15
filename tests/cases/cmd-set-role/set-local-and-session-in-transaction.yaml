@@ -1,0 +1,48 @@
+# SET LOCAL ROLE reverts at COMMIT, while SET SESSION ROLE persists past the transaction.
+id: cmd-set-role.set-local-and-session-in-transaction
+title: SET LOCAL ROLE lasts only until COMMIT, and SET SESSION ROLE persists until RESET ROLE
+family: cmd-set-role
+tier: core
+feature_ids: [set-role, set-local, set-session, transactions, reset-role]
+required_capabilities: [roles, set-role, transactions, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#description (SESSION and LOCAL modifiers act the same as SET)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_tx_r
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET LOCAL ROLE sr_tx_r
+    expect: ok
+  - sql: |
+      SELECT current_user = 'sr_tx_r' AS in_tx
+    expect: rows
+    order: ordered
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT current_user = session_user AS after_commit
+    expect: rows
+    order: ordered
+  - sql: |
+      SET SESSION ROLE sr_tx_r
+    expect: ok
+  - sql: |
+      SELECT current_user = 'sr_tx_r' AS session_scope
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT current_user = session_user AS reset_ok
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP ROLE sr_tx_r
+    expect: ok

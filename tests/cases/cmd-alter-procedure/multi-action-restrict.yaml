@@ -1,0 +1,43 @@
+# Several actions may appear in one ALTER PROCEDURE; RESTRICT is accepted only after an action
+# list, never alone or after RENAME.
+id: cmd-alter-procedure.multi-action-restrict
+title: Several actions combine in one ALTER PROCEDURE; RESTRICT is valid only after an action
+family: cmd-alter-procedure
+tier: core
+feature_ids: [alter-procedure, set-configuration, security-definer, restrict]
+required_capabilities: [create-procedure, guc, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_procedure.sgml#sql-alterprocedure (Synopsis: action [ ... ] [ RESTRICT ]; Parameters: RESTRICT)"
+sessions: [a]
+setup: |
+  CREATE PROCEDURE ma_p(integer) LANGUAGE SQL AS $$ SELECT 1 $$;
+steps:
+  - sql: |
+      ALTER PROCEDURE ma_p(integer) SECURITY DEFINER SET search_path = admin, pg_temp SET work_mem = '3MB' RESTRICT
+    expect: ok
+  - sql: |
+      SELECT prosecdef, proconfig @> ARRAY['search_path=admin, pg_temp']::text[] AS has_sp, proconfig @> ARRAY['work_mem=3MB']::text[] AS has_wm FROM pg_proc WHERE proname = 'ma_p'
+    expect: rows
+    comment: expect true, true, true
+  - sql: |
+      ALTER PROCEDURE ma_p(integer) RESET ALL RESTRICT
+    expect: ok
+  - sql: |
+      SELECT prosecdef, proconfig IS NULL AS no_cfg FROM pg_proc WHERE proname = 'ma_p'
+    expect: rows
+    comment: security mode kept; configuration cleared
+  - sql: |
+      ALTER PROCEDURE ma_p(integer) RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: RESTRICT needs an action in front of it
+  - sql: |
+      ALTER PROCEDURE ma_p(integer) RENAME TO ma_q RESTRICT
+    expect: error
+    sqlstate: "42601"
+    comment: RENAME does not take RESTRICT
+  - sql: |
+      SELECT proname FROM pg_proc WHERE proname IN ('ma_p', 'ma_q')
+    expect: rows
+    comment: ma_p still exists under its name

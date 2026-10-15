@@ -1,0 +1,52 @@
+# Role-membership GRANT rejects the GROUP noise word, PUBLIC as grantee, unknown options, self-membership and grants without ADMIN OPTION.
+id: cmd-grant.role-membership-errors
+title: Role membership GRANT fails for GROUP, PUBLIC, unknown options, self-membership and grants without ADMIN OPTION
+family: cmd-grant
+tier: core
+feature_ids: [grant, role-membership, admin-option, errors, syntax]
+required_capabilities: [roles, role-membership, session-authorization, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/grant.sgml#sql-grant-description-roles (GROUP noise word, PUBLIC, ADMIN OPTION)"
+sessions: [a]
+setup: |
+  CREATE ROLE cgg_re_a;
+  CREATE ROLE cgg_re_b;
+  CREATE ROLE cgg_re_c;
+steps:
+  - sql: |
+      GRANT cgg_re_a TO GROUP cgg_re_b
+    expect: error
+    sqlstate: "42601"
+    comment: the role form does not allow the GROUP noise word
+  - sql: |
+      GRANT cgg_re_a TO PUBLIC
+    expect: error
+    sqlstate: "42704"
+    comment: membership cannot be granted to PUBLIC, which is not a role name here
+  - sql: |
+      GRANT cgg_re_a TO cgg_re_b WITH FOO TRUE
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      GRANT cgg_re_a TO cgg_re_a
+    expect: error
+    sqlstate: "0LP01"
+  - sql: |
+      SET SESSION AUTHORIZATION cgg_re_b
+    expect: ok
+  - sql: |
+      GRANT cgg_re_a TO cgg_re_c
+    expect: error
+    sqlstate: "42501"
+    comment: without ADMIN OPTION on cgg_re_a the member cannot grant it
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      GRANT cgg_re_a TO cgg_re_b
+    expect: ok
+  - sql: |
+      SELECT count(*) AS memberships FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid WHERE r.rolname = 'cgg_re_a'
+    expect: rows
+    order: ordered

@@ -1,0 +1,48 @@
+# Documented jsonb_set, jsonb_set_lax (null_value_treatment) and jsonb_insert: path semantics, negative indexes, out-of-range array indexes, and error cases.
+id: doc-functions-json.jsonb-set-insert-lax
+title: jsonb_set, jsonb_set_lax and jsonb_insert path semantics with documented examples and errors
+family: doc-functions-json
+tier: core
+feature_ids: [jsonb-set, jsonb-set-lax, jsonb-insert, jsonb-path-update]
+required_capabilities: [select, jsonb]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-json-processing (jsonb_set, jsonb_set_lax, jsonb_insert)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT jsonb_set('[{"f1":1,"f2":null},2,null,3]', '{0,f1}', '[2,3,4]', false) AS replace_existing,
+             jsonb_set('[{"f1":1,"f2":null},2]', '{0,f3}', '[2,3,4]') AS create_missing_default
+    expect: rows
+    comment: "documented examples; create_if_missing defaults to true"
+  - sql: |
+      SELECT jsonb_set('{"a": 1}', '{b, c}', '"x"') AS missing_parent_unchanged,
+             jsonb_set('{"a": 1}', '{b}', '"x"', false) AS missing_leaf_no_create,
+             jsonb_set('{"a": [0,1,2]}', '{a, -10}', '"x"') AS neg_index_out_of_range,
+             jsonb_set('{"a": [0,1,2]}', '{a, 10}', '"x"') AS pos_index_appends
+    expect: rows
+    comment: "earlier steps must exist or the target is returned unchanged; out-of-range positive index appends"
+  - sql: |
+      SELECT jsonb_set_lax('[{"f1":1,"f2":null},2,null,3]', '{0,f1}', null) AS lax_default_json_null,
+             jsonb_set_lax('[{"f1":99,"f2":null},2]', '{0,f3}', null, true, 'return_target') AS lax_return_target,
+             jsonb_set_lax('{"a":1,"b":2}', '{a}', null, true, 'delete_key') AS lax_delete_key
+    expect: rows
+    comment: "documented: a NULL new_value is handled according to null_value_treatment"
+  - sql: |
+      SELECT jsonb_set_lax('{"a":1}', '{a}', null, true, 'raise_exception') AS lax_raise
+    expect: error
+    sqlstate: "22004"
+    comment: "raise_exception turns a NULL new_value into an error"
+  - sql: |
+      SELECT jsonb_insert('{"a": [0,1,2]}', '{a, 1}', '"new_value"') AS insert_before,
+             jsonb_insert('{"a": [0,1,2]}', '{a, 1}', '"new_value"', true) AS insert_after,
+             jsonb_insert('{"a": [0,1,2]}', '{a, -1}', '"x"') AS neg_before_last,
+             jsonb_insert('{"a": [0,1,2]}', '{a, -1}', '"x"', true) AS neg_after_last,
+             jsonb_insert('{"a": [0,1,2]}', '{a, 10}', '"x"') AS past_end
+    expect: rows
+    comment: "documented examples; negative indexes count from the end"
+  - sql: |
+      SELECT jsonb_insert('{"a": 1}', '{a}', '2') AS existing_key
+    expect: error
+    sqlstate: "22023"
+    comment: "an object field is inserted only if the key does not already exist"

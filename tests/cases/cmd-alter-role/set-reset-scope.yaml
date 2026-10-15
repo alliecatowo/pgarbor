@@ -1,0 +1,66 @@
+# Role-specific SET forms (=, TO, FROM CURRENT, DEFAULT, RESET) add, replace and remove entries in pg_db_role_setting.
+id: cmd-alter-role.set-reset-scope
+title: ALTER ROLE SET, SET FROM CURRENT, DEFAULT and RESET manage role session defaults
+family: cmd-alter-role
+tier: core
+feature_ids: [alter-role, set, reset, set-from-current, role-settings]
+required_capabilities: [roles, catalog-introspection, select, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_role.sgml#sql-alterrole-examples (worker_bee maintenance_work_mem); ref/alter_role.sgml#sql-alterrole-params-configuration-parameter"
+sessions: [a]
+notes: "Settings are read from pg_db_role_setting for database 0 (all databases). The worker_bee setting is the doc example."
+steps:
+  - sql: |
+      CREATE ROLE worker_bee
+    expect: ok
+  - sql: |
+      ALTER ROLE worker_bee SET maintenance_work_mem = 100000
+    expect: ok
+  - sql: |
+      SELECT unnest(s.setconfig) AS setting FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'worker_bee' AND s.setdatabase = 0 ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER ROLE worker_bee SET work_mem TO '3MB'
+    expect: ok
+  - sql: |
+      SET work_mem = '7MB'
+    expect: ok
+  - sql: |
+      ALTER ROLE worker_bee SET work_mem FROM CURRENT
+    expect: ok
+    comment: copies the session value 7MB, replacing the earlier 3MB
+  - sql: |
+      SELECT unnest(s.setconfig) AS setting FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'worker_bee' AND s.setdatabase = 0 ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET work_mem
+    expect: ok
+  - sql: |
+      ALTER ROLE worker_bee SET maintenance_work_mem TO DEFAULT
+    expect: ok
+  - sql: |
+      SELECT unnest(s.setconfig) AS setting FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'worker_bee' AND s.setdatabase = 0 ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: only work_mem=7MB remains
+  - sql: |
+      ALTER ROLE worker_bee RESET work_mem
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'worker_bee'
+    expect: rows
+    comment: the row is removed once no settings remain
+  - sql: |
+      ALTER ROLE worker_bee SET work_mem = '1MB';
+      ALTER ROLE worker_bee SET maintenance_work_mem = 200000;
+      ALTER ROLE worker_bee RESET ALL
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'worker_bee'
+    expect: rows
+  - sql: |
+      DROP ROLE worker_bee
+    expect: ok

@@ -1,0 +1,50 @@
+# Docs example: AFTER INSERT FOR EACH STATEMENT with REFERENCING NEW TABLE checks that transfer rows net to zero.
+id: cmd-create-trigger.transition-tables-statement
+title: Statement-level AFTER trigger reads the NEW TABLE transition relation and rejects unbalanced inserts
+family: cmd-create-trigger
+tier: core
+feature_ids: [create-trigger, transition-tables, referencing-clause, statement-level-trigger, plpgsql-trigger-function]
+required_capabilities: [create-table, insert, select, plpgsql, triggers, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_trigger.sgml#SQL-CREATETRIGGER examples (transfer_insert REFERENCING NEW TABLE AS inserted)"
+setup: |
+  CREATE TABLE transfer (id int, acct text, amount int);
+  CREATE TABLE trig_log (seq bigserial, msg text);
+  CREATE FUNCTION check_transfer_balances_to_zero() RETURNS trigger AS $$
+  DECLARE
+    total int;
+    n int;
+  BEGIN
+    SELECT count(*), COALESCE(sum(amount), 0) INTO n, total FROM inserted;
+    INSERT INTO trig_log (msg) VALUES ('rows=' || n);
+    IF total <> 0 THEN
+      RAISE EXCEPTION 'transfer rows net to %', total;
+    END IF;
+    RETURN NULL;
+  END
+  $$ LANGUAGE plpgsql;
+steps:
+  - sql: |
+      CREATE TRIGGER transfer_insert AFTER INSERT ON transfer REFERENCING NEW TABLE AS inserted FOR EACH STATEMENT EXECUTE FUNCTION check_transfer_balances_to_zero()
+    expect: ok
+  - sql: |
+      INSERT INTO transfer VALUES (1, 'checking', -10), (2, 'savings', 10)
+    expect: ok
+    comment: rows net to zero, statement succeeds
+  - sql: |
+      INSERT INTO transfer VALUES (3, 'checking', 5)
+    expect: error
+    sqlstate: "P0001"
+    comment: RAISE EXCEPTION default sqlstate, the whole statement is rolled back
+  - sql: |
+      INSERT INTO transfer SELECT g, 'x', 1 FROM generate_series(1, 0) AS g
+    expect: ok
+    comment: zero rows, the transition relation is empty and the trigger still runs
+  - sql: |
+      SELECT count(*) FROM transfer
+    expect: rows
+  - sql: |
+      SELECT msg FROM trig_log ORDER BY seq
+    expect: rows
+    order: ordered

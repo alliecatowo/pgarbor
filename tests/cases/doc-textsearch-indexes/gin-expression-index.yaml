@@ -1,0 +1,71 @@
+# GIN index on an expression: to_tsvector over coalesced columns, with the same query expression.
+id: doc-textsearch-indexes.gin-expression-index
+title: GIN expression index over to_tsvector of coalesced columns
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gin-index, expression-index, to-tsvector, null-semantics]
+required_capabilities: [create-table, insert, select, create-index, gin-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (expression index on to_tsvector)"
+steps:
+  - sql: |
+      CREATE TABLE articles (id int4 PRIMARY KEY, title text, body text)
+    expect: ok
+  - sql: |
+      INSERT INTO articles VALUES
+        (1, 'Fox story', 'quick brown fox jumps'),
+        (2, 'Dog', 'lazy dog sleeps'),
+        (3, NULL, 'fox in body only'),
+        (4, 'Cat', NULL),
+        (5, NULL, NULL)
+    expect: ok
+  - sql: |
+      CREATE INDEX articles_fts ON articles USING GIN (to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, '')))
+    expect: ok
+  - sql: |
+      SELECT id FROM articles
+      WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, '')) @@ to_tsquery('english', 'fox')
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: NULL title and body are coalesced so row 3 still matches on body
+  - sql: |
+      SELECT id FROM articles
+      WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, '')) @@ to_tsquery('english', 'cat')
+      ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM articles
+      WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, '')) @@ to_tsquery('english', 'sleeps & dog')
+      ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM articles
+      WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, '')) @@ to_tsquery('english', 'foxes')
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: stemmed query term matches the same indexed expression
+  - sql: |
+      SELECT id FROM articles
+      WHERE to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, '')) @@ to_tsquery('english', 'fox') IS NULL
+      ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the expression is never NULL because coalesce removes NULL inputs
+  - sql: |
+      SELECT id FROM articles WHERE to_tsvector('english', title) @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: a different expression does not use the index but returns correct rows, NULL title gives no match
+  - sql: |
+      CREATE INDEX articles_simple ON articles USING GIN (to_tsvector('simple', body))
+    expect: ok
+  - sql: |
+      SELECT id FROM articles WHERE to_tsvector('simple', body) @@ to_tsquery('simple', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: simple configuration performs no stemming, so only literal fox matches

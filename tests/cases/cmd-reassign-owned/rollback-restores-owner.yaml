@@ -1,0 +1,40 @@
+# REASSIGN OWNED is transactional: inside a rolled-back transaction the new ownership disappears.
+id: cmd-reassign-owned.rollback-restores-owner
+title: "ROLLBACK after REASSIGN OWNED restores the original owner"
+family: cmd-reassign-owned
+tier: core
+feature_ids: [reassign-owned, transactions, ownership]
+required_capabilities: [roles, transactions, create-table, select, errors, catalog-introspection]
+provenance:
+  source: hand
+  ref: "ref/reassign_owned.sgml#sql-reassign-owned-description (ownership change is an ordinary catalog change)"
+sessions: [a]
+setup: |
+  CREATE ROLE ro14_old;
+  CREATE ROLE ro14_new;
+  CREATE TABLE ro14_t (a int4);
+  ALTER TABLE ro14_t OWNER TO ro14_old;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      REASSIGN OWNED BY ro14_old TO ro14_new
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro14_t'
+    expect: rows
+    order: ordered
+    comment: visible inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(relowner) AS owner FROM pg_class WHERE relname = 'ro14_t'
+    expect: rows
+    order: ordered
+    comment: back to ro14_old after the rollback
+  - sql: |
+      DROP OWNED BY ro14_old; DROP ROLE ro14_old; DROP ROLE ro14_new
+    expect: ok
+    comment: cleanup

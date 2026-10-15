@@ -1,0 +1,42 @@
+# Documented: a collation name may be schema-qualified; unqualified names go to the current schema; uniqueness is per schema.
+id: cmd-create-collation.schema-qualified-name
+title: "CREATE COLLATION honors schema qualification, per-schema uniqueness and search_path"
+family: cmd-create-collation
+tier: core
+feature_ids: [create-collation, schema-qualified-name, search-path]
+required_capabilities: [create-collation, create-schema, icu-provider, set-search-path, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_collation.sgml#sql-createcollation (Parameters: name)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA cmd_cc_s1;
+  CREATE SCHEMA cmd_cc_s2;
+steps:
+  - sql: |
+      CREATE COLLATION cmd_cc_s1.cmd_cc_dup (provider = icu, locale = 'und')
+    expect: ok
+  - sql: |
+      CREATE COLLATION cmd_cc_s2.cmd_cc_dup (provider = icu, locale = 'und')
+    expect: ok
+    comment: the same name is allowed in another schema
+  - sql: |
+      CREATE COLLATION cmd_cc_s1.cmd_cc_dup (provider = icu, locale = 'und')
+    expect: error
+    sqlstate: "42710"
+  - sql: |
+      CREATE COLLATION cmd_cc_nosuch.cmd_cc_x (provider = icu, locale = 'und')
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema must exist
+  - sql: |
+      SET search_path = cmd_cc_s2, public
+    expect: ok
+  - sql: |
+      CREATE COLLATION cmd_cc_here (provider = icu, locale = 'und')
+    expect: ok
+    comment: unqualified name goes to the first schema on search_path
+  - sql: |
+      SELECT n.nspname, c.collname FROM pg_collation c JOIN pg_namespace n ON n.oid = c.collnamespace WHERE c.collname IN ('cmd_cc_dup', 'cmd_cc_here') ORDER BY 1, 2
+    expect: rows
+    order: ordered

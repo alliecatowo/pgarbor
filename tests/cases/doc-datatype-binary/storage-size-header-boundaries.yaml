@@ -1,0 +1,22 @@
+# Documented storage size: bytea takes 1 or 4 header bytes plus the data. Short values (up to 126 data bytes) use a 1-byte header.
+id: doc-datatype-binary.storage-size-header-boundaries
+title: bytea on-disk size is data length plus a 1-byte header up to 126 bytes, and 4 bytes beyond that
+family: doc-datatype-binary
+tier: core
+feature_ids: [bytea, storage-size, binary-strings]
+required_capabilities: [create-table, insert, select]
+provenance:
+  source: pg-docs
+  ref: "datatype.sgml#datatype-binary-table (bytea storage size: 1 or 4 bytes plus the actual binary string)"
+sessions: [a]
+setup: |
+  CREATE TABLE sz (id int PRIMARY KEY, b bytea NOT NULL)
+steps:
+  - sql: |
+      INSERT INTO sz SELECT n, decode(repeat('ab', n), 'hex') FROM unnest(ARRAY[0, 1, 4, 126, 127, 128]) AS n
+    expect: ok
+  - sql: |
+      SELECT id, length(b) AS data_len, pg_column_size(b) AS stored_size FROM sz ORDER BY id
+    expect: rows
+    order: ordered
+    comment: stored size is data_len + 1 for data_len <= 126, and data_len + 4 otherwise

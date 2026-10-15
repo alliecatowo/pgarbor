@@ -1,0 +1,35 @@
+# CYCLE wraps to MINVALUE after MAXVALUE; NO CYCLE makes the next call past MAXVALUE an error.
+id: cmd-alter-sequence.cycle-then-no-cycle
+title: "ALTER SEQUENCE toggles CYCLE: wrap-around before NO CYCLE, an error at the limit after it"
+family: cmd-alter-sequence
+tier: core
+feature_ids: [alter-sequence, cycle, no-cycle, maxvalue, nextval, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_sequence.sgml#sql-altersequence (CYCLE; NO CYCLE)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_cyc MAXVALUE 3 CYCLE;
+steps:
+  - sql: |
+      SELECT nextval('s_cyc'), nextval('s_cyc'), nextval('s_cyc'), nextval('s_cyc')
+    expect: rows
+    order: ordered
+    comment: the fourth call wraps to MINVALUE
+  - sql: |
+      ALTER SEQUENCE s_cyc NO CYCLE
+    expect: ok
+  - sql: |
+      SELECT nextval('s_cyc')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT nextval('s_cyc')
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT nextval('s_cyc')
+    expect: error
+    sqlstate: "2200H"
+    comment: NO CYCLE forbids wrapping past MAXVALUE

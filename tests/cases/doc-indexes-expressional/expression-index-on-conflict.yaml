@@ -1,0 +1,36 @@
+# ON CONFLICT can arbitrate on a unique expression index, but only when the conflict target matches an index.
+id: doc-indexes-expressional.expression-index-on-conflict
+title: INSERT ON CONFLICT infers a unique expression index; a non-matching target is an error
+family: doc-indexes-expressional
+tier: core
+feature_ids: [expression-index, unique-index, insert-on-conflict, lower, errors]
+required_capabilities: [create-table, create-index, insert, insert-conflict, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-expressional (expression indexes enforce constraints not definable as UNIQUE)"
+sessions: [a]
+setup: |
+  CREATE TABLE kv (id int4 PRIMARY KEY, k text, v int4);
+  CREATE UNIQUE INDEX kv_k_ci ON kv (lower(k));
+  INSERT INTO kv VALUES (1, 'Alpha', 10);
+steps:
+  - sql: |
+      INSERT INTO kv VALUES (2, 'ALPHA', 20) ON CONFLICT (lower(k)) DO NOTHING
+    expect: ok
+    comment: the case-variant key conflicts with the expression index, so nothing is inserted
+  - sql: |
+      INSERT INTO kv VALUES (3, 'alpha', 30) ON CONFLICT (lower(k)) DO UPDATE SET v = EXCLUDED.v + kv.v
+    expect: ok
+    comment: the conflicting row is updated with 30 + 10
+  - sql: |
+      INSERT INTO kv VALUES (4, 'beta', 1) ON CONFLICT (lower(k)) DO NOTHING
+    expect: ok
+  - sql: |
+      SELECT id, k, v FROM kv ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO kv VALUES (5, 'Beta', 2) ON CONFLICT (k) DO NOTHING
+    expect: error
+    sqlstate: "42P10"
+    comment: there is no unique index on plain k, so this conflict target cannot be inferred

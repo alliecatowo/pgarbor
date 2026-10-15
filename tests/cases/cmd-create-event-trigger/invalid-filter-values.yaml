@@ -1,0 +1,39 @@
+# The WHEN clause accepts only the TAG filter variable with non-empty, recognised command tags.
+id: cmd-create-event-trigger.invalid-filter-values
+title: Unknown filter variable, unrecognised command tag, empty value list and quoted TAG are all rejected
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-tag-filter]
+required_capabilities: [event-triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE FUNCTION abort_any_command() RETURNS event_trigger LANGUAGE plpgsql AS $$
+  BEGIN RAISE EXCEPTION 'command % is disabled', tg_tag; END; $$;
+steps:
+  - sql: |
+      CREATE EVENT TRIGGER e_bad_var ON ddl_command_start WHEN foo IN ('CREATE TABLE') EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: only TAG is a supported filter variable
+  - sql: |
+      CREATE EVENT TRIGGER e_bad_tag ON ddl_command_start WHEN TAG IN ('NOT A TAG') EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: filter value is not a known command tag
+  - sql: |
+      CREATE EVENT TRIGGER e_empty ON ddl_command_start WHEN TAG IN () EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: the value list needs at least one value
+  - sql: |
+      CREATE EVENT TRIGGER e_quoted ON ddl_command_start WHEN "TAG" IN ('CREATE TABLE') EXECUTE FUNCTION abort_any_command()
+    expect: error
+    sqlstate: "42601"
+    comment: a quoted identifier is not the TAG keyword
+  - sql: |
+      SELECT count(*) AS created FROM pg_event_trigger
+    expect: rows
+    order: ordered
+    comment: no failed statement created a trigger

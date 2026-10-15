@@ -1,0 +1,40 @@
+# IF EXISTS turns a missing object (or a missing schema) into a NOTICE; without it the same names are errors.
+id: cmd-drop-statistics.if-exists-missing-notice
+title: IF EXISTS skips missing objects and missing schemas with a NOTICE
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, drop-if-exists, extended-statistics]
+required_capabilities: [create-table, create-schema, extended-statistics, drop-statistics]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_statistics.sgml#sql-dropstatistics (Parameters: IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA ds_acc;
+  CREATE TABLE ds_ifx (a int, b int);
+  CREATE STATISTICS ds_here ON a, b FROM ds_ifx;
+steps:
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_absent
+    expect: notice
+    comment: missing unqualified name
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_acc.ds_absent
+    expect: notice
+    comment: missing name in an existing schema
+  - sql: |
+      DROP STATISTICS IF EXISTS no_such_schema.ds_absent
+    expect: notice
+    comment: missing schema is also skipped with IF EXISTS
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_here
+    expect: ok
+  - sql: |
+      DROP STATISTICS IF EXISTS ds_here
+    expect: notice
+    comment: second drop of the same name is a notice, not an error
+  - sql: |
+      DROP STATISTICS ds_here
+    expect: error
+    sqlstate: "42704"
+    comment: without IF EXISTS the same missing name is undefined_object

@@ -1,0 +1,36 @@
+# DELETE has no LIMIT clause; the documented batching idiom uses a FOR UPDATE LIMIT sub-select joined on ctid.
+id: cmd-delete.batch-ctid-limit-emulation
+title: Batch delete with a LIMIT sub-select and ctid join; DELETE LIMIT is a syntax error
+family: cmd-delete
+tier: core
+feature_ids: [delete, limit, ctid, for-update, cte, using, create-table, insert, select, errors]
+required_capabilities: [create-table, insert, select, delete, with, using, row-locks, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#examples (While there is no LIMIT clause for DELETE ...)"
+sessions: [a]
+setup: |
+  CREATE TABLE user_logs (id int4 PRIMARY KEY, status text, creation_date date);
+  INSERT INTO user_logs VALUES (1, 'archived', '2020-01-03'), (2, 'archived', '2020-01-01'), (3, 'active', '2019-01-01'), (4, 'archived', '2020-01-02');
+steps:
+  - sql: |
+      DELETE FROM user_logs LIMIT 1
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      WITH delete_batch AS (
+        SELECT l.ctid FROM user_logs AS l
+          WHERE l.status = 'archived'
+          ORDER BY l.creation_date
+          FOR UPDATE
+          LIMIT 2
+      )
+      DELETE FROM user_logs AS dl
+        USING delete_batch AS del
+        WHERE dl.ctid = del.ctid
+    expect: ok
+    comment: documented idiom with LIMIT 10000 scaled down to 2; deletes the two oldest archived rows (ids 2 and 4)
+  - sql: |
+      SELECT id, status FROM user_logs ORDER BY id
+    expect: rows
+    order: ordered

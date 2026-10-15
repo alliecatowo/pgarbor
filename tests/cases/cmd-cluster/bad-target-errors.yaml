@@ -1,0 +1,41 @@
+# Naming a missing table, a missing index, an index of another table, or a view are each rejected.
+id: cmd-cluster.bad-target-errors
+title: CLUSTER rejects missing tables, missing indexes, foreign indexes and views
+family: cmd-cluster
+tier: core
+feature_ids: [cluster, cluster-using, errors]
+required_capabilities: [create-table, create-index, create-view, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/cluster.sgml#sql-cluster (Parameters: table_name, index_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4);
+  CREATE INDEX t_v ON t (v);
+  CREATE TABLE u (id int4 PRIMARY KEY);
+  CREATE VIEW vw AS SELECT 1 AS x;
+steps:
+  - sql: |
+      CLUSTER nosuch
+    expect: error
+    sqlstate: "42P01"
+    comment: unknown table
+  - sql: |
+      CLUSTER t USING nosuch
+    expect: error
+    sqlstate: "42704"
+    comment: unknown index
+  - sql: |
+      CLUSTER t USING u_pkey
+    expect: error
+    sqlstate: "42809"
+    comment: index belongs to another table
+  - sql: |
+      CLUSTER vw
+    expect: error
+    sqlstate: "42809"
+    comment: a view is not a table or materialized view
+  - sql: |
+      SELECT count(*) AS n FROM t
+    expect: rows
+    comment: none of the failed commands changed t

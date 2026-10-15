@@ -1,0 +1,55 @@
+# UPDATE and DELETE ... WHERE CURRENT OF a FOR UPDATE cursor act on the row the cursor is positioned on.
+id: doc-plpgsql-cursors.update-delete-where-current-of
+title: UPDATE and DELETE WHERE CURRENT OF act on the cursor's current row
+family: doc-plpgsql-cursors
+tier: core
+feature_ids: [plpgsql-cursors, where-current-of, select-for-update, update, delete]
+required_capabilities: [plpgsql, cursors, create-function, create-table, insert, select, update, delete, row-locks]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-cursors"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int PRIMARY KEY, grp int NOT NULL, name text);
+  INSERT INTO items VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 1, 'c'), (4, 2, 'd');
+  CREATE FUNCTION rename_group1() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE
+    c CURSOR FOR SELECT * FROM items WHERE grp = 1 FOR UPDATE;
+    r record;
+    n int := 0;
+  BEGIN
+    OPEN c;
+    LOOP
+      FETCH c INTO r;
+      EXIT WHEN NOT FOUND;
+      UPDATE items SET name = name || '!' WHERE CURRENT OF c;
+      n := n + 1;
+    END LOOP;
+    CLOSE c;
+    RETURN n;
+  END $$;
+  CREATE FUNCTION delete_first_group2() RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE
+    c CURSOR FOR SELECT * FROM items WHERE grp = 2 FOR UPDATE;
+    r record;
+  BEGIN
+    OPEN c;
+    FETCH c INTO r;
+    DELETE FROM items WHERE CURRENT OF c;
+    CLOSE c;
+    RETURN 1;
+  END $$;
+steps:
+  - sql: |
+      SELECT rename_group1()
+    expect: rows
+  - sql: |
+      SELECT id, name FROM items ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT delete_first_group2()
+    expect: rows
+  - sql: |
+      SELECT count(*) FROM items
+    expect: rows

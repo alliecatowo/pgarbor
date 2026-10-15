@@ -1,0 +1,46 @@
+# VACUUM skips a named view with a WARNING, processes materialized views and partitioned tables, and succeeds on a mixed list.
+id: cmd-vacuum.views-partitions-matviews
+title: "VACUUM skips views, handles matviews and partitioned tables"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum, create-view, create-materialized-view, partitioning, warnings]
+required_capabilities: [create-table, create-view, create-materialized-view, insert, select, partitioning, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Description: tables and materialized views)"
+sessions: [a]
+setup: |
+  CREATE TABLE vvp (id int4, v int4);
+  INSERT INTO vvp SELECT g, g FROM generate_series(1, 10) g;
+  CREATE VIEW vvp_v AS SELECT * FROM vvp;
+  CREATE MATERIALIZED VIEW vvp_mv AS SELECT * FROM vvp;
+  CREATE TABLE vvp_p (a int4) PARTITION BY RANGE (a);
+  CREATE TABLE vvp_p1 PARTITION OF vvp_p FOR VALUES FROM (0) TO (100);
+  INSERT INTO vvp_p VALUES (5), (50);
+steps:
+  - sql: |
+      VACUUM vvp_v
+    expect: ok
+    comment: WARNING that the view is skipped; not an error
+  - sql: |
+      VACUUM vvp_mv
+    expect: ok
+  - sql: |
+      VACUUM vvp_p
+    expect: ok
+    comment: processes every partition
+  - sql: |
+      VACUUM ONLY vvp_p
+    expect: ok
+    comment: partitions are still processed when the parent is named with ONLY
+  - sql: |
+      VACUUM vvp_p1
+    expect: ok
+  - sql: |
+      VACUUM vvp_v, vvp
+    expect: ok
+    comment: a mixed list skips the view and vacuums the table
+  - sql: |
+      SELECT count(*) FROM vvp_p
+    expect: rows
+    order: ordered

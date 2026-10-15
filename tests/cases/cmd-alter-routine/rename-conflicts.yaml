@@ -1,0 +1,42 @@
+# Renames and moves that would collide with an existing signature fail with 42723. Renaming a
+# routine to its own name also collides with itself. Overloads of the same name are not a conflict.
+id: cmd-alter-routine.rename-conflicts
+title: ALTER ROUTINE rename and SET SCHEMA collisions raise duplicate-function errors while overloads coexist
+family: cmd-alter-routine
+tier: core
+feature_ids: [alter-routine, rename, set-schema, overloading]
+required_capabilities: [create-function, create-procedure, create-schema, alter-function, sql-functions, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_routine.sgml#sql-alterroutine (Synopsis: RENAME TO, SET SCHEMA); ref/alter_function.sgml (Description)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA s1;
+  CREATE FUNCTION foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1';
+  CREATE FUNCTION foo2(integer) RETURNS integer LANGUAGE sql AS 'SELECT $1 + 1';
+  CREATE FUNCTION s1.foo(integer) RETURNS integer LANGUAGE sql AS 'SELECT 3';
+  CREATE PROCEDURE pr1(int) LANGUAGE sql AS 'SELECT 1';
+  CREATE PROCEDURE pr1(text) LANGUAGE sql AS 'SELECT 1';
+steps:
+  - sql: |
+      ALTER ROUTINE foo(integer) RENAME TO foo2
+    expect: error
+    sqlstate: "42723"
+    comment: foo2(integer) already exists
+  - sql: |
+      ALTER ROUTINE pr1(int) RENAME TO pr1
+    expect: error
+    sqlstate: "42723"
+    comment: renaming a routine to its own name collides with itself
+  - sql: |
+      ALTER ROUTINE foo(integer) SET SCHEMA s1
+    expect: error
+    sqlstate: "42723"
+  - sql: |
+      ALTER ROUTINE pr1(int) RENAME TO pr2
+    expect: ok
+    comment: pr1(text) is an overload, not a conflict with the new name
+  - sql: |
+      SELECT proname, pg_get_function_identity_arguments(oid) AS args, pronamespace::regnamespace AS schema FROM pg_proc WHERE proname IN ('foo', 'foo2', 'pr1', 'pr2') ORDER BY 1, 2, 3
+    expect: rows
+    order: ordered

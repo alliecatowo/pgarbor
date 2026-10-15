@@ -1,0 +1,28 @@
+# ANY and ALL used as WHERE filters over a table column, including a NULL column value and a NULL-containing array.
+id: doc-functions-comparisons.any-all-table-filter
+title: ANY and ALL filter table rows and exclude NULL column values
+family: doc-functions-comparisons
+tier: core
+feature_ids: [any-array, all-array, where-clause, null-semantics]
+required_capabilities: [select, create-table, insert, arrays]
+provenance:
+  source: pg-docs
+  ref: "src/sgml/func.sgml#functions-comparisons-any-some"
+setup: |
+  CREATE TABLE aa_t (id int4 PRIMARY KEY, v int4, allowed int4[]);
+  INSERT INTO aa_t VALUES (1, 2, '{1,2,3}'), (2, 7, '{1,2,3}'), (3, NULL, '{1,2,3}'), (4, 3, '{}'), (5, 3, NULL), (6, 9, '{NULL,9}');
+steps:
+  - sql: |
+      SELECT id FROM aa_t WHERE v = ANY(allowed) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 4 has an empty array and row 5 a NULL array, so neither matches
+  - sql: |
+      SELECT id FROM aa_t WHERE v <> ALL(allowed) ORDER BY id
+    expect: rows
+    order: ordered
+    comment: row 6 is excluded because 9 <> 9 is false, which decides the ALL result despite the NULL element; row 5 has a NULL array and row 3 a NULL value
+  - sql: |
+      SELECT id FROM aa_t WHERE v = ANY(ARRAY[2, 9]) ORDER BY id
+    expect: rows
+    order: ordered

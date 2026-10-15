@@ -1,0 +1,31 @@
+# Documented: with UNIQUE INDEX ... INCLUDE (y), uniqueness applies to x alone, not to (x, y).
+id: doc-indexes-index-only-scans.include-unique-key-only
+title: A unique index with INCLUDE enforces uniqueness on the key column only
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, include-columns, unique-index]
+required_capabilities: [create-table, create-index, unique-index, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (CREATE UNIQUE INDEX tab_x_y ON tab(x) INCLUDE (y); the uniqueness condition applies to just column x)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab (x int, y text);
+  CREATE UNIQUE INDEX tab_x_y ON tab (x) INCLUDE (y);
+steps:
+  - sql: |
+      INSERT INTO tab VALUES (1, 'a'), (2, 'a')
+    expect: ok
+  - sql: |
+      INSERT INTO tab VALUES (3, 'a')
+    expect: ok
+    comment: same payload value as other rows is fine; only x is unique
+  - sql: |
+      INSERT INTO tab VALUES (1, 'b')
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate key x=1 with a different y is rejected
+  - sql: |
+      SELECT x, y FROM tab ORDER BY x
+    expect: rows
+    order: ordered

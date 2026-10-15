@@ -1,0 +1,45 @@
+# Composite attribute COLLATE clauses, collation on a non-collatable type, and the zero-attribute composite.
+id: cmd-create-type.composite-collate-and-empty
+title: "Composite attribute collations and a zero-attribute composite type"
+family: cmd-create-type
+tier: core
+feature_ids: [create-type, composite-types, collations, catalog-introspection, errors]
+required_capabilities: [create-type, select, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_type.sgml#sql-createtype-composite (COLLATE, Compatibility)"
+steps:
+  - sql: |
+      CREATE TYPE cc2 AS (a text COLLATE "C", b text)
+    expect: ok
+  - sql: |
+      SELECT a.attname, c.collname
+      FROM pg_attribute a LEFT JOIN pg_collation c ON c.oid = a.attcollation
+      WHERE a.attrelid = 'cc2'::regclass AND a.attnum > 0
+      ORDER BY a.attnum
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT (ROW('B', 'x')::cc2).a COLLATE "C" > 'a' AS gt
+    expect: rows
+    comment: uppercase B sorts before lowercase a under C
+  - sql: |
+      CREATE TYPE cc1 AS (a int4 COLLATE "C")
+    expect: error
+    sqlstate: "42804"
+    comment: integer is not collatable
+  - sql: |
+      CREATE TYPE cc3 AS (a text COLLATE "nosuchcoll")
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      CREATE TYPE empty0 AS ()
+    expect: ok
+    comment: zero-attribute composite is a PostgreSQL extension to the standard
+  - sql: |
+      SELECT ROW()::empty0::text AS txt
+    expect: rows
+  - sql: |
+      SELECT typtype, typrelid <> 0 AS has_relation FROM pg_type WHERE typname = 'empty0'
+    expect: rows
+    comment: a composite type always has an associated relation entry

@@ -1,0 +1,51 @@
+# Event triggers are superuser-only: the new owner must be a superuser, and only an owner (or superuser) may alter.
+id: cmd-alter-event-trigger.owner-requires-superuser
+title: Event trigger owner must be a superuser; non-owners cannot alter
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc, roles]
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      CREATE ROLE cmd_aet_plain NOSUPERUSER
+    expect: ok
+  - sql: |
+      CREATE ROLE cmd_aet_su SUPERUSER
+    expect: ok
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO cmd_aet_plain
+    expect: error
+    sqlstate: '42501'
+    comment: non-superuser cannot own an event trigger
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO cmd_aet_su
+    expect: ok
+  - sql: |
+      SET ROLE cmd_aet_plain
+    expect: ok
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard DISABLE
+    expect: error
+    sqlstate: '42501'
+    comment: cmd_aet_plain is neither superuser nor owner
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT evtname, pg_get_userbyid(evtowner) AS owner FROM pg_event_trigger
+    expect: rows
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard OWNER TO postgres
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_aet_plain
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_aet_su
+    expect: ok

@@ -1,0 +1,29 @@
+# table_name may be schema-qualified; the rule is only found under the table's actual schema.
+id: cmd-drop-rule.schema-qualified-table
+title: DROP RULE with a schema-qualified table name finds the rule in that schema only
+family: cmd-drop-rule
+tier: extended
+feature_ids: [drop-rule, create-rule, schemas]
+required_capabilities: [create-schema, create-table, create-rule, drop-rule, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_rule.sgml#sql-droprule (table_name: optionally schema-qualified)"
+sessions: [a]
+setup: |
+  CREATE SCHEMA dr_s1;
+  CREATE TABLE dr_s1.t (a int4);
+  CREATE TABLE public.t (a int4);
+  CREATE RULE qr AS ON INSERT TO dr_s1.t DO INSTEAD NOTHING;
+steps:
+  - sql: |
+      DROP RULE qr ON public.t
+    expect: error
+    sqlstate: "42704"
+    comment: public.t has no rule named qr
+  - sql: |
+      DROP RULE qr ON dr_s1.t
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_rules WHERE schemaname = 'dr_s1'
+    expect: rows
+    comment: no rules remain in dr_s1

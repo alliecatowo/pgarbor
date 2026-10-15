@@ -1,0 +1,29 @@
+# A function's SET clause applies only during the call; the caller's session value is unaffected afterwards.
+id: cmd-set.function-set-clause
+title: SET clause on a SQL function is in effect during the call and restored on exit
+family: cmd-set
+tier: core
+feature_ids: [set, create-function, set-local, sql-functions]
+required_capabilities: [select, guc, create-function-sql, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/set.sgml#sql-set (Description: SET LOCAL within a function with a SET option)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cmd_set_show() RETURNS text LANGUAGE sql SET work_mem = '1MB' AS $$ SELECT current_setting('work_mem') $$
+steps:
+  - sql: |
+      SET work_mem = '8MB'
+    expect: ok
+  - sql: |
+      SELECT cmd_set_show() AS inside_call, current_setting('work_mem') AS caller_after
+    expect: rows
+    comment: inside 1MB, caller sees 8MB afterwards
+  - sql: |
+      BEGIN; SET LOCAL work_mem = '3MB'; SELECT cmd_set_show() AS inside_call, current_setting('work_mem') AS caller_local; COMMIT
+    expect: ok
+    comment: the function's SET option overrides the caller's LOCAL value during the call only
+  - sql: |
+      SELECT current_setting('work_mem') AS after_commit
+    expect: rows
+    comment: 8MB

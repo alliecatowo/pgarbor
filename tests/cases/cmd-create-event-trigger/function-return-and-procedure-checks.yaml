@@ -1,0 +1,48 @@
+# The referenced function must take no arguments, return event_trigger, and be a function rather than a procedure.
+id: cmd-create-event-trigger.function-return-and-procedure-checks
+title: Trigger functions must return event_trigger, be functions not procedures, and be found by name
+family: cmd-create-event-trigger
+tier: core
+feature_ids: [create-event-trigger, event-triggers, event-trigger-function, create-procedure]
+required_capabilities: [event-triggers, plpgsql, create-function, create-procedure]
+provenance:
+  source: pg-docs
+  ref: "ref/create_event_trigger.sgml#sql-createeventtrigger"
+setup: |
+  CREATE FUNCTION f_int() RETURNS int4 LANGUAGE plpgsql AS $$ BEGIN RETURN 1; END; $$;
+  CREATE FUNCTION f_void() RETURNS void LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;
+  CREATE PROCEDURE p_proc() LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;
+steps:
+  - sql: |
+      CREATE EVENT TRIGGER e_int ON ddl_command_start EXECUTE FUNCTION f_int()
+    expect: error
+    sqlstate: "42P17"
+    comment: function f_int must return type event_trigger
+  - sql: |
+      CREATE EVENT TRIGGER e_void ON ddl_command_start EXECUTE FUNCTION f_void()
+    expect: error
+    sqlstate: "42P17"
+    comment: a void return is not event_trigger either
+  - sql: |
+      CREATE EVENT TRIGGER e_proc ON ddl_command_start EXECUTE PROCEDURE p_proc()
+    expect: error
+    sqlstate: "42883"
+    comment: a procedure is not found by the function lookup
+  - sql: |
+      CREATE EVENT TRIGGER e_proc2 ON ddl_command_start EXECUTE FUNCTION p_proc()
+    expect: error
+    sqlstate: "42883"
+    comment: FUNCTION and PROCEDURE are equivalent keywords, but the target must be a function
+  - sql: |
+      CREATE EVENT TRIGGER e_missing ON ddl_command_start EXECUTE FUNCTION no_such_fn()
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      CREATE FUNCTION f_args(x int4) RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$
+    expect: error
+    sqlstate: "42P13"
+    comment: event trigger functions cannot declare arguments
+  - sql: |
+      SELECT count(*) AS created FROM pg_event_trigger
+    expect: rows
+    order: ordered

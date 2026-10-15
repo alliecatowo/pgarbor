@@ -1,0 +1,37 @@
+# DROP PROCEDURE with only a name works when exactly one procedure of that name exists.
+id: cmd-drop-procedure.doc-example-single-name
+title: DROP PROCEDURE by bare name when one procedure of that name exists
+family: cmd-drop-procedure
+tier: core
+feature_ids: [drop-procedure, create-procedure, call, plpgsql]
+required_capabilities: [create-table, insert, select, create-procedure, call, plpgsql, drop-procedure, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_procedure.sgml#sql-dropprocedure-examples (single procedure)"
+sessions: [a]
+setup: |
+  CREATE TABLE maint_log (msg text)
+steps:
+  - sql: |
+      CREATE PROCEDURE do_db_maintenance(IN target_schema text, OUT results text) LANGUAGE plpgsql AS $$
+      BEGIN
+        INSERT INTO maint_log VALUES ('ran on ' || target_schema);
+        results := 'done';
+      END $$
+    expect: ok
+  - sql: |
+      DROP PROCEDURE do_db_maintenance
+    expect: ok
+    comment: the argument list may be omitted when the name is unique
+  - sql: |
+      SELECT count(*) AS procs FROM pg_proc WHERE proname = 'do_db_maintenance'
+    expect: rows
+    order: multiset
+  - sql: |
+      CALL do_db_maintenance('public')
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      SELECT count(*) AS logged FROM maint_log
+    expect: rows
+    order: multiset

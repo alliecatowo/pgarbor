@@ -1,0 +1,32 @@
+# gen_random_uuid() and uuidv4() both return a uuid of version 4 (random) in the RFC 9562 layout.
+id: doc-functions-uuid.gen-random-uuid-v4
+title: gen_random_uuid and uuidv4 return random version 4 uuids
+family: doc-functions-uuid
+tier: core
+feature_ids: [uuid, gen-random-uuid, uuidv4, uuid-version]
+required_capabilities: [select]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-uuid (UUID Generation Functions; gen_random_uuid, uuidv4)"
+sessions: [a]
+steps:
+  - sql: |
+      SELECT pg_typeof(gen_random_uuid())::text AS t1, pg_typeof(uuidv4())::text AS t2
+    expect: rows
+    comment: both functions return type uuid
+  - sql: |
+      SELECT uuid_extract_version(gen_random_uuid()) = 4 AS v_gen,
+             uuid_extract_version(uuidv4()) = 4 AS v_v4
+    expect: rows
+    comment: doc says gen_random_uuid() yields version 4; uuidv4() is its alias
+  - sql: |
+      SELECT u::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AS shape_ok
+      FROM (SELECT gen_random_uuid() AS u UNION ALL SELECT uuidv4()) s
+    expect: rows
+    order: multiset
+    comment: text form has version nibble 4 and RFC variant nibble 8, 9, a or b
+  - sql: |
+      SELECT count(DISTINCT u) AS distinct_count
+      FROM (SELECT gen_random_uuid() AS u FROM generate_series(1, 500)) s
+    expect: rows
+    comment: 500 random values are distinct (no collisions expected)

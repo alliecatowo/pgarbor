@@ -1,0 +1,55 @@
+# Owner names fold like any identifier: an unquoted mixed-case name refers to a different role than the quoted one; CURRENT_USER is a keyword unless quoted.
+id: cmd-alter-large-object.quoted-role-identifiers
+title: OWNER TO respects identifier case folding and quoting, and CURRENT_USER is a keyword
+family: cmd-alter-large-object
+tier: extended
+feature_ids: [alter-large-object, owner, identifiers, quoting]
+required_capabilities: [large-objects, roles, catalog-introspection, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_large_object.sgml#sql-alterlargeobject"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE ROLE "CMD_ALO_Mixed"
+    expect: ok
+  - sql: |
+      CREATE ROLE "current_user"
+    expect: ok
+  - sql: |
+      SELECT lo_create(931101)
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 931101 OWNER TO CMD_ALO_Mixed
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted name folds to cmd_alo_mixed, which does not exist
+  - sql: |
+      ALTER LARGE OBJECT 931101 OWNER TO "CMD_ALO_Mixed"
+    expect: ok
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 931101
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 931101 OWNER TO "current_user"
+    expect: ok
+    comment: quoted, so this names the role called current_user, not the keyword
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 931101
+    expect: rows
+  - sql: |
+      ALTER LARGE OBJECT 931101 OWNER TO CURRENT_USER
+    expect: ok
+    comment: unquoted keyword, so the session user postgres
+  - sql: |
+      SELECT r.rolname FROM pg_largeobject_metadata m JOIN pg_roles r ON r.oid = m.lomowner WHERE m.oid = 931101
+    expect: rows
+  - sql: |
+      SELECT lo_unlink(931101)
+    expect: rows
+  - sql: |
+      DROP ROLE "CMD_ALO_Mixed"
+    expect: ok
+  - sql: |
+      DROP ROLE "current_user"
+    expect: ok

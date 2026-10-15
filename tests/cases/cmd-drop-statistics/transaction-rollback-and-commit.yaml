@@ -1,0 +1,44 @@
+# DROP STATISTICS is transactional: a rolled-back drop restores the object, a committed drop removes it.
+id: cmd-drop-statistics.transaction-rollback-and-commit
+title: DROP STATISTICS inside a transaction is undone by ROLLBACK and kept by COMMIT
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, transactions, extended-statistics]
+required_capabilities: [create-table, extended-statistics, drop-statistics, transactions]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-dropstatistics; transaction semantics of DDL (transaction-iso.html)"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_txn (a int, b int);
+  CREATE STATISTICS ds_txn_s ON a, b FROM ds_txn;
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP STATISTICS ds_txn_s
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxname = 'ds_txn_s'
+    expect: rows
+    comment: gone inside the transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxname = 'ds_txn_s'
+    expect: rows
+    comment: restored by ROLLBACK
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP STATISTICS ds_txn_s
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxname = 'ds_txn_s'
+    expect: rows

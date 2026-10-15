@@ -1,0 +1,44 @@
+# merge_update and merge_insert accept row-constructor assignment and DEFAULT for individual columns.
+id: cmd-merge.row-constructor-and-default-assign
+title: MERGE assigns via row constructor and DEFAULT in UPDATE SET and INSERT column lists
+family: cmd-merge
+tier: core
+feature_ids: [merge, update, insert, default-keyword, row-constructor-assignment, returning]
+required_capabilities: [create-table, insert, select, update, merge, returning]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (merge_update: column_name = ROW(...) and DEFAULT; merge_insert: default for unlisted columns)"
+setup: |
+  CREATE TABLE pt (id integer, a integer DEFAULT 7, b text DEFAULT 'x');
+  INSERT INTO pt VALUES (1, 1, 'one');
+steps:
+  - sql: |
+      MERGE INTO pt t
+      USING (VALUES (1, 50)) s(id, v)
+      ON t.id = s.id
+      WHEN MATCHED THEN
+        UPDATE SET (a, b) = ROW(s.v, DEFAULT)
+      RETURNING t.id, t.a, t.b
+    expect: rows
+    order: multiset
+    comment: expect (1, 50, 'x'); DEFAULT in row constructor sets b to its default
+  - sql: |
+      MERGE INTO pt t
+      USING (VALUES (1, 60)) s(id, v)
+      ON t.id = s.id
+      WHEN MATCHED THEN
+        UPDATE SET a = DEFAULT, b = 'z'
+      RETURNING t.id, t.a, t.b
+    expect: rows
+    order: multiset
+    comment: expect (1, 7, 'z')
+  - sql: |
+      MERGE INTO pt t
+      USING (VALUES (2, 50)) s(id, v)
+      ON t.id = s.id
+      WHEN NOT MATCHED THEN
+        INSERT (id, b) VALUES (s.id, DEFAULT)
+      RETURNING t.id, t.a, t.b
+    expect: rows
+    order: multiset
+    comment: expect (2, 7, 'x'); unlisted column a takes its declared default

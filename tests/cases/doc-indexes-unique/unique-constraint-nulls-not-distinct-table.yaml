@@ -1,0 +1,30 @@
+# The NULLS NOT DISTINCT clause also applies to a table-level UNIQUE constraint, and NULLS DISTINCT is the default.
+id: doc-indexes-unique.unique-constraint-nulls-not-distinct-table
+title: Table-level UNIQUE NULLS NOT DISTINCT rejects repeated NULLs; NULLS DISTINCT default allows them
+family: doc-indexes-unique
+tier: extended
+feature_ids: [unique-index, unique-constraint, nulls, nulls-not-distinct, nulls-distinct, errors]
+required_capabilities: [create-table, insert, select, unique-constraints, nulls-not-distinct, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-unique (NULLS [NOT] DISTINCT); ddl-constraints unique constraints"
+sessions: [a]
+setup: |
+  CREATE TABLE tnd (a int UNIQUE NULLS NOT DISTINCT, b int);
+  CREATE TABLE tdd (a int UNIQUE NULLS DISTINCT, b int);
+steps:
+  - sql: |
+      INSERT INTO tnd VALUES (NULL, 1)
+    expect: ok
+  - sql: |
+      INSERT INTO tnd VALUES (NULL, 2)
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO tdd VALUES (NULL, 1), (NULL, 2)
+    expect: ok
+  - sql: |
+      SELECT c.relname, x.indnullsnotdistinct FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid
+      WHERE x.indrelid IN ('tnd'::regclass, 'tdd'::regclass) ORDER BY c.relname
+    expect: rows
+    order: ordered

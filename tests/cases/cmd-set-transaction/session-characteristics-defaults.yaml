@@ -1,0 +1,59 @@
+# SET SESSION CHARACTERISTICS sets defaults for later transactions; SET TRANSACTION overrides them for one transaction only.
+id: cmd-set-transaction.session-characteristics-defaults
+title: SET SESSION CHARACTERISTICS sets per-session defaults that SET TRANSACTION overrides for one block
+family: cmd-set-transaction
+tier: core
+feature_ids: [session-characteristics, set-transaction, isolation-level, read-only, defaults]
+required_capabilities: [transactions, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/set_transaction.sgml#sql-set-transaction (Description: SET SESSION CHARACTERISTICS sets the default transaction characteristics for subsequent transactions; these defaults can be overridden by SET TRANSACTION)"
+sessions: [a]
+steps:
+  - sql: |
+      SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY
+    expect: ok
+  - sql: |
+      SELECT current_setting('default_transaction_isolation') AS iso, current_setting('default_transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_isolation') AS iso, current_setting('transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+    comment: the defaults apply to the new transaction
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      SET TRANSACTION READ WRITE
+    expect: ok
+  - sql: |
+      SELECT current_setting('transaction_read_only') AS ro, current_setting('transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: SET TRANSACTION overrides the read-only default for this block only
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE
+    expect: ok
+  - sql: |
+      SELECT current_setting('default_transaction_read_only') AS ro
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET default_transaction_isolation
+    expect: ok
+  - sql: |
+      SELECT current_setting('default_transaction_isolation') AS iso
+    expect: rows
+    order: ordered
+    comment: back to the built-in default

@@ -1,0 +1,39 @@
+# Targets below -1 are rejected by value; non-integer targets fail to parse.
+id: cmd-alter-statistics.set-statistics-invalid-values
+title: "ALTER STATISTICS SET STATISTICS rejects out-of-range and non-integer targets"
+family: cmd-alter-statistics
+tier: core
+feature_ids: [alter-statistics, statistics-target, errors, syntax-errors]
+required_capabilities: [create-table, alter-statistics, extended-statistics, catalog-introspection]
+provenance:
+  source: hand
+  ref: "PG18 statscmds.c AlterStatistics range check; doc/src/sgml/ref/alter_statistics.sgml#sql-alterstatistics"
+sessions: [a]
+setup: |
+  CREATE TABLE ast_iv (a int, b int);
+  CREATE STATISTICS ast_iv_s1 (ndistinct) ON a, b FROM ast_iv;
+  ALTER STATISTICS ast_iv_s1 SET STATISTICS 25;
+steps:
+  - sql: |
+      ALTER STATISTICS ast_iv_s1 SET STATISTICS -2
+    expect: error
+    sqlstate: "22023"
+    comment: statistics target -2 is too low
+  - sql: |
+      ALTER STATISTICS ast_iv_s1 SET STATISTICS 'abc'
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      ALTER STATISTICS ast_iv_s1 SET STATISTICS NULL
+    expect: error
+    sqlstate: "42601"
+    comment: NULL is not a target; DEFAULT is the keyword for the default
+  - sql: |
+      ALTER STATISTICS ast_iv_s1 SET STATISTICS 1.5
+    expect: error
+    sqlstate: "42601"
+  - sql: |
+      SELECT stxstattarget FROM pg_statistic_ext WHERE stxname = 'ast_iv_s1'
+    expect: rows
+    order: ordered
+    comment: the previous value 25 is untouched by the failed commands

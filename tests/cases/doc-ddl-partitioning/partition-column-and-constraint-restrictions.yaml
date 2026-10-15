@@ -1,0 +1,45 @@
+# Declarative partitions must have exactly the parent's columns: CREATE TABLE ... PARTITION OF cannot add
+# a column, and ATTACH rejects a table with an extra column. NO INHERIT CHECK on a partitioned table is
+# not allowed, and ALTER TABLE ONLY cannot add a CHECK once partitions exist.
+id: doc-ddl-partitioning.partition-column-and-constraint-restrictions
+title: Partitions cannot add columns and parents cannot take NO INHERIT or ONLY CHECK constraints
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, partition-columns, check-constraints, inheritance-restrictions]
+required_capabilities: [create-table, alter-table, select]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning-limitations (partition columns, CHECK/NOT NULL inheritance, ONLY constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE rc (id int, logdate date) PARTITION BY RANGE (logdate);
+  CREATE TABLE rc_1 PARTITION OF rc FOR VALUES FROM ('2024-01-01') TO ('2024-02-01');
+  CREATE TABLE rc_extra (id int, logdate date, note text);
+steps:
+  - sql: |
+      CREATE TABLE rc_2 PARTITION OF rc (note) FOR VALUES FROM ('2024-02-01') TO ('2024-03-01')
+    expect: error
+    sqlstate: "42703"
+    comment: partitions cannot declare columns of their own
+  - sql: |
+      ALTER TABLE rc ATTACH PARTITION rc_extra FOR VALUES FROM ('2024-03-01') TO ('2024-04-01')
+    expect: error
+    sqlstate: "42804"
+    comment: attached table must have exactly the parent's columns
+  - sql: |
+      ALTER TABLE rc ADD CONSTRAINT rc_nic CHECK (id > 0) NO INHERIT
+    expect: error
+    sqlstate: "42P16"
+  - sql: |
+      ALTER TABLE ONLY rc ADD CONSTRAINT rc_ck CHECK (id > 0)
+    expect: error
+    sqlstate: "42P16"
+    comment: ONLY is not allowed for CHECK once partitions exist
+  - sql: |
+      ALTER TABLE rc ADD CONSTRAINT rc_ck CHECK (id > 0)
+    expect: ok
+  - sql: |
+      SELECT conrelid::regclass::text AS tbl, conname FROM pg_constraint WHERE conname = 'rc_ck' ORDER BY 1
+    expect: rows
+    order: ordered
+    comment: a plain CHECK on the parent is inherited by the partition

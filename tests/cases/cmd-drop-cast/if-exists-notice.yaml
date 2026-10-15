@@ -1,0 +1,40 @@
+# DROP CAST IF EXISTS does not raise an error when the cast or a type is missing; it issues a notice instead, while a missing type without IF EXISTS is an error.
+id: cmd-drop-cast.if-exists-notice
+title: "DROP CAST IF EXISTS skips missing casts and missing types with a notice"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, if-exists, notices]
+required_capabilities: [create-type, create-cast, create-function-sql, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-parameters (IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE TYPE ie_a AS (v int);
+  CREATE TYPE ie_b AS (v int);
+steps:
+  - sql: |
+      DROP CAST IF EXISTS (ie_a AS ie_b)
+    expect: ok
+    comment: both types exist but no cast does, so a notice is issued and nothing is dropped
+  - sql: |
+      DROP CAST IF EXISTS (ie_nosuch AS ie_b)
+    expect: ok
+    comment: a missing source type is also skipped with a notice under IF EXISTS
+  - sql: |
+      DROP CAST IF EXISTS (ie_a AS ie_nosuch)
+    expect: ok
+  - sql: |
+      DROP CAST (ie_a AS ie_b)
+    expect: error
+    sqlstate: "42704"
+    comment: without IF EXISTS the same missing cast is an error
+  - sql: |
+      DROP CAST (ie_nosuch AS ie_b)
+    expect: error
+    sqlstate: "42704"
+    comment: without IF EXISTS a missing type is an error
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'ie_a'::regtype
+    expect: rows
+    order: multiset

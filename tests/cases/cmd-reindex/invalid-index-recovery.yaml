@@ -1,0 +1,58 @@
+# A failed CREATE UNIQUE INDEX CONCURRENTLY leaves an invalid index; REINDEX CONCURRENTLY fails the same way until the duplicates are fixed.
+id: cmd-reindex.invalid-index-recovery
+title: REINDEX CONCURRENTLY repairs an invalid index once the uniqueness violation is removed
+family: cmd-reindex
+tier: core
+feature_ids: [reindex, reindex-index, reindex-concurrently, indexes, unique-indexes, errors]
+required_capabilities: [create-table, create-index, insert, delete, select, drop-index, reindex, reindex-concurrently, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/reindex.sgml#sql-reindex-concurrently (failed rebuild leaves an invalid index; _ccnew recovery: drop it, then REINDEX CONCURRENTLY again)"
+sessions: [a]
+setup: |
+  CREATE TABLE inv (id int4, k int4);
+  INSERT INTO inv VALUES (1, 5), (2, 5);
+steps:
+  - sql: |
+      CREATE UNIQUE INDEX CONCURRENTLY inv_k ON inv (k)
+    expect: error
+    sqlstate: "23505"
+    comment: duplicate keys make the concurrent build fail and leave inv_k invalid
+  - sql: |
+      SELECT c.relname, i.indisvalid
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'inv'::regclass
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+  - sql: |
+      REINDEX INDEX CONCURRENTLY inv_k
+    expect: error
+    sqlstate: "23505"
+    comment: the rebuild still sees the duplicate and fails, leaving inv_k_ccnew
+  - sql: |
+      SELECT c.relname, i.indisvalid
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'inv'::regclass
+      ORDER BY c.relname
+    expect: rows
+    order: ordered
+    comment: both leftovers are invalid
+  - sql: |
+      DROP INDEX inv_k_ccnew
+    expect: ok
+    comment: recommended recovery for a _ccnew leftover
+  - sql: |
+      DELETE FROM inv WHERE id = 2
+    expect: ok
+  - sql: |
+      REINDEX INDEX CONCURRENTLY inv_k
+    expect: ok
+    comment: an invalid index can be rebuilt concurrently by REINDEX INDEX
+  - sql: |
+      SELECT c.relname, i.indisvalid
+      FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'inv'::regclass
+      ORDER BY c.relname
+    expect: rows
+    order: ordered

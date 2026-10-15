@@ -1,0 +1,42 @@
+# A strategy or support number may appear only once per operand types (42P17); FUNCTION 2 is the btree sort support function and must take internal (42P17); FUNCTION may carry explicit operand types.
+id: cmd-create-opclass.duplicate-numbers-and-sort-support
+title: "Duplicate strategy or support numbers fail with 42P17; explicit FUNCTION operand types are recorded"
+family: cmd-create-opclass
+tier: core
+feature_ids: [create-operator-class, operator-strategies, support-functions, sort-support, errors]
+required_capabilities: [create-operator-class, create-type, create-function, create-operator, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_opclass.sgml#sql-createopclass (Parameters: strategy_number, support_number, op_type)"
+sessions: [a]
+setup: |
+  CREATE TYPE cr_pt AS (a int4);
+  CREATE FUNCTION cr_pt_lt(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a < ($2).a';
+  CREATE FUNCTION cr_pt_eq(cr_pt, cr_pt) RETURNS bool LANGUAGE sql IMMUTABLE AS 'SELECT ($1).a = ($2).a';
+  CREATE FUNCTION cr_pt_cmp(cr_pt, cr_pt) RETURNS int4 LANGUAGE sql IMMUTABLE AS 'SELECT CASE WHEN ($1).a < ($2).a THEN -1 WHEN ($1).a > ($2).a THEN 1 ELSE 0 END';
+  CREATE OPERATOR < (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_lt);
+  CREATE OPERATOR = (leftarg = cr_pt, rightarg = cr_pt, procedure = cr_pt_eq);
+steps:
+  - sql: |
+      CREATE OPERATOR CLASS cr_dup_op FOR TYPE cr_pt USING btree AS OPERATOR 1 <, OPERATOR 1 =, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: error
+    sqlstate: "42P17"
+    comment: strategy 1 appears twice for (cr_pt, cr_pt)
+  - sql: |
+      CREATE OPERATOR CLASS cr_dup_fn FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt), FUNCTION 1 cr_pt_cmp(cr_pt, cr_pt)
+    expect: error
+    sqlstate: "42P17"
+    comment: support function 1 appears twice for (cr_pt, cr_pt)
+  - sql: |
+      CREATE OPERATOR CLASS cr_sort_bad FOR TYPE cr_pt USING btree AS OPERATOR 1 <, FUNCTION 2 cr_pt_cmp(cr_pt, cr_pt)
+    expect: error
+    sqlstate: "42P17"
+    comment: btree support function 2 is sort support and must accept internal
+  - sql: |
+      CREATE OPERATOR CLASS cr_fn_types FOR TYPE cr_pt USING btree AS OPERATOR 1 < (cr_pt, cr_pt), OPERATOR 3 = (cr_pt, cr_pt), FUNCTION 1 (cr_pt, cr_pt) cr_pt_cmp(cr_pt, cr_pt)
+    expect: ok
+    comment: explicit operand types in parentheses are accepted
+  - sql: |
+      SELECT p.amprocnum, p.amproclefttype::regtype::text AS lt, p.amprocrighttype::regtype::text AS rt, p.amproc::regprocedure::text AS fn FROM pg_amproc p JOIN pg_opclass o ON o.opcfamily = p.amprocfamily WHERE o.opcname = 'cr_fn_types' ORDER BY 1
+    expect: rows
+    order: ordered

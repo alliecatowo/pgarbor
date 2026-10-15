@@ -1,0 +1,35 @@
+# Unquoted names fold to lower case; a quoted mixed-case name must be quoted exactly to be dropped.
+id: cmd-drop-statistics.quoted-identifier-folding
+title: Unquoted DROP STATISTICS names fold to lower case and do not match quoted mixed-case names
+family: cmd-drop-statistics
+tier: core
+feature_ids: [drop-statistics, identifiers, quoting]
+required_capabilities: [create-table, extended-statistics, drop-statistics]
+provenance:
+  source: hand
+  ref: "PG18 docs sql-syntax-lexical.html (identifiers and key words); drop_statistics.sgml#sql-dropstatistics (name)"
+sessions: [a]
+setup: |
+  CREATE TABLE ds_quo (a int, b int);
+  CREATE STATISTICS "DsMixed" ON a, b FROM ds_quo;
+  CREATE STATISTICS ds_lower ON a, b FROM ds_quo;
+steps:
+  - sql: |
+      DROP STATISTICS dsmixed
+    expect: error
+    sqlstate: "42704"
+    comment: unquoted name folds to dsmixed, which does not exist
+  - sql: |
+      DROP STATISTICS "dsmixed"
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      DROP STATISTICS "DsMixed"
+    expect: ok
+  - sql: |
+      DROP STATISTICS DS_LOWER
+    expect: ok
+    comment: unquoted upper case folds to ds_lower
+  - sql: |
+      SELECT count(*) FROM pg_statistic_ext WHERE stxrelid = 'ds_quo'::regclass
+    expect: rows

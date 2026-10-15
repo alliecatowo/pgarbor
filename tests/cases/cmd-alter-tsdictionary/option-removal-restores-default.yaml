@@ -1,0 +1,29 @@
+# Documented: a bare option name removes the previous setting so the default applies.
+id: cmd-alter-tsdictionary.option-removal-restores-default
+title: "Bare option name removes a stopword setting so the default (no stopwords) applies"
+family: cmd-alter-tsdictionary
+tier: core
+feature_ids: [alter-text-search-dictionary, option-removal, stopwords-option]
+required_capabilities: [create-text-search-dictionary, alter-text-search-dictionary, text-search, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_tsdictionary.sgml#sql-altertsdictionary (parameter value: if the equal sign and value are omitted, the previous setting is removed)"
+sessions: [a]
+setup: |
+  CREATE TEXT SEARCH DICTIONARY my_dict (TEMPLATE = snowball, language = english, stopwords = english);
+steps:
+  - sql: |
+      SELECT ts_lexize('my_dict', 'the')
+    expect: rows
+    comment: stopword removes 'the'
+  - sql: |
+      ALTER TEXT SEARCH DICTIONARY my_dict ( StopWords )
+    expect: ok
+  - sql: |
+      SELECT ts_lexize('my_dict', 'the')
+    expect: rows
+    comment: with the option removed, 'the' passes through the stemmer unchanged
+  - sql: |
+      SELECT dictinitoption FROM pg_ts_dict WHERE dictname = 'my_dict'
+    expect: rows
+    comment: language setting survives; only stopwords is removed

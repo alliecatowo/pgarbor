@@ -1,0 +1,32 @@
+# Documented example: maintain customer_account balances from recent_transactions (UPDATE on match, INSERT otherwise).
+id: cmd-merge.docs-customer-accounts
+title: MERGE documentation example updates matched balances and inserts unmatched customers
+family: cmd-merge
+tier: core
+feature_ids: [merge, update, insert, on-join-condition]
+required_capabilities: [create-table, insert, select, merge]
+provenance:
+  source: pg-docs
+  ref: "ref/merge.sgml (Examples: customer_account / recent_transactions)"
+setup: |
+  CREATE TABLE customer_account (customer_id integer PRIMARY KEY, balance integer NOT NULL);
+  CREATE TABLE recent_transactions (customer_id integer, transaction_value integer);
+  INSERT INTO customer_account VALUES (1, 100), (2, 250), (3, 0);
+  INSERT INTO recent_transactions VALUES (1, 25), (3, -40), (4, 75);
+steps:
+  - sql: |
+      MERGE INTO customer_account ca
+      USING recent_transactions t
+      ON t.customer_id = ca.customer_id
+      WHEN MATCHED THEN
+        UPDATE SET balance = balance + transaction_value
+      WHEN NOT MATCHED THEN
+        INSERT (customer_id, balance)
+        VALUES (t.customer_id, t.transaction_value)
+    expect: ok
+    comment: expect MERGE 3 (two updates, one insert); customer 2 untouched
+  - sql: |
+      SELECT customer_id, balance FROM customer_account ORDER BY customer_id
+    expect: rows
+    order: ordered
+    comment: expect (1,125), (2,250), (3,-40), (4,75)

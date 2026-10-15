@@ -1,0 +1,32 @@
+id: cmd-refresh-materialized-view.not-populated-concurrently
+title: CONCURRENTLY is rejected on an unpopulated view, and CONCURRENTLY with WITH NO DATA is a syntax error
+family: cmd-refresh-materialized-view
+tier: core
+feature_ids: [refresh-materialized-view, refresh-concurrently, with-no-data]
+required_capabilities: [create-table, insert, select, create-materialized-view, refresh-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/refresh_materialized_view.sgml#sql-refreshmaterializedview (CONCURRENTLY; Description)"
+sessions: [a]
+setup: |
+  CREATE TABLE items (id int4 PRIMARY KEY, label text);
+  INSERT INTO items VALUES (1, 'x'), (2, 'y');
+  CREATE MATERIALIZED VIEW item_view AS SELECT id, label FROM items;
+  CREATE MATERIALIZED VIEW item_empty AS SELECT id, label FROM items WITH NO DATA;
+steps:
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY item_view WITH NO DATA
+    expect: error
+    sqlstate: "42601"
+    comment: CONCURRENTLY and WITH NO DATA may not be specified together
+  - sql: |
+      REFRESH MATERIALIZED VIEW CONCURRENTLY item_empty
+    expect: error
+    sqlstate: "0A000"
+    comment: CONCURRENTLY can only be used when the view is already populated
+  - sql: |
+      REFRESH MATERIALIZED VIEW item_empty
+    expect: ok
+  - sql: |
+      SELECT count(*) FROM item_empty
+    expect: rows

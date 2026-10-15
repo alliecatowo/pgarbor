@@ -1,0 +1,44 @@
+# ALTER INDEX ... [NO] DEPENDS ON EXTENSION: the marker is recorded in pg_depend, NO removes it, unknown extensions fail, and IF EXISTS is not part of this subform.
+id: cmd-alter-index.depends-on-extension
+title: DEPENDS ON EXTENSION records an extension dependency; NO DEPENDS removes it
+family: cmd-alter-index
+tier: extended
+feature_ids: [alter-index, extension-dependency, errors]
+required_capabilities: [create-table, create-index, alter-index, extensions, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_index.sgml#sql-alterindex (DEPENDS ON EXTENSION / NO DEPENDS ON EXTENSION)"
+sessions: [a]
+setup: |
+  CREATE TABLE dep_t (id int4, v int4);
+  CREATE INDEX dep_t_v ON dep_t (v);
+steps:
+  - sql: |
+      ALTER INDEX dep_t_v DEPENDS ON EXTENSION no_such_extension
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      SELECT count(*) AS ext_deps FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = 'dep_t_v'::regclass AND d.refclassid = 'pg_extension'::regclass
+    expect: rows
+    order: ordered
+    comment: no extension dependency yet
+  - sql: |
+      ALTER INDEX dep_t_v DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      SELECT count(*) AS ext_deps FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = 'dep_t_v'::regclass AND d.refclassid = 'pg_extension'::regclass
+    expect: rows
+    order: ordered
+    comment: exactly one extension dependency recorded
+  - sql: |
+      ALTER INDEX dep_t_v NO DEPENDS ON EXTENSION plpgsql
+    expect: ok
+  - sql: |
+      SELECT count(*) AS ext_deps FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = 'dep_t_v'::regclass AND d.refclassid = 'pg_extension'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER INDEX IF EXISTS dep_t_v DEPENDS ON EXTENSION plpgsql
+    expect: error
+    sqlstate: "42601"
+    comment: the grammar does not allow IF EXISTS with DEPENDS ON EXTENSION

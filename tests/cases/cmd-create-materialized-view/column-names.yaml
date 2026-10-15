@@ -1,0 +1,47 @@
+id: cmd-create-materialized-view.column-names
+title: Column list renames output columns; omitted names come from the query output
+family: cmd-create-materialized-view
+tier: core
+feature_ids: [create-materialized-view, column-names]
+required_capabilities: [create-table, insert, select, create-materialized-view]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_materialized_view.sgml#sql-creatematerializedview (column_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, label text);
+  INSERT INTO t VALUES (1, 'x');
+steps:
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_named (alpha, beta) AS SELECT id, label FROM t
+    expect: ok
+  - session: a
+    sql: |
+      SELECT attnum, attname FROM pg_attribute WHERE attrelid = 'mv_named'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      SELECT alpha, beta FROM mv_named
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_partial (first_col) AS SELECT id, label FROM t
+    expect: ok
+    comment: fewer names than columns is accepted; remaining columns keep query names
+  - session: a
+    sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'mv_partial'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered
+  - session: a
+    sql: |
+      CREATE MATERIALIZED VIEW mv_noname AS SELECT id AS k, label FROM t
+    expect: ok
+  - session: a
+    sql: |
+      SELECT attname FROM pg_attribute WHERE attrelid = 'mv_noname'::regclass AND attnum > 0 ORDER BY attnum
+    expect: rows
+    order: ordered

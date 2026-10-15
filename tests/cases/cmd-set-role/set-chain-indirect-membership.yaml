@@ -1,0 +1,55 @@
+# SET ROLE may use an indirect chain of memberships, provided every link in the chain carries the SET option.
+id: cmd-set-role.set-chain-indirect-membership
+title: SET ROLE succeeds through a chain of SET-option memberships and fails when one link lacks SET
+family: cmd-set-role
+tier: extended
+feature_ids: [set-role, role-membership, set-option, indirect-membership, errors]
+required_capabilities: [roles, set-role, grant, session-authorization, errors, select]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/set_role.sgml#description (SET option, either directly or indirectly via a chain of memberships)"
+sessions: [a]
+setup: |
+  CREATE ROLE sr_ch_mem LOGIN;
+  CREATE ROLE sr_ch_mid;
+  CREATE ROLE sr_ch_top;
+  GRANT sr_ch_top TO sr_ch_mid WITH INHERIT TRUE, SET TRUE;
+  GRANT sr_ch_mid TO sr_ch_mem WITH INHERIT TRUE, SET TRUE
+steps:
+  - sql: |
+      SET SESSION AUTHORIZATION sr_ch_mem
+    expect: ok
+  - sql: |
+      SET ROLE sr_ch_top
+    expect: ok
+    comment: reachable through sr_ch_mid, both links carry SET
+  - sql: |
+      SELECT current_user = 'sr_ch_top' AS via_chain
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      REVOKE sr_ch_mid FROM sr_ch_mem
+    expect: ok
+  - sql: |
+      GRANT sr_ch_mid TO sr_ch_mem WITH INHERIT TRUE, SET FALSE
+    expect: ok
+  - sql: |
+      SET SESSION AUTHORIZATION sr_ch_mem
+    expect: ok
+  - sql: |
+      SET ROLE sr_ch_top
+    expect: error
+    sqlstate: "42501"
+    comment: the first link no longer carries the SET option, so the chain is broken
+  - sql: |
+      RESET SESSION AUTHORIZATION
+    expect: ok
+  - sql: |
+      DROP ROLE sr_ch_mem, sr_ch_mid, sr_ch_top
+    expect: ok

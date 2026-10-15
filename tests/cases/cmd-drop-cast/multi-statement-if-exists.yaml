@@ -1,0 +1,28 @@
+# Several DROP CAST statements in one Simple Query message: the first drops the cast, repeated IF EXISTS statements only issue notices.
+id: cmd-drop-cast.multi-statement-if-exists
+title: "Repeated DROP CAST IF EXISTS statements in one query succeed after the first drop"
+family: cmd-drop-cast
+tier: core
+feature_ids: [drop-cast, if-exists, create-cast]
+required_capabilities: [create-type, create-cast, create-function-sql, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/drop_cast.sgml#sql-dropcast-parameters (IF EXISTS)"
+sessions: [a]
+setup: |
+  CREATE TYPE ms_m AS (v int);
+  CREATE FUNCTION ms_f(int4) RETURNS ms_m LANGUAGE sql AS $$ SELECT ROW($1)::ms_m $$;
+  CREATE CAST (int4 AS ms_m) WITH FUNCTION ms_f(int4);
+steps:
+  - sql: |
+      DROP CAST (int4 AS ms_m); DROP CAST IF EXISTS (int4 AS ms_m); DROP CAST IF EXISTS (int4 AS ms_m)
+    expect: ok
+    comment: first statement drops; the next two are skipped with notices
+  - sql: |
+      SELECT count(*) AS n FROM pg_cast WHERE castsource = 'int4'::regtype AND casttarget = 'ms_m'::regtype
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT CAST(7 AS ms_m)
+    expect: error
+    sqlstate: "42846"

@@ -1,0 +1,41 @@
+# Read Committed: if the first updater rolls back, the waiting updater proceeds against the originally found row.
+id: doc-transaction-iso.rc-waiter-proceeds-after-first-updater-rollback
+title: READ COMMITTED waiter applies its update to the original row after the holder rolls back
+family: doc-transaction-iso
+tier: core
+feature_ids: [transactions, read-committed, row-locks, update]
+required_capabilities: [create-table, insert, select, update, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#xact-read-committed"
+sessions: [a, b]
+setup: |
+  CREATE TABLE doc_acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO doc_acct VALUES (1, 100);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE doc_acct SET balance = balance + 10 WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      UPDATE doc_acct SET balance = balance * 2 WHERE id = 1
+    async: true
+    expect_blocked: true
+  - session: a
+    sql: |
+      ROLLBACK
+    expect: ok
+  - session: b
+    wait: true
+    expect: ok
+    comment: waiter proceeds from the original 100, giving 200
+  - session: b
+    sql: |
+      SELECT id, balance FROM doc_acct ORDER BY id
+    expect: rows
+    order: ordered

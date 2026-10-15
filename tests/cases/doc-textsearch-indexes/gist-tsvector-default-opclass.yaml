@@ -1,0 +1,45 @@
+# GiST on a tsvector column: default and explicit tsvector_ops both work; NULL rows are never matched.
+id: doc-textsearch-indexes.gist-tsvector-default-opclass
+title: GiST index on tsvector with default and explicit tsvector_ops
+family: doc-textsearch-indexes
+tier: core
+feature_ids: [gist-index, tsvector-match, tsvector-ops, null-semantics]
+required_capabilities: [create-table, insert, select, create-index, gist-index, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-indexes (CREATE INDEX ... USING GIST (column))"
+steps:
+  - sql: |
+      CREATE TABLE docs (id int4 PRIMARY KEY, tsv tsvector)
+    expect: ok
+  - sql: |
+      INSERT INTO docs VALUES
+        (1, to_tsvector('english', 'quick brown fox')),
+        (2, to_tsvector('english', 'lazy dogs')),
+        (3, NULL),
+        (4, to_tsvector('english', 'fox and dog'))
+    expect: ok
+  - sql: |
+      CREATE INDEX docs_gist_default ON docs USING GIST (tsv)
+    expect: ok
+    comment: no opclass name means the default tsvector opclass
+  - sql: |
+      CREATE INDEX docs_gist_explicit ON docs USING GIST (tsv tsvector_ops)
+    expect: ok
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'fox') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'fox & dog') ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM docs WHERE tsv @@ to_tsquery('english', 'cat') ORDER BY id
+    expect: rows
+    order: ordered
+    comment: no match returns zero rows
+  - sql: |
+      SELECT indexname FROM pg_indexes WHERE tablename = 'docs' ORDER BY indexname
+    expect: rows
+    order: ordered

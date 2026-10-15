@@ -1,0 +1,42 @@
+# DEFAULT and = default arguments, named-argument calls that use defaults, the ambiguity error that
+# appears when a default overload collides with a shorter one, and the rule that defaults must trail.
+id: cmd-create-function.default-args-and-ambiguity
+title: Parameter defaults fill trailing arguments; defaults must be trailing; default overloads can be ambiguous
+family: cmd-create-function
+tier: core
+feature_ids: [create-function, default-arguments, named-arguments, overloading]
+required_capabilities: [create-function, sql-functions, select]
+provenance:
+  source: pg-docs
+  ref: "ref/create_function.sgml#sql-createfunction-overloading (foo(int, int default 42)); Parameters default_expr"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE FUNCTION d2(a int, b int DEFAULT 1, c int = 2) RETURNS int LANGUAGE sql AS 'select a * 100 + b * 10 + c'
+    expect: ok
+    comment: DEFAULT and = are both accepted syntax for defaults
+  - sql: |
+      SELECT d2(5) AS only_a, d2(5, 6) AS a_b, d2(5, c => 9) AS skip_b, d2(a => 1, c => 9) AS named_only
+    expect: rows
+    comment: 512, 562, 519, 119
+  - sql: |
+      CREATE FUNCTION d3(int, int default 1, int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: error
+    sqlstate: "42P13"
+    comment: an input parameter after one with a default must also have a default
+  - sql: |
+      CREATE FUNCTION amb(int) RETURNS int LANGUAGE sql AS 'select $1'
+    expect: ok
+  - sql: |
+      CREATE FUNCTION amb(int, int default 42) RETURNS int LANGUAGE sql AS 'select $1 + $2'
+    expect: ok
+    comment: distinct argument-type lists, so no creation-time conflict
+  - sql: |
+      SELECT amb(10)
+    expect: error
+    sqlstate: "42725"
+    comment: amb(10) matches both overloads equally, so the call is ambiguous
+  - sql: |
+      SELECT amb(10, 1) AS two_args
+    expect: rows
+    comment: "11"

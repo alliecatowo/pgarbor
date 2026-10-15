@@ -1,0 +1,51 @@
+# AT TIME ZONE / AT LOCAL and the timezone() function forms, per the documented conversion table.
+id: doc-functions-datetime.at-time-zone-variants
+title: AT TIME ZONE and AT LOCAL convert timestamp, timestamptz and timetz; timezone() matches the operator
+family: doc-functions-datetime
+tier: extended
+feature_ids: [at-time-zone, at-local, timezone-function, timetz-zone-conversion]
+required_capabilities: [select, timestamp, guc]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/func.sgml#functions-datetime-zoneconvert (AT TIME ZONE and AT LOCAL Variants table)"
+sessions: [a]
+steps:
+  - sql: |
+      SET TIME ZONE 'UTC'
+    expect: ok
+  - sql: |
+      SELECT timestamp '2001-02-16 20:38:40' AT TIME ZONE 'America/Denver' AS doc_ts_to_tz,
+             timestamp with time zone '2001-02-16 20:38:40-05' AT TIME ZONE 'America/Denver' AS doc_tz_to_ts,
+             time with time zone '05:34:17-05' AT TIME ZONE 'UTC' AS doc_timetz
+    expect: rows
+    order: multiset
+    comment: documented 2001-02-17 03:38:40+00, 2001-02-16 18:38:40, 10:34:17+00
+  - sql: |
+      SELECT timestamp '2001-02-16 20:38:40' AT TIME ZONE INTERVAL '-08:00' AS iv_zone,
+             timestamp with time zone '2001-02-16 20:38:40-05' AT TIME ZONE INTERVAL '-08:00' AS iv_zone_tz
+    expect: rows
+    order: multiset
+    comment: the zone may also be an interval offset
+  - sql: |
+      SELECT timezone('America/Denver', timestamp '2001-02-16 20:38:40') AS fn_ts,
+             timezone('America/Denver', timestamp with time zone '2001-02-16 20:38:40-05') AS fn_tstz,
+             timezone('UTC', time with time zone '05:34:17-05') AS fn_timetz,
+             timezone('America/Denver', timestamp '2001-02-16 20:38:40') = (timestamp '2001-02-16 20:38:40' AT TIME ZONE 'America/Denver') AS same_as_op
+    expect: rows
+    order: multiset
+    comment: the function forms are equivalent to the AT TIME ZONE operator
+  - sql: |
+      SET TIME ZONE 'America/Denver'
+    expect: ok
+  - sql: |
+      SELECT timestamp '2001-02-16 20:38:40' AT LOCAL AS local_ts,
+             timestamp with time zone '2001-02-16 20:38:40-05' AT LOCAL AS local_tstz,
+             time with time zone '05:34:17-05' AT LOCAL AS local_timetz
+    expect: rows
+    order: multiset
+    comment: AT LOCAL uses the session TimeZone; with America/Denver, 2001-02-16 20:38:40 is -07 and the timestamptz input is 18:38:40 local
+  - sql: |
+      SELECT interval '1 hour' AT TIME ZONE 'UTC' AS iv
+    expect: error
+    sqlstate: "42883"
+    comment: AT TIME ZONE is not defined for interval values

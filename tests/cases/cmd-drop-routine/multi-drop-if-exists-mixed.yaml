@@ -1,0 +1,27 @@
+# With IF EXISTS, each missing routine in a multi-routine list is skipped with its own notice.
+id: cmd-drop-routine.multi-drop-if-exists-mixed
+title: "DROP ROUTINE IF EXISTS drops present routines and skips missing ones in one command"
+family: cmd-drop-routine
+tier: core
+feature_ids: [drop-routine, if-exists, multiple-objects, notices]
+required_capabilities: [create-function, errors, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/drop_routine.sgml#sql-droproutine (IF EXISTS, name [, ...])"
+sessions: [a]
+setup: |
+  CREATE FUNCTION mx_1(integer) RETURNS int LANGUAGE sql AS 'SELECT 1';
+  CREATE FUNCTION mx_2(text) RETURNS int LANGUAGE sql AS 'SELECT 2';
+steps:
+  - sql: |
+      DROP ROUTINE IF EXISTS mx_1(integer), mx_nosuch(integer), mx_2(text)
+    expect: ok
+    comment: the missing mx_nosuch produces a notice and the other two are dropped
+  - sql: |
+      SELECT count(*) AS n FROM pg_proc WHERE proname IN ('mx_1', 'mx_2')
+    expect: rows
+    order: multiset
+  - sql: |
+      DROP ROUTINE IF EXISTS mx_1(integer)
+    expect: ok
+    comment: already gone, so only a notice

@@ -1,0 +1,33 @@
+# TRUNCATE on the partitioned parent empties all partitions. TRUNCATE ONLY on the parent is rejected
+# because the parent has no storage of its own.
+id: doc-ddl-partitioning.truncate-parent-and-only
+title: TRUNCATE on a partitioned table cascades to partitions, TRUNCATE ONLY is rejected
+family: doc-ddl-partitioning
+tier: core
+feature_ids: [partitioning, truncate, partition-maintenance]
+required_capabilities: [create-table, insert, select, truncate]
+provenance:
+  source: pg-docs
+  ref: "ddl.sgml#ddl-partitioning-limitations ('attempts to use TRUNCATE ONLY on a partitioned table will always return an error')"
+sessions: [a]
+setup: |
+  CREATE TABLE tt (id int) PARTITION BY RANGE (id);
+  CREATE TABLE tt_1 PARTITION OF tt FOR VALUES FROM (0) TO (10);
+  CREATE TABLE tt_2 PARTITION OF tt FOR VALUES FROM (10) TO (20);
+  INSERT INTO tt VALUES (1), (15);
+steps:
+  - sql: |
+      TRUNCATE ONLY tt
+    expect: error
+    sqlstate: "42809"
+  - sql: |
+      SELECT count(*) FROM tt
+    expect: rows
+    order: ordered
+  - sql: |
+      TRUNCATE tt
+    expect: ok
+  - sql: |
+      SELECT count(*) AS total, (SELECT count(*) FROM tt_1) AS p1, (SELECT count(*) FROM tt_2) AS p2 FROM tt
+    expect: rows
+    order: ordered

@@ -1,0 +1,39 @@
+# ENABLE REPLICA fires only when session_replication_role = replica.
+id: cmd-alter-event-trigger.enable-replica-fires-only-in-replica-role
+title: ENABLE REPLICA fires only under session_replication_role = replica
+family: cmd-alter-event-trigger
+tier: core
+feature_ids: [alter-event-trigger, event-triggers]
+required_capabilities: [event-triggers, plpgsql, create-function, create-table, guc]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_event_trigger.sgml#sql-altereventtrigger"
+setup: |
+  CREATE FUNCTION aet_block() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked by aet_guard' USING ERRCODE = 'P0001'; END $$;
+  CREATE EVENT TRIGGER aet_guard ON ddl_command_start WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION aet_block();
+steps:
+  - sql: |
+      ALTER EVENT TRIGGER aet_guard ENABLE REPLICA
+    expect: ok
+  - sql: |
+      SELECT evtname, CASE evtenabled WHEN 'O' THEN 'origin' WHEN 'D' THEN 'disabled' WHEN 'R' THEN 'replica' WHEN 'A' THEN 'always' END AS mode FROM pg_event_trigger ORDER BY evtname
+    expect: rows
+    order: ordered
+    comment: evtenabled is R (replica)
+  - sql: |
+      CREATE TABLE t3 (a int4)
+    expect: ok
+    comment: origin role, so the replica-only trigger does not fire
+  - sql: |
+      SET session_replication_role = replica
+    expect: ok
+  - sql: |
+      CREATE TABLE t4 (a int4)
+    expect: error
+    sqlstate: P0001
+  - sql: |
+      RESET session_replication_role
+    expect: ok
+  - sql: |
+      SELECT to_regclass('t3') IS NOT NULL AS t3, to_regclass('t4') IS NULL AS t4_absent
+    expect: rows

@@ -1,0 +1,46 @@
+# currval and lastval are errors until nextval (or a true setval) has run in the session; setval sets currval, and lastval tracks only nextval.
+id: doc-functions-sequence.currval-lastval-session
+title: currval and lastval error before use in a session, and setval sets currval but not lastval
+family: doc-functions-sequence
+tier: core
+feature_ids: [currval, lastval, setval, nextval, errors]
+required_capabilities: [sequences, select, errors]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-sequence (currval, lastval)"
+sessions: [a]
+setup: |
+  CREATE SEQUENCE s_l1;
+  CREATE SEQUENCE s_l2;
+steps:
+  - sql: |
+      SELECT currval('s_l1')
+    expect: error
+    sqlstate: "55000"
+    comment: nextval has not yet been called for this sequence in this session
+  - sql: |
+      SELECT lastval()
+    expect: error
+    sqlstate: "55000"
+    comment: lastval is an error until nextval has been called in the session
+  - sql: |
+      SELECT nextval('s_l1') AS v
+    expect: rows
+  - sql: |
+      SELECT setval('s_l2', 42) AS v
+    expect: rows
+  - sql: |
+      SELECT lastval() AS last, currval('s_l2') AS cur
+    expect: rows
+    comment: setval sets the currval of s_l2 but lastval still refers to the last nextval
+  - sql: |
+      SELECT nextval('s_l2') AS v
+    expect: rows
+  - sql: |
+      SELECT lastval() AS v
+    expect: rows
+    comment: lastval now refers to the most recent nextval, on s_l2
+  - sql: |
+      SELECT currval('s_l1') AS v
+    expect: rows
+    comment: currval of the first sequence keeps its own last value

@@ -1,0 +1,28 @@
+# NAMEDATALEN-1 (63) is the longest operator name. A 63-character name is accepted; a 64-character name fails with "operator too long".
+id: cmd-create-operator.name-length-boundary
+title: "Operator names of 63 characters are accepted and 64 characters are rejected as too long"
+family: cmd-create-operator
+tier: core
+feature_ids: [create-operator, operator-names, errors]
+required_capabilities: [create-operator, create-function-sql, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_operator.sgml#description (NAMEDATALEN-1 limit)"
+sessions: [a]
+setup: |
+  CREATE FUNCTION cco_neg8c(int8) RETURNS int8 LANGUAGE sql IMMUTABLE AS $$ SELECT -$1 $$;
+steps:
+  - sql: |
+      CREATE OPERATOR ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ (RIGHTARG = int8, PROCEDURE = cco_neg8c)
+    expect: ok
+    comment: 63 tildes
+  - sql: |
+      SELECT length(oprname) AS len, oprname = repeat('~', 63) AS exact_match
+      FROM pg_operator WHERE oprname = repeat('~', 63)
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE OPERATOR ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ (RIGHTARG = int8, PROCEDURE = cco_neg8c)
+    expect: error
+    sqlstate: "42601"
+    comment: 64 tildes is one character too long

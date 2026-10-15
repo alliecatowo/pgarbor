@@ -1,0 +1,30 @@
+# WHERE CURRENT OF deletes the row most recently fetched from a cursor; a later FETCH continues after it.
+id: cmd-delete.where-current-of-cursor
+title: DELETE WHERE CURRENT OF deletes the fetched cursor row
+family: cmd-delete
+tier: core
+feature_ids: [delete, cursors, where-current-of, declare, fetch, create-table, insert, select, transactions]
+required_capabilities: [create-table, insert, select, delete, cursors, transactions]
+provenance:
+  source: pg-docs
+  ref: "ref/delete.sgml#synopsis (WHERE CURRENT OF); ref/delete.sgml#parameters (cursor_name); ref/delete.sgml#examples (DELETE ... WHERE CURRENT OF c_tasks)"
+sessions: [a]
+setup: |
+  CREATE TABLE tasks (id int4 PRIMARY KEY, status text);
+  INSERT INTO tasks VALUES (1, 'OPEN'), (2, 'DONE'), (3, 'OPEN'), (4, 'DONE');
+steps:
+  - sql: |
+      BEGIN;
+      DECLARE c_tasks CURSOR FOR SELECT id, status FROM tasks ORDER BY id;
+      FETCH 2 FROM c_tasks;
+      DELETE FROM tasks WHERE CURRENT OF c_tasks;
+      FETCH 1 FROM c_tasks
+    expect: any
+    comment: fetches rows 1 and 2, deletes row 2 (the most recently fetched), then the next fetch returns row 3
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT id, status FROM tasks ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,36 @@
+id: cmd-declare.insensitive-ignores-same-tx-update
+title: An INSENSITIVE cursor does not show changes made by the same transaction after DECLARE
+family: cmd-declare
+tier: core
+feature_ids: [declare-cursor, cursor-sensitivity, insensitive, update]
+required_capabilities: [create-table, insert, select, update, transactions, cursors]
+provenance:
+  source: pg-docs
+  ref: "ref/declare.sgml#sql-declare (Parameters: ASENSITIVE | INSENSITIVE; Compatibility)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, name text);
+  INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c');
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DECLARE c INSENSITIVE CURSOR FOR SELECT id, name FROM t ORDER BY id
+    expect: ok
+  - sql: |
+      UPDATE t SET name = 'changed' WHERE id = 2
+    expect: ok
+  - sql: |
+      FETCH ALL FROM c
+    expect: rows
+    order: ordered
+    comment: the cursor still shows the old value 'b'
+  - sql: |
+      SELECT id, name FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the table itself shows the new value
+  - sql: |
+      ROLLBACK
+    expect: ok

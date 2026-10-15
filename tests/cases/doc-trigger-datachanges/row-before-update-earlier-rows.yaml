@@ -1,0 +1,35 @@
+# Row-level BEFORE UPDATE sees the effects of rows already updated by the same command; the visit order is not
+# predictable, so the multiset of observed totals is compared.
+id: doc-trigger-datachanges.row-before-update-earlier-rows
+title: Row-level BEFORE UPDATE observes earlier row changes of the same command in unpredictable order
+family: doc-trigger-datachanges
+tier: core
+feature_ids: [triggers, row-level-triggers, plpgsql, update, visibility]
+required_capabilities: [create-table, insert, select, update, triggers, plpgsql, create-function]
+provenance:
+  source: pg-docs
+  ref: "trigger.sgml#trigger-datachanges (ordering of change events is not in general predictable)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int PRIMARY KEY, v int NOT NULL);
+  CREATE TABLE lg (seq serial, tag text, n int);
+  INSERT INTO t VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+  CREATE FUNCTION rb_upd() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    INSERT INTO lg(tag, n) VALUES ('rb_upd', (SELECT sum(v) FROM t));
+    RETURN NEW;
+  END $$;
+  CREATE TRIGGER trg_rb_upd BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION rb_upd();
+steps:
+  - sql: |
+      UPDATE t SET v = v + 10 WHERE id IN (1, 2, 3)
+    expect: ok
+  - sql: |
+      SELECT n FROM lg WHERE tag = 'rb_upd'
+    expect: rows
+    order: multiset
+    comment: the three firings see the total before, after one, and after two earlier row updates
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered

@@ -1,0 +1,39 @@
+# Read/write conflict: a reader cannot see another transaction's uncommitted write, and sees it after commit.
+id: doc-applevel-consistency.read-committed-uncommitted-invisible
+title: READ COMMITTED reader does not see uncommitted update, sees it after commit
+family: doc-applevel-consistency
+tier: core
+feature_ids: [read-committed, mvcc-visibility, read-write-conflict]
+required_capabilities: [create-table, insert, select, update, transactions, isolation-levels, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#applevel-consistency"
+sessions: [a, b]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, balance int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 100), (2, 200);
+steps:
+  - session: a
+    sql: |
+      BEGIN ISOLATION LEVEL READ COMMITTED
+    expect: ok
+  - session: a
+    sql: |
+      UPDATE acct SET balance = 500 WHERE id = 1
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the reader appears to run first; it must not see the uncommitted 500
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    sql: |
+      SELECT id, balance FROM acct ORDER BY id
+    expect: rows
+    order: ordered
+    comment: after commit the new value is visible

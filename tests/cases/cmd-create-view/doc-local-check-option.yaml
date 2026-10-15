@@ -1,0 +1,33 @@
+# Documented example: LOCAL CHECK OPTION checks only the view's own WHERE, not the base view's.
+id: cmd-create-view.doc-local-check-option
+title: LOCAL check option enforces only the conditions defined on the view itself
+family: cmd-create-view
+tier: core
+feature_ids: [create-view, check-option, where, insert]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/create_view.sgml#sql-createview-examples (Create a view with LOCAL CHECK OPTION)"
+sessions: [a]
+setup: |
+  CREATE TABLE films (id int4 PRIMARY KEY, title text, kind text, classification text);
+  INSERT INTO films VALUES (1, 'A', 'Comedy', 'U'), (2, 'B', 'Comedy', 'PG'), (3, 'C', 'Drama', 'U'), (4, 'D', 'Comedy', 'R');
+  CREATE VIEW comedies AS SELECT * FROM films WHERE kind = 'Comedy';
+steps:
+  - sql: |
+      CREATE VIEW universal_comedies AS SELECT * FROM comedies WHERE classification = 'U' WITH LOCAL CHECK OPTION
+    expect: ok
+  - sql: |
+      INSERT INTO universal_comedies (id, title, kind, classification) VALUES (10, 'L', 'Drama', 'U')
+    expect: ok
+    comment: kind is not checked because the comedies condition is not part of the local check
+  - sql: |
+      SELECT id, kind, classification FROM universal_comedies ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the inserted Drama row is invisible through the view
+  - sql: |
+      INSERT INTO universal_comedies (id, title, kind, classification) VALUES (11, 'M', 'Comedy', 'R')
+    expect: error
+    sqlstate: "44000"
+    comment: classification R violates the view's own condition

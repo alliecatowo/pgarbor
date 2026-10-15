@@ -1,0 +1,33 @@
+# check_option accepts local/cascaded case-insensitively; other values are 22023; a non-auto-updatable view is 0A000.
+id: cmd-alter-view.check-option-value-and-non-updatable
+title: "ALTER VIEW check_option rejects invalid values and non-updatable views"
+family: cmd-alter-view
+tier: core
+feature_ids: [alter-view, check-option, view-options, error-handling]
+required_capabilities: [create-table, select, create-view, alter-view, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_view.sgml#sql-alterview (check_option enum: must be local or cascaded)"
+sessions: [a]
+setup: |
+  CREATE TABLE av_ck (id int4, v int4);
+  CREATE VIEW av_ckv AS SELECT id, v FROM av_ck WHERE v > 0;
+  CREATE VIEW av_ckagg AS SELECT count(*) AS n FROM av_ck;
+steps:
+  - sql: |
+      ALTER VIEW av_ckv SET (check_option = 'foo')
+    expect: error
+    sqlstate: "22023"
+    comment: not a valid enum value
+  - sql: |
+      ALTER VIEW av_ckv SET (check_option = LOCAL)
+    expect: ok
+  - sql: |
+      SELECT reloptions FROM pg_class WHERE oid = 'av_ckv'::regclass
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER VIEW av_ckagg SET (check_option = local)
+    expect: error
+    sqlstate: "0A000"
+    comment: WITH CHECK OPTION is supported only on automatically updatable views

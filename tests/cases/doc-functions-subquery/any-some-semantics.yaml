@@ -1,0 +1,37 @@
+# ANY and SOME (synonyms), IN equivalence to = ANY, NULL results, empty subqueries and arrays.
+id: doc-functions-subquery.any-some-semantics
+title: ANY and SOME return true, false or NULL per the documented rules, and IN equals = ANY
+family: doc-functions-subquery
+tier: core
+feature_ids: [any-subquery, some-subquery, in-subquery, null-semantics]
+required_capabilities: [create-table, insert, select, subquery, arrays]
+provenance:
+  source: pg-docs
+  ref: "func.sgml#functions-subquery (ANY/SOME)"
+sessions: [a]
+setup: |
+  CREATE TABLE tab1 (col1 int4, col2 int4);
+  CREATE TABLE tab2 (col2 int4);
+  INSERT INTO tab1 VALUES (1, 10), (2, 20), (3, NULL), (4, 40);
+  INSERT INTO tab2 VALUES (10), (10), (NULL);
+steps:
+  - sql: |
+      SELECT 5 > ANY (SELECT col1 FROM tab1) AS a1, 0 > ANY (SELECT col1 FROM tab1) AS a2, 5 > ANY (SELECT col1 FROM tab1 WHERE false) AS a3, 10 > ANY (SELECT col2 FROM tab1) AS n3
+    expect: rows
+    comment: empty subquery gives false; a NULL-only failure gives NULL
+  - sql: |
+      SELECT 1 = SOME (SELECT col1 FROM tab1) AS s, 1 IN (SELECT 1 UNION ALL SELECT NULL) AS u, 2 IN (SELECT 1 UNION ALL SELECT NULL) AS u2, 1 IN (SELECT col1 FROM tab1 ORDER BY col1 DESC LIMIT 1) AS lim
+    expect: rows
+    comment: SOME is a synonym for ANY and IN is = ANY; a non-match with a NULL row gives NULL
+  - sql: |
+      SELECT 1 = ANY ('{1,NULL}'::int[]) AS arr_any, 5 = ANY (ARRAY[]::int[]) AS e_any, NULL::int = ANY (SELECT col1 FROM tab1 WHERE false) AS nn
+    expect: rows
+    comment: the array form follows the same rules; a NULL left operand over an empty set is false
+  - sql: |
+      SELECT 'a' = ANY (SELECT 'a'::text) AS txt_any, 'a' LIKE ANY (SELECT 'b%' UNION ALL SELECT 'a%') AS like_any
+    expect: rows
+  - sql: |
+      SELECT col1 FROM tab1 WHERE col2 = ANY (SELECT col2 FROM tab2) ORDER BY col1
+    expect: rows
+    order: ordered
+    comment: only the row with a definite match passes the filter; NULL comparisons are dropped

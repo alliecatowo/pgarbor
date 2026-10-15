@@ -1,0 +1,38 @@
+# LOCK TABLE without a mode takes ACCESS EXCLUSIVE, which blocks even plain SELECT.
+id: doc-explicit-locking.access-exclusive-blocks-select
+title: Default LOCK TABLE mode is ACCESS EXCLUSIVE and blocks a concurrent SELECT
+family: doc-explicit-locking
+tier: core
+feature_ids: [lock-table, lock-modes, transactions, multi-session, select]
+required_capabilities: [create-table, insert, select, lock-table, transactions, multi-session]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/mvcc.sgml#locking-tables (ACCESS EXCLUSIVE; default mode of LOCK TABLE)"
+sessions: [a, b]
+setup: |
+  CREATE TABLE t (id int4 PRIMARY KEY, v int4 NOT NULL);
+  INSERT INTO t VALUES (1, 10), (2, 20);
+steps:
+  - session: a
+    sql: |
+      BEGIN
+    expect: ok
+  - session: a
+    sql: |
+      LOCK TABLE t
+    expect: ok
+    comment: no mode given, so ACCESS EXCLUSIVE
+  - session: b
+    sql: |
+      SELECT id, v FROM t ORDER BY id
+    async: true
+    expect_blocked: true
+    comment: only ACCESS EXCLUSIVE blocks a plain SELECT
+  - session: a
+    sql: |
+      COMMIT
+    expect: ok
+  - session: b
+    wait: true
+    expect: rows
+    order: ordered

@@ -1,0 +1,46 @@
+# DROP TABLE is transactional: rolled back, the table and its rows return; committed, they are gone.
+id: cmd-drop-table.rollback-restores-table
+title: DROP TABLE inside a rolled back transaction leaves the table and rows intact
+family: cmd-drop-table
+tier: core
+feature_ids: [drop-table, transactions]
+required_capabilities: [create-table, insert, select, drop-table, transactions, catalog-introspection]
+provenance:
+  source: hand
+  ref: "ref/drop_table.sgml#sql-droptable (drop of table inside a transaction block)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4);
+  INSERT INTO t VALUES (1), (2);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      SELECT to_regclass('t') IS NULL AS gone_in_txn
+    expect: rows
+    order: ordered
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: rollback restored the table with both rows
+  - sql: |
+      BEGIN
+    expect: ok
+  - sql: |
+      DROP TABLE t
+    expect: ok
+  - sql: |
+      COMMIT
+    expect: ok
+  - sql: |
+      SELECT to_regclass('t') IS NULL AS gone_after_commit
+    expect: rows
+    order: ordered

@@ -1,0 +1,22 @@
+# A two-dictionary chain: a stop-word dictionary that rejects non-stop words is followed by english_stem.
+id: doc-textsearch-debugging.ts-debug-dictionary-chain
+title: ts_debug shows the dictionary chain and which dictionary recognized each token
+family: doc-textsearch-debugging
+tier: core
+feature_ids: [ts-debug, dictionary-chain, stop-words, simple-template, accept-option]
+required_capabilities: [create-table, select, text-search]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/textsearch.sgml#textsearch-configuration-testing"
+setup: |
+  CREATE TEXT SEARCH DICTIONARY my_stop (TEMPLATE = simple, STOPWORDS = english, ACCEPT = false);
+  CREATE TEXT SEARCH CONFIGURATION public.stopchain ( COPY = pg_catalog.english );
+  ALTER TEXT SEARCH CONFIGURATION public.stopchain ALTER MAPPING FOR asciiword WITH my_stop, english_stem;
+steps:
+  - sql: |
+      SELECT alias, token, dictionaries, dictionary, lexemes
+      FROM ts_debug('public.stopchain', 'The Brightest supernovaes') WITH ORDINALITY AS t(alias, description, token, dictionaries, dictionary, lexemes, n)
+      ORDER BY n
+    expect: rows
+    order: ordered
+    comment: the stop word is caught by my_stop; the non-stop words fall through to english_stem

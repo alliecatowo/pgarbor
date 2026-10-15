@@ -1,0 +1,37 @@
+# Documented: INCLUDE can also be written in UNIQUE and PRIMARY KEY constraints.
+id: doc-indexes-index-only-scans.include-in-unique-and-pk-constraints
+title: INCLUDE clause in UNIQUE and PRIMARY KEY constraints enforces uniqueness on the key only
+family: doc-indexes-index-only-scans
+tier: core
+feature_ids: [covering-index, include-columns, unique-constraint, primary-key]
+required_capabilities: [create-table, insert, select, unique-constraints, primary-key, constraints, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-index-only-scans (An INCLUDE clause can also be written in UNIQUE and PRIMARY KEY constraints)"
+sessions: [a]
+setup: |
+  CREATE TABLE t2 (x int, y text, UNIQUE (x) INCLUDE (y));
+  CREATE TABLE t3 (x int, y text, PRIMARY KEY (x) INCLUDE (y));
+steps:
+  - sql: |
+      SELECT conrelid::regclass::text AS tbl, contype, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid IN ('t2'::regclass, 't3'::regclass) AND contype IN ('u', 'p') ORDER BY 1
+    expect: rows
+    order: ordered
+  - sql: |
+      INSERT INTO t2 VALUES (1, 'a'), (2, 'a')
+    expect: ok
+  - sql: |
+      INSERT INTO t2 VALUES (1, 'z')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      INSERT INTO t3 VALUES (1, 'a')
+    expect: ok
+  - sql: |
+      INSERT INTO t3 VALUES (1, 'b')
+    expect: error
+    sqlstate: "23505"
+  - sql: |
+      SELECT 't2' AS tbl, x, y FROM t2 ORDER BY x
+    expect: rows
+    order: ordered

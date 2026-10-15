@@ -1,0 +1,47 @@
+# COMMENT ON AGGREGATE takes the aggregate's argument types (ordered-set and * forms included); the input-mode and type alias spellings name the same aggregate, and unknown signatures are rejected.
+id: cmd-comment.aggregate-signature
+title: COMMENT ON AGGREGATE accepts (*), ORDER BY and type-alias signatures and rejects unknown ones
+family: cmd-comment
+tier: core
+feature_ids: [comment, comment-aggregate, comment-aggregate-star, comment-ordered-set]
+required_capabilities: [comment, create-aggregate, aggregates, catalog-introspection, select, errors]
+provenance:
+  source: pg-docs
+  ref: "ref/comment.sgml#sql-comment-synopsis (aggregate_signature); ref/comment.sgml#sql-comment-examples (AGGREGATE examples)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE AGGREGATE cmt_agg(double precision) (sfunc = float8pl, stype = float8)
+    expect: ok
+  - sql: |
+      COMMENT ON AGGREGATE cmt_agg(double precision) IS 'Computes sample variance'
+    expect: ok
+  - sql: |
+      COMMENT ON AGGREGATE cmt_agg(float8) IS 'float8 alias replaces the comment'
+    expect: ok
+  - sql: |
+      COMMENT ON AGGREGATE cmt_agg(IN double precision) IS 'IN is the default mode'
+    expect: ok
+  - sql: |
+      COMMENT ON AGGREGATE count(*) IS 'Counts rows'
+    expect: ok
+  - sql: |
+      COMMENT ON AGGREGATE percentile_cont(float8 ORDER BY float8) IS 'ordered-set aggregate'
+    expect: ok
+  - sql: |
+      SELECT obj_description('cmt_agg(float8)'::regprocedure, 'pg_proc') AS agg,
+             (SELECT obj_description(oid, 'pg_proc') FROM pg_proc WHERE proname = 'count' AND pronargs = 0) AS count_star,
+             obj_description('percentile_cont(float8,float8)'::regprocedure, 'pg_proc') AS ordered_set
+    expect: rows
+  - sql: |
+      COMMENT ON AGGREGATE cmt_agg(*) IS 'star form does not match a typed aggregate'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      COMMENT ON AGGREGATE sum(*) IS 'sum takes a typed argument'
+    expect: error
+    sqlstate: "42883"
+  - sql: |
+      COMMENT ON AGGREGATE cmt_agg(int4) IS 'no integer overload'
+    expect: error
+    sqlstate: "42883"

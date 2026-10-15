@@ -1,0 +1,60 @@
+# A policy only covers the commands it names; with RLS on, commands with no applicable policy see or affect no rows, and INSERT is refused.
+id: cmd-create-policy.command-scoped-default-deny
+title: "Policy for one command gives no access to other commands under RLS default deny"
+family: cmd-create-policy
+tier: core
+feature_ids: [create-policy, policies, select, update, insert, default-deny]
+required_capabilities: [create-table, insert, select, update, rls, roles]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_policy.sgml#sql-createpolicy (Description: default deny; Per-Command Policies)"
+sessions: [a]
+setup: |
+  CREATE ROLE pgarbor_case_cp_q;
+  CREATE TABLE t (id int4, v int4);
+  INSERT INTO t VALUES (1, 5), (2, -1), (3, 0);
+  GRANT SELECT, INSERT, UPDATE ON t TO pgarbor_case_cp_q;
+  ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY p_upd ON t FOR UPDATE TO pgarbor_case_cp_q USING (v > 0);
+  CREATE POLICY p_sel ON t FOR SELECT TO pgarbor_case_cp_q USING (true);
+steps:
+  - sql: |
+      SET ROLE pgarbor_case_cp_q
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP POLICY p_sel ON t
+    expect: ok
+  - sql: |
+      SET ROLE pgarbor_case_cp_q
+    expect: ok
+  - sql: |
+      SELECT id FROM t ORDER BY id
+    expect: rows
+    order: ordered
+    comment: with no SELECT policy left, the default is deny and no rows are visible
+  - sql: |
+      UPDATE t SET v = v + 1 WHERE true
+    expect: ok
+    comment: no rows are visible to the update, so nothing changes
+  - sql: |
+      INSERT INTO t VALUES (9, 9)
+    expect: error
+    sqlstate: "42501"
+    comment: no INSERT policy exists, so the insert is refused
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT id, v FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      DROP TABLE t; DROP ROLE pgarbor_case_cp_q
+    expect: ok

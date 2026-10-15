@@ -1,0 +1,35 @@
+# Documented whole-row references: a table alias alone is the composite row value, and c.* expands
+# to its columns at the top level of a select list; a function-call composite needs parentheses.
+id: doc-rowtypes.whole-row-star-expansion
+title: A table alias yields the whole-row composite, and alias.* expands it to columns at top level
+family: doc-rowtypes
+tier: core
+feature_ids: [composite-types, whole-row-reference, star-expansion]
+required_capabilities: [create-table, insert, select, composite-types]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/rowtypes.sgml#rowtypes-usage"
+sessions: [a]
+setup: |
+  CREATE TABLE inventory_item (name text, supplier_id integer, price numeric);
+  INSERT INTO inventory_item VALUES ('fuzzy dice', 42, 1.99), ('pan', 7, 12.50);
+steps:
+  - sql: |
+      SELECT c FROM inventory_item c ORDER BY c.name
+    expect: rows
+    order: ordered
+    comment: a single composite-valued column
+  - sql: |
+      SELECT c.* FROM inventory_item c ORDER BY c.name
+    expect: rows
+    order: ordered
+    comment: expands to name, supplier_id, price
+  - sql: |
+      SELECT (c).* FROM inventory_item c ORDER BY c.name
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT somefunc_absent FROM inventory_item c
+    expect: error
+    sqlstate: "42703"
+    comment: a missing column is an undefined column (42703); the alias c is still a table reference

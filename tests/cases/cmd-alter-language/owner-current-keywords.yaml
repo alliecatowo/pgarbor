@@ -1,0 +1,48 @@
+# Under SET ROLE, CURRENT_USER and CURRENT_ROLE name the role in effect, while SESSION_USER names the session user.
+id: cmd-alter-language.owner-current-keywords
+title: OWNER TO CURRENT_USER and CURRENT_ROLE follow SET ROLE, SESSION_USER does not
+family: cmd-alter-language
+tier: extended
+feature_ids: [alter-language, owner, roles, set-role, session-user]
+required_capabilities: [alter-language, roles, set-role, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "ref/alter_language.sgml#sql-alterlanguage (Synopsis: OWNER TO { new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER })"
+sessions: [a]
+setup: |
+  DROP ROLE IF EXISTS al_ck_owner;
+  CREATE ROLE al_ck_owner NOLOGIN;
+steps:
+  - sql: |
+      ALTER LANGUAGE sql OWNER TO al_ck_owner
+    expect: ok
+  - sql: |
+      SET ROLE al_ck_owner
+    expect: ok
+  - sql: |
+      ALTER LANGUAGE sql OWNER TO CURRENT_USER
+    expect: ok
+    comment: under SET ROLE, CURRENT_USER is al_ck_owner, which already owns sql
+  - sql: |
+      ALTER LANGUAGE sql OWNER TO CURRENT_ROLE
+    expect: ok
+  - sql: |
+      ALTER LANGUAGE sql OWNER TO SESSION_USER
+    expect: error
+    sqlstate: "42501"
+    comment: SESSION_USER is the superuser login role; al_ck_owner is not a member of it
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      SELECT pg_get_userbyid(lanowner) = 'al_ck_owner' AS still_owned FROM pg_language WHERE lanname = 'sql'
+    expect: rows
+    order: ordered
+  - sql: |
+      ALTER LANGUAGE sql OWNER TO CURRENT_ROLE
+    expect: ok
+    comment: without SET ROLE, CURRENT_ROLE is the session user again
+  - sql: |
+      SELECT lanowner = (SELECT oid FROM pg_roles WHERE rolname = CURRENT_USER) AS back_to_session_user FROM pg_language WHERE lanname = 'sql'
+    expect: rows
+    order: ordered

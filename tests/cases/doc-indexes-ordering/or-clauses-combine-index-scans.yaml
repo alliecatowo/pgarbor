@@ -1,0 +1,35 @@
+# OR and AND across separate single-column indexes are combined by bitmap scans; results must match the logical predicate.
+id: doc-indexes-ordering.or-clauses-combine-index-scans
+title: OR and AND predicates over separately indexed columns return the logical result set
+family: doc-indexes-ordering
+tier: core
+feature_ids: [btree-index, bitmap-scan, or-conditions, and-conditions, create-index]
+required_capabilities: [create-table, insert, select, order-by, create-index, btree-index]
+provenance:
+  source: pg-docs
+  ref: "indices.sgml#indexes-ordering (Combining Multiple Indexes: x = 42 OR x = 47 ... and x = 5 AND y = 6)"
+sessions: [a]
+setup: |
+  CREATE TABLE o1 (id int4 PRIMARY KEY, x int4, y int4);
+  CREATE INDEX o1_x ON o1 (x);
+  CREATE INDEX o1_y ON o1 (y);
+  INSERT INTO o1 VALUES (1, 42, 6), (2, 47, 1), (3, 53, 6), (4, 99, 2), (5, 5, 6), (6, 5, 7), (7, 8, NULL), (8, NULL, 6);
+steps:
+  - sql: |
+      SELECT id FROM o1 WHERE x = 42 OR x = 47 OR x = 53 OR x = 99 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM o1 WHERE x = 5 AND y = 6 ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      SELECT id FROM o1 WHERE x = 5 OR y = 6 ORDER BY id
+    expect: rows
+    order: ordered
+    comment: the NULL in x does not match and the NULL-x row matches only through y
+  - sql: |
+      SELECT id, x FROM o1 WHERE x = 42 OR x = 47 ORDER BY x, id
+    expect: rows
+    order: ordered
+    comment: a sort is needed after the bitmap combination, so ORDER BY must still be honored

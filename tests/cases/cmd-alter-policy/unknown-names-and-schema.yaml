@@ -1,0 +1,42 @@
+# Unknown policy, table, schema, and role names each produce their own SQLSTATE; none of them change the policy.
+id: cmd-alter-policy.unknown-names-and-schema
+title: "ALTER POLICY with unknown policy, table, schema or role names fails cleanly"
+family: cmd-alter-policy
+tier: core
+feature_ids: [alter-policy, policies, errors, schemas]
+required_capabilities: [create-table, select, rls, roles, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_policy.sgml#sql-alterpolicy (name, table_name, role_name)"
+sessions: [a]
+setup: |
+  CREATE TABLE t (id int4, v int4);
+  CREATE POLICY p ON t USING (v > 0);
+steps:
+  - sql: |
+      ALTER POLICY missing ON t USING (true)
+    expect: error
+    sqlstate: "42704"
+    comment: no policy named missing on table t
+  - sql: |
+      ALTER POLICY p ON missing_tbl USING (true)
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER POLICY p ON no_such_schema.t USING (true)
+    expect: error
+    sqlstate: "3F000"
+    comment: the schema does not exist
+  - sql: |
+      ALTER POLICY p ON public.missing_tbl RENAME TO q
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      ALTER POLICY p ON t TO pgarbor_case_no_such_role
+    expect: error
+    sqlstate: "42704"
+    comment: unknown role in the TO list
+  - sql: |
+      SELECT policyname, qual FROM pg_policies WHERE tablename = 't'
+    expect: rows
+    comment: the policy is untouched

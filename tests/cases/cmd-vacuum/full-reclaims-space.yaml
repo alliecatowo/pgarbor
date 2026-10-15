@@ -1,0 +1,41 @@
+# VACUUM FULL rewrites the table so deleted space is returned to the operating system, and keeps every remaining row.
+id: cmd-vacuum.full-reclaims-space
+title: "VACUUM FULL shrinks a mostly-deleted table and preserves surviving rows"
+family: cmd-vacuum
+tier: core
+feature_ids: [vacuum-full, relation-size, delete]
+required_capabilities: [create-table, insert, delete, select, catalog-introspection]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Description: VACUUM FULL; Notes: FULL option)"
+sessions: [a]
+setup: |
+  CREATE TABLE vfr (id int4 PRIMARY KEY, v int4, s text);
+  INSERT INTO vfr SELECT g, g * 10, repeat('x', 100) FROM generate_series(1, 400) g;
+  DELETE FROM vfr WHERE id > 10;
+steps:
+  - sql: |
+      SELECT pg_relation_size('vfr') > 8192 AS multi_page_before
+    expect: rows
+    order: ordered
+  - sql: |
+      VACUUM (FULL) vfr
+    expect: ok
+  - sql: |
+      SELECT pg_relation_size('vfr') AS size_after_full
+    expect: rows
+    order: ordered
+    comment: the rewritten table fits in one page
+  - sql: |
+      SELECT count(*), sum(v), min(id), max(id) FROM vfr
+    expect: rows
+    order: ordered
+    comment: only the ten surviving rows remain, with their values
+  - sql: |
+      VACUUM FULL vfr
+    expect: ok
+    comment: the legacy form is the same operation
+  - sql: |
+      SELECT count(*) FROM vfr
+    expect: rows
+    order: ordered

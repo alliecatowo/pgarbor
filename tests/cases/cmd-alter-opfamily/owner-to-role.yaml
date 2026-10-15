@@ -1,0 +1,43 @@
+# OWNER TO accepts a role name or CURRENT_USER/SESSION_USER; an unknown role is undefined_object.
+id: cmd-alter-opfamily.owner-to-role
+title: OWNER TO changes the family owner, accepts CURRENT_USER and SESSION_USER, and rejects unknown roles
+family: cmd-alter-opfamily
+tier: core
+feature_ids: [alter-operator-family, owner, roles, errors]
+required_capabilities: [alter-operator-family, create-operator-family, create-role, catalog-introspection, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/alter_opfamily.sgml#sql-alteropfamily (OWNER TO new_owner | CURRENT_ROLE | CURRENT_USER | SESSION_USER)"
+sessions: [a]
+setup: |
+  CREATE ROLE cmd_aof_own_role;
+  CREATE OPERATOR FAMILY cmd_aof_owned USING btree;
+steps:
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_owned USING btree OWNER TO cmd_aof_no_such_role
+    expect: error
+    sqlstate: "42704"
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_owned USING btree OWNER TO cmd_aof_own_role
+    expect: ok
+  - sql: |
+      SELECT f.opfname, f.opfowner = 'cmd_aof_own_role'::regrole AS owned_by_role
+      FROM pg_opfamily f WHERE f.opfname = 'cmd_aof_owned'
+    expect: rows
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_owned USING btree OWNER TO CURRENT_USER
+    expect: ok
+  - sql: |
+      SELECT f.opfname, f.opfowner = current_user::regrole AS owned_by_current_user
+      FROM pg_opfamily f WHERE f.opfname = 'cmd_aof_owned'
+    expect: rows
+  - sql: |
+      ALTER OPERATOR FAMILY cmd_aof_owned USING btree OWNER TO SESSION_USER
+    expect: ok
+  - sql: |
+      DROP OPERATOR FAMILY cmd_aof_owned USING btree
+    expect: ok
+  - sql: |
+      DROP ROLE cmd_aof_own_role
+    expect: ok
+    comment: the role owned nothing after the family was dropped

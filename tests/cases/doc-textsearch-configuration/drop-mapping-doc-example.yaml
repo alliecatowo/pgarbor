@@ -1,0 +1,34 @@
+# Documented: DROP MAPPING FOR email, url, url_path, sfloat, float removes those token types from indexing and search.
+id: doc-textsearch-configuration.drop-mapping-doc-example
+title: DROP MAPPING for email url url_path sfloat float removes those token types from ts_debug and to_tsvector
+family: doc-textsearch-configuration
+tier: core
+feature_ids: [tsearch, drop-mapping, ts-debug, token-types]
+required_capabilities: [select, text-search]
+provenance:
+  source: pg-docs
+  ref: "textsearch.sgml#textsearch-configuration (ALTER TEXT SEARCH CONFIGURATION pg DROP MAPPING FOR email, url, url_path, sfloat, float)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TEXT SEARCH CONFIGURATION public.pg ( COPY = pg_catalog.english )
+    expect: ok
+  - sql: |
+      ALTER TEXT SEARCH CONFIGURATION public.pg DROP MAPPING FOR email, url, url_path, sfloat, float
+    expect: ok
+  - sql: |
+      SELECT count(*) AS dropped_alias_rows
+      FROM ts_debug('public.pg', 'Mail bob@example.com or see http://www.example.com/a/b.html for 3.14 and 2.5e10')
+      WHERE alias IN ('email', 'url', 'url_path', 'sfloat', 'float')
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT count(*) AS tokens_still_indexed
+      FROM ts_debug('public.pg', 'bob@example.com 3.14')
+      WHERE alias IN ('email', 'float') AND lexemes <> '{}'
+    expect: rows
+    order: multiset
+  - sql: |
+      SELECT to_tsvector('public.pg', 'bob@example.com 3.14') = ''::tsvector AS empty_for_dropped_types
+    expect: rows
+    order: multiset

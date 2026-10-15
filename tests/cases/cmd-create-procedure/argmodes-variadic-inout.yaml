@@ -1,0 +1,47 @@
+# Argument modes: VARIADIC collects trailing arguments into an array (also spreadable with VARIADIC),
+# and INOUT parameters are returned as a result row from CALL.
+id: cmd-create-procedure.argmodes-variadic-inout
+title: VARIADIC and INOUT argument modes in CREATE PROCEDURE, observed through CALL
+family: cmd-create-procedure
+tier: core
+feature_ids: [create-procedure, variadic-arguments, inout-arguments, call, plpgsql]
+required_capabilities: [create-table, insert, select, create-procedure, call, plpgsql]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/create_procedure.sgml#sql-createprocedure (argmode)"
+sessions: [a]
+steps:
+  - sql: |
+      CREATE TABLE t (id int4, label text)
+    expect: ok
+  - sql: |
+      CREATE PROCEDURE pvar(VARIADIC xs int[]) LANGUAGE plpgsql AS $$
+      BEGIN
+        INSERT INTO t SELECT x, 'v' FROM unnest(xs) AS x;
+      END $$
+    expect: ok
+  - sql: |
+      CALL pvar(1, 2, 3)
+    expect: ok
+  - sql: |
+      CALL pvar(VARIADIC ARRAY[7, 8])
+    expect: ok
+  - sql: |
+      SELECT id, label FROM t ORDER BY id
+    expect: rows
+    order: ordered
+  - sql: |
+      CREATE PROCEDURE pinout(IN a int, INOUT b int) LANGUAGE plpgsql AS $$
+      BEGIN
+        b := a + b;
+      END $$
+    expect: ok
+  - sql: |
+      CALL pinout(2, 40)
+    expect: rows
+    order: ordered
+    comment: INOUT value is returned as the single result row
+  - sql: |
+      CALL pinout(a => 1, b => NULL)
+    expect: rows
+    comment: NULL in, NULL out

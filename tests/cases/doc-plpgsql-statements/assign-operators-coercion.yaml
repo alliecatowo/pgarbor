@@ -1,0 +1,43 @@
+# Assignment accepts := and =, targets array elements/slices and record fields, uses assignment casts,
+# and falls back to text I/O when no cast exists; a non-integer text value fails at assignment.
+id: doc-plpgsql-statements.assign-operators-coercion
+title: PL/pgSQL assignment accepts := and =, array element and slice targets, record fields, and assignment-cast coercion
+family: doc-plpgsql-statements
+tier: core
+feature_ids: [plpgsql, assignment, arrays, type-coercion, record-fields]
+required_capabilities: [plpgsql, create-function, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/plpgsql.sgml#plpgsql-statements-assignment"
+sessions: [a]
+setup: |
+  CREATE FUNCTION f_assign() RETURNS text LANGUAGE plpgsql AS $$
+  DECLARE pt point; s text; arr int[] := '{1,2,3,4}'; tax numeric := 0; rec record;
+  BEGIN
+    pt := point(1,2);
+    s := pt;
+    arr[2] := 20;
+    arr[1:2] := array[7,8];
+    tax = 3 * 0.06;
+    SELECT 1 AS a, 2 AS b INTO rec;
+    rec.a := 20;
+    RETURN s || ' ' || array_to_string(arr, ',') || ' ' || tax || ' ' || (rec.a + rec.b);
+  END $$;
+  CREATE FUNCTION f_round_int(v numeric) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE x int; BEGIN x := v; RETURN x; END $$;
+  CREATE FUNCTION f_to_int(v text) RETURNS int LANGUAGE plpgsql AS $$
+  DECLARE x int; BEGIN x := v; RETURN x; END $$;
+steps:
+  - sql: |
+      SELECT f_assign() AS result
+    expect: rows
+    comment: point has no assignment cast to text, so := uses text output; slice and element targets applied in order
+  - sql: |
+      SELECT f_round_int(2.9) AS up, f_round_int(-2.5) AS half_away
+    expect: rows
+    comment: numeric to int4 uses the assignment cast
+  - sql: |
+      SELECT f_to_int('abc')
+    expect: error
+    sqlstate: "22P02"
+    comment: the text value is passed to the int4 input function at assignment

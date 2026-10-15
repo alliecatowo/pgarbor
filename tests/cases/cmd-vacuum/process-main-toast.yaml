@@ -1,0 +1,43 @@
+# PROCESS_MAIN and PROCESS_TOAST choose which of the table and its TOAST relation are vacuumed; FULL requires PROCESS_TOAST.
+id: cmd-vacuum.process-main-toast
+title: "VACUUM PROCESS_MAIN and PROCESS_TOAST combinations, and FULL requiring TOAST"
+family: cmd-vacuum
+tier: extended
+feature_ids: [vacuum, toast, options, errors]
+required_capabilities: [create-table, insert, select, errors]
+provenance:
+  source: pg-docs
+  ref: "doc/src/sgml/ref/vacuum.sgml#sql-vacuum (Parameters: PROCESS_MAIN, PROCESS_TOAST)"
+sessions: [a]
+setup: |
+  CREATE TABLE vpt (id int4 PRIMARY KEY, s text);
+  INSERT INTO vpt SELECT g, repeat(md5(g::text), 100) FROM generate_series(1, 50) g;
+steps:
+  - sql: |
+      VACUUM (PROCESS_MAIN false) vpt
+    expect: ok
+    comment: vacuum only the TOAST relation
+  - sql: |
+      VACUUM (PROCESS_TOAST false) vpt
+    expect: ok
+    comment: vacuum only the main relation
+  - sql: |
+      VACUUM (PROCESS_MAIN false, PROCESS_TOAST false) vpt
+    expect: ok
+    comment: neither relation is processed, which is still a valid command
+  - sql: |
+      VACUUM (PROCESS_MAIN false, TRUNCATE) vpt
+    expect: ok
+  - sql: |
+      VACUUM (FULL, PROCESS_TOAST false) vpt
+    expect: error
+    sqlstate: "0A000"
+    comment: FULL requires PROCESS_TOAST
+  - sql: |
+      VACUUM (FULL, PROCESS_TOAST true) vpt
+    expect: ok
+  - sql: |
+      SELECT count(*), length(max(s)) FROM vpt
+    expect: rows
+    order: ordered
+    comment: stored values are unchanged by every variant
