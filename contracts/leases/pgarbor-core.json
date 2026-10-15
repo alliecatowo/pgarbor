@@ -1,0 +1,551 @@
+{
+ "crate": "pgarbor-core",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "CORE-01",
+   "task_ids": [
+    "TXN-01",
+    "TXN-13",
+    "BRANCH-03",
+    "BRANCH-05",
+    "BRANCH-06"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/engine.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Engine create/open/close, branch_head, attach_session, session-aware branch admin, cancel/terminate.",
+   "spec": "Implement every unimplemented fn in engine.rs per the module docs and fn docs. create/open: vfs = options.vfs.clone().unwrap_or_else(|| Arc::new(pgarbor_storage::OsVfs)); map EngineOptions to pgarbor_storage::{CreateOptions, OpenOptions}; wrap with Engine::from_parts into Arc. branch_head: ONE container.snapshot() for record + tree (snapshot pairing rule). attach_session: closed -> error::terminated_by_administrator(); resolve branch via branches.get(&req.branch); record.database_root(req.database_oid) None -> error::database_not_in_branch; sessions.register(rec.id, &rec.name, req, options.max_sessions, now_unix_ms()); return SessionHandle{engine: self.clone(), shared}. create_branch: lock order \u2014 seqs = sequences.lock_entries() BEFORE begin_write; then sequences.flush_branch(&mut seqs, &mut w, &mut src) then ops::advance_head for the source if flush wrote >0 entries, then ops::create on w.tree(dir)); for CreateSource::Snapshot use branches.create. delete/reset: session check helper (private fn): count other non-terminating sessions on the branch; !force and count>0 -> 55006; force -> request_terminate + locks.wake for each and proceed without waiting; then branches.delete/reset; then sequences.forget_branch + ids().forget_branch. rename: branches.rename then update SessionShared.branch_name for sessions on that branch. cancel_backend/terminate_backend: sessions.get(pid) -> interrupts.request_cancel/terminate + locks.wake(pid). cancel_request: sessions.cancel_with_key then wake. Tests (in-file, MemVfs via EngineOptions{vfs: Some(Arc::new(MemVfs::new())), sync: SyncMode::Off}): create then open of the same path in the same MemVfs after dropping the engine; attach to unknown branch -> 42704; delete_branch with another attached session -> 55006 with detail 'There is 1 other session using the branch.'; force delete succeeds immediately while the other SessionHandle is still alive and that session's Interrupts::check returns FATAL 57P01; a second non-forced delete attempt on another branch ignores terminating sessions; branch_head of a fresh branch equals parent root.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-branches/src/manager.rs",
+    "crates/pgarbor-branches/src/ops.rs",
+    "crates/pgarbor-storage/src/container/handle.rs",
+    "crates/pgarbor-storage/src/container/options.rs",
+    "crates/pgarbor-core/src/engine.rs",
+    "crates/pgarbor-core/src/session.rs",
+    "crates/pgarbor-core/src/options.rs",
+    "crates/pgarbor-core/src/sequence/store.rs"
+   ],
+   "depends_on_leases": [
+    "CORE-02"
+   ],
+   "acceptance": [
+    "create_branch is one storage commit and copies only root pointers",
+    "delete/reset of a branch with other sessions fails with 55006 unless forced",
+    "branch_head never pairs a root with a different snapshot"
+   ]
+  },
+  {
+   "lease_id": "CORE-02",
+   "task_ids": [
+    "TXN-01",
+    "TXN-12"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/session.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Session registry: pid allocation, registration, cancel-key matching, random bytes.",
+   "spec": "Implement SessionRegistry::register, unregister, cancel_with_key and random_bytes per session.rs docs. register: lock sessions write; len >= max_sessions -> PgError::new(SqlState::TOO_MANY_CONNECTIONS, \"sorry, too many clients already\").with_severity(Severity::Fatal); pid loop from next_pid skipping used, wrapping i32::MAX -> FIRST_PID; build SessionShared (Activity{state: Idle, query: String::new(), query_start_ms: None, xact_start_ms: None, state_change_ms: now_ms, backend_xid: None, txn: None, wait: None}, sequences: Mutex::new(SessionSequences::default())). cancel_with_key: constant-time compare (lengths equal and XOR-fold == 0). random_bytes: RandomState hasher seeded per 8-byte chunk with (std::process::id(), chunk index, SystemTime nanos, static AtomicU64 counter.fetch_add(1)). Tests: pids unique and start at 1000; max_sessions enforced with FATAL 53300; cancel with wrong key returns false and sets nothing; with right key sets cancel so Interrupts::check returns 57014 once and then Ok; random_bytes(32) differ between calls.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/session.rs",
+    "crates/pgarbor-core/src/options.rs",
+    "crates/pgarbor-core/src/sequence/state.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "pids are unique among live sessions",
+    "cancel requires the exact secret"
+   ]
+  },
+  {
+   "lease_id": "CORE-03",
+   "task_ids": [
+    "TXN-03",
+    "TXN-06"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/overlay.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Overlay write set with savepoint undo log and merge scan.",
+   "spec": "Implement Overlay::{put, delete, put_unlogged, rollback_to, set_logging, range, to_batch} and merge_scan per overlay.rs docs. bytes accounting: add key.len()+value.len() on insert, subtract the replaced entry's size. range: guard inverted/empty bounds exactly like pgarbor_storage::WriteBatch::range (copy its logic), then map.range. merge_scan: struct MergeIter<'a>{ base: Peekable<KvIter<'a>>, over: Peekable<std::collections::btree_map::Range<'a, Vec<u8>, Option<Vec<u8>>>>, failed: bool } implementing Iterator<Item=Result<(Vec<u8>,Vec<u8>)>>: compare heads; overlay key smaller -> emit if Some, skip if None; equal -> overlay wins (skip base item); base smaller -> emit base; base Err -> emit once then fuse. Build the overlay range with owned bounds (Bound<Vec<u8>>) and the same empty-range guard. Tests: put/delete/get; rollback_to restores absent/tombstone/value states across 3 nested marks; put_unlogged survives rollback_to; set_logging(false) clears undo; merge of base [a1,b2,c3] with overlay {b: None, bb: Some(x), d: Some(4)} over (Unbounded,Unbounded) = [a1, bb x, c3, d4]; bounded merges; inverted range yields nothing; base error propagates once.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/overlay.rs",
+    "crates/pgarbor-storage/src/batch.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "rollback_to(mark) restores the exact overlay state at mark",
+    "merge_scan output is strictly ascending with overlay precedence and tombstones hidden"
+   ]
+  },
+  {
+   "lease_id": "CORE-04",
+   "task_ids": [
+    "TXN-01",
+    "TXN-02",
+    "TXN-05",
+    "TXN-07",
+    "TXN-08",
+    "TXN-09"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/txn.rs"
+   ],
+   "model_tier": "opus",
+   "summary": "Txn lifecycle: begin, statement snapshots (RC/RR), SET TRANSACTION checks, key/relation locks with LockOutcome, rollback, release.",
+   "spec": "Implement Txn::{begin, begin_statement, set_isolation, set_read_only, set_deferrable, lock_key, lock_key_for_write, lock_relation, rollback, release_all} per txn.rs module and fn docs. Consult PG18 src/backend/commands/variable.c (check_transaction_isolation/read_only/deferrable) and src/backend/access/transam/xact.c. begin: Txn fields init (overlay empty, savepoints empty, last_subxact 0, held_keys empty, limits default, state InProgress, finished false, kind/isolation/read_only/deferrable from opts; read_only |= engine.is_read_only()). begin_statement: check_not_failed; if isolation.uses_statement_snapshot() || snapshot.is_none(): head = engine.branch_head(&branch, database)? ; head.record.generation != self.generation -> error::branch_changed_under_transaction(&branch_name); snapshot = Some(TxnSnapshot{tree: head.tree, commit_seq: head.snapshot.commit_seq()}); statements += 1. Subtransaction test = !savepoints.is_empty(). lock_key: strength order ForKeyShare<ForShare<ForNoKeyUpdate<ForUpdate (private fn strength); held_keys fast path; acquire via engine.locks().acquire(&self.session, LockScope::Transaction{txn: id, subxact: current_subxact()}, &LockTag::Key{branch, database, key: key.to_vec()}, mode, policy, &self.limits); outcome algorithm in docs (compare snapshot tree get vs head tree get; generation guard on the head). lock_key_for_write: per docs. lock_relation: acquire on LockTag::Relation. release_all: overlay.clear(); savepoints.clear(); held_keys.clear(); engine.locks().release_txn(session.id, id)?; finished = true (set finished even if release errors, then return the error). rollback: release_all + activity update (xact_start_ms None, txn None, backend_xid None, wait None). Tests live in crates/pgarbor-core/tests/core-07.rs (shared with commit) \u2014 here add in-file unit tests only for strength ordering and SET TRANSACTION error cases (construct Txn via Engine over MemVfs).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/txn.rs",
+    "crates/pgarbor-core/src/engine.rs",
+    "crates/pgarbor-core/src/session.rs",
+    "crates/pgarbor-core/src/overlay.rs",
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/src/locks/table.rs",
+    "crates/pgarbor-core/src/locks/tag.rs",
+    "crates/pgarbor-core/src/savepoint.rs",
+    "crates/pgarbor-storage/src/container/snapshot.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/variable.c",
+    "~/develop/reference/postgres-18/src/backend/access/transam/xact.c"
+   ],
+   "depends_on_leases": [
+    "CORE-01",
+    "CORE-03",
+    "CORE-09"
+   ],
+   "acceptance": [
+    "RC sees other sessions' commits at the next statement; RR does not",
+    "SET TRANSACTION ISOLATION LEVEL after the first snapshot fails with 25001 unless the level is unchanged",
+    "lock outcome is computed from a head read after the lock grant",
+    "RR raises 40001 with update/delete wording on Changed"
+   ]
+  },
+  {
+   "lease_id": "CORE-05",
+   "task_ids": [
+    "TXN-05",
+    "TXN-06"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/savepoint.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "SAVEPOINT / RELEASE / ROLLBACK TO with overlay undo and lock release.",
+   "spec": "Implement Txn::{savepoint, release_savepoint, rollback_to_savepoint} per savepoint.rs docs (PG xact.c DefineSavepoint/ReleaseSavepoint/RollbackToSavepoint). Order of checks: implicit-kind check (25P01) first, then failed-state check for SAVEPOINT/RELEASE (25P02), then name lookup (3B001, search from the end with rposition). Lock handling: engine.locks().release_subxacts(session.id, id, sp.subxact) on rollback-to and held_keys.retain(|_, h| h.subxact < sp.subxact); release: parent = savepoints[idx-1].subxact or SubXactId::TOP, engine.locks().reassign_subxacts(session.id, id, sp.subxact, parent) and rewrite held_keys entries with subxact >= sp.subxact to parent. When savepoints becomes empty after RELEASE -> overlay.set_logging(false). Tests (tests/core-07.rs is shared; add in-file tests using Engine over MemVfs): implicit txn SAVEPOINT -> 25P01 'SAVEPOINT can only be used in transaction blocks'; put a, savepoint s1, put b, rollback to s1 -> a visible, b gone; duplicate names use innermost; rollback to s1 twice works; release unknown -> 3B001; failed txn: release -> 25P02, rollback to -> InProgress; keys locked after s1 are unlocked after rollback to s1 (another session's lock_key with NoWait succeeds).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/savepoint.rs",
+    "crates/pgarbor-core/src/txn.rs",
+    "crates/pgarbor-core/src/overlay.rs",
+    "crates/pgarbor-core/src/locks/manager.rs"
+   ],
+   "depends_on_leases": [
+    "CORE-03",
+    "CORE-04",
+    "CORE-09"
+   ],
+   "acceptance": [
+    "ROLLBACK TO restores overlay and releases locks taken after the savepoint",
+    "RELEASE keeps writes and merges locks into the parent"
+   ]
+  },
+  {
+   "lease_id": "CORE-06",
+   "task_ids": [
+    "TXN-03",
+    "TXN-09"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/txn_kv.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "TxnKv KvRead/KvWrite view with implicit key locking.",
+   "spec": "Implement KvRead::{get, scan}, KvWrite::{put, delete} and put_fresh for TxnKv per txn_kv.rs docs. scan: base = snapshot.tree.scan(lower, upper)?; crate::overlay::merge_scan(base, &self.txn.overlay, lower, upper). Missing snapshot -> error::internal(\"no snapshot: begin_statement was not called\"). Sequence keyspace detection: key.starts_with(&SpaceId::SEQUENCES.prefix()). Write lock: let outcome = self.txn.lock_key(key, mode, WaitPolicy::Block)?; if !isolation.uses_statement_snapshot() map Changed(Some)->serialization_concurrent_update, Changed(None)->serialization_concurrent_delete. After the overlay write set txn.wrote and, on the first write, session.update_activity(|a| a.backend_xid = Some(txn.id)). delete returns the merged-view existence (self.get(key)?.is_some()) computed BEFORE writing the tombstone. Tests go in tests/core-07.rs (CORE-07 owns it) \u2014 add in-file tests: read-only txn put -> 25006 'cannot execute INSERT in a read-only transaction'; get before begin_statement -> XX000; own writes visible in get and scan.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/txn_kv.rs",
+    "crates/pgarbor-core/src/txn.rs",
+    "crates/pgarbor-core/src/overlay.rs"
+   ],
+   "depends_on_leases": [
+    "CORE-03",
+    "CORE-04"
+   ],
+   "acceptance": [
+    "a transaction always reads its own writes",
+    "writes outside the sequence keyspace always hold a key lock except put_fresh"
+   ]
+  },
+  {
+   "lease_id": "CORE-07",
+   "task_ids": [
+    "TXN-04",
+    "BRANCH-03"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/commit.rs",
+    "crates/pgarbor-core/tests/core-07.rs"
+   ],
+   "model_tier": "opus",
+   "summary": "Durable COMMIT: apply overlay to current head under the writer, generation guard, release locks after durability.",
+   "spec": "Implement Txn::commit and apply_commit exactly per commit.rs steps. apply_commit: let dir = w.directory_root(); rec = pgarbor_branches::directory::load_record(&w.tree(dir), &branch)? (absent -> branch_id_not_found); guard; root = rec.database_root(db) (None -> error::database_not_in_branch); new_root = w.apply(root, &overlay.to_batch()?)?; then let ctx = OpCtx{commit_seq: w.commit_seq(), now_unix_ms: now}; let mut t = w.tree(dir); ops::advance_head(&mut t, &ctx, &branch, generation, db, new_root)?; let nd = t.root(); w.set_directory_root(nd). commit(): steps 1-7; sequence keys = overlay keys with SEQUENCES prefix -> relid from bytes 4..8. On every error path after begin: release_all() and return the error. Integration tests (tests/core-07.rs, MemVfs + SyncMode::Off, two sessions on one Engine): (1) north-star: put/commit, reopen engine (drop + Engine::open on same MemVfs path), value visible; (2) uncommitted writes invisible to other session; rollback leaves nothing; (3) RC: session B sees A's commit at next statement; RR: does not; (4) concurrent update of same key: A locks/writes, B's lock_key_for_write blocks (run B in a thread), A commits, B gets Changed(Some(new)) in RC, 40001 in RR; (5) empty-overlay commit does not change container.commit_seq(); (6) branch isolation: commit on 'feature' does not change main's root; (7) COMMIT in Failed state returns RolledBack; (8) forced reset under an open txn -> commit fails with 55000 and nothing is applied; (9) deadlock: two threads lock k1/k2 crosswise with deadlock_timeout 50ms -> exactly one gets 40P01 whose detail mentions 'ShareLock on transaction'.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/commit.rs",
+    "crates/pgarbor-core/src/txn.rs",
+    "crates/pgarbor-core/src/engine.rs",
+    "crates/pgarbor-core/src/overlay.rs",
+    "crates/pgarbor-core/src/sequence/store.rs",
+    "crates/pgarbor-branches/src/ops.rs",
+    "crates/pgarbor-branches/src/directory.rs",
+    "crates/pgarbor-storage/src/container/write.rs",
+    "contracts/crates/pgarbor-storage.md"
+   ],
+   "depends_on_leases": [
+    "CORE-01",
+    "CORE-04",
+    "CORE-06",
+    "BR-03"
+   ],
+   "acceptance": [
+    "COMMIT returns Ok only after the storage commit is durable",
+    "key locks are released only after the commit is published",
+    "a commit never applies to a branch whose generation changed",
+    "read-only transactions never call begin_write"
+   ]
+  },
+  {
+   "lease_id": "CORE-08",
+   "task_ids": [
+    "TXN-09"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/mode.rs",
+    "crates/pgarbor-core/src/locks/tag.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Lock modes, PG conflict tables, mode names, tag descriptions.",
+   "spec": "Implement LockMode::{conflicts_with, pg_name, parse_table_mode} and LockTag::{locktype, describe, wait_event} per the docs (conflict lists in mode.rs are authoritative; cross-check src/backend/storage/lmgr/lock.c LockConflicts and src/backend/access/heap/heapam.c tupleLockExtraInfo / docs table 13.3). Implement conflicts as a match on (self, other) using two private const tables [u8; 8] bitmasks indexed by mode position. Tests: matrix symmetry for all 144 pairs; AccessShare conflicts only with AccessExclusive; RowExclusive does not conflict with RowExclusive; ForKeyShare vs ForNoKeyUpdate no conflict; ForKeyShare vs ForUpdate conflict; mixed table/row false; pg_name strings; describe formats ('relation 16384 of database 5', 'advisory lock [5,0,1,1]').",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/locks/mode.rs",
+    "crates/pgarbor-core/src/locks/tag.rs",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/lock.c",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/lmgr.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "conflict relation is symmetric and matches PG's tables exactly"
+   ]
+  },
+  {
+   "lease_id": "CORE-09",
+   "task_ids": [
+    "TXN-09",
+    "TXN-10"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/tests/core-09.rs"
+   ],
+   "model_tier": "opus",
+   "summary": "Lock manager: grant/queue/wait/timeout/cancel/release, pg_locks snapshot, blocking pids.",
+   "spec": "Implement every LockManager method per manager.rs docs. Keep all table mutation in private fns taking &mut LockTable (grantable, grant, grant_waiters, remove_waiter, release_matching) so logic is testable without threads. Use Instant for timing and SystemTime for unix ms. Wait loop must check slot status (Granted) BEFORE any timeout/interrupt evaluation; on giving up after a concurrent grant, release that grant before returning the error. Session activity wait info: session.update_activity(|a| a.wait = Some(WaitEvent{event_type: \"Lock\", event: tag.wait_event()?})) and clear on every exit path. Never hold the table mutex while sleeping or while taking session.activity. Integration tests (tests/core-09.rs, build SessionShared values via a small helper with Interrupts::new()): exclusive vs exclusive blocks until release (thread + channel), share/share compatible; same-session re-acquire never blocks; FIFO: a third request queued behind a waiting exclusive waits; NoWait/SkipLocked -> NotAvailable without queueing; lock_timeout 50ms -> 55P03 and waiter removed; cancel during wait -> 57014 promptly after wake(); 2-session deadlock with deadlock_timeout 30ms -> exactly one 40P01, the other then acquires; release_subxacts releases only subxact >= from; reassign_subxacts merges; release_session leaves txn locks; snapshot lists granted and waiting entries; blocking_sessions reports the holder.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/src/locks/table.rs",
+    "crates/pgarbor-core/src/locks/mode.rs",
+    "crates/pgarbor-core/src/locks/tag.rs",
+    "crates/pgarbor-core/src/locks/deadlock.rs",
+    "crates/pgarbor-core/src/session.rs",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/lock.c",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/proc.c",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/README"
+   ],
+   "depends_on_leases": [
+    "CORE-08",
+    "CORE-10"
+   ],
+   "acceptance": [
+    "no lost wake-ups: a granted waiter always returns Acquired",
+    "timeouts/cancel never leave a queued or granted residue",
+    "lock waits honor lock_timeout, statement_timeout, cancel and terminate"
+   ]
+  },
+  {
+   "lease_id": "CORE-10",
+   "task_ids": [
+    "TXN-10"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/deadlock.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Wait-for graph construction and cycle detection with PG-format report.",
+   "spec": "Implement wait_for_edges, find_cycle and describe_wait per deadlock.rs docs (PG src/backend/storage/lmgr/deadlock.c FindLockCycle/DeadLockReport). wait_for_edges: for each (tag, entry) and each waiter at queue index i: hard edges to granted holders (other session, conflicting mode), soft edges to waiters j < i (other session, conflicting requested mode); blocker_txn from the conflicting Grant's scope (hard edge) or the earlier Waiter's scope (soft edge): LockScope::Transaction{txn,..} -> Some(txn), Session -> None. find_cycle: iterative DFS from start following edges by waiter; when an edge's blocker == start, return path. Deterministic order (sort edges as documented). Tests: 2-cycle, 3-cycle, cycle not through start -> None, soft-edge cycle, describe_wait for Key tag with blocker_txn Some(808) = 'ShareLock on transaction 808', relation tag = 'AccessExclusiveLock on relation 16384 of database 5', deadlock_error detail exactly two lines for a 2-cycle.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/locks/deadlock.rs",
+    "crates/pgarbor-core/src/locks/table.rs",
+    "crates/pgarbor-core/src/locks/mode.rs",
+    "crates/pgarbor-core/src/locks/tag.rs",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/deadlock.c"
+   ],
+   "depends_on_leases": [
+    "CORE-08"
+   ],
+   "acceptance": [
+    "cycles through the checking session are always found; cycles elsewhere are ignored",
+    "40P01 detail matches PG's DeadLockReport line format"
+   ]
+  },
+  {
+   "lease_id": "CORE-11",
+   "task_ids": [
+    "TXN-09"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/advisory.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_advisory_* lock/unlock semantics on the lock manager.",
+   "spec": "Implement lock, unlock and unlock_all per advisory.rs docs. Mode mapping: Exclusive -> LockMode::Exclusive ('ExclusiveLock'), Shared -> LockMode::Share ('ShareLock'). lock with wait=false -> WaitPolicy::NoWait; return Ok(matches!(r, AcquireResult::Acquired{..})). unlock -> release_one with LockScope::Session; false -> UnlockResult{released:false, warning: Some(error::advisory_not_owned(name))}. Tests (Engine over MemVfs with two sessions): re-entrant session lock needs two unlocks, third unlock returns false + WARNING text 'you don't own a lock of type ExclusiveLock'; xact lock + pg_advisory_unlock -> false + warning; shared vs exclusive distinct; try_lock from other session false while held; xact lock released at commit; session lock survives rollback; tag_fields(-1) == (4294967295, 4294967295, 1), Pair(1,2) == (1,2,2).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/locks/advisory.rs",
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/src/txn.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/lockfuncs.c"
+   ],
+   "depends_on_leases": [
+    "CORE-09",
+    "CORE-04"
+   ],
+   "acceptance": [
+    "re-entrancy counts and WARNING behavior match PG18 (oracle cases in the doc)"
+   ]
+  },
+  {
+   "lease_id": "CORE-12",
+   "task_ids": [
+    "TXN-13"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/sequence/state.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Sequence state codec, nextval arithmetic, CACHE + SEQ_LOG_VALS log_cnt emulation, setval checks.",
+   "spec": "Implement SequenceState::{encode, decode}, next_value, advance, validate_setval per state.rs docs, following PG18 src/backend/commands/sequence.c nextval_internal line by line for fetch/log/log_cnt (variables: incby, maxv, minv, cache, log, fetch, last, result, rescnt; logit). Never overflow: use checked_add/checked_sub. advance with cache=1 must reproduce the oracle: new seq (1,0,f) -> value 1, state (1,32,t), persist Some((33,0,t)); next -> 2, (2,31,t), persist None; ... after 32 more calls logging again. Tests: oracle sequences above; maxvalue 2 -> 1,2 then 2200H message exactly 'nextval: reached maximum value of sequence \"s2\" (2)'; descending min; cycle wraps to min/max; setval bounds message 'setval: value 0 is out of bounds for sequence \"s\" (1..9223372036854775807)'; encode/decode roundtrip and 18-byte length; decode of 17 bytes -> XX001.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/sequence/state.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/sequence.c"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "log_cnt/last_value/is_called after each nextval match PG18 for cache 1",
+    "persisted state never lets a crash reissue a value"
+   ]
+  },
+  {
+   "lease_id": "CORE-13",
+   "task_ids": [
+    "TXN-13"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/sequence/store.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Sequence store: engine cache, mini-commits, session currval/lastval/CACHE, fork flush, shutdown flush.",
+   "spec": "Implement every unimplemented fn in sequence/store.rs per the module docs. Mini-commit helper (private fn mini_commit(engine, branch, db, key, value) -> Result<CommitSeq>): begin_write; rec = directory::load_record(&w.tree(dir), &branch)?; root = rec.database_root(db); new_root = w.apply(root, &batch)?; ops::advance_head(&mut w.tree(dir), &OpCtx{..}, &branch, rec.generation, db, new_root)?; set_directory_root; commit. Hold the entries mutex across load + advance + mini-commit for one sequence. Session state in txn.session().sequences (key (database, relid)). flush_branch(entries guard, w, rec) \u2014 the caller already holds lock_entries() (lock order: entries before writer; nextval also takes entries before begin_write) \u2014 writes visible states (state.encode) of all entries with key.branch == rec.id via w.apply on each db root and updates rec in place with set_database_root (caller stores the record). Tests (Engine over MemVfs): nextval 1,2,3 across two sessions interleaved gives distinct increasing values; read_state after first nextval = (1,32,t); setval then currval; currval before nextval -> 55000; read-only txn nextval -> 25006 'cannot execute nextval() in a read-only transaction'; sequence created in an uncommitted txn works and disappears on rollback; after engine drop+reopen (without close) next value is 34 (skips), after close()+reopen it continues at 4 with log_cnt shown 31 before the next call; create_branch after 3 nextvals: child's nextval = 4 and parent's = 4 too (independent).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/sequence/store.rs",
+    "crates/pgarbor-core/src/sequence/state.rs",
+    "crates/pgarbor-core/src/txn.rs",
+    "crates/pgarbor-core/src/engine.rs",
+    "crates/pgarbor-core/src/session.rs",
+    "crates/pgarbor-branches/src/ops.rs",
+    "crates/pgarbor-branches/src/directory.rs"
+   ],
+   "depends_on_leases": [
+    "CORE-12",
+    "CORE-01",
+    "CORE-04",
+    "CORE-03"
+   ],
+   "acceptance": [
+    "nextval is non-transactional (survives rollback) and never returns a value twice, including across crash/reopen",
+    "a forked branch continues from the parent's visible last_value"
+   ]
+  },
+  {
+   "lease_id": "CORE-14",
+   "task_ids": [
+    "TXN-01"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/alloc.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Non-transactional row-id and OID allocators seeded from the latest head.",
+   "spec": "Implement next_rowid, next_rowids, next_oid and max_rowid per alloc.rs docs. Seeding: head = txn.engine().branch_head(&txn.branch(), txn.database())?; the map entry is created under the mutex (double-checked: compute seed outside? NO \u2014 hold the mutex while seeding to avoid two seeds; seeding is rare). max_rowid binary search: lo=0, hi=u64::MAX; predicate exists(x) = first key of scan(Included(row_key(relid,x)), upper) is Some; if !exists(0) -> None; find largest x with exists(x) then read that first key's rowid exactly (decode bytes 4..12 of the first key >= x). Tests (MemVfs Engine): empty table -> 1,2,3; table with committed rowids up to 1000 -> 1001 after engine reopen; two sessions interleaved get distinct ids; forget_branch then re-seed; next_oid with seed closure returning 20000 -> 20000, 20001; seed below 16384 clamps to 16384; max_rowid over keys of neighboring relations is not confused (relid 16384 rows 1..5 and relid 16385 rows 1..100 -> Some(5)).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/alloc.rs",
+    "crates/pgarbor-core/src/engine.rs",
+    "crates/pgarbor-core/src/txn.rs"
+   ],
+   "depends_on_leases": [
+    "CORE-01",
+    "CORE-04"
+   ],
+   "acceptance": [
+    "allocated ids are unique per (branch, database, relid) across concurrent sessions and never collide with committed rows after reopen"
+   ]
+  },
+  {
+   "lease_id": "CORE-15",
+   "task_ids": [
+    "TXN-12"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/diag.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "pg_stat_activity / pg_locks / pg_blocking_pids row builders.",
+   "spec": "Implement activity_rows, lock_rows and blocking_pids per diag.rs docs; check exact column lists in contracts/reference/pg18/catalog_attributes.csv for pg_stat_activity and pg_locks. activity: for each engine.sessions().all() (filter s.branch == f when Some), take s.activity(); state = Some(a.state.as_pg_str()); wait_event_type/wait_event from a.wait; usesysid 10; backend_type 'client backend'; client_port = the session's client_port as given at attach (None for embedded sessions). lock_rows: map LockInfo -> LockRow (mode via LockMode::pg_name, virtualtransaction format '{pid}/{txn}' from session activity txn), add per-session virtualxid row and per-writer transactionid row as documented, sort by pid then locktype. Tests: Engine over MemVfs with two sessions, one waiting on the other's advisory lock in a thread: activity shows wait_event_type 'Lock', wait_event 'advisory', state 'active'; lock_rows has one granted and one waiting advisory row with classid/objid/objsubid; blocking_pids(waiter) == [holder].",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/diag.rs",
+    "crates/pgarbor-core/src/session.rs",
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/src/locks/table.rs",
+    "contracts/reference/pg18/catalog_attributes.csv"
+   ],
+   "depends_on_leases": [
+    "CORE-02",
+    "CORE-09",
+    "CORE-08"
+   ],
+   "acceptance": [
+    "pg_stat_activity/pg_locks rows only include the viewer's branch when filtered"
+   ]
+  },
+  {
+   "lease_id": "CORE-16",
+   "task_ids": [
+    "TXN-11"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/ssi.rs"
+   ],
+   "model_tier": "opus",
+   "summary": "Serializable Snapshot Isolation (predicate locks, rw-conflicts, dangerous structures).",
+   "spec": "Design and implement SSI per ssi.rs docs and PG18 src/backend/storage/lmgr/predicate.c + README-SSI. Keep is_active() returning false until all hooks are implemented and covered by tests in this file; the follow-up wiring into txn_kv.rs/commit.rs is a separate amendment (those files belong to CORE-06/CORE-07). Required tests: classic write-skew (two doctors on call) aborts one with 40001 'could not serialize access due to read/write dependencies among transactions'; read-only transaction anomaly example from the PG docs; non-overlapping key ranges never conflict.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/ssi.rs",
+    "crates/pgarbor-core/src/txn.rs",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/predicate.c",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/README-SSI"
+   ],
+   "depends_on_leases": [
+    "CORE-07",
+    "CORE-09"
+   ],
+   "acceptance": [
+    "write skew under SERIALIZABLE aborts one transaction with 40001",
+    "no false positives for disjoint key ranges"
+   ]
+  }
+ ]
+}

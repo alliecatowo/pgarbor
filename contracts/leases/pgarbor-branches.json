@@ -1,0 +1,402 @@
+{
+ "crate": "pgarbor-branches",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "BR-01",
+   "task_ids": [
+    "BRANCH-01"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/record.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "BranchRecord v1 binary encode/decode.",
+   "spec": "Implement BranchRecord::encode and BranchRecord::decode exactly per the byte table and decoding rules 1-6 in record.rs module docs. Little-endian; use a small private cursor struct (fn take(&mut self, n) -> Result<&[u8]>) that returns corrupt(\"truncated branch record\") instead of panicking; never index slices directly. encode: call validate() first (Some(msg) -> PgError::internal(format!(\"invalid branch record: {msg}\"))); name/label longer than u16::MAX -> internal error; flags bit0 = parent.is_some(), bit1 = roots_retained. decode: check version first (error::unsupported_record_format), then every rule; reject trailing bytes; reject non-zero parent bytes when has_parent=0; reject unknown flag bits (> 0x03), state > 1, snapshot kind > 2 (SnapshotKind::from_byte), non-UTF-8 strings, Active with deleted_at_seq != 0 or roots_retained, extra database oid 5 or duplicates. Unit tests in a #[cfg(test)] mod: roundtrip of (a) new_active minimal record, (b) record with parent, 3 snapshots of all kinds, 2 extra databases, deleted+retained; byte-exact check that encode of new_active(BranchId([1;16]),\"main\",None,PageId(7),CommitSeq(2),1000) has length 99+2+4+4+4 and bytes[35..43]==7u64.to_le_bytes(); every truncation length 0..len of a valid record errors with XX001; flipping version byte to 2 -> XX001 'unsupported branch record format version 2'; trailing byte -> error.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "decode(encode(r)) == r for all valid records",
+    "every strict prefix of a valid encoding fails with SQLSTATE XX001 and never panics",
+    "layout offsets match contracts/crates/pgarbor-branches.md byte table"
+   ]
+  },
+  {
+   "lease_id": "BR-02",
+   "task_ids": [
+    "BRANCH-01",
+    "BRANCH-04"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/directory.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Typed directory reads/writes over KvRead/KvWrite.",
+   "spec": "Implement every unimplemented fn in directory.rs per its doc comment and the module-level consistency checks (exact XX001 messages given). check_format: dir.scan(Unbounded,Unbounded) first item None -> Empty; get(meta_key(META_FORMAT)) None -> error::directory_corrupt(\"missing format marker\"); meta::decode_format; != DIRECTORY_FORMAT_VERSION -> error::unsupported_directory_format(v). load_record: key consistency check (record.id must equal requested id). list: scan_prefix(&[keys::BRANCH_PREFIX]), decode each, filter, sort by (name bytes, id). resolve/resolve_any_state per docs. default_branch/origin via meta helpers. store_record: dir.put(branch_key, rec.encode()?). Tests with pgarbor_common::MemKv: empty dir -> Empty; format marker present -> Ready; format 2 -> XX001; list sorting and deleted filtering; resolve by name/id; dangling N entry -> XX001; N pointing at deleted record -> XX001; resolve(Id of deleted) -> 42704 'has been deleted'.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "crates/pgarbor-branches/src/meta.rs",
+    "crates/pgarbor-branches/src/directory.rs"
+   ],
+   "depends_on_leases": [
+    "BR-01"
+   ],
+   "acceptance": [
+    "resolve(Name) returns only active branches; dangling or mismatched N entries are XX001, never silently ignored",
+    "check_format distinguishes Empty, Ready and unsupported versions"
+   ]
+  },
+  {
+   "lease_id": "BR-03",
+   "task_ids": [
+    "BRANCH-02",
+    "BRANCH-03",
+    "BRANCH-04",
+    "BRANCH-05"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/ops.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Branch lifecycle mutations (initialize/create/rename/delete/restore/purge/default/advance_head).",
+   "spec": "Implement each fn in ops.rs exactly as its doc comment says, as pure functions over &mut dyn KvWrite (which also implements KvRead, so call directory::* readers on it). Validate everything (names via crate::name::validate_branch_name, existence, limits) BEFORE the first write. new_branch_id uses uuid::Uuid::new_v4().into_bytes(). initialize must also write Mformat via directory::store_format and Mdefault_branch. create copies data_root + extra_databases pointers (never pages); parent = source id; created_at_seq = head_seq = ctx.commit_seq. delete: default-branch guard, remove N, tombstone fields, generation += 1, retain vs drop roots per DeleteOptions. restore/purge/set_default/advance_head per docs (advance_head error for missing database: PgError::new(SqlState::INVALID_CATALOG_NAME, format!(\"database with OID {oid} does not exist in branch \\\"{name}\\\"\"))). Tests (MemKv): initialize twice -> 55000; create from main copies root and sets parent; duplicate name 42710; invalid name 42602; rename keeps id/generation and moves N entry; rename to existing 42710; delete default -> 55000; delete non-default with retain keeps roots (live_roots non-empty, roots_retained) and frees the name for reuse; restore after retain works and bumps generation; restore after retain=false -> 55000 purged; purge removes B key; advance_head with stale generation -> 55000; advance_head updates head_seq and root; every failing call leaves MemKv byte-identical (clone map before, compare after).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "crates/pgarbor-branches/src/directory.rs",
+    "crates/pgarbor-branches/src/meta.rs",
+    "crates/pgarbor-branches/src/name.rs",
+    "crates/pgarbor-branches/src/ops.rs"
+   ],
+   "depends_on_leases": [
+    "BR-01",
+    "BR-02"
+   ],
+   "acceptance": [
+    "create is O(1): no data tree keys are touched, only B and N directory keys",
+    "failed operations leave the directory unchanged",
+    "generation increments on delete and restore, not on create/rename/advance_head"
+   ]
+  },
+  {
+   "lease_id": "BR-04",
+   "task_ids": [
+    "BRANCH-06"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/history.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Named snapshots and branch reset with optional recovery snapshot.",
+   "spec": "Implement create_snapshot, drop_snapshot and reset per the doc comments in history.rs. Use directory::resolve on the KvWrite (it is a KvRead), crate::name::validate_snapshot_label, record::MAX_SNAPSHOTS_PER_BRANCH, error::* helpers. reset: resolve target root BEFORE writing; Parent target errors are PgError::new(SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, format!(\"branch \\\"{name}\\\" has no parent\")) and format!(\"parent of branch \\\"{name}\\\" has been deleted\") (deleted parent = directory::load_record returns Deleted, or missing). Recovery snapshot appended before the root switch; generation += 1. Tests (MemKv + ops::initialize/create): snapshot then reset to it restores data_root; reset with recovery snapshot keeps old root under the label with kind ResetRecovery; duplicate label 42710; reset to Parent; reset to another branch copies its root; limit 1024 -> 54000; failed reset leaves directory unchanged.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "crates/pgarbor-branches/src/directory.rs",
+    "crates/pgarbor-branches/src/ops.rs",
+    "crates/pgarbor-branches/src/history.rs",
+    "crates/pgarbor-branches/src/name.rs"
+   ],
+   "depends_on_leases": [
+    "BR-02",
+    "BR-03"
+   ],
+   "acceptance": [
+    "reset bumps generation and sets head_seq to ctx.commit_seq",
+    "recovery snapshot preserves the pre-reset root"
+   ]
+  },
+  {
+   "lease_id": "BR-05",
+   "task_ids": [
+    "BRANCH-12",
+    "BRANCH-05"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/resolver.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "BranchRootResolver for storage compaction/doctor/export.",
+   "spec": "Implement RootResolver::roots and ::remap for BranchRootResolver exactly per the doc comments. Use keys::classify; only DirKey::Branch keys embed roots. roots: decode record, check record.id == key id (else error::directory_corrupt(format!(\"branch record {key_id} has id {id}\"))), push NamedRoot{label, root} for each of record.live_roots(). remap: for live records, map data_root, each extra_databases root, each snapshot root (skip NONE, never call map on NONE), in live_roots() order, re-encode, Some(bytes); dropped tombstones and non-B keys -> Ok(None). Tests: active record with data_root 5 and snapshots [7, NONE] -> roots labels ['branch main','branch main snapshot s1'] (NONE skipped); remap with |p| PageId(p.0+100) returns decodable record with shifted roots and NONE preserved; deleted+retained labels start with 'deleted branch'; dropped tombstone -> no roots, remap None; N/M keys -> nothing; garbage B value -> XX001.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "crates/pgarbor-storage/src/roots.rs",
+    "crates/pgarbor-branches/src/resolver.rs"
+   ],
+   "depends_on_leases": [
+    "BR-01"
+   ],
+   "acceptance": [
+    "every live root of every Active or retained record is reported; no other PageId is ever reported",
+    "remap rewrites exactly the reported roots"
+   ]
+  },
+  {
+   "lease_id": "BR-06",
+   "task_ids": [
+    "BRANCH-08"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/compare.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Branch compare: structural CoW tree diff grouped by keyspace.",
+   "spec": "Implement compare() and diff_trees() per compare.rs docs. Structural diff: two cursors over pgarbor_storage::btree::node::decode_node(&snap.read_page(id)?) (Snapshot implements PageSource) \u2014 each cursor is a stack of frames (Internal{node, next_child} / Leaf{node, next_entry}). Before descending into a pending child of both cursors, if both next pending subtrees have the same PageId and both cursors are at the same position (same lower bound key: track the separator key that bounds each pending child; equal PageId already implies equal content and range), skip both. Otherwise descend the side(s) whose next subtree lower bound is smaller and merge leaf entries by key. Overflow values: LeafValue::Overflow with equal first PageId => equal, else materialize via pgarbor_storage::btree::read::materialize and compare. Accumulate into a BTreeMap<SpaceKind, SpaceDiff> (samples: lowercase hex of the key built with format!(\"{:02x}\") per byte, up to opts.samples_per_space), stop at max_differences (truncated=true). compare(): resolve both branches from snap.directory(); same_root -> identical without reading; include_pages via pgarbor_storage::gc::trace(snap, snap.page_count(), &[NamedRoot a, NamedRoot b], true) using RootUsage.exclusive_pages; shared = reachable.len() - exA - exB. a_is_parent_of_b = b.parent == Some(a.id). Tests (in-file, MemVfs container: Container::create_with(Arc::new(MemVfs::new()), Path::new(\"t.pga\"), &CreateOptions{sync: SyncMode::Off, ..})): build a tree of 5000 keys across spaces (catalog prefix 1, relation 16384, 16385), fork (copy root), mutate 3 keys + insert 2 + delete 1 on the fork in a new commit, compare -> exact counts per space; result equals a naive merge of two full scans (write the naive version as a test helper) on 20 randomized cases; identical roots -> same_root=true; empty vs non-empty tree.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "contracts/crates/pgarbor-storage.md",
+    "crates/pgarbor-storage/src/btree/node.rs",
+    "crates/pgarbor-storage/src/btree/read.rs",
+    "crates/pgarbor-storage/src/container/snapshot.rs",
+    "crates/pgarbor-storage/src/gc/trace.rs",
+    "crates/pgarbor-branches/src/directory.rs",
+    "crates/pgarbor-branches/src/compare.rs"
+   ],
+   "depends_on_leases": [
+    "BR-02"
+   ],
+   "acceptance": [
+    "diff of a branch against itself or a fresh fork reads no data pages",
+    "diff counts equal the naive full-scan merge on randomized trees",
+    "differences are grouped by 4-byte keyspace prefix"
+   ]
+  },
+  {
+   "lease_id": "BR-07",
+   "task_ids": [
+    "BRANCH-12"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/space.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Per-branch retained/exclusive space accounting.",
+   "spec": "Implement branch_space() per the numbered steps in space.rs. Use pgarbor_storage::doctor::space_report(&snap, &BranchRootResolver), crate::directory::list(&snap.directory(), true), pgarbor_storage::gc::trace(&snap, snap.page_count(), &roots, false) and ReachSet::contains. Build NamedRoot lists from record.live_roots(). Tests (MemVfs container + BranchManager over it once BR-03/BR-05 exist; otherwise build directory entries by hand with ops::* inside a WriteTxn): two branches sharing a root -> each pages == total, exclusive 0; after writing 100 keys on one branch its exclusive_pages > 0 and the other's stays 0; dropped tombstone reports 0 pages.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "crates/pgarbor-storage/src/doctor/space.rs",
+    "crates/pgarbor-storage/src/doctor/report.rs",
+    "crates/pgarbor-storage/src/gc/trace.rs",
+    "crates/pgarbor-branches/src/directory.rs",
+    "crates/pgarbor-branches/src/resolver.rs",
+    "crates/pgarbor-branches/src/space.rs"
+   ],
+   "depends_on_leases": [
+    "BR-02",
+    "BR-05"
+   ],
+   "acceptance": [
+    "sum of exclusive pages over branches <= reachable pages",
+    "shared pages are never reported as exclusive"
+   ]
+  },
+  {
+   "lease_id": "BR-08",
+   "task_ids": [
+    "BRANCH-07"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/handle.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": ".pgabranch handle format, atomic write, parse, resolution.",
+   "spec": "Implement every fn in handle.rs per the module docs (format pgabranch/1). to_bytes: HandleBody (format=HANDLE_FORMAT, uuids via to_hyphenated) -> crc = crc32c::crc32c(&serde_json::to_vec(&body)) formatted {:08x}; then HandleJson with crc -> serde_json::to_string_pretty + \"\\n\". parse: size check, serde_json::from_slice::<HandleJson> (deny_unknown_fields), format check, DatabaseUuid::parse/BranchId::parse (None -> handle_invalid(path, \"invalid db_uuid\")), recompute crc. relative_path: absolutize both with std::env::current_dir().join when relative; strip common components; build '..' segments; different Prefix/RootDir -> Ok(None). write_handle: compute hint (relative unless opts.absolute_db_path or None), atomic tmp+rename via Vfs; read_handle; resolve_db_path; check(). Tests with MemVfs: roundtrip to_bytes/parse; exact golden bytes for fixed inputs (assert the JSON text including member order and crc); flipping one char in branch_name_hint -> 'checksum mismatch'; extra member -> error; wrong format string -> error; relative_path('/w/branches','/w/dev.pga') == '../dev.pga'; resolve uses explicit path first, then hint relative to handle dir; uuid mismatch -> 55000 message from error::handle_db_mismatch; existing handle without overwrite -> 58P02.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "crates/pgarbor-storage/src/io/vfs.rs",
+    "crates/pgarbor-storage/src/io/file_io.rs",
+    "crates/pgarbor-storage/src/io/mem.rs",
+    "crates/pgarbor-storage/src/error.rs",
+    "crates/pgarbor-branches/src/directory.rs",
+    "crates/pgarbor-branches/src/handle.rs"
+   ],
+   "depends_on_leases": [
+    "BR-02"
+   ],
+   "acceptance": [
+    "golden file bytes are stable",
+    "handle for database A never resolves against database B",
+    "renamed branch still resolves by id"
+   ]
+  },
+  {
+   "lease_id": "BR-09",
+   "task_ids": [
+    "BRANCH-10",
+    "BRANCH-11"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/reflink.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Reflink clone: Linux FICLONE ioctl, macOS clonefile, fallback classification.",
+   "spec": "Implement clone_file per reflink.rs module docs with #[cfg(target_os=\"linux\")], #[cfg(target_os=\"macos\")] and a fallback cfg(not(any(...))) private fn each; clone_file dispatches. Use std::os::fd::AsRawFd. libc::ioctl(fd, libc::FICLONE, src_fd) \u2014 pass FICLONE uncast. Map unsupported errnos (libc::EOPNOTSUPP, libc::ENOTSUP, libc::EXDEV, libc::EINVAL, libc::ENOTTY, libc::ENOSYS, libc::EPERM) to Ok(Unsupported{reason}); always remove the partially created dst on any non-success path. macOS: CString::new(path.as_os_str().as_bytes()); libc::clonefile(src, dst, 0). Keep unsafe blocks minimal with // SAFETY comments. Tests (linux): tempfile::tempdir() on the default tmp fs: result is Cloned (btrfs/xfs) or Unsupported; in both cases no stray dst when Unsupported; content equal when Cloned; dst existing -> 58P02; src missing -> 58P01.",
+   "reads": [
+    "crates/pgarbor-branches/src/reflink.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-storage/src/error.rs",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.190/src/unix/linux_like/mod.rs (FICLONE)",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.190/src/unix/bsd/apple/mod.rs (clonefile)",
+    "https://man7.org/linux/man-pages/man2/ioctl_ficlone.2.html"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "unsupported filesystems return Unsupported and leave no destination file",
+    "a successful clone is fsynced and byte-identical"
+   ]
+  },
+  {
+   "lease_id": "BR-10",
+   "task_ids": [
+    "BRANCH-09"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/export.rs",
+    "crates/pgarbor-branches/tests/br-10.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Copy-strategy standalone export with reopen-verify-before-publish.",
+   "spec": "Implement export_branch, standalone_directory_entries and verify_and_publish exactly per the numbered steps in export.rs. Use pgarbor_storage::{ExportBuilder, ExportOptions, Container, OpenOptions, VerifyLevel}, pgarbor_storage::io::{sibling_path, parent_dir}, pgarbor_storage::format::{random_db_uuid}, format::superblock::now_unix_ms, crate::ops::new_branch_id (or opts.new_branch_id), crate::resolver::BranchRootResolver, DetachReport::from_parts(.., StrategyUsed::Copy, None, ..). Error hygiene: on every Err after creating the temp, call vfs.remove_file(tmp) best-effort (ignore its error) and return the original error. Integration tests (tests/br-10.rs, MemVfs, SyncMode::Off): create container + BranchManager::open; write 1000 keys on main via WriteTxn + ops::advance_head; create branch 'feature' and write 10 more keys there; export 'feature' -> reopen dest with Container::open_with + BranchManager::open: one branch named 'main', fresh uuid != source, origin.source_branch_name == 'feature', all 1010 keys readable and equal; page_count of the export < source page_count; dest exists without overwrite -> 58P02 and dest untouched; source keeps committing during export (commit between snapshot and finish) and export reflects the snapshot commit; stale .detach-tmp is removed.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "contracts/crates/pgarbor-storage.md",
+    "crates/pgarbor-storage/src/export.rs",
+    "crates/pgarbor-storage/src/container/handle.rs",
+    "crates/pgarbor-storage/src/io/vfs.rs",
+    "crates/pgarbor-branches/src/directory.rs",
+    "crates/pgarbor-branches/src/meta.rs",
+    "crates/pgarbor-branches/src/resolver.rs",
+    "crates/pgarbor-branches/src/detach.rs",
+    "crates/pgarbor-branches/src/export.rs",
+    "crates/pgarbor-branches/src/manager.rs"
+   ],
+   "depends_on_leases": [
+    "BR-02",
+    "BR-03",
+    "BR-05"
+   ],
+   "acceptance": [
+    "exported file reopens, verifies Full with zero errors, and holds exactly one branch",
+    "exported file has a fresh DatabaseUuid and an Morigin mapping",
+    "failed export leaves no dest and no temp file"
+   ]
+  },
+  {
+   "lease_id": "BR-11",
+   "task_ids": [
+    "BRANCH-09",
+    "BRANCH-10",
+    "BRANCH-11",
+    "BRANCH-12"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/detach.rs",
+    "crates/pgarbor-branches/tests/br-11.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Detach orchestration: strategy selection, reflink barrier, re-identify, logical prune.",
+   "spec": "Implement detach_branch, reflink_detach, reidentify_file and prune_to_branch per detach.rs docs. Barrier: hold the WriteTxn from container.begin_write() while calling reflink::clone_file and drop it (w.abort()) right after. reidentify_file: pgarbor_storage::container::read_slots + pgarbor_storage::format::choose_slot + Superblock::encode; write via FileIo::write_all_at at offset slot*4096 (SUPERBLOCK_SLOT_SIZE) and zero the other slot; sync_data if SyncMode::Full. prune_to_branch: inside one WriteTxn build a fresh directory with w.build_tree(&mut export::standalone_directory_entries(&new_rec, origin)?.into_iter().map(Ok)) and set_directory_root, commit. Origin strategy string 'reflink'. Fallback: Auto + Unsupported -> export::export_branch with fallback_reason Some(reason). Tests (tests/br-11.rs): MemVfs + os_filesystem=false: Auto -> strategy_used Copy with fallback_reason Some; ReflinkRequired -> 0A000 not is_unimplemented(); real tempdir (OsVfs) with DetachOptions{os_filesystem: true, ..} Auto: either Reflink (then reopen: one branch, new uuid, garbage_pages > 0 when another branch had exclusive pages) or Copy fallback; reidentify_file on a copied file then Container::open succeeds with the new uuid.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "crates/pgarbor-branches/src/keys.rs",
+    "crates/pgarbor-branches/src/options.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "contracts/crates/pgarbor-storage.md",
+    "crates/pgarbor-storage/src/container/recovery.rs",
+    "crates/pgarbor-storage/src/format/superblock.rs",
+    "crates/pgarbor-storage/src/container/write.rs",
+    "crates/pgarbor-branches/src/export.rs",
+    "crates/pgarbor-branches/src/reflink.rs",
+    "crates/pgarbor-branches/src/detach.rs",
+    "contracts/amendments/pgarbor-branches-02-storage-reidentify-and-export-publish.md"
+   ],
+   "depends_on_leases": [
+    "BR-09",
+    "BR-10",
+    "BR-03"
+   ],
+   "acceptance": [
+    "Auto never fails because reflink is unsupported; it falls back and reports why",
+    "detached file is reopened and verified before the rename",
+    "no commit can interleave with the clone (writer barrier held)"
+   ]
+  }
+ ]
+}
