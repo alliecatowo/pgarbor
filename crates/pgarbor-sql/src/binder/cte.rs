@@ -980,8 +980,12 @@ mod tests {
         let mut order = vec![0, 1, 2];
         assert!(move_before(&mut order, 2, 0));
         assert_eq!(order, vec![2, 0, 1]);
-        // An item that is already before `before` cannot be moved in front of it.
-        assert!(!move_before(&mut order, 0, 2));
+        // Now 2 sits before 0; an item already in front of `before` is not moved.
+        assert!(!move_before(&mut order, 2, 0));
+        assert_eq!(order, vec![2, 0, 1]);
+        // 0 is after 2, so it can move in front of 2.
+        assert!(move_before(&mut order, 0, 2));
+        assert_eq!(order, vec![0, 2, 1]);
     }
 
     #[test]

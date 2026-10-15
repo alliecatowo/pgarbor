@@ -492,7 +492,10 @@ mod tests {
 
     #[test]
     fn begin_non_pg_modifier_is_syntax_error() {
-        let err = run("BEGIN DEFERRED", bind_transaction).err().expect("must fail");
+        // sqlparser's PostgreSQL dialect rejects the SQLite-style modifier while parsing, before the
+        // binder sees it. PG answers 42601 as well ("syntax error at or near \"DEFERRED\""), so the
+        // check is end-to-end through the parser.
+        let err = crate::parser::parse("BEGIN DEFERRED").err().expect("must fail");
         assert_eq!(err.sqlstate.code(), "42601");
     }
 
