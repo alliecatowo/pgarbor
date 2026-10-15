@@ -1,10 +1,14 @@
 # VACUUM FULL moves surviving row versions, changing their ctid.
+# The physical ctid values after VACUUM FULL are not pinned here: the exact
+# (block,item) assignment varied between recordings. The case instead asserts
+# the documented behavior directly: each surviving row's ctid differs from the
+# ctid it had before VACUUM FULL.
 id: doc-ddl-system-columns.ctid-changed-by-vacuum-full
 title: VACUUM FULL changes the ctid of surviving rows
 family: doc-ddl-system-columns
 tier: extended
 feature_ids: [system-columns, ctid, vacuum, delete, update]
-required_capabilities: [create-table, insert, select, update, delete, vacuum]
+required_capabilities: [create-table, insert, select, update, delete, vacuum, temp-tables]
 provenance:
   source: pg-docs
   ref: "doc/src/sgml/ddl.sgml#ddl-system-columns (ctid changes if a row is moved by VACUUM FULL)"
@@ -19,10 +23,15 @@ steps:
     expect: rows
     order: ordered
   - sql: |
+      CREATE TEMP TABLE before_vacuum AS SELECT id, ctid AS old_ctid FROM t
+    expect: ok
+  - sql: |
       VACUUM (FULL) t
     expect: ok
   - sql: |
-      SELECT id, ctid FROM t ORDER BY id
+      SELECT t.id, t.ctid <> b.old_ctid AS moved
+      FROM t JOIN before_vacuum b USING (id)
+      ORDER BY t.id
     expect: rows
     order: ordered
-    comment: the surviving rows were relocated, so their ctid values changed
+    comment: every surviving row was relocated, so its ctid differs from the value recorded before VACUUM FULL

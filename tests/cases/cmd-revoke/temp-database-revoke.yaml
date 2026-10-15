@@ -10,10 +10,11 @@ provenance:
   ref: "ref/revoke.sgml#sql-revoke (REVOKE { CREATE | CONNECT | TEMPORARY | TEMP } ON DATABASE database_name)"
 sessions: [a]
 setup: |
-  CREATE ROLE rvm_s;
+  DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['pgarbor_case_role_rvm_s'] LOOP IF EXISTS (SELECT FROM pg_roles WHERE rolname = r) THEN EXECUTE format('DROP ROLE %I', r); END IF; END LOOP; END $$;
+  CREATE ROLE pgarbor_case_role_rvm_s;
 steps:
   - sql: |
-      SET ROLE rvm_s
+      SET ROLE pgarbor_case_role_rvm_s
     expect: ok
   - sql: |
       CREATE TEMP TABLE rvm_tmp_before (x int4)
@@ -26,12 +27,14 @@ steps:
       DO $$ BEGIN EXECUTE format('REVOKE TEMP ON DATABASE %I FROM PUBLIC', current_database()); END $$
     expect: ok
   - sql: |
-      SET ROLE rvm_s
+      SET ROLE pgarbor_case_role_rvm_s
     expect: ok
   - sql: |
       CREATE TEMP TABLE rvm_tmp_after (x int4)
     expect: error
     sqlstate: "42501"
+    compare_message: false
+    comment: the message names the backend temp schema (pg_temp_N), which varies per run
   - sql: |
       RESET ROLE
     expect: ok

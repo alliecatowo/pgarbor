@@ -1,4 +1,6 @@
 # Sequence advancement is not transactional, so nextval inside a rolled-back savepoint is not undone.
+# Each statement is its own step so that each expect: states the kind of its own result
+# (the last result of a multi-statement step is COMMIT, which is kind=command).
 id: cmd-savepoint.sequence-not-rolled-back
 title: nextval consumed after a savepoint is not returned by ROLLBACK TO SAVEPOINT
 family: cmd-savepoint
@@ -12,13 +14,19 @@ sessions: [a]
 setup: |
   CREATE SEQUENCE s;
 steps:
-  - sql: |
-      BEGIN;
-      SAVEPOINT sp;
-      SELECT nextval('s') AS first;
-      ROLLBACK TO SAVEPOINT sp;
-      SELECT nextval('s') AS second;
-      COMMIT
+  - sql: "BEGIN;"
+    expect: ok
+  - sql: "SAVEPOINT sp;"
+    expect: ok
+  - sql: "SELECT nextval('s') AS first;"
     expect: rows
     order: ordered
-    comment: first=1 is consumed and not reused; second=2
+    comment: first=1 is consumed inside the savepoint
+  - sql: "ROLLBACK TO SAVEPOINT sp;"
+    expect: ok
+  - sql: "SELECT nextval('s') AS second;"
+    expect: rows
+    order: ordered
+    comment: second=2; the value 1 is not reused after ROLLBACK TO SAVEPOINT
+  - sql: "COMMIT;"
+    expect: ok

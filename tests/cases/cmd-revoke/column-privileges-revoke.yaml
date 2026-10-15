@@ -10,44 +10,45 @@ provenance:
   ref: "ref/revoke.sgml#sql-revoke-description (When revoking privileges on a table, the corresponding column privileges are automatically revoked; revoking column privileges from a table-granted role has no effect)"
 sessions: [a]
 setup: |
-  CREATE ROLE rvc_u;
+  DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['pgarbor_case_role_rvc_u'] LOOP IF EXISTS (SELECT FROM pg_roles WHERE rolname = r) THEN EXECUTE format('DROP ROLE %I', r); END IF; END LOOP; END $$;
+  CREATE ROLE pgarbor_case_role_rvc_u;
   CREATE TABLE rvc_t (a int4, b text);
   INSERT INTO rvc_t VALUES (1, 'x'), (2, 'y');
   CREATE TABLE rvc_t2 (a int4, b text);
   INSERT INTO rvc_t2 VALUES (3, 'z');
 steps:
   - sql: |
-      GRANT SELECT (a, b) ON rvc_t TO rvc_u
+      GRANT SELECT (a, b) ON rvc_t TO pgarbor_case_role_rvc_u
     expect: ok
   - sql: |
-      REVOKE SELECT (a) ON rvc_t FROM rvc_u
+      REVOKE SELECT (a) ON rvc_t FROM pgarbor_case_role_rvc_u
     expect: ok
   - sql: |
-      SELECT has_column_privilege('rvc_u', 'rvc_t', 'a', 'SELECT') AS a_sel, has_column_privilege('rvc_u', 'rvc_t', 'b', 'SELECT') AS b_sel
+      SELECT has_column_privilege('pgarbor_case_role_rvc_u', 'rvc_t', 'a', 'SELECT') AS a_sel, has_column_privilege('pgarbor_case_role_rvc_u', 'rvc_t', 'b', 'SELECT') AS b_sel
     expect: rows
     comment: a revoked, b kept
   - sql: |
-      GRANT SELECT ON rvc_t TO rvc_u
+      GRANT SELECT ON rvc_t TO pgarbor_case_role_rvc_u
     expect: ok
   - sql: |
-      REVOKE SELECT (a) ON rvc_t FROM rvc_u
+      REVOKE SELECT (a) ON rvc_t FROM pgarbor_case_role_rvc_u
     expect: ok
   - sql: |
-      SELECT has_column_privilege('rvc_u', 'rvc_t', 'a', 'SELECT') AS a_sel, has_column_privilege('rvc_u', 'rvc_t', 'b', 'SELECT') AS b_sel
+      SELECT has_column_privilege('pgarbor_case_role_rvc_u', 'rvc_t', 'a', 'SELECT') AS a_sel, has_column_privilege('pgarbor_case_role_rvc_u', 'rvc_t', 'b', 'SELECT') AS b_sel
     expect: rows
     comment: table-level SELECT still covers column a, so the column revoke had no effect
   - sql: |
-      GRANT SELECT (a) ON rvc_t2 TO rvc_u
+      GRANT SELECT (a) ON rvc_t2 TO pgarbor_case_role_rvc_u
     expect: ok
   - sql: |
-      REVOKE SELECT ON rvc_t2 FROM rvc_u
+      REVOKE SELECT ON rvc_t2 FROM pgarbor_case_role_rvc_u
     expect: ok
   - sql: |
-      SELECT has_column_privilege('rvc_u', 'rvc_t2', 'a', 'SELECT') AS a_sel
+      SELECT has_column_privilege('pgarbor_case_role_rvc_u', 'rvc_t2', 'a', 'SELECT') AS a_sel
     expect: rows
     comment: table-level revoke also removed the column privilege
   - sql: |
-      SET ROLE rvc_u
+      SET ROLE pgarbor_case_role_rvc_u
     expect: ok
   - sql: |
       SELECT a FROM rvc_t2

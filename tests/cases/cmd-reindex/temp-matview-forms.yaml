@@ -4,7 +4,7 @@ title: REINDEX works on temporary tables and materialized views but not on plain
 family: cmd-reindex
 tier: extended
 feature_ids: [reindex, reindex-table, reindex-index, reindex-concurrently, temp-tables, materialized-views]
-required_capabilities: [create-table, create-index, create-materialized-view, insert, select, reindex, reindex-concurrently, temp-tables]
+required_capabilities: [create-table, create-index, create-view, create-materialized-view, insert, select, reindex, reindex-concurrently, temp-tables]
 provenance:
   source: pg-docs
   ref: "ref/reindex.sgml#sql-reindex (Parameters: CONCURRENTLY: For temporary tables, REINDEX is always non-concurrent)"
@@ -14,9 +14,7 @@ setup: |
   INSERT INTO base VALUES (1, 10), (2, 20);
   CREATE MATERIALIZED VIEW mv AS SELECT id, k FROM base;
   CREATE INDEX mv_id ON mv (id);
-  CREATE TEMP TABLE tmp (id int4 PRIMARY KEY, v int4);
-  INSERT INTO tmp VALUES (1, 100), (2, 200);
-  CREATE INDEX tmp_v ON tmp (v);
+  CREATE VIEW plain_v AS SELECT id, k FROM base;
 steps:
   - sql: |
       REINDEX TABLE mv
@@ -29,6 +27,17 @@ steps:
       SELECT id, k FROM mv ORDER BY id
     expect: rows
     order: ordered
+  - sql: |
+      REINDEX TABLE plain_v
+    expect: error
+    sqlstate: "42809"
+    comment: a plain view is not a table or materialized view
+  - sql: |
+      CREATE TEMP TABLE tmp (id int4 PRIMARY KEY, v int4);
+      INSERT INTO tmp VALUES (1, 100), (2, 200);
+      CREATE INDEX tmp_v ON tmp (v)
+    expect: ok
+    comment: temporary tables are session-local, so they are created in the same session that reindexes them
   - sql: |
       REINDEX TABLE CONCURRENTLY tmp
     expect: ok

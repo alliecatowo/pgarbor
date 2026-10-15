@@ -1,7 +1,8 @@
-# The docs state there is no UNLOCK TABLE; locks end only at transaction end. The statement is a
-# syntax error and aborts the surrounding transaction, which ROLLBACK then ends.
+# The docs state there is no UNLOCK TABLE. The statement is a syntax error (42601) that aborts the
+# surrounding transaction; on PostgreSQL 18.6 the error itself releases the transaction's table
+# locks, so another session can take the table before ROLLBACK.
 id: cmd-lock.unlock-table-syntax-error
-title: UNLOCK TABLE is not a command; the lock stays until the transaction ends
+title: UNLOCK TABLE is not a command; its syntax error aborts the block and releases the lock
 family: cmd-lock
 tier: core
 feature_ids: [lock-table, transactions, errors]
@@ -29,13 +30,25 @@ steps:
     sqlstate: "42601"
   - session: b
     sql: |
+      BEGIN
+    expect: ok
+    comment: LOCK TABLE outside a transaction block fails with 25P01, so session b opens one first
+  - session: b
+    sql: |
       LOCK TABLE t_unlock IN ACCESS SHARE MODE NOWAIT
-    expect: error
-    sqlstate: "55P03"
-    comment: the failed UNLOCK did not release the lock
+    expect: ok
+    comment: the syntax error already released a's ACCESS EXCLUSIVE lock; the aborted block still holds nothing
+  - session: b
+    sql: |
+      ROLLBACK
+    expect: ok
   - session: a
     sql: |
       ROLLBACK
+    expect: ok
+  - session: b
+    sql: |
+      BEGIN
     expect: ok
   - session: b
     sql: |

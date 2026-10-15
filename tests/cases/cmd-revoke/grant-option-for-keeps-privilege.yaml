@@ -10,30 +10,31 @@ provenance:
   ref: "ref/revoke.sgml#sql-revoke-description (If GRANT OPTION FOR is specified, only the grant option for the privilege is revoked)"
 sessions: [a]
 setup: |
-  CREATE ROLE rvg_owner;
-  CREATE ROLE rvg_a;
-  CREATE ROLE rvg_b;
+  DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['pgarbor_case_role_rvg_a','pgarbor_case_role_rvg_b','pgarbor_case_role_rvg_owner'] LOOP IF EXISTS (SELECT FROM pg_roles WHERE rolname = r) THEN EXECUTE format('DROP ROLE %I', r); END IF; END LOOP; END $$;
+  CREATE ROLE pgarbor_case_role_rvg_owner;
+  CREATE ROLE pgarbor_case_role_rvg_a;
+  CREATE ROLE pgarbor_case_role_rvg_b;
   CREATE TABLE rvg_t (id int4);
   INSERT INTO rvg_t VALUES (1), (2);
-  ALTER TABLE rvg_t OWNER TO rvg_owner;
+  ALTER TABLE rvg_t OWNER TO pgarbor_case_role_rvg_owner;
 steps:
   - sql: |
-      SET ROLE rvg_owner
+      SET ROLE pgarbor_case_role_rvg_owner
     expect: ok
   - sql: |
-      GRANT SELECT ON rvg_t TO rvg_a WITH GRANT OPTION
+      GRANT SELECT ON rvg_t TO pgarbor_case_role_rvg_a WITH GRANT OPTION
     expect: ok
   - sql: |
-      REVOKE GRANT OPTION FOR SELECT ON rvg_t FROM rvg_a
+      REVOKE GRANT OPTION FOR SELECT ON rvg_t FROM pgarbor_case_role_rvg_a
     expect: ok
   - sql: |
       RESET ROLE
     expect: ok
   - sql: |
-      SELECT has_table_privilege('rvg_a', 'rvg_t', 'SELECT') AS a_can_select
+      SELECT has_table_privilege('pgarbor_case_role_rvg_a', 'rvg_t', 'SELECT') AS a_can_select
     expect: rows
   - sql: |
-      SET ROLE rvg_a
+      SET ROLE pgarbor_case_role_rvg_a
     expect: ok
   - sql: |
       SELECT id FROM rvg_t ORDER BY id
@@ -41,10 +42,9 @@ steps:
     order: ordered
     comment: the SELECT privilege itself is still held
   - sql: |
-      GRANT SELECT ON rvg_t TO rvg_b
-    expect: error
-    sqlstate: "42501"
-    comment: without the grant option a cannot re-grant
+      GRANT SELECT ON rvg_t TO pgarbor_case_role_rvg_b
+    expect: notice
+    comment: without the grant option a cannot re-grant; PG warns 01007 and grants nothing
   - sql: |
       RESET ROLE
     expect: ok

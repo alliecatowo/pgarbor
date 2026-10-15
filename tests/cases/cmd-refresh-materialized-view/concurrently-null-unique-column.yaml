@@ -38,11 +38,9 @@ steps:
       INSERT INTO src2 VALUES (5, 'x')
     expect: ok
   - sql: |
-      REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nulls
-    expect: error
-    sqlstate: "23505"
-    compare_message: false
-    comment: new data has two 'x' rows; unique index rejects it; message context embeds a backend temp schema name
+      DO $$ BEGIN REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nulls; RAISE NOTICE 'refresh succeeded'; EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'refresh failed with SQLSTATE %', SQLSTATE; END $$
+    expect: notice
+    comment: new data has two 'x' rows; unique index rejects it with 23505. Run inside a DO block so the error's CONTEXT (which embeds a backend-specific pg_temp schema name) is not recorded; the notice carries the SQLSTATE
   - sql: |
       SELECT id, grp FROM mv_nulls ORDER BY id
     expect: rows

@@ -189,8 +189,8 @@ def run_cases(cases: Iterable[Case], target: Target, expected_root: Path, out_di
               reruns: int = 1) -> list[CaseResult]:
     """Run many cases per module docstring; ``target.start()`` first, ``target.stop()`` last."""
     selected = list(cases)
-    parallel = [case for case in selected if not case.needs_restart]
-    serial = [case for case in selected if case.needs_restart]
+    parallel = [case for case in selected if not case.runs_serially]
+    serial = [case for case in selected if case.runs_serially]
     expected_root = Path(expected_root)
     out_dir = Path(out_dir)
 

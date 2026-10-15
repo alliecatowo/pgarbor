@@ -1,6 +1,8 @@
 # Hex input digits may be upper or lower case, and whitespace is allowed between digit pairs.
 # The manual says whitespace is not allowed right after the leading \x; the oracle accepts '\x AB', so the recorded
 # PG 18.6 behavior is authoritative and this case documents the observed acceptance.
+# An uppercase 'X' prefix is NOT the hex format marker: PG 18.6 rejects '\X0a0B' with 22P02, so that is checked in
+# its own step rather than failing the row-set query.
 id: doc-datatype-binary.hex-whitespace-and-case
 title: bytea hex input accepts mixed case and whitespace between digit pairs
 family: doc-datatype-binary
@@ -18,8 +20,12 @@ steps:
         (2, E'\\xdeADbeef'::bytea),
         (3, '\x AB'::bytea),
         (4, '\xDE  AD'::bytea),
-        (5, '\X0a0B'::bytea)
+        (5, '\x0a0B'::bytea)
       ) AS t(id, v) ORDER BY id
     expect: rows
     order: ordered
-    comment: uppercase X prefix may be accepted or rejected; the recording decides
+    comment: mixed-case digits and whitespace between digit pairs and after the \x prefix are accepted
+  - sql: "SELECT '\\X0a0B'::bytea"
+    expect: error
+    sqlstate: "22P02"
+    comment: uppercase X is not the hex format prefix; PG 18.6 rejects it as invalid bytea input

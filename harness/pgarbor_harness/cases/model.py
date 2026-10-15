@@ -15,6 +15,7 @@ Defaults applied by from_dict:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
@@ -109,6 +110,13 @@ class Step:
         )
 
 
+_CLUSTER_GLOBAL_RE = re.compile(
+    r"\b(CREATE|ALTER|DROP)\s+(ROLE|USER|GROUP|DATABASE|TABLESPACE|(TRUSTED\s+)?(PROCEDURAL\s+)?LANGUAGE)\b"
+    r"|\b(DROP|REASSIGN)\s+OWNED\b|\bALTER\s+DEFAULT\s+PRIVILEGES\b|\bSET\s+(SESSION\s+)?ROLE\b"
+    r"|\bSET\s+SESSION\s+AUTHORIZATION\b|\bGRANT\b|\bREVOKE\b|\bOR\s+REPLACE\s+(TRUSTED\s+)?(PROCEDURAL\s+)?LANGUAGE\b",
+    re.IGNORECASE)
+
+
 @dataclass
 class Case:
     """A validated case. ``path`` is repo-relative POSIX (``tests/cases/smoke/x.yaml``).
@@ -133,6 +141,18 @@ class Case:
     @property
     def needs_restart(self) -> bool:
         return any(s.kind == "restart" for s in self.steps)
+
+    @property
+    def touches_cluster_globals(self) -> bool:
+        """True when the case creates/alters/drops cluster-wide objects (roles, databases,
+        tablespaces, languages) or rewrites role-owned state. Per-case databases do not isolate
+        these, so such cases run serially after the parallel pool (like restart cases)."""
+        texts = [self.setup or ""] + [str(s.payload.get("sql", "")) for s in self.steps]
+        return any(_CLUSTER_GLOBAL_RE.search(t) for t in texts)
+
+    @property
+    def runs_serially(self) -> bool:
+        return self.needs_restart or self.touches_cluster_globals
 
     @property
     def is_multi_session(self) -> bool:

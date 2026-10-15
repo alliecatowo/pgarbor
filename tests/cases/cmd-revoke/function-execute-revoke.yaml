@@ -10,18 +10,20 @@ provenance:
   ref: "ref/revoke.sgml#sql-revoke (REVOKE ... ON { FUNCTION | PROCEDURE | ROUTINE } function_name [ ( [argmode] [arg_name] arg_type ...) ]; ALL FUNCTIONS IN SCHEMA)"
 sessions: [a]
 setup: |
-  CREATE ROLE rvf_u;
+  DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['pgarbor_case_role_rvf_u'] LOOP IF EXISTS (SELECT FROM pg_roles WHERE rolname = r) THEN EXECUTE format('DROP ROLE %I', r); END IF; END LOOP; END $$;
+  CREATE ROLE pgarbor_case_role_rvf_u;
   CREATE SCHEMA rvf_sch;
+  GRANT USAGE ON SCHEMA rvf_sch TO pgarbor_case_role_rvf_u;
   CREATE FUNCTION rvf_sch.add2(int4, int4) RETURNS int4 LANGUAGE sql AS 'SELECT $1 + $2';
   CREATE FUNCTION rvf_sch.neg(int4) RETURNS int4 LANGUAGE sql AS 'SELECT -$1';
 steps:
   - sql: |
-      SET ROLE rvf_u
+      SET ROLE pgarbor_case_role_rvf_u
     expect: ok
   - sql: |
       SELECT rvf_sch.add2(1, 2)
     expect: rows
-    comment: EXECUTE is granted to PUBLIC by default
+    comment: EXECUTE is granted to PUBLIC by default; USAGE on the schema is granted explicitly in setup
   - sql: |
       RESET ROLE
     expect: ok
@@ -29,17 +31,17 @@ steps:
       REVOKE EXECUTE ON FUNCTION rvf_sch.add2(int4, int4) FROM PUBLIC
     expect: ok
   - sql: |
-      SELECT has_function_privilege('rvf_u', 'rvf_sch.add2(int4, int4)', 'EXECUTE') AS add2_exec, has_function_privilege('rvf_u', 'rvf_sch.neg(int4)', 'EXECUTE') AS neg_exec
+      SELECT has_function_privilege('pgarbor_case_role_rvf_u', 'rvf_sch.add2(int4, int4)', 'EXECUTE') AS add2_exec, has_function_privilege('pgarbor_case_role_rvf_u', 'rvf_sch.neg(int4)', 'EXECUTE') AS neg_exec
     expect: rows
     comment: only the named signature loses EXECUTE
   - sql: |
       REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA rvf_sch FROM PUBLIC
     expect: ok
   - sql: |
-      SELECT has_function_privilege('rvf_u', 'rvf_sch.add2(int4, int4)', 'EXECUTE') AS add2_exec, has_function_privilege('rvf_u', 'rvf_sch.neg(int4)', 'EXECUTE') AS neg_exec
+      SELECT has_function_privilege('pgarbor_case_role_rvf_u', 'rvf_sch.add2(int4, int4)', 'EXECUTE') AS add2_exec, has_function_privilege('pgarbor_case_role_rvf_u', 'rvf_sch.neg(int4)', 'EXECUTE') AS neg_exec
     expect: rows
   - sql: |
-      SET ROLE rvf_u
+      SET ROLE pgarbor_case_role_rvf_u
     expect: ok
   - sql: |
       SELECT rvf_sch.neg(5)

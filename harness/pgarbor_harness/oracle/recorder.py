@@ -303,8 +303,8 @@ def _run_all(work: Callable[[Case], RecordResult], cases: list[Case],
              jobs: int) -> list[RecordResult]:
     """Non-restart cases on a thread pool; restart cases one at a time afterwards (they
     restart the shared container). Results sorted by case id."""
-    normal = [c for c in cases if not c.needs_restart]
-    restarts = [c for c in cases if c.needs_restart]
+    normal = [c for c in cases if not c.runs_serially]
+    restarts = [c for c in cases if c.runs_serially]
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool_exec:
         results = list(pool_exec.map(work, normal))
     results.extend(work(c) for c in restarts)
