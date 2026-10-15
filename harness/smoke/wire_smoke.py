@@ -37,6 +37,24 @@ def main():
                 print(f"OK   {q} -> {cur.statusmessage} {rows}"); ok += 1
             except Exception as e:
                 print(f"ERR  {q} -> {type(e).__name__}: {str(e).splitlines()[0]}"); fail += 1
+        def check(name, got, want):
+            nonlocal ok, fail
+            if got == want:
+                print(f"OK   check {name} -> {got!r}"); ok += 1
+            else:
+                print(f"ERR  check {name} -> got {got!r}, want {want!r}"); fail += 1
+        try:
+            n = lambda: c.execute("SELECT count(*) FROM t").fetchone()[0]
+            check("UPDATE changed value", c.execute("SELECT b FROM t WHERE a = 1").fetchone()[0], "x!")
+            check("information_schema filter",
+                  [r[0] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")], ["t"])
+            before = n()
+            c.execute("BEGIN"); c.execute("INSERT INTO t(a,b) VALUES (100,'tmp')")
+            check("count inside txn", n(), before + 1)
+            c.execute("ROLLBACK")
+            check("ROLLBACK restores count", n(), before)
+        except Exception as e:
+            print("ERR  checks ->", type(e).__name__, str(e).splitlines()[0]); fail += 1
         try:
             cur = c.execute("SELECT a, b FROM t WHERE a = %s", (1,))
             print("OK   extended/params ->", cur.fetchall()); ok += 1
