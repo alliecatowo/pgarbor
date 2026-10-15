@@ -39,19 +39,10 @@ use pgarbor_types::catalog_data::Volatility;
 
 use crate::build;
 use crate::build_dml;
-use crate::context::PlannerState;
+use crate::context::{CteScope, PlannerState};
 use crate::logical::ScanSource;
 use crate::plan::{AppendNode, CteBodyPlan, CteDef, NodeKind, OutCol, PlanNode};
 use crate::planner;
-
-/// Scratch keys holding, per WITH nesting depth, the first `CteDef` id reserved for that level.
-const SCOPE_BASE_KEYS: [&str; 32] = [
-    "cte_base_00", "cte_base_01", "cte_base_02", "cte_base_03", "cte_base_04", "cte_base_05", "cte_base_06",
-    "cte_base_07", "cte_base_08", "cte_base_09", "cte_base_10", "cte_base_11", "cte_base_12", "cte_base_13",
-    "cte_base_14", "cte_base_15", "cte_base_16", "cte_base_17", "cte_base_18", "cte_base_19", "cte_base_20",
-    "cte_base_21", "cte_base_22", "cte_base_23", "cte_base_24", "cte_base_25", "cte_base_26", "cte_base_27",
-    "cte_base_28", "cte_base_29", "cte_base_30", "cte_base_31",
-];
 
 /// What [`register_ctes`] does with one CTE of a WITH list (PG `SS_process_ctes`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,14 +57,11 @@ enum Decision {
 
 /// Plan/register the CTEs of one query level (module docs).
 pub fn register_ctes(st: &mut PlannerState, ctes: &[BoundCte]) -> Result<()> {
-    let depth = st.cte_scopes.len();
-    let key = scope_key(depth)?;
     let decs = decisions(ctes);
-    st.cte_scopes.push(ctes.to_vec());
 
     // Reserve a consecutive id block for the materialized CTEs of this list.
     let base = next_cte_id(st)?;
-    st.scratch.insert(key, i64::from(base));
+    st.cte_scopes.push(std::sync::Arc::new(CteScope { ctes: ctes.to_vec(), base }));
     for (cte, dec) in ctes.iter().zip(decs.iter()) {
         if *dec == Decision::Materialize {
             let id = next_cte_id(st)?;
@@ -116,7 +104,7 @@ pub fn plan_cte_reference(st: &mut PlannerState, kind: &RangeKind) -> Result<(Sc
     let depth = n - 1 - levels_up;
 
     let (decision, rank, columns, inline_body) = {
-        let scope: &Vec<BoundCte> = &st.cte_scopes[depth];
+        let scope: &[BoundCte] = &st.cte_scopes[depth].ctes;
         let cte = scope.get(cte_index).ok_or_else(|| PgError::internal("CTE reference index out of range"))?;
         let decs = decisions(scope);
         let decision = if recursive_self {
@@ -144,7 +132,7 @@ pub fn plan_cte_reference(st: &mut PlannerState, kind: &RangeKind) -> Result<(Sc
             Ok((ScanSource::Subquery(planned?), columns))
         }
         Decision::Materialize => {
-            let base = scope_base(st, depth)?;
+            let base = st.cte_scopes[depth].base;
             let cte_id = base.checked_add(rank).ok_or_else(|| PgError::internal("CTE id overflow"))?;
             if recursive_self {
                 Ok((ScanSource::WorkTable { cte_id }, columns))
@@ -255,23 +243,6 @@ fn decide(cte: &BoundCte) -> Decision {
 fn rank_before(decs: &[Decision], index: usize) -> Result<u32> {
     let n = decs.iter().take(index).filter(|d| **d == Decision::Materialize).count();
     u32::try_from(n).map_err(|_| PgError::internal("too many CTEs in one WITH list"))
-}
-
-fn scope_key(depth: usize) -> Result<&'static str> {
-    SCOPE_BASE_KEYS
-        .get(depth)
-        .copied()
-        .ok_or_else(|| PgError::unimplemented("PLN-11", "WITH clauses nested deeper than 32 query levels"))
-}
-
-fn scope_base(st: &PlannerState, depth: usize) -> Result<u32> {
-    let key = scope_key(depth)?;
-    let raw = st
-        .scratch
-        .get(key)
-        .copied()
-        .ok_or_else(|| PgError::internal("WITH scope was not registered"))?;
-    u32::try_from(raw).map_err(|_| PgError::internal("corrupt CTE scope base"))
 }
 
 fn next_cte_id(st: &PlannerState) -> Result<u32> {

@@ -75,13 +75,20 @@ fn internal(message: impl Into<String>) -> PgError {
 
 /// Build the logical plan of a complete query (module docs).
 pub fn build_query(st: &mut PlannerState, q: &BoundQuery) -> Result<LogicalPlan> {
-    cte::register_ctes(st, &q.ctes)?;
+    // The binder opens a CTE frame only for query levels that have a WITH clause, so
+    // `levels_up` of a CTE reference counts WITH levels only: mirror that here.
+    let has_with = !q.ctes.is_empty();
+    if has_with {
+        cte::register_ctes(st, &q.ctes)?;
+    }
     let result = match &q.body {
         QueryBody::Select(sel) => build_select_block(st, sel, q),
         QueryBody::Values(bv) => build_values_block(st, bv, q),
         QueryBody::SetOp(body) => build_setop_block(st, body, q),
     };
-    cte::unregister_ctes(st);
+    if has_with {
+        cte::unregister_ctes(st);
+    }
     result
 }
 

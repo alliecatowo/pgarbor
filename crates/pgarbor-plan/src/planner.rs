@@ -119,7 +119,13 @@ pub fn plan_query_node(st: &mut PlannerState, q: &BoundQuery) -> Result<PlanNode
 pub fn plan_logical(st: &mut PlannerState, lp: &LogicalPlan) -> Result<PlanNode> {
     let saved_level = st.cur_level;
     st.cur_level = lp.level;
+    // Re-install the WITH scopes that were visible when this level was built.
+    let snapshot = st.level_cte_scopes.get(lp.level as usize).cloned();
+    let saved_scopes = snapshot.map(|s| std::mem::replace(&mut st.cte_scopes, s));
     let result = plan_logical_node(st, lp);
+    if let Some(saved) = saved_scopes {
+        st.cte_scopes = saved;
+    }
     st.cur_level = saved_level;
     result
 }

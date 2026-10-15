@@ -61,6 +61,14 @@ pub struct PlanContext<'a> {
     pub table_rows: HashMap<Oid, f64>,
 }
 
+/// One WITH list visible to a query level: the bound CTEs and the first `CteDef` id reserved for its
+/// materialized members.
+#[derive(Debug)]
+pub struct CteScope {
+    pub ctes: Vec<BoundCte>,
+    pub base: u32,
+}
+
 /// Mutable state threaded through the planner modules for one statement.
 pub struct PlannerState<'a> {
     pub ctx: &'a PlanContext<'a>,
@@ -69,7 +77,11 @@ pub struct PlannerState<'a> {
     /// CTEs planned so far (index = `cte_id`).
     pub ctes: Vec<CteDef>,
     /// Bound CTE definitions of each enclosing query level (innermost last), for CteScan planning.
-    pub cte_scopes: Vec<Vec<BoundCte>>,
+    pub cte_scopes: Vec<std::sync::Arc<CteScope>>,
+    /// `cte_scopes` as it stood when each query level (index = level id) was entered. Sub-links and
+    /// sub-selects are converted to physical plans after `build_query` has left their WITH scopes, so
+    /// `planner::plan_logical` re-installs this snapshot while converting a level.
+    pub level_cte_scopes: Vec<Vec<std::sync::Arc<CteScope>>>,
     /// Relations the plan reads (for `PlanDeps`).
     pub dep_relations: Vec<Oid>,
     pub dep_types: Vec<Oid>,
@@ -93,6 +105,7 @@ impl<'a> PlannerState<'a> {
             subplans: Vec::new(),
             ctes: Vec::new(),
             cte_scopes: Vec::new(),
+            level_cte_scopes: Vec::new(),
             dep_relations: Vec::new(),
             dep_types: Vec::new(),
             dep_functions: Vec::new(),
@@ -107,6 +120,7 @@ impl<'a> PlannerState<'a> {
     pub fn enter_level(&mut self, names: Vec<(String, Vec<String>)>) -> u32 {
         let id = self.range_names.len() as u32;
         self.range_names.push(names);
+        self.level_cte_scopes.push(self.cte_scopes.clone());
         self.level_stack.push(id);
         id
     }
