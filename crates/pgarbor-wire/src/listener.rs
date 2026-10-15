@@ -135,6 +135,8 @@ pub fn accept_loop(shared: Arc<Shared>, listener: BoundListener) -> Result<()> {
         };
         let Some(stream) = accepted else { continue };
         let nonblocking_result = match &stream {
+            #[cfg(test)]
+            crate::transport::Stream::Memory { .. } => Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "scripted streams cannot be accepted by a listener")),
             crate::transport::Stream::Tcp(s) => s.set_nonblocking(false),
             #[cfg(unix)]
             crate::transport::Stream::Unix(s) => s.set_nonblocking(false),

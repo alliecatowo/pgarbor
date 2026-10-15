@@ -389,7 +389,7 @@ mod tests {
         );
         assert_eq!(
             encoded(Backend::AuthenticationSasl { mechanisms: vec!["SCRAM-SHA-256".into()] }),
-            b"R\0\0\0\x13\0\0\0\x0aSCRAM-SHA-256\0\0"
+            b"R\0\0\0\x17\0\0\0\x0aSCRAM-SHA-256\0\0"
         );
     }
 

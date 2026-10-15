@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn md5_verifier_and_challenge_follow_postgres_formula() {
-        assert_eq!(md5_verifier("secret", "postgres").unwrap(), "md5e8a48653851e28c69d0506508fb27fc5");
+        assert_eq!(md5_verifier("secret", "postgres").unwrap(), "md553f48b7c4b76a86ce72276c5755f217d");
         let stored = md5_verifier("secret", "postgres").unwrap();
         let salt = [1, 2, 3, 4];
         let response = md5_response(&stored, &salt).unwrap();

@@ -178,3 +178,70 @@ mod tests {
         assert_eq!(error.message, "the database system is shutting down");
     }
 }
+
+#[cfg(test)]
+mod duplex_e2e {
+    use super::*;
+    use crate::buf::MsgReader;
+    fn frame(bytes: &mut Vec<u8>, tag: u8, body: &[u8]) {
+        bytes.push(tag);bytes.extend_from_slice(&((body.len()+4) as u32).to_be_bytes());bytes.extend_from_slice(body);
+    }
+    fn startup() -> Vec<u8> {
+        let mut body=196608u32.to_be_bytes().to_vec();
+        body.extend_from_slice(b"user\0postgres\0database\0postgres\0\0");
+        let mut data=((body.len()+4) as u32).to_be_bytes().to_vec();data.extend(body);data
+    }
+    fn query(bytes: &mut Vec<u8>, sql: &str) {let mut body=sql.as_bytes().to_vec();body.push(0);frame(bytes,b'Q',&body);}
+    fn exchange(mut input: Vec<u8>) -> Vec<(u8,Vec<u8>)> {
+        frame(&mut input,b'X',&[]);
+        let db=pgarbor::Database::in_memory().expect("database");
+        let shared=crate::shared::Shared::new(db,crate::ServerConfig::loopback("main"));
+        let (stream,output)=crate::transport::scripted(input);
+        run_connection(&shared,stream).expect("wire connection");
+        let bytes=output.lock().expect("output").clone();let mut at=0;let mut frames=Vec::new();
+        while at<bytes.len() {
+            assert!(bytes.len()-at>=5);let tag=bytes[at];
+            let n=u32::from_be_bytes(bytes[at+1..at+5].try_into().expect("length")) as usize;
+            assert!(n>=4 && at+1+n<=bytes.len());frames.push((tag,bytes[at+5..at+1+n].to_vec()));at+=1+n;
+        }
+        frames
+    }
+    fn rows(frames: &[(u8,Vec<u8>)]) -> Vec<Vec<Option<String>>> {
+        frames.iter().filter(|f|f.0==b'D').map(|(_,b)| {
+            let mut r=MsgReader::new(b);let n=r.read_i16().expect("fields");assert!(n>=0);
+            let row=(0..n).map(|_|{let n=r.read_i32().expect("length");if n==-1 {None} else {assert!(n>=0);Some(std::str::from_utf8(r.take(n as usize).expect("value")).expect("UTF8").to_owned())}}).collect();r.finish().expect("end");row
+        }).collect()
+    }
+    fn no_errors(frames: &[(u8,Vec<u8>)]) {assert!(!frames.iter().any(|f|f.0==b'E'),"errors: {frames:?}");}
+    #[test]
+    fn fresh_show_begin_rollback_and_select_over_wire_session() {
+        let mut input=startup();
+        for sql in ["SHOW server_version","CREATE TABLE t(id int)","BEGIN","INSERT INTO t VALUES(1)","ROLLBACK","SELECT count(*) FROM t"] {query(&mut input,sql);}
+        let out=exchange(input);no_errors(&out);
+        assert_eq!(rows(&out),vec![vec![Some("18.6".into())],vec![Some("0".into())]]);
+        assert!(out.iter().any(|(t,b)|*t==b'Z' && b==b"T"));
+        assert_eq!(out.iter().filter(|f|f.0==b'Z').count(),7);
+    }
+    #[test]
+    fn update_delete_and_information_schema_over_wire_session() {
+        let mut input=startup();
+        for sql in ["CREATE TABLE t(id int primary key,v text)","INSERT INTO t VALUES(1,'a'),(2,'b')","UPDATE t SET v=v || '!' WHERE id=1","DELETE FROM t WHERE id=2","SELECT v FROM t ORDER BY id","SELECT table_name FROM information_schema.tables WHERE table_schema='public'"] {query(&mut input,sql);}
+        let out=exchange(input);no_errors(&out);
+        assert_eq!(rows(&out),vec![vec![Some("a!".into())],vec![Some("t".into())]]);
+        assert!(out.iter().any(|(t,b)|*t==b'C' && b==b"UPDATE 1\0"));
+        assert!(out.iter().any(|(t,b)|*t==b'C' && b==b"DELETE 1\0"));
+    }
+    #[test]
+    fn extended_text_parameter_uses_real_bind_execute_sync() {
+        let mut input=startup();
+        frame(&mut input,b'P',b"\0SELECT $1::int + 1\0\0\0");
+        frame(&mut input,b'B',b"\0\0\0\0\0\x01\0\0\0\x0241\0\0");
+        frame(&mut input,b'D',b"P\0");
+        frame(&mut input,b'E',b"\0\0\0\0\0");
+        frame(&mut input,b'S',b"");
+        let out=exchange(input);no_errors(&out);
+        assert_eq!(rows(&out),vec![vec![Some("42".into())]]);
+        assert_eq!(out.iter().filter(|f|f.0==b'Z').count(),2);
+        for tag in [b'1',b'2',b'T',b'D',b'C'] {assert!(out.iter().any(|f|f.0==tag));}
+    }
+}

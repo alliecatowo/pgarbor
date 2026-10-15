@@ -21,3 +21,11 @@ Section 12 is amended accordingly; no frozen Rust item changes.
 ## Steward decision (2026-10-15)
 
 Accept native 3.0 and 3.2 protocol representations implemented by startup_flow/startup_packet. Protocol conformance remains unverified without live PG18 and independent client execution; no oracle results changed.
+
+Verification seam (2026-10-15): `Stream` has a cfg(test)-only scripted in-memory
+byte duplex. It shares read bytes and captured writes across clones and never binds a
+socket. Connection tests feed independent raw startup/simple/extended frontend frames
+through the actual connection and session loop, then assert decoded backend rows,
+command tags and ReadyForQuery states. Production Stream remains TCP/Unix only; these
+tests do not claim listener, kernel I/O, network timeout, authentication-method or
+external-client coverage. A no-op test timeout/shutdown simulates a finite script only.
