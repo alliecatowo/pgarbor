@@ -57,7 +57,7 @@ use super::context::{Binder, ExprCtx};
 use super::expr::{bind_arg, bind_boolean};
 use super::expr_sublink::bind_nested_query;
 use super::from::bind_from_clause;
-use super::scope::{add_namespace_for_range, mark_access, AccessKind, QueryScope, ScopeKind};
+use super::scope::{mark_access, AccessKind, QueryScope, ScopeKind};
 use super::target::bind_target_list;
 use super::target_table::{open_target_table, DmlKind};
 use crate::diag::{self, ExprClause};
@@ -183,8 +183,7 @@ pub fn bind_returning(b: &mut Binder, items: Option<&[SelectItem]>) -> Result<Ve
 
 fn bind_update_in_scope(b: &mut Binder, u: &Update, name: &ObjectName, alias: Option<&Ident>) -> Result<BoundStatement> {
     let (target, target_rt) = open_target_table(b, name, alias, DmlKind::Update, false)?;
-    // The target is in the namespace for SET, WHERE and RETURNING; FROM items are added after it.
-    add_namespace_for_range(b, target_rt, true, true)?;
+    // `open_target_table` already put the target in the namespace (SET, WHERE, RETURNING); FROM items follow.
     let from = match &u.from {
         Some(UpdateTableFromKind::BeforeSet(items)) | Some(UpdateTableFromKind::AfterSet(items)) => bind_from_clause(b, items)?,
         None => Vec::new(),
@@ -210,7 +209,6 @@ fn bind_update_in_scope(b: &mut Binder, u: &Update, name: &ObjectName, alias: Op
 
 fn bind_delete_in_scope(b: &mut Binder, d: &Delete, name: &ObjectName, alias: Option<&Ident>) -> Result<BoundStatement> {
     let (target, target_rt) = open_target_table(b, name, alias, DmlKind::Delete, false)?;
-    add_namespace_for_range(b, target_rt, true, true)?;
     let using = match &d.using {
         Some(items) => bind_from_clause(b, items)?,
         None => Vec::new(),
@@ -531,5 +529,44 @@ mod tests {
     fn plain_column_accepts_any_value() {
         let a = set_col(1, "a", false, false);
         assert!(check_default_only(&a, false).is_ok());
+    }
+
+    #[test]
+    fn update_and_delete_register_target_once() {
+        use crate::binder::context::{BindContext, BindSession};
+        use pgarbor_catalog::ddl::spec::{ColumnSpec, CreateTableSpec};
+        use pgarbor_catalog::model::{Persistence, RelKind};
+        use pgarbor_catalog::testing;
+        use pgarbor_types::context::IoConfig;
+
+        let (mut kv, env) = testing::bootstrapped().unwrap();
+        let spec = CreateTableSpec {
+            namespace: pgarbor_catalog::builtin::PUBLIC_NAMESPACE,
+            name: "t".to_string(),
+            owner: 10,
+            kind: RelKind::Table,
+            persistence: Persistence::Permanent,
+            columns: vec![ColumnSpec::new("a", TypeId::of(oids::INT4)), ColumnSpec::new("b", TypeId::of(oids::TEXT))],
+            constraints: Vec::new(),
+            options: Vec::new(),
+            if_not_exists: false,
+            inherits: Vec::new(),
+        };
+        let (_r, env2) = testing::run(&mut kv, &env, |t| {
+            t.create_table(&spec)?;
+            Ok(())
+        })
+        .unwrap();
+        let ctx = BindContext {
+            env: &env2,
+            session: BindSession { database: "postgres".to_string() },
+            io_config: IoConfig::default(),
+            statement_timestamp: 0,
+            declared_params: Vec::new(),
+        };
+        for sql in ["UPDATE t SET b = b || '!' WHERE a = 1", "DELETE FROM t WHERE a = 2", "UPDATE t x SET b = 'q' WHERE x.a = 1"] {
+            let raw = crate::parser::parse_one(sql).unwrap();
+            crate::binder::bind(&raw, &ctx).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        }
     }
 }
