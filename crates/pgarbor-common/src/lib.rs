@@ -4,6 +4,7 @@
 //! Changes require an amendment ticket under `contracts/amendments/`.
 
 pub mod error;
+pub mod time;
 pub mod ids;
 pub mod kv;
 

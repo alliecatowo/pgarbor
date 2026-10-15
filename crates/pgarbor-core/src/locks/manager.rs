@@ -59,7 +59,8 @@ use crate::types::{AcquireResult, SessionId, SubXactId, WaitLimits, WaitPolicy};
 use pgarbor_common::{PgError, Result, TxnId};
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration};
+use pgarbor_common::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Interrupt poll period of a lock wait.
 const POLL: Duration = Duration::from_millis(100);

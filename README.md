@@ -23,6 +23,55 @@ it checks that compatibility by running the same tests against a pinned, real Po
 | SQL parser/binder, planner, executor, embedded API | `pgarbor-sql`, `-plan`, `-exec`, `pgarbor` | in design |
 | PG wire protocol server, CLI | `pgarbor-wire`, `pgarbor-cli` | in design |
 
+## Language bindings and WebAssembly
+
+Everything below was run on this branch (Linux x86_64); the engine is still pre-release, so only the SQL the
+engine supports today works.
+
+**C ABI** (`crates/pgarbor-ffi`, header `include/pgarbor.h`). Handles are bound to the creating thread.
+
+```sh
+cargo build -p pgarbor-ffi            # target/debug/libpgarbor_ffi.{so,dylib,a}
+cargo test -p pgarbor-ffi             # compiles crates/pgarbor-ffi/tests/smoke.c with cc and runs it
+```
+
+```c
+uint64_t db, s; PgaResult *r;
+pga_open("dev.pga", PGA_OPEN_CREATE, &db);
+pga_session_open(db, NULL, NULL, NULL, &s);
+if (pga_exec(s, "SELECT 1", &r) == 0) { puts(pga_result_value(r, 0, 0, 0)); pga_result_free(r); }
+else fprintf(stderr, "%s %s\n", pga_errcode(), pga_errmsg());   // e.g. 23505 duplicate key ...
+```
+
+**Python** (`bindings/python`, ctypes, no build step beyond the cdylib; set `PGARBOR_LIB` to override the library path).
+
+```python
+import pgarbor
+conn = pgarbor.connect("dev.pga")
+conn.execute("CREATE TABLE t(id int PRIMARY KEY)")
+try: conn.execute("INSERT INTO t VALUES (1),(1)")
+except pgarbor.Error as e: print(e.sqlstate)       # 23505
+```
+Test: `cd bindings/python && uv run --with pytest python -m pytest tests`.
+
+**Node** (`bindings/node`, [koffi](https://koffi.dev) over the C ABI). Test: `cd bindings/node && npm install && npm test`.
+
+```js
+const pgarbor = require('./bindings/node');
+const c = pgarbor.connect('dev.pga');
+console.log(c.exec('SELECT 1 AS one').rows);        // [ [ '1' ] ]
+```
+
+**WebAssembly** (`crates/pgarbor-wasm`, in-memory database on `MemVfs`; see `docs/WASM.md` for limits).
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+demo/build.sh                                      # builds demo/web/pkg (about 13 MB wasm, unoptimised)
+node demo/test-node.mjs                            # SELECT / CREATE / INSERT / duplicate key under Node
+python3 -m http.server -d demo/web 8000            # then open http://localhost:8000
+```
+
 ## How compatibility is verified
 
 `harness/` is a Python verification harness (run with `uv`):

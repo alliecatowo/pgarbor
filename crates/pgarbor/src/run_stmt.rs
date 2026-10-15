@@ -44,7 +44,7 @@
 //!    stay queued until commit. Row-returning results are materialized (`Vec<Vec<Datum>>`).
 //! Statement text for `pg_stat_activity.query`: the WHOLE submitted string (`raw.source.text()`).
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use pgarbor_common::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use pgarbor_catalog::ddl::drop_stmt::DropKind;
 use pgarbor_common::{PgError, Result};

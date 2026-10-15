@@ -23,7 +23,8 @@
 //! Privileges (`perm::require_sequence_privilege`): nextval USAGE|UPDATE, currval SELECT|USAGE, setval UPDATE;
 //! failure 42501 `permission denied for sequence s`.
 //! Strictness is applied by the evaluator before calling (strict procs never see NULL arguments).
-use std::time::{Duration, Instant};
+use std::time::{Duration};
+use pgarbor_common::time::{Instant};
 
 use pgarbor_catalog::model::common::acl_mode;
 use pgarbor_catalog::CatalogEnv;

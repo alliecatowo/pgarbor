@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 pub use pgarbor_common::{Oid, PgError, Result, Severity, SqlState};
-pub use pgarbor_storage::{MemVfs, OsVfs, SyncMode, VerifyLevel, Vfs};
+pub use pgarbor_storage::{MemVfs, SyncMode, VerifyLevel, Vfs};
+#[cfg(not(target_arch = "wasm32"))]
+pub use pgarbor_storage::OsVfs;
 pub use pgarbor_types::{Datum, TypeId};
 
 /// Transaction status byte of ReadyForQuery.

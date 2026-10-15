@@ -23,7 +23,9 @@ use crate::doctor::report::{DoctorReport, Issue, IssueSeverity, SpaceReport};
 use crate::gc::trace::ReachSet;
 use crate::error;
 use crate::format::superblock::Superblock;
-use crate::io::{OsVfs, Vfs};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::io::OsVfs;
+use crate::io::Vfs;
 use crate::pager::{Pager, PagerStats};
 use crate::roots::RootResolver;
 use crate::container::options::VerifyLevel;
@@ -115,11 +117,13 @@ pub struct Container {
 
 impl Container {
     /// Create a new `.pga` at `path` on the real file system (error if it exists).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn create(path: impl AsRef<Path>, opts: &CreateOptions) -> Result<Container> {
         Container::create_with(Arc::new(OsVfs), path.as_ref(), opts)
     }
 
     /// Open an existing `.pga` on the real file system (runs recovery).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn open(path: impl AsRef<Path>, opts: &OpenOptions) -> Result<Container> {
         Container::open_with(Arc::new(OsVfs), path.as_ref(), opts)
     }

@@ -35,7 +35,7 @@ use pgarbor_branches::{directory, ops, OpCtx};
 use pgarbor_common::{CommitSeq, Oid, RelId, Result, SpaceId};
 use pgarbor_storage::WriteTxn;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use pgarbor_common::time::{SystemTime, UNIX_EPOCH};
 
 fn now_unix_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)

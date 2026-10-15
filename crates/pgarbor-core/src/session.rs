@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use pgarbor_common::time::{Instant, SystemTime, UNIX_EPOCH};
 
 // CONTRACT
 /// Asynchronous interrupt flags of one session (PG `ProcessInterrupts`). Set from other threads
@@ -307,7 +307,7 @@ pub const FIRST_PID: i32 = 1000;
 /// .build_hasher()` (randomly keyed SipHash) and append the 8-byte outputs.
 pub fn random_bytes(n: usize) -> Result<Vec<u8>> {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let pid = std::process::id();
+    let pid = pgarbor_common::time::process_id();
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let mut out = Vec::with_capacity(n + 8);
     let mut chunk: u64 = 0;
