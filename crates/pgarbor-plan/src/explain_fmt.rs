@@ -1061,7 +1061,8 @@ mod tests {
 
     #[test]
     fn json_seq_scan_matches_doc_fixture() {
-        let lines = render(&seq_scan_plan(), &opts(false)).expect("render");
+        let o = ExplainOptions { format: ExplainFormat::Json, ..opts(false) };
+        let lines = render(&seq_scan_plan(), &o).expect("render");
         let expected = [
             "[",
             "  {",
