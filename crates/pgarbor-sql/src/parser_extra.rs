@@ -16,13 +16,14 @@
 use pgarbor_common::{PgError, Result, SqlState};
 use sqlparser::ast::{DataType, Expr, Ident, ObjectName};
 use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use crate::diag;
 use crate::extra_stmt::{
     AlterDatabaseAction, AlterDomainAction, AlterMatViewAction, AlterSequenceAction, ExtraStatement, ReindexKind,
-    SequenceOptionAst,
+    RoleOptionAst, RoleOptionItem, RoleStmtKind, SequenceOptionAst,
 };
 use crate::parser::RECURSION_LIMIT;
 use crate::source::SourceMap;
@@ -81,6 +82,9 @@ pub fn parse_extra(tokens: Vec<TokenWithSpan>, src: &SourceMap) -> Result<ExtraS
             Known::DropOwned => parse_drop_owned(&mut cx),
             Known::ReassignOwned => parse_reassign_owned(&mut cx),
             Known::AlterSequence => parse_alter_sequence(&mut cx),
+            Known::CreateSequence => parse_create_sequence(&mut cx),
+            Known::CreateRole => parse_create_role(&mut cx),
+            Known::AlterRole => parse_alter_role(&mut cx),
             Known::AlterDomain => parse_alter_domain(&mut cx),
             Known::AlterDatabase => parse_alter_database(&mut cx),
             Known::AlterMaterializedView => parse_alter_matview(&mut cx),
@@ -107,6 +111,12 @@ enum Known {
     AlterDomain,
     AlterDatabase,
     AlterMaterializedView,
+    /// `CREATE [GLOBAL|LOCAL] [TEMP|TEMPORARY|UNLOGGED] SEQUENCE ...` (options in any order).
+    CreateSequence,
+    /// `CREATE {ROLE|USER|GROUP} ...` (options in any order, signed numbers).
+    CreateRole,
+    /// `ALTER {ROLE|USER} name [WITH] options` (not RENAME / SET / RESET / IN DATABASE).
+    AlterRole,
 }
 
 /// Where a chunk goes: a fully parsed statement, or a recognized-but-unsupported feature name.
@@ -221,7 +231,39 @@ fn starts_with(head: &[String], pat: &[&str]) -> bool {
     head.len() >= pat.len() && pat.iter().zip(head.iter()).all(|(p, h)| h.as_str() == *p)
 }
 
+/// Heads that need more than a fixed prefix: CREATE SEQUENCE with its optional persistence words,
+/// CREATE ROLE|USER|GROUP, and the option-list form of ALTER ROLE|USER.
+fn route_special(head: &[String]) -> Option<Known> {
+    if at(head, 0, "CREATE") {
+        let mut i = 1;
+        while ["GLOBAL", "LOCAL", "TEMP", "TEMPORARY", "UNLOGGED"].iter().any(|w| at(head, i, w)) {
+            i += 1;
+        }
+        if at(head, i, "SEQUENCE") {
+            return Some(Known::CreateSequence);
+        }
+        if (at(head, 1, "ROLE") || at(head, 1, "GROUP") || at(head, 1, "USER")) && !user_mapping(head) {
+            return Some(Known::CreateRole);
+        }
+    }
+    if at(head, 0, "ALTER") && (at(head, 1, "ROLE") || at(head, 1, "USER")) && !user_mapping(head) {
+        let other_form = ["RENAME", "SET", "RESET", "IN"].iter().any(|w| at(head, 3, w));
+        if head.len() >= 3 && !other_form {
+            return Some(Known::AlterRole);
+        }
+    }
+    None
+}
+
+/// `{CREATE|ALTER|DROP} USER MAPPING FOR|IF ...` is a foreign-data command, not a role.
+fn user_mapping(head: &[String]) -> bool {
+    at(head, 1, "USER") && at(head, 2, "MAPPING") && (at(head, 3, "FOR") || at(head, 3, "IF"))
+}
+
 fn route(head: &[String]) -> Option<Route> {
+    if let Some(k) = route_special(head) {
+        return Some(Route::Known(k));
+    }
     for (pat, k) in KNOWN_HEADS {
         if starts_with(head, pat) {
             return Some(Route::Known(*k));
@@ -728,7 +770,7 @@ fn parse_alter_sequence(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
             return Err(cx.fail_here());
         }
     } else {
-        match seq_options(cx)? {
+        match seq_options(cx, false)? {
             Parsed::Value(opts) => {
                 if opts.is_empty() {
                     return Err(cx.fail_here());
@@ -742,6 +784,209 @@ fn parse_alter_sequence(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
     Ok(ExtraStatement::AlterSequence { if_exists, name, action })
 }
 
+/// PG `CreateSeqStmt`: `CREATE OptTemp SEQUENCE [IF NOT EXISTS] qualified_name OptSeqOptList`. The
+/// options come in any order (`SeqOptElem`); repeats are a binder error (42601).
+fn parse_create_sequence(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("CREATE")?;
+    let (mut temporary, mut unlogged) = (false, false);
+    loop {
+        if cx.word("GLOBAL") || cx.word("LOCAL") {
+            continue;
+        } else if cx.word("TEMP") || cx.word("TEMPORARY") {
+            temporary = true;
+        } else if cx.word("UNLOGGED") {
+            unlogged = true;
+        } else {
+            break;
+        }
+    }
+    cx.expect_word("SEQUENCE")?;
+    let if_not_exists = if cx.word("IF") {
+        cx.expect_word("NOT")?;
+        cx.expect_word("EXISTS")?;
+        true
+    } else {
+        false
+    };
+    let name = cx.object_name()?;
+    let options = match seq_options(cx, true)? {
+        Parsed::Value(o) => o,
+        Parsed::Unsupported(feature) => return Ok(unsupported(feature)),
+    };
+    cx.finish()?;
+    Ok(ExtraStatement::CreateSequence { temporary, unlogged, if_not_exists, name, options })
+}
+
+/// PG `CreateRoleStmt` / `CreateUserStmt` / `CreateGroupStmt`:
+/// `CREATE {ROLE|USER|GROUP} RoleId opt_with OptRoleList`.
+fn parse_create_role(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("CREATE")?;
+    let kind = if cx.word("ROLE") {
+        RoleStmtKind::Role
+    } else if cx.word("USER") {
+        RoleStmtKind::User
+    } else {
+        cx.expect_word("GROUP")?;
+        RoleStmtKind::Group
+    };
+    let name = cx.ident()?;
+    cx.word("WITH");
+    let options = role_options(cx, true)?;
+    cx.finish()?;
+    Ok(ExtraStatement::CreateRole { kind, name, options })
+}
+
+/// PG `AlterRoleStmt`: `ALTER {ROLE|USER} RoleSpec opt_with AlterOptRoleList`.
+fn parse_alter_role(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    if !cx.word("ROLE") {
+        cx.expect_word("USER")?;
+    }
+    let name = role_spec(cx)?;
+    cx.word("WITH");
+    let options = role_options(cx, false)?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterRole { name, options })
+}
+
+/// PG `SignedIconst` as `i32`: optional sign, then an integer token that fits `int` (a larger one
+/// is lexed as a numeric constant, hence a syntax error at the number).
+fn signed_iconst(cx: &mut Cx<'_>) -> Result<i32> {
+    let neg = if cx.token(&Token::Minus) {
+        true
+    } else {
+        cx.token(&Token::Plus);
+        false
+    };
+    let t = cx.peek();
+    match &t.token {
+        Token::Number(digits, _) if digits.bytes().all(|b| b.is_ascii_digit()) => match digits.parse::<i32>() {
+            Ok(v) => {
+                cx.p.next_token();
+                Ok(if neg { -v } else { v })
+            }
+            Err(_) => Err(cx.fail_at(&t)),
+        },
+        _ => Err(cx.fail_at(&t)),
+    }
+}
+
+/// `role_list`.
+fn role_list(cx: &mut Cx<'_>) -> Result<Vec<Ident>> {
+    cx.comma_list(role_spec)
+}
+
+/// PG `OptRoleList` (`create = true`, `CreateOptRoleElem`) or `AlterOptRoleList` (`AlterOptRoleElem`):
+/// options in any order up to the end of the statement.
+fn role_options(cx: &mut Cx<'_>, create: bool) -> Result<Vec<RoleOptionItem>> {
+    let mut out = Vec::new();
+    loop {
+        let t = cx.peek();
+        if is_eof(&t) {
+            break;
+        }
+        let pos = cx.src.pos_of_span(t.span.clone());
+        let option = if cx.word("PASSWORD") {
+            if cx.word("NULL") {
+                RoleOptionAst::Password(None)
+            } else {
+                match cx.string_const() {
+                    Some(s) => RoleOptionAst::Password(Some(s)),
+                    None => return Err(cx.fail_here()),
+                }
+            }
+        } else if cx.word("ENCRYPTED") {
+            cx.expect_word("PASSWORD")?;
+            match cx.string_const() {
+                Some(s) => RoleOptionAst::Password(Some(s)),
+                None => return Err(cx.fail_here()),
+            }
+        } else if cx.word("UNENCRYPTED") {
+            cx.expect_word("PASSWORD")?;
+            if cx.string_const().is_none() {
+                return Err(cx.fail_here());
+            }
+            let e = PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "UNENCRYPTED PASSWORD is no longer supported")
+                .with_hint("Remove UNENCRYPTED to store the password in encrypted form instead.");
+            return Err(diag::with_position(e, pos));
+        } else if cx.word("INHERIT") {
+            RoleOptionAst::Inherit(true)
+        } else if cx.word("CONNECTION") {
+            cx.expect_word("LIMIT")?;
+            RoleOptionAst::ConnectionLimit(signed_iconst(cx)?)
+        } else if cx.word("VALID") {
+            cx.expect_word("UNTIL")?;
+            match cx.string_const() {
+                Some(s) => RoleOptionAst::ValidUntil(s),
+                None => return Err(cx.fail_here()),
+            }
+        } else if cx.word("USER") {
+            RoleOptionAst::RoleMembers(role_list(cx)?)
+        } else if create && cx.word("SYSID") {
+            let n = cx.peek();
+            match &n.token {
+                Token::Number(d, _) if d.bytes().all(|b| b.is_ascii_digit()) && d.parse::<i32>().is_ok() => {
+                    cx.p.next_token();
+                    RoleOptionAst::Sysid
+                }
+                _ => return Err(cx.fail_at(&n)),
+            }
+        } else if create && cx.word("ADMIN") {
+            RoleOptionAst::AdminMembers(role_list(cx)?)
+        } else if create && cx.word("ROLE") {
+            RoleOptionAst::RoleMembers(role_list(cx)?)
+        } else if create && cx.word("IN") {
+            if !(cx.word("ROLE") || cx.word("GROUP")) {
+                return Err(cx.fail_here());
+            }
+            RoleOptionAst::AddRoleTo(role_list(cx)?)
+        } else if let Token::Word(w) = &t.token {
+            // The IDENT production: a plain identifier naming a boolean attribute.
+            let word = w.value.to_ascii_lowercase();
+            let (which, on) = match word.as_str() {
+                "superuser" => (0, true),
+                "nosuperuser" => (0, false),
+                "createrole" => (1, true),
+                "nocreaterole" => (1, false),
+                "replication" => (2, true),
+                "noreplication" => (2, false),
+                "createdb" => (3, true),
+                "nocreatedb" => (3, false),
+                "login" => (4, true),
+                "nologin" => (4, false),
+                "bypassrls" => (5, true),
+                "nobypassrls" => (5, false),
+                "noinherit" => (6, false),
+                _ => {
+                    // Any identifier that is not a keyword reaches the IDENT action and is reported
+                    // there; a keyword in this position is an ordinary syntax error.
+                    // SYSID is a PostgreSQL keyword that sqlparser does not list.
+                    let pg_keyword = word == "sysid";
+                    if w.quote_style.is_some() || (w.keyword == Keyword::NoKeyword && !pg_keyword) {
+                        let e = PgError::syntax(format!("unrecognized role option \"{}\"", w.value), None);
+                        return Err(diag::with_position(e, pos));
+                    }
+                    return Err(cx.fail_at(&t));
+                }
+            };
+            cx.p.next_token();
+            match which {
+                0 => RoleOptionAst::Superuser(on),
+                1 => RoleOptionAst::CreateRole(on),
+                2 => RoleOptionAst::Replication(on),
+                3 => RoleOptionAst::CreateDb(on),
+                4 => RoleOptionAst::Login(on),
+                5 => RoleOptionAst::BypassRls(on),
+                _ => RoleOptionAst::Inherit(on),
+            }
+        } else {
+            return Err(cx.fail_at(&t));
+        };
+        out.push(RoleOptionItem { option, pos });
+    }
+    Ok(out)
+}
+
 /// Is the next token the start of a `NumericOnly`?
 fn starts_numeric(cx: &Cx<'_>) -> bool {
     matches!(cx.peek().token, Token::Number(..) | Token::Plus | Token::Minus)
@@ -750,7 +995,7 @@ fn starts_numeric(cx: &Cx<'_>) -> bool {
 /// PG `SeqOptList` items, in written order, until a token that is not a sequence option (the
 /// caller's `finish` reports it). `LOGGED`, `UNLOGGED` and `SEQUENCE NAME` are grammar items PG
 /// accepts in this list but PGArbor does not implement.
-fn seq_options(cx: &mut Cx<'_>) -> Result<Parsed<Vec<SequenceOptionAst>>> {
+fn seq_options(cx: &mut Cx<'_>, for_create: bool) -> Result<Parsed<Vec<SequenceOptionAst>>> {
     let mut out = Vec::new();
     loop {
         if is_eof(&cx.peek()) {
@@ -801,11 +1046,22 @@ fn seq_options(cx: &mut Cx<'_>) -> Result<Parsed<Vec<SequenceOptionAst>>> {
                 out.push(SequenceOptionAst::Restart(None));
             }
         } else if cx.word("LOGGED") {
-            return Ok(Parsed::Unsupported("ALTER SEQUENCE ... LOGGED"));
+            if !for_create {
+                return Ok(Parsed::Unsupported("ALTER SEQUENCE ... LOGGED"));
+            }
+            out.push(SequenceOptionAst::Logged(true));
         } else if cx.word("UNLOGGED") {
-            return Ok(Parsed::Unsupported("ALTER SEQUENCE ... UNLOGGED"));
+            if !for_create {
+                return Ok(Parsed::Unsupported("ALTER SEQUENCE ... UNLOGGED"));
+            }
+            out.push(SequenceOptionAst::Logged(false));
         } else if cx.word("SEQUENCE") {
-            return Ok(Parsed::Unsupported("ALTER SEQUENCE ... SEQUENCE NAME"));
+            if !for_create {
+                return Ok(Parsed::Unsupported("ALTER SEQUENCE ... SEQUENCE NAME"));
+            }
+            cx.expect_word("NAME")?;
+            cx.object_name()?;
+            out.push(SequenceOptionAst::SequenceName);
         } else {
             break;
         }
@@ -1454,5 +1710,89 @@ mod tests {
         let e = err(sql);
         assert_eq!(e.message, "syntax error at or near \"reindex_nothing\"");
         assert_eq!(e.position, Some(1));
+    }
+
+    #[test]
+    fn sequence_and_role_routing() {
+        assert!(is_extra("create sequence s"));
+        assert!(is_extra("create temp sequence s"));
+        assert!(is_extra("create unlogged sequence s"));
+        assert!(is_extra("create role r"));
+        assert!(is_extra("create user u"));
+        assert!(is_extra("create group g"));
+        assert!(is_extra("alter role r login"));
+        assert!(is_extra("alter user r with password 'x'"));
+        assert!(is_extra("alter role r"));
+        // Forms sqlparser still owns.
+        assert!(!is_extra("alter role r rename to s"));
+        assert!(!is_extra("alter role r set work_mem = '1MB'"));
+        assert!(!is_extra("alter role r reset all"));
+        assert!(!is_extra("alter role all in database d set a = 1"));
+        assert!(!is_extra("alter role r in database d set a = 1"));
+        assert!(!is_extra("create table t (a int)"));
+        assert!(!is_extra("create unlogged table t (a int)"));
+        // Foreign-data commands keep their unsupported route.
+        assert_eq!(
+            ok("create user mapping for u server s"),
+            ExtraStatement::Unsupported { feature: "CREATE USER MAPPING".into() }
+        );
+    }
+
+    #[test]
+    fn create_sequence_options_any_order() {
+        let ExtraStatement::CreateSequence { temporary, unlogged, if_not_exists, name: n, options } =
+            ok("create sequence if not exists s.q cycle increment by -2 as int start 5 no minvalue owned by none restart")
+        else {
+            panic!("not a CREATE SEQUENCE");
+        };
+        assert!(!temporary && !unlogged && if_not_exists);
+        assert_eq!(n, name(&["s", "q"]));
+        assert_eq!(options.len(), 7);
+        assert_eq!(options[0], SequenceOptionAst::Cycle(true));
+        assert_eq!(options[1], SequenceOptionAst::IncrementBy("-2".into()));
+        assert_eq!(options[3], SequenceOptionAst::StartWith("5".into()));
+        assert_eq!(options[5], SequenceOptionAst::OwnedBy(None));
+        assert_eq!(options[6], SequenceOptionAst::Restart(None));
+        let e = err("create sequence s increment");
+        assert_eq!(e.message, "syntax error at end of input");
+        let e = err("create sequence s foo");
+        assert_eq!(e.message, "syntax error at or near \"foo\"");
+    }
+
+    #[test]
+    fn role_options_parse_signed_and_unordered() {
+        let ExtraStatement::CreateRole { kind, name: n, options } =
+            ok("create user u with in role a, b connection limit -2 noinherit admin c password null sysid 3")
+        else {
+            panic!("not a CREATE ROLE");
+        };
+        assert_eq!(kind, RoleStmtKind::User);
+        assert_eq!(n, ident("u"));
+        let opts: Vec<RoleOptionAst> = options.into_iter().map(|i| i.option).collect();
+        assert_eq!(
+            opts,
+            vec![
+                RoleOptionAst::AddRoleTo(vec![ident("a"), ident("b")]),
+                RoleOptionAst::ConnectionLimit(-2),
+                RoleOptionAst::Inherit(false),
+                RoleOptionAst::AdminMembers(vec![ident("c")]),
+                RoleOptionAst::Password(None),
+                RoleOptionAst::Sysid,
+            ]
+        );
+        let ExtraStatement::AlterRole { name: n, options } = ok("alter role r connection limit +7 nologin") else {
+            panic!("not an ALTER ROLE");
+        };
+        assert_eq!(n, ident("r"));
+        assert_eq!(options[0].option, RoleOptionAst::ConnectionLimit(7));
+        assert_eq!(options[0].pos, Some(14));
+        assert_eq!(options[1].option, RoleOptionAst::Login(false));
+        // CREATE-only options are syntax errors in ALTER ROLE.
+        assert_eq!(err("alter role r sysid 3").message, "syntax error at or near \"sysid\"");
+        let e = err("alter role r connection limit 2147483648");
+        assert_eq!(e.message, "syntax error at or near \"2147483648\"");
+        let e = err("create role r bogus");
+        assert_eq!(e.message, "unrecognized role option \"bogus\"");
+        assert_eq!(e.position, Some(15));
     }
 }
