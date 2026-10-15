@@ -48,6 +48,7 @@ use crate::result::ExecResult;
 /// CREATE TABLE (module docs). The catalog queues `CreateSequenceState` for serial/identity
 /// sequences; any created sequence without one gets it added here so its state always exists.
 pub fn exec_create_table(cx: &mut ExecContext, spec: &CreateTableSpec) -> Result<ExecResult> {
+    for constraint in &spec.constraints { reject_deferred(constraint)?; }
     let (created, outcome) = run_ddl(cx, |ddl| ddl.create_table(spec))?;
     let mut follow_ups = outcome.follow_ups;
     if let Some(created) = &created {
@@ -214,6 +215,7 @@ fn apply_command(
             ddl.set_column_attribute(table, column, attr)?;
         }
         AlterTableCmd::AddConstraint(spec) => {
+            reject_deferred(spec)?;
             ddl.add_constraint(table, spec)?;
         }
         AlterTableCmd::DropConstraint { name, cascade, missing_ok } => {
@@ -226,6 +228,9 @@ fn apply_command(
             ddl.validate_constraint(table, name)?;
         }
         AlterTableCmd::AlterConstraint { name, deferrable, initially_deferred, enforced } => {
+            if *deferrable == Some(true) || *initially_deferred == Some(true) {
+                return Err(PgError::unimplemented("EXE-33", "deferred constraint enforcement"));
+            }
             ddl.alter_constraint(table, name, *deferrable, *initially_deferred, *enforced)?;
         }
         AlterTableCmd::SetOptions { set, reset } => {
@@ -240,6 +245,9 @@ fn apply_command(
             ddl.set_replica_identity(table, setting)?;
         }
         AlterTableCmd::RowSecurity { enable, force } => {
+            if *enable == Some(true) || *force == Some(true) {
+                return Err(PgError::unimplemented("EXE-33", "row security policy enforcement"));
+            }
             ddl.set_row_security(table, *enable, *force)?;
         }
     }
@@ -424,4 +432,11 @@ mod tests {
         let res = exec_alter_table(&mut cx, &stmt).expect("alter type");
         assert_eq!(res.tag(), "ALTER TABLE");
     }
+}
+
+fn reject_deferred(spec: &pgarbor_catalog::ddl::spec::ConstraintSpec) -> Result<()> {
+    if spec.deferrable || spec.initially_deferred {
+        return Err(PgError::unimplemented("EXE-33", "deferred constraint enforcement"));
+    }
+    Ok(())
 }

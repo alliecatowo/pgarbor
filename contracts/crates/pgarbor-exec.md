@@ -97,7 +97,7 @@ Unimplemented behavior is `Err(PgError::unimplemented("EXE-NN", ..))`, never a w
 
 * No triggers, rules, row-level security, inheritance, partitioning, temp tables, cursors (`DECLARE`), `MERGE`.
 * User-defined SQL/PL functions are stored by the catalog but NOT executed (0A000 in expressions, `DO`, `CALL`).
-* Deferrable / INITIALLY DEFERRED constraints are checked at statement end, not commit (`SET CONSTRAINTS` is a no-op).
+* Deferrable / INITIALLY DEFERRED constraints are unsupported (leased 0A000; exec-03). `SET CONSTRAINTS ALL IMMEDIATE` is accepted only because supported constraints are immediate; DEFERRED is rejected.
 * EvalPlanQual is limited to single-table UPDATE/DELETE/FOR UPDATE (module `modify`, `node_lock`).
 * No spilling: sorts, hashes, aggregates and partitions are held in memory. `Backward` index scans collect the interval's keys.
 * No planner row-count hints (amendment plan-01 needs a storage source).
@@ -160,3 +160,8 @@ Frozen and implemented (not leased): `lib.rs`, `error.rs`, `result.rs`, `txn.rs`
 ## Assembly decisions (2026-10-15)
 
 Steward decisions: exec-01 NULL-distinct unique key suffix accepted; exec-02 integration invariants accepted with limits in its decision. Unsupported deferred constraints must return leased 0A000, and mixed-type join keys use nested loops.
+
+Security correction (exec-03): deferred constraints are unsupported (0A000), including
+already stored deferred metadata. Row security activation and access to relations
+with row security flags are unsupported (0A000). The earlier promise of early deferred
+checking is superseded; no policy enforcement is claimed.

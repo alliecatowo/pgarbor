@@ -232,6 +232,12 @@ pub fn table_desc(cx: &ExecContext, oid: Oid) -> Result<Rc<TableDesc>> {
 pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
     let snap = se.env.snapshot();
     let rel = snap.relation(oid).ok_or_else(|| relation_vanished(oid))?;
+    if rel.row_security || rel.force_row_security {
+        return Err(PgError::unimplemented("EXE-01", "row security policy enforcement"));
+    }
+    if snap.constraints_of(oid).iter().any(|c| c.deferrable || c.initially_deferred) {
+        return Err(PgError::unimplemented("EXE-01", "deferred constraint enforcement"));
+    }
     // Row storage is what DML and table-shaped DDL need; views, indexes, sequences, ... have none.
     if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
         return Err(relation_vanished(oid));
