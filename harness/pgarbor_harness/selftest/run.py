@@ -236,7 +236,7 @@ def _mutant_sweep(samples: list[_Sample], prefix: str, checks: list[SelftestChec
         failures: list[str] = []
         for case, ref, tgt in samples:
             try:
-                mutated = fn(copy.deepcopy(tgt))
+                mutated = fn(copy.deepcopy(tgt), case)
                 if mutated is None:
                     continue
                 applicable += 1
@@ -270,7 +270,7 @@ def _comparator_sweep(samples: list[_Sample], prefix: str,
             for oname in kills:
                 fn = registry[oname]
                 for case, ref, tgt in samples:
-                    mutated = fn(copy.deepcopy(tgt))
+                    mutated = fn(copy.deepcopy(tgt), case)
                     if mutated is None:
                         continue
                     if not _typed.compare_transcripts(case, ref, mutated):

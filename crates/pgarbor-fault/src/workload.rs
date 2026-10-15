@@ -289,7 +289,23 @@ fn apply_txn(c: &Container, ops: &[WorkOp]) -> Result<CommitSeq> {
             }
             WorkOp::CreateRoot { name, from } => {
                 let src = match from {
-                    Some(f) => resolve_root(&w, dir, f)?,
+                    Some(f) => {
+                        let id = resolve_root(&w, dir, f)?;
+                        if !id.is_none() && pgarbor_storage::PageSink::is_private(&w, id) {
+                            // The source tree was built in this txn: its pages are private and
+                            // the B+tree rewrites/frees private pages in place, so two roots must
+                            // never share them (O(1) sharing is only valid for committed
+                            // pages). Deep-copy into a fresh, independent tree.
+                            let mut items = w
+                                .scan(id, std::ops::Bound::Unbounded, std::ops::Bound::Unbounded)?
+                                .collect::<Result<Vec<_>>>()?
+                                .into_iter()
+                                .map(Ok);
+                            w.build_tree(&mut items)?
+                        } else {
+                            id
+                        }
+                    }
                     None => PageId::NONE,
                 };
                 dir = w.put(dir, &root_key(name), &src.0.to_le_bytes())?.root;

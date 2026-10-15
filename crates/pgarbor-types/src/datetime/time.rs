@@ -837,8 +837,9 @@ mod tests {
 
     #[test]
     fn timetz_compare_uses_utc_then_zone() {
-        // 12:00 at -05:30 (zone -19800 west) is 06:30 UTC; 06:30 at UTC is the same instant.
-        assert_eq!(timetz_cmp_internal(43_200_000_000, -19_800, 23_400_000_000, 0), 1);
-        assert_eq!(timetz_cmp_internal(23_400_000_000, 0, 43_200_000_000, -19_800), -1);
+        // 12:00 at +05:30 (zone -19800 seconds west) is 06:30 UTC; 06:30 at UTC is the same instant.
+        // Equal UTC instants tie-break on zone (seconds west): -19800 < 0, so the +05:30 value sorts first.
+        assert_eq!(timetz_cmp_internal(43_200_000_000, -19_800, 23_400_000_000, 0), -1);
+        assert_eq!(timetz_cmp_internal(23_400_000_000, 0, 43_200_000_000, -19_800), 1);
     }
 }

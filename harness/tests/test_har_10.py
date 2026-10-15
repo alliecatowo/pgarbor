@@ -220,7 +220,7 @@ def test_connection_lost_alive_but_panic_stops():
     assert len(tr.steps) == 1
 
 
-def test_harness_exception_recorded_and_released():
+def test_harness_exception_recorded_and_released(monkeypatch):
     case = mk([{"sql": "ok"}, {"sql": "bad"}, {"sql": "never"}])
 
     def boom(self, sql):
@@ -228,12 +228,11 @@ def test_harness_exception_recorded_and_released():
             raise ValueError("oops")
         return StepOutput(results=[rows_result(sql)])
 
-    FakeSession.run_simple = boom
-    try:
-        t = FakeTarget()
-        tr = executor.execute_case(case, t)
-    finally:
-        del FakeSession.run_simple
+    # monkeypatch restores the original FakeSession.run_simple on teardown; a manual
+    # assign + `del` would delete the class's own method and break later tests.
+    monkeypatch.setattr(FakeSession, "run_simple", boom)
+    t = FakeTarget()
+    tr = executor.execute_case(case, t)
     assert len(tr.steps) == 2
     assert tr.steps[1].harness_error == "ValueError: oops"
     assert t.released

@@ -682,8 +682,10 @@ mod tests {
     fn n(s: &str) -> Numeric {
         Numeric::from_decimal(BigDecimal::from_str(s).unwrap())
     }
+    /// Text form via the canonical `numeric_out` formatter (not `BigDecimal` Display, which uses
+    /// scientific notation for small magnitudes and does not preserve PG's display scale on zero).
     fn s(x: Result<Numeric>) -> String {
-        x.unwrap().as_decimal().unwrap().to_string()
+        super::super::io::format_numeric(&x.unwrap()).unwrap()
     }
 
     #[test]

@@ -63,7 +63,6 @@ because every spec's teardown drops its objects.
 
 from __future__ import annotations
 
-import difflib
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -550,30 +549,30 @@ def run_spec(spec: IsolationSpec, endpoint: Endpoint) -> tuple[str, str]:
 _WAIT_MARKERS = ("<waiting ...>", "<... completed>")
 
 
-def _changed_lines(expected: str, actual: str) -> list[str]:
+def _without_wait_markers(text: str) -> list[str]:
+    """Output lines with wait markers removed: ``<waiting ...>`` suffixes are stripped and
+    ``<... completed>`` lines are dropped, so a wait-only difference compares equal."""
     out: list[str] = []
-    for ln in difflib.unified_diff(expected.splitlines(), actual.splitlines(), lineterm="", n=0):
-        if ln.startswith(("---", "+++", "@@")):
+    for ln in text.splitlines():
+        if _WAIT_MARKERS[1] in ln:
             continue
-        if ln.startswith(("+", "-")):
-            out.append(ln)
+        out.append(ln.replace(" " + _WAIT_MARKERS[0], "").replace(_WAIT_MARKERS[0], ""))
     return out
 
 
 def _only_wait_diffs(candidates: list[Path], actual: str) -> bool:
-    """True when the closest candidate differs only in wait-marker lines."""
+    """True when some candidate equals the actual output once wait markers are ignored."""
     act = outdiff.strip_trailing_cr(actual.encode("utf-8", "surrogateescape")).decode(
         "utf-8", "surrogateescape")
-    best: Optional[list[str]] = None
+    want = _without_wait_markers(act)
     for c in candidates:
         try:
             exp = outdiff.strip_trailing_cr(c.read_bytes()).decode("utf-8", "surrogateescape")
         except OSError:
             continue
-        ch = _changed_lines(exp, act)
-        if best is None or len(ch) < len(best):
-            best = ch
-    return bool(best) and all(any(m in ln for m in _WAIT_MARKERS) for ln in (best or []))
+        if _without_wait_markers(exp) == want:
+            return True
+    return False
 
 
 def _candidates(isolation_dir: Path, name: str) -> list[Path]:

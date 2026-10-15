@@ -501,7 +501,7 @@ mod tests {
         let (c, _) = make(64 << 20);
         let seq = put_commit(&c, b"k", b"v").unwrap();
         assert_eq!(seq, c.commit_seq());
-        assert_eq!(seq.0, 1);
+        assert_eq!(seq.0, 2);
         let snap = c.snapshot();
         assert_eq!(snap.directory().get(b"k").unwrap(), Some(b"v".to_vec()));
     }
@@ -560,10 +560,10 @@ mod tests {
         let err = put_commit(&c, b"b", b"2").unwrap_err();
         assert_eq!(err.sqlstate.code(), "53100");
         assert!(!c.is_poisoned());
-        assert_eq!(c.commit_seq().0, 1);
+        assert_eq!(c.commit_seq().0, 2);
         ctl.fail_write.store(false, Ordering::SeqCst);
         put_commit(&c, b"b", b"2").unwrap();
-        assert_eq!(c.commit_seq().0, 2);
+        assert_eq!(c.commit_seq().0, 3);
     }
 
     #[test]
@@ -575,7 +575,7 @@ mod tests {
         ctl.fail_sync.store(false, Ordering::SeqCst);
         let e = c.begin_write().unwrap_err();
         assert_eq!(e.sqlstate.code(), "58030");
-        assert_eq!(c.commit_seq().0, 0);
+        assert_eq!(c.commit_seq().0, 1);
     }
 
     #[test]

@@ -1,0 +1,38 @@
+# Inside an explicit transaction, a failed parameterized statement aborts the block; further
+# statements fail with 25P02 until an explicit ROLLBACK.
+id: orm-node-pg.transaction-aborted-25p02
+title: "Failed parameterized statement inside BEGIN aborts the block until ROLLBACK"
+family: orm-node-pg
+tier: core
+feature_ids: [transactions, parameterized-queries, errors, constraints]
+required_capabilities: [create-table, insert, select, transactions, extended-protocol, errors]
+provenance:
+  source: hand
+  ref: "PG18 errcodes 25P02 in_failed_sql_transaction; node-postgres transaction pattern"
+sessions: [a]
+setup: |
+  CREATE TABLE acct (id int4 PRIMARY KEY, bal int4 NOT NULL);
+  INSERT INTO acct VALUES (1, 5);
+steps:
+  - sql: |
+      BEGIN
+    expect: ok
+  - exec_params:
+      sql: |
+        INSERT INTO acct (id, bal) VALUES ($1, $2)
+      params: ["1", "7"]
+    expect: error
+    sqlstate: "23505"
+  - exec_params:
+      sql: |
+        UPDATE acct SET bal = bal + $1 WHERE id = $2
+      params: ["1", "1"]
+    expect: error
+    sqlstate: "25P02"
+  - sql: |
+      ROLLBACK
+    expect: ok
+  - sql: |
+      SELECT id, bal FROM acct ORDER BY id
+    expect: rows
+    order: ordered

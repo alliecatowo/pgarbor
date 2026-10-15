@@ -319,7 +319,9 @@ mod tests {
         let mut b = encode_page(4096, &mk(PageKind::Leaf, 1, 1, vec![1, 2])).unwrap();
         let too_big = (payload_capacity(4096) + 1) as u32;
         b[28..32].copy_from_slice(&too_big.to_le_bytes());
-        fix_crc(&mut b);
+        // No fix_crc here: the forged length is past the buffer end, so the helper cannot slice
+        // the payload. The capacity check (contract step 3) runs before the checksum (step 4),
+        // so the stored crc is never consulted.
         let e = decode_page(4096, PageId(1), &b).unwrap_err();
         assert_eq!(e.detail.as_deref(), Some("payload length 4065 exceeds page capacity 4064"));
     }

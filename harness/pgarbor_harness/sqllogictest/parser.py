@@ -220,12 +220,25 @@ def render_values(rows: list[list[Optional[str]]], sort: str, hash_threshold: in
 
 
 def write(records: list[SltRecord]) -> str:
-    """Serialize records back to text (round-trips parse(write(r)) == r except comments)."""
-    blocks: list[str] = []
+    """Serialize records back to text (round-trips parse(write(r)) == r except comments).
+
+    Each record header is written on its own ``line`` (comments and other layout are replaced by
+    blank lines), so ``parse(write(r))`` keeps every ``line`` and diagnostics stay aligned with
+    the source file. Records that cannot be placed at their line are written just after the
+    previous one, separated by one blank line.
+    """
+    lines: list[str] = []
     for r in records:
         if r.kind not in _RECORD_KINDS:
             raise ValueError(f"unknown record kind {r.kind!r}")
         out: list[str] = [f"{kind} {engine}" for kind, engine in r.conditions]
+        # 1-based line where this block must start so that its header lands on r.line.
+        target = r.line - len(out)
+        nxt = len(lines) + 1
+        if lines:
+            lines.extend([""] * max(1, target - nxt))
+        else:
+            lines.extend([""] * max(0, target - nxt))
         if r.kind == "statement":
             if r.expect_ok:
                 out.append("statement ok")
@@ -247,7 +260,7 @@ def write(records: list[SltRecord]) -> str:
             out.append(f"hash-threshold {r.hash_threshold}")
         else:
             out.append("halt")
-        blocks.append("\n".join(out))
-    if not blocks:
+        lines.extend(out)
+    if not lines:
         return ""
-    return "\n\n".join(blocks) + "\n"
+    return "\n".join(lines) + "\n"

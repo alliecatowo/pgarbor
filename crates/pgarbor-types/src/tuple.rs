@@ -49,7 +49,9 @@ pub const TUPLE_FORMAT_V1: u8 = 0x01;
 
 /// Maximum nesting depth (records / arrays / jsonb) accepted by the encoder and decoder. Keeps
 /// recursion bounded on hostile input; encoder and decoder agree so every encoded row decodes.
-const MAX_DEPTH: usize = 512;
+/// Sized for debug-build frames (~4-8 KiB per level on the record/jsonb paths) on a 2 MiB thread
+/// stack: 512 overflowed in debug builds before the recursive arms were split out of line.
+const MAX_DEPTH: usize = 128;
 
 const T_NULL: u8 = 0x00;
 const T_FALSE: u8 = 0x01;
@@ -473,31 +475,38 @@ fn read_jsonb(r: &mut Reader<'_>, depth: usize) -> Result<Jsonb> {
         2 => Jsonb::Bool(true),
         3 => Jsonb::Number(read_numeric(r, false)?),
         4 => Jsonb::String(r.string()?),
-        5 => {
-            let n = r.count()?;
-            let mut items = Vec::with_capacity(n);
-            for _ in 0..n {
-                items.push(read_jsonb(r, depth + 1)?);
-            }
-            Jsonb::Array(items)
-        }
-        6 => {
-            let n = r.count()?;
-            let mut pairs: Vec<(String, Jsonb)> = Vec::with_capacity(n);
-            for _ in 0..n {
-                let k = r.string()?;
-                if let Some((prev, _)) = pairs.last() {
-                    if jsonb_key_cmp(prev, &k) != Ordering::Less {
-                        return Err(bad("jsonb object keys not sorted and unique"));
-                    }
-                }
-                let v = read_jsonb(r, depth + 1)?;
-                pairs.push((k, v));
-            }
-            Jsonb::Object(pairs)
-        }
+        5 => read_jsonb_array(r, depth + 1)?,
+        6 => read_jsonb_object(r, depth + 1)?,
         _ => return Err(bad("unknown jsonb kind")),
     })
+}
+
+// Recursive jsonb arms live out of line so `read_jsonb`'s frame stays small (see `read_leaf`).
+#[inline(never)]
+fn read_jsonb_array(r: &mut Reader<'_>, depth: usize) -> Result<Jsonb> {
+    let n = r.count()?;
+    let mut items = Vec::with_capacity(n);
+    for _ in 0..n {
+        items.push(read_jsonb(r, depth)?);
+    }
+    Ok(Jsonb::Array(items))
+}
+
+#[inline(never)]
+fn read_jsonb_object(r: &mut Reader<'_>, depth: usize) -> Result<Jsonb> {
+    let n = r.count()?;
+    let mut pairs: Vec<(String, Jsonb)> = Vec::with_capacity(n);
+    for _ in 0..n {
+        let k = r.string()?;
+        if let Some((prev, _)) = pairs.last() {
+            if jsonb_key_cmp(prev, &k) != Ordering::Less {
+                return Err(bad("jsonb object keys not sorted and unique"));
+            }
+        }
+        let v = read_jsonb(r, depth)?;
+        pairs.push((k, v));
+    }
+    Ok(Jsonb::Object(pairs))
 }
 
 fn skip_jsonb(r: &mut Reader<'_>, depth: usize) -> Result<()> {
@@ -511,21 +520,29 @@ fn skip_jsonb(r: &mut Reader<'_>, depth: usize) -> Result<()> {
             let n = r.byte_len()?;
             r.take(n)?;
         }
-        5 => {
-            let n = r.count()?;
-            for _ in 0..n {
-                skip_jsonb(r, depth + 1)?;
-            }
-        }
-        6 => {
-            let n = r.count()?;
-            for _ in 0..n {
-                let k = r.byte_len()?;
-                r.take(k)?;
-                skip_jsonb(r, depth + 1)?;
-            }
-        }
+        5 => skip_jsonb_array(r, depth + 1)?,
+        6 => skip_jsonb_object(r, depth + 1)?,
         _ => return Err(bad("unknown jsonb kind")),
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn skip_jsonb_array(r: &mut Reader<'_>, depth: usize) -> Result<()> {
+    let n = r.count()?;
+    for _ in 0..n {
+        skip_jsonb(r, depth)?;
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn skip_jsonb_object(r: &mut Reader<'_>, depth: usize) -> Result<()> {
+    let n = r.count()?;
+    for _ in 0..n {
+        let k = r.byte_len()?;
+        r.take(k)?;
+        skip_jsonb(r, depth)?;
     }
     Ok(())
 }
@@ -560,6 +577,19 @@ fn read_value(r: &mut Reader<'_>, depth: usize) -> Result<Datum> {
         return Err(bad("nesting too deep"));
     }
     let tag = r.u8()?;
+    match tag {
+        T_JSONB => Ok(Datum::Jsonb(read_jsonb(r, depth + 1)?)),
+        T_ARRAY => read_array(r, depth + 1),
+        T_RECORD => read_record(r, depth + 1),
+        _ => read_leaf(r, tag),
+    }
+}
+
+/// Non-recursive scalar decode. Kept out of line so the recursive frames (`read_value`,
+/// `read_array`, `read_record`) stay small: an inlined copy of this whole match made debug-build
+/// frames large enough that MAX_DEPTH nested records overflowed a 2 MiB thread stack.
+#[inline(never)]
+fn read_leaf(r: &mut Reader<'_>, tag: u8) -> Result<Datum> {
     Ok(match tag {
         T_NULL => Datum::Null,
         T_FALSE => Datum::Bool(false),
@@ -592,27 +622,30 @@ fn read_value(r: &mut Reader<'_>, depth: usize) -> Result<Datum> {
             Datum::Interval(Interval { months, days, micros })
         }
         T_JSON => Datum::Json(r.string()?),
-        T_JSONB => Datum::Jsonb(read_jsonb(r, depth + 1)?),
-        T_ARRAY => {
-            let (elem, dims, n) = read_array_header(r)?;
-            let mut items = Vec::with_capacity(n);
-            for _ in 0..n {
-                items.push(read_value(r, depth + 1)?);
-            }
-            Datum::Array(Box::new(Array { elem, dims, items }))
-        }
         T_OID => Datum::Oid(r.u32()?),
         T_CHAR => Datum::Char(r.u8()?),
-        T_RECORD => {
-            let n = r.count()?;
-            let mut fields = Vec::with_capacity(n);
-            for _ in 0..n {
-                fields.push(read_value(r, depth + 1)?);
-            }
-            Datum::Record(fields)
-        }
         _ => return Err(bad(&format!("unknown value tag 0x{tag:02x}"))),
     })
+}
+
+#[inline(never)]
+fn read_array(r: &mut Reader<'_>, depth: usize) -> Result<Datum> {
+    let (elem, dims, n) = read_array_header(r)?;
+    let mut items = Vec::with_capacity(n);
+    for _ in 0..n {
+        items.push(read_value(r, depth)?);
+    }
+    Ok(Datum::Array(Box::new(Array { elem, dims, items })))
+}
+
+#[inline(never)]
+fn read_record(r: &mut Reader<'_>, depth: usize) -> Result<Datum> {
+    let n = r.count()?;
+    let mut fields = Vec::with_capacity(n);
+    for _ in 0..n {
+        fields.push(read_value(r, depth)?);
+    }
+    Ok(Datum::Record(fields))
 }
 
 /// Advance past one value without materializing it (still bounds-checked and structure-checked).
@@ -621,6 +654,17 @@ fn skip_value(r: &mut Reader<'_>, depth: usize) -> Result<()> {
         return Err(bad("nesting too deep"));
     }
     let tag = r.u8()?;
+    match tag {
+        T_JSONB => skip_jsonb(r, depth + 1),
+        T_ARRAY => skip_array(r, depth + 1),
+        T_RECORD => skip_record(r, depth + 1),
+        _ => skip_leaf(r, tag),
+    }
+}
+
+/// Non-recursive skip of a scalar tag; out of line to keep `skip_value`'s recursive frame small.
+#[inline(never)]
+fn skip_leaf(r: &mut Reader<'_>, tag: u8) -> Result<()> {
     match tag {
         T_NULL | T_FALSE | T_TRUE => {}
         T_INT2 => {
@@ -646,23 +690,28 @@ fn skip_value(r: &mut Reader<'_>, depth: usize) -> Result<()> {
         T_INTERVAL => {
             r.take(16)?;
         }
-        T_JSONB => skip_jsonb(r, depth + 1)?,
-        T_ARRAY => {
-            let (_, _, n) = read_array_header(r)?;
-            for _ in 0..n {
-                skip_value(r, depth + 1)?;
-            }
-        }
         T_CHAR => {
             r.u8()?;
         }
-        T_RECORD => {
-            let n = r.count()?;
-            for _ in 0..n {
-                skip_value(r, depth + 1)?;
-            }
-        }
         _ => return Err(bad(&format!("unknown value tag 0x{tag:02x}"))),
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn skip_array(r: &mut Reader<'_>, depth: usize) -> Result<()> {
+    let (_, _, n) = read_array_header(r)?;
+    for _ in 0..n {
+        skip_value(r, depth)?;
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn skip_record(r: &mut Reader<'_>, depth: usize) -> Result<()> {
+    let n = r.count()?;
+    for _ in 0..n {
+        skip_value(r, depth)?;
     }
     Ok(())
 }

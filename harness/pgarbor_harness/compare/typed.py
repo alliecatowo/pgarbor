@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import collections
 import copy
+import dataclasses
 from typing import Any
 
 from .. import sqltext
@@ -289,18 +290,38 @@ def compare_steps(path: str, case: Case, step_index: int, ref: StepObservation,
     return out
 
 
+def _normalized_copy(case: Case, transcript: Transcript) -> Transcript:
+    """Deep-copy ``transcript`` and apply the case normalizers to the copy.
+
+    ``apply_case_normalizers`` requires one observation per case step. A transcript that is
+    shorter or longer than the case is still a valid comparison input: the missing or extra
+    steps are reported by ``compare_transcripts`` as ``missing_step``. So in that case only the
+    overlapping prefix is normalized here, and the step-less tail is left as is (it is never
+    compared beyond its kind)."""
+    if len(transcript.steps) == len(case.steps):
+        return apply_case_normalizers(case, copy.deepcopy(transcript))
+    n = min(len(transcript.steps), len(case.steps))
+    sub_case = dataclasses.replace(case, steps=list(case.steps[:n]))
+    sub = copy.deepcopy(transcript)
+    sub.steps = sub.steps[:n]
+    return apply_case_normalizers(sub_case, sub)
+
+
 def compare_transcripts(case: Case, reference: Transcript, target: Transcript) -> list[Diff]:
     """Full comparison (module docstring)."""
-    ref = apply_case_normalizers(case, copy.deepcopy(reference))
-    tgt = apply_case_normalizers(case, copy.deepcopy(target))
+    ref = _normalized_copy(case, reference)
+    tgt = _normalized_copy(case, target)
     out: list[Diff] = []
+    # Extra-step kinds come from the un-normalized target: the normalized copy may have been
+    # truncated to the case length, and the kind field is never changed by a normalizer.
+    raw_ts = {"setup": target.setup, "steps": target.steps}
     for prefix, rs, ts, is_setup in (("setup", ref.setup, tgt.setup, True),
                                      ("steps", ref.steps, tgt.steps, False)):
         for i, r in enumerate(rs):
             t = ts[i] if i < len(ts) else None
             out += compare_steps(f"{prefix}[{i}]", case, i, r, t, is_setup)
-        for i in range(len(rs), len(ts)):
-            out.append(Diff(f"{prefix}[{i}]", "missing_step", None, ts[i].kind,
+        for i in range(len(rs), len(raw_ts[prefix])):
+            out.append(Diff(f"{prefix}[{i}]", "missing_step", None, raw_ts[prefix][i].kind,
                             "target has an extra step not present in the reference"))
     return out
 

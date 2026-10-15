@@ -18,9 +18,12 @@ def col(name="a", oid=23, **kw):
 
 
 def rows_res(rows, cols=None, tag=None):
+    # The default tag is the same on both sides of a comparison so that these fixtures isolate
+    # the row-level diff under test. The contract compares command tags exactly, so a real
+    # "SELECT 2" vs "SELECT 1" pair also reports command_tag (see the explicit test below).
     cols = cols if cols is not None else [col()]
     return StatementResult("rows", columns=cols, rows=[list(r) for r in rows],
-                           command_tag=tag or f"SELECT {len(rows)}")
+                           command_tag=tag or "SELECT")
 
 
 def err_res(sqlstate="42P01", message="m", **kw):
@@ -145,6 +148,14 @@ def test_row_order_and_row_count_and_value():
     d = cmp_res(rows_res([["1"], ["2"]]), rows_res([["1"], ["3"]]))
     assert kinds(d) == ["value"] and d[0].path == "r.rows[1][0]"
     assert (d[0].reference, d[0].target) == ("2", "3")
+
+
+def test_row_count_mismatch_with_real_tags_also_reports_command_tag():
+    # Contract section 6 compares command tags exactly, so a row-count change that also changes
+    # the tag ("SELECT 2" -> "SELECT 1") yields both diffs, in result order (command_tag first).
+    ref = rows_res([["1"], ["1"]], tag="SELECT 2")
+    tgt = rows_res([["1"]], tag="SELECT 1")
+    assert kinds(cmp_res(ref, tgt)) == ["command_tag", "row_count"]
 
 
 def test_row_multiset():

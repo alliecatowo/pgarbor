@@ -160,7 +160,8 @@ def test_header_jsonl_and_password_redaction(tmp_path: Path) -> None:
     assert all(r["conn"] == "c1" for r in records)
     assert all(r["dir"] in ("F", "B") for r in records)
 
-    pairs = [(r["dir"], r["msg"]["type"]) for r in records]
+    # the redacted PasswordMessage has no "type" (contract: replaced by {"redacted": true}), so use .get
+    pairs = [(r["dir"], r["msg"].get("type")) for r in records]
     assert ("F", "Startup") in pairs
     assert ("B", "Authentication") in pairs
     assert ("F", "Query") in pairs

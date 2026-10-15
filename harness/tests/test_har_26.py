@@ -93,7 +93,7 @@ def test_minimize_case_reduces_to_needed_step_and_keeps_candidates_valid():
         "steps": [
             {"sql": "SELECT 1"},
             {"sql": "SELECT pg_sleep(0)", "async": True},
-            {"wait": True},
+            {"wait": True, "session": "a"},
             {"sql": "SELECT 2"},
         ],
     }

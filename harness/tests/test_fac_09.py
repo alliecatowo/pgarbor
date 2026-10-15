@@ -320,6 +320,15 @@ def test_real_evidence_modules_roundtrip(cfg, monkeypatch):
     """Acceptance: evidence.json validates via EvidencePack.from_json (needs FAC-10..14)."""
     calls: list[str] = []
     _patch_all_ok(monkeypatch, calls)
+    # The real evidence.build_pack records git sha/branch/dirty (evidence.py docstring), so
+    # the repo root must be a git repository with a commit.
+    import os
+    import subprocess
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+    subprocess.run(["git", "init", "-q"], cwd=cfg.repo_root, check=True)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"],
+                   cwd=cfg.repo_root, check=True, env=env)
     res = campaign.run_campaign(cfg)
     if res.exit_code == 4 and any("NotImplementedError" in str(e)
                                   for e in json.loads(

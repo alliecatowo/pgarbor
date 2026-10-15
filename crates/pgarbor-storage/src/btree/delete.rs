@@ -548,7 +548,9 @@ mod tests {
     #[test]
     fn random_interleavings_match_model() {
         for (seed, pad, shared) in [(1u64, 150usize, false), (7, 150, true), (99, 400, false), (12345, 30, true)] {
-            let mut rng = Rng(seed * 0x9E3779B97F4A7C15 | 1);
+            // Deterministic seeds are listed in the table above; the multiply must wrap
+            // (a plain `*` overflows u64 in debug builds for any seed >= 2).
+            let mut rng = Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
             let mut s = MemSink::new();
             let mut root = PageId::NONE;
             let mut model: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();

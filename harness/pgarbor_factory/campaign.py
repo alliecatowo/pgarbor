@@ -381,6 +381,10 @@ def _phase_storage_fault(cfg: CampaignConfig, ctx: _Ctx) -> list[FamilyEvidence]
         for n in r.passed:
             outcomes.append("PASS")
             items.append({"id": f"{r.package}::{n}", "outcome": "PASS"})
+        for n in r.ignored:
+            # Cataloged but not executed: visible as UNRUN, never folded into PASS.
+            outcomes.append("UNRUN")
+            items.append({"id": f"{r.package}::{n}", "outcome": "UNRUN", "reason": "ignored"})
         for n in r.failed:
             low = n.lower()
             o = "CORRUPTION" if any(w in low for w in _CRITICAL_WORDS) else "MISMATCH"

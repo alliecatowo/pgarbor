@@ -198,7 +198,7 @@ def test_basic_output(fake):
         "Parsed test spec with 2 sessions\n"
         "\nstarting permutation: a b\n"
         "x\n-\n1\n(1 row)\n\n"          # setup result set
-        "step a: SEL 1;\n x\n-\n1\n(1 row)\n\n"
+        "step a: SEL 1;\nx\n-\n1\n(1 row)\n\n"
         "step b: ERR;\nERROR:  could not serialize\n")
 
 
@@ -228,7 +228,7 @@ def test_star_marker_forces_wait(fake):
                   [[P("a", Marker("star")), P("b")]])
     text, _ = tester.run_spec(spec, EP)
     assert "step a: SEL 1; <waiting ...>\n" in text
-    assert text.endswith("step a: <... completed>\n x\n-\n1\n(1 row)\n\n")
+    assert text.endswith("step a: <... completed>\nx\n-\n1\n(1 row)\n\n")
 
 
 def test_step_blocker_marker(fake):

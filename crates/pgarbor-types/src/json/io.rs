@@ -75,7 +75,9 @@ fn write_value(out: &mut String, v: &Jsonb, level: usize, pretty: bool, after_ke
                 if i > 0 {
                     out.push_str(if pretty { "," } else { ", " });
                 }
-                if pretty {
+                // A container item opens its own line via the leading indent in `write_value`
+                // (`!after_key && level > 0`); pushing one here too would emit a blank line.
+                if pretty && !matches!(item, Jsonb::Array(_) | Jsonb::Object(_)) {
                     push_indent(out, level + 1);
                 }
                 write_value(out, item, level + 1, pretty, false)?;
