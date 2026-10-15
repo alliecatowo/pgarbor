@@ -113,6 +113,13 @@ enum CopyRelation<'a> {
 
 /// Bind COPY.
 pub fn bind_copy(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
+    b.scopes.push(super::scope::QueryScope::new(super::scope::ScopeKind::TableExpr));
+    let result = bind_copy_inner(b, stmt);
+    b.scopes.pop();
+    result
+}
+
+fn bind_copy_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
     let (source, to, target, options, legacy_options, values) = match stmt {
         Statement::Copy { source, to, target, options, legacy_options, values } => {
             (source, *to, target, options, legacy_options, values)

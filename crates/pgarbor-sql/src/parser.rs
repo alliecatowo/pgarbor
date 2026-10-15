@@ -310,11 +310,17 @@ fn trim_range(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<(usi
 
 /// Parse one chunk (tokens end with EOF) with sqlparser; the whole chunk must be one statement.
 fn parse_ast_chunk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<Statement> {
+    let toks = signed_connection_limit(toks);
+    let toks = toks.as_slice();
     let dialect = PostgreSqlDialect {};
     let mut parser = Parser::new(&dialect)
         .with_recursion_limit(RECURSION_LIMIT)
         .with_tokens_with_locations(toks.to_vec());
-    let stmt = match parser.parse_statement() {
+    let head: Vec<_> = toks.iter().filter_map(|t| bare_word(&t.token)).take(3).collect();
+    let is_sequence = matches!(head.as_slice(), [a,b,..] if a == "CREATE" && b == "SEQUENCE")
+        || matches!(head.as_slice(), [a,b,c] if a == "CREATE" && matches!(b.as_str(), "TEMP" | "TEMPORARY") && c == "SEQUENCE");
+    let parsed = if is_sequence { parse_sequence_flexible(&mut parser) } else { parser.parse_statement() };
+    let stmt = match parsed {
         Ok(s) => s,
         Err(e) => {
             let err = syntax_error::translate_parser_error(&e, src, toks)?;
@@ -328,6 +334,63 @@ fn parse_ast_chunk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<Statement>
         return Err(diag::syntax_error_near(&near, src.char_pos(next.span.start)));
     }
     Ok(stmt)
+}
+
+// sqlparser 0.63 fixes SeqOptList order; PG gram.y permits any order and repetitions
+// (repetitions are rejected by binding, before any catalog changes).
+fn parse_sequence_flexible(p: &mut Parser<'_>) -> std::result::Result<Statement, sqlparser::parser::ParserError> {
+    use sqlparser::keywords::Keyword as K;
+    use sqlparser::ast::SequenceOptions as O;
+    p.expect_keyword_is(K::CREATE)?;
+    let temporary = p.parse_keyword(K::TEMP) || p.parse_keyword(K::TEMPORARY);
+    p.expect_keyword_is(K::SEQUENCE)?;
+    let if_not_exists = p.parse_keywords(&[K::IF,K::NOT,K::EXISTS]);
+    let name=p.parse_object_name(false)?;
+    let mut data_type=None;let mut owned_by=None;let mut sequence_options=Vec::new();
+    loop {
+        if p.parse_keyword(K::AS) {
+            if data_type.is_some() { return Err(sqlparser::parser::ParserError::ParserError("conflicting or redundant options".into())); }
+            data_type=Some(p.parse_data_type()?);
+        } else if p.parse_keyword(K::INCREMENT) {
+            let by=p.parse_keyword(K::BY);sequence_options.push(O::IncrementBy(p.parse_number()?,by));
+        } else if p.parse_keyword(K::MINVALUE) {sequence_options.push(O::MinValue(Some(p.parse_number()?)));}
+        else if p.parse_keyword(K::MAXVALUE) {sequence_options.push(O::MaxValue(Some(p.parse_number()?)));}
+        else if p.parse_keyword(K::START) {let with=p.parse_keyword(K::WITH);sequence_options.push(O::StartWith(p.parse_number()?,with));}
+        else if p.parse_keyword(K::CACHE) {sequence_options.push(O::Cache(p.parse_number()?));}
+        else if p.parse_keyword(K::CYCLE) {sequence_options.push(O::Cycle(false));}
+        else if p.parse_keyword(K::NO) {
+            if p.parse_keyword(K::MINVALUE) {sequence_options.push(O::MinValue(None));}
+            else if p.parse_keyword(K::MAXVALUE) {sequence_options.push(O::MaxValue(None));}
+            else {p.expect_keyword_is(K::CYCLE)?;sequence_options.push(O::Cycle(true));}
+        } else if p.parse_keyword(K::OWNED) {
+            p.expect_keyword_is(K::BY)?;
+            if owned_by.is_some() {return Err(sqlparser::parser::ParserError::ParserError("conflicting or redundant options".into()));}
+            owned_by=Some(p.parse_object_name(false)?);
+        } else {break;}
+    }
+    Ok(Statement::CreateSequence {temporary,if_not_exists,name,data_type,sequence_options,owned_by})
+}
+// The role parser's numeric-value path omits unary signs. Fold only the signed
+// CONNECTION LIMIT literal; retain its original source span and every other token.
+fn signed_connection_limit(toks: &[TokenWithSpan]) -> Vec<TokenWithSpan> {
+    let mut out=Vec::with_capacity(toks.len());let mut i=0;
+    let significant: Vec<_>=toks.iter().enumerate().filter(|(_,t)|!matches!(t.token,Token::Whitespace(_))).collect();
+    while i<significant.len() {
+        let (_,t)=significant[i];
+        if i>=2 && bare_word(&significant[i-2].1.token).as_deref()==Some("CONNECTION")
+            && bare_word(&significant[i-1].1.token).as_deref()==Some("LIMIT")
+            && matches!(t.token,Token::Minus | Token::Plus) {
+            if let Some((_,next))=significant.get(i+1) {
+                if let Token::Number(n,long)=&next.token {
+                    let sign=if matches!(t.token,Token::Minus) {"-"} else {""};
+                    out.push(TokenWithSpan::new(Token::Number(format!("{sign}{n}"),*long),Span::new(t.span.start,next.span.end)));
+                    i+=2;continue;
+                }
+            }
+        }
+        out.push(t.clone());i+=1;
+    }
+    out
 }
 
 /// Parse text that must contain exactly ONE statement (used for re-binding stored view

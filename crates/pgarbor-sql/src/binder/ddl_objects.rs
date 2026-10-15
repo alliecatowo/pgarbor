@@ -145,7 +145,7 @@ fn string_literal(e: &Expr) -> Option<String> {
 fn signed_number(e: &Expr) -> Option<(bool, &str)> {
     match e {
         Expr::Value(v) => match &v.value {
-            Value::Number(s, _) => Some((false, s.as_str())),
+            Value::Number(s, _) => Some(match s.strip_prefix('-') { Some(digits) => (true, digits), None => (false, s.strip_prefix('+').unwrap_or(s.as_str())) }),
             _ => None,
         },
         Expr::UnaryOp { op: UnaryOperator::Minus, expr, .. } => signed_number(expr).map(|(neg, s)| (!neg, s)),
@@ -767,12 +767,10 @@ mod tests {
     use crate::source::SourceMap;
     use pgarbor_catalog::testing;
     use pgarbor_types::context::IoConfig;
-    use sqlparser::dialect::PostgreSqlDialect;
-    use sqlparser::parser::Parser;
 
     fn parse_one(sql: &str) -> Statement {
-        let mut stmts = Parser::parse_sql(&PostgreSqlDialect {}, sql).expect("test SQL parses");
-        stmts.remove(0)
+        let raw = crate::parse_one(sql).expect("PG SQL parses through adapter");
+        raw.as_ast().expect("DDL AST").clone()
     }
 
     fn sequence_options(sql: &str) -> Vec<AstSequenceOption> {

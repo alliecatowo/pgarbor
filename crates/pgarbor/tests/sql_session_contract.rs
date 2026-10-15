@@ -180,3 +180,31 @@ fn information_schema_columns_is_served_by_its_producer() {
         other => panic!("expected rows: {other:?}"),
     }
 }
+
+#[test]
+fn utility_and_transaction_control_can_be_first_on_fresh_session() {
+    for sql in ["SHOW server_version", "BEGIN", "ROLLBACK", "SET application_name = 'first'", "SHOW ALL"] {
+        let db = Database::in_memory().expect("database");
+        let mut s = db.session("main", SessionOptions::default()).expect("fresh session");
+        let out = s.simple_query_raw(sql);
+        assert!(out.error.is_none(), "first statement {sql}: {:?}", out.error);
+        assert_eq!(out.statements.len(), 1, "{sql}");
+        if sql == "BEGIN" {
+            assert_eq!(out.status, pgarbor::TxnStatus::InTransaction);
+            assert_eq!(s.simple_query("ROLLBACK").expect("rollback")[0].result.tag(), "ROLLBACK");
+        }
+    }
+}
+
+#[test]
+fn unsupported_security_and_deferred_constraints_fail_closed() {
+    let db = Database::in_memory().expect("database");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    s.simple_query("CREATE TABLE t(id int primary key)").expect("create");
+    for sql in ["ALTER TABLE t ENABLE ROW LEVEL SECURITY", "ALTER TABLE t FORCE ROW LEVEL SECURITY", "CREATE TABLE d(id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"] {
+        let e = s.simple_query(sql).expect_err("must reject unenforced semantics");
+        assert_eq!(e.sqlstate.code(), "0A000", "{sql}: {e:?}");
+        assert!(e.is_unimplemented());
+    }
+    s.simple_query("INSERT INTO t VALUES (1)").expect("transaction recovers");
+}

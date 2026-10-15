@@ -33,3 +33,9 @@ pgarbor-sql (parser_extra, classify, binder), workspace Cargo.toml (future).
 ## Steward decision (2026-10-15)
 
 Keep sqlparser pinned at 0.63.0 and the explicit extras parser/classification. Unsupported constructs remain leased 0A000; no dependency fork or grammar-fidelity claim is approved.
+
+Assembly follow-up (2026-10-15): the parser adapter now reads CREATE SEQUENCE option
+lists in arbitrary PG order, retaining duplicate options for binder rejection. It folds
+signed CONNECTION LIMIT number tokens for sqlparser's value-only role option parser,
+retaining original source locations. Binder unit fixtures use the production adapter
+rather than bypassing it with raw sqlparser. SQL case text and oracle files are unchanged.
