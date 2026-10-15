@@ -44,13 +44,15 @@
 use crate::engine::Engine;
 use crate::error;
 use crate::locks::mode::LockMode;
+use crate::locks::table::LockScope;
+use crate::locks::tag::LockTag;
 use crate::overlay::Overlay;
 use crate::savepoint::Savepoint;
 use crate::session::SessionShared;
 use crate::types::{
     AcquireResult, IsolationLevel, LockOutcome, SubXactId, TxnKind, TxnOptions, TxnState, WaitLimits, WaitPolicy,
 };
-use pgarbor_common::{BranchId, CommitSeq, Oid, PgError, RelId, Result, TxnId};
+use pgarbor_common::{BranchId, CommitSeq, KvRead, Oid, RelId, Result, TxnId};
 use pgarbor_storage::TreeSnapshot;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -118,9 +120,44 @@ impl Txn {
     /// - read-only engine forces `read_only = true`.
     /// - session activity: `xact_start_ms = now`, `txn = Some(id)`, `backend_xid = None`.
     /// - register `session_txn` for deadlock reports happens lazily in the lock manager.
-    #[allow(unused_variables)]
     pub fn begin(engine: Arc<Engine>, session: Arc<SessionShared>, opts: &TxnOptions) -> Result<Txn> {
-        Err(PgError::unimplemented("CORE-04", "transaction begin"))
+        let head = engine.branch_head(&session.branch, session.database_oid)?;
+        if !head.record.is_active() {
+            return Err(pgarbor_branches::error::branch_deleted(&head.record.name, &head.record.id));
+        }
+        let id = engine.next_txn_id();
+        let now = now_unix_ms();
+        let read_only = opts.read_only || engine.is_read_only();
+        session.update_activity(|a| {
+            a.xact_start_ms = Some(now);
+            a.txn = Some(id);
+            a.backend_xid = None;
+            a.wait = None;
+        });
+        Ok(Txn {
+            engine,
+            branch: session.branch,
+            branch_name: head.record.name.clone(),
+            database: session.database_oid,
+            session,
+            id,
+            generation: head.record.generation,
+            kind: opts.kind,
+            isolation: opts.isolation,
+            read_only,
+            deferrable: opts.deferrable,
+            state: TxnState::InProgress,
+            snapshot: None,
+            statements: 0,
+            overlay: Overlay::new(),
+            savepoints: Vec::new(),
+            last_subxact: 0,
+            held_keys: HashMap::new(),
+            limits: WaitLimits::default(),
+            wrote: false,
+            started_unix_ms: now,
+            finished: false,
+        })
     }
 
     pub fn id(&self) -> TxnId {
@@ -210,17 +247,32 @@ impl Txn {
     /// fresh `engine.branch_head(..)` + generation guard → `snapshot = Some(TxnSnapshot{..})`;
     /// `statements += 1`. (Utility statements that need no snapshot — SET, SAVEPOINT, SHOW... —
     /// must not call this, so `SET TRANSACTION` stays legal after them.)
-    #[allow(unused_variables)]
     pub fn begin_statement(&mut self) -> Result<()> {
-        Err(PgError::unimplemented("CORE-04", "statement snapshot"))
+        self.check_not_failed()?;
+        if self.isolation.uses_statement_snapshot() || self.snapshot.is_none() {
+            let head = fresh_head(self)?;
+            self.snapshot = Some(TxnSnapshot { tree: head.tree, commit_seq: head.snapshot.commit_seq() });
+        }
+        self.statements += 1;
+        Ok(())
     }
 
     /// `SET TRANSACTION ISOLATION LEVEL` (variable.c check_transaction_isolation): same level → Ok;
     /// inside a savepoint → `error::isolation_in_subtransaction`; snapshot already taken →
     /// `error::isolation_after_query`; else set.
-    #[allow(unused_variables)]
     pub fn set_isolation(&mut self, level: IsolationLevel) -> Result<()> {
-        Err(PgError::unimplemented("CORE-04", "SET TRANSACTION ISOLATION LEVEL"))
+        if level == self.isolation {
+            return Ok(());
+        }
+        // variable.c checks FirstSnapshotSet before IsSubTransaction.
+        if self.snapshot.is_some() {
+            return Err(error::isolation_after_query());
+        }
+        if !self.savepoints.is_empty() {
+            return Err(error::isolation_in_subtransaction());
+        }
+        self.isolation = level;
+        Ok(())
     }
 
     /// `SET TRANSACTION READ ONLY|READ WRITE` (check_transaction_read_only): setting read-only is
@@ -228,52 +280,147 @@ impl Txn {
     /// `read_write_inside_read_only`, snapshot taken → `read_write_after_query`, read-only engine →
     /// 25006 `cannot set transaction read-write mode during recovery`-style: use
     /// `error::read_only_transaction("SET TRANSACTION READ WRITE")`; else set.
-    #[allow(unused_variables)]
     pub fn set_read_only(&mut self, read_only: bool) -> Result<()> {
-        Err(PgError::unimplemented("CORE-04", "SET TRANSACTION READ ONLY/WRITE"))
+        if !read_only && self.read_only {
+            if !self.savepoints.is_empty() {
+                return Err(error::read_write_inside_read_only());
+            }
+            if self.snapshot.is_some() {
+                return Err(error::read_write_after_query());
+            }
+            if self.engine.is_read_only() {
+                return Err(error::read_only_transaction("SET TRANSACTION READ WRITE"));
+            }
+        }
+        self.read_only = read_only;
+        Ok(())
     }
 
     /// `SET TRANSACTION [NOT] DEFERRABLE` (check_transaction_deferrable): inside a savepoint →
     /// `deferrable_in_subtransaction`; snapshot taken → `deferrable_after_query`; else set
     /// (DEFERRABLE has no effect in v1 besides being reported, as in PG for non-serializable).
-    #[allow(unused_variables)]
     pub fn set_deferrable(&mut self, deferrable: bool) -> Result<()> {
-        Err(PgError::unimplemented("CORE-04", "SET TRANSACTION DEFERRABLE"))
+        if !self.savepoints.is_empty() {
+            return Err(error::deferrable_in_subtransaction());
+        }
+        if self.snapshot.is_some() {
+            return Err(error::deferrable_after_query());
+        }
+        self.deferrable = deferrable;
+        Ok(())
     }
 
     /// Lock a data-tree key (module docs).
-    #[allow(unused_variables)]
     pub fn lock_key(&mut self, key: &[u8], mode: LockMode, policy: WaitPolicy) -> Result<LockOutcome> {
-        Err(PgError::unimplemented("CORE-04", "key lock with outcome"))
+        if let Some(h) = self.held_keys.get(key) {
+            if strength(h.mode) >= strength(mode) {
+                return Ok(LockOutcome::Unchanged);
+            }
+        }
+        let subxact = self.current_subxact();
+        let tag = LockTag::Key { branch: self.branch, database: self.database, key: key.to_vec() };
+        let scope = LockScope::Transaction { txn: self.id, subxact };
+        let res = self.engine.locks().acquire(&self.session, scope, &tag, mode, policy, &self.limits)?;
+        if res == AcquireResult::NotAvailable {
+            return Ok(LockOutcome::NotAvailable);
+        }
+        // The cache keeps the strongest mode; only reached when the request is stronger anyway.
+        self.held_keys.insert(key.to_vec(), HeldKey { mode, subxact });
+        if self.snapshot.is_none() {
+            return Ok(LockOutcome::Unchanged);
+        }
+        // Read the head AFTER the grant so a just-committed holder's change is visible.
+        let head = fresh_head(self)?;
+        let Some(snap) = self.snapshot.as_ref() else {
+            return Ok(LockOutcome::Unchanged);
+        };
+        if head.snapshot.commit_seq() == snap.commit_seq {
+            return Ok(LockOutcome::Unchanged);
+        }
+        let latest = head.tree.get(key)?;
+        let mine = snap.tree.get(key)?;
+        if latest == mine {
+            Ok(LockOutcome::Unchanged)
+        } else {
+            Ok(LockOutcome::Changed(latest))
+        }
     }
 
     /// Lock for UPDATE/DELETE with isolation-dependent conflict handling (module docs).
-    #[allow(unused_variables)]
     pub fn lock_key_for_write(&mut self, key: &[u8]) -> Result<LockOutcome> {
-        Err(PgError::unimplemented("CORE-04", "write key lock"))
+        let outcome = self.lock_key(key, LockMode::ForUpdate, WaitPolicy::Block)?;
+        if !self.isolation.uses_statement_snapshot() {
+            if let LockOutcome::Changed(latest) = &outcome {
+                return Err(if latest.is_some() {
+                    error::serialization_concurrent_update()
+                } else {
+                    error::serialization_concurrent_delete()
+                });
+            }
+        }
+        Ok(outcome)
     }
 
     /// Table-level lock (DML takes RowExclusive/AccessShare, DDL AccessExclusive, LOCK TABLE any):
     /// `LockTag::Relation{branch, database, relid}` with scope Transaction{id, current_subxact}.
-    #[allow(unused_variables)]
     pub fn lock_relation(&mut self, relid: RelId, mode: LockMode, policy: WaitPolicy) -> Result<AcquireResult> {
-        Err(PgError::unimplemented("CORE-04", "relation lock"))
+        let tag = LockTag::Relation { branch: self.branch, database: self.database, relid };
+        let scope = LockScope::Transaction { txn: self.id, subxact: self.current_subxact() };
+        self.engine.locks().acquire(&self.session, scope, &tag, mode, policy, &self.limits)
     }
 
     /// ROLLBACK (also of a Failed txn, and the implicit rollback of a failed implicit txn):
     /// `release_all()`, mark finished, session activity `xact_start_ms = None`, `txn = None`,
     /// `backend_xid = None`. Sequence state is not touched (non-transactional).
-    #[allow(unused_variables)]
     pub fn rollback(mut self) -> Result<()> {
-        Err(PgError::unimplemented("CORE-04", "transaction rollback"))
+        let res = self.release_all();
+        self.session.update_activity(|a| {
+            a.xact_start_ms = None;
+            a.txn = None;
+            a.backend_xid = None;
+            a.wait = None;
+        });
+        res
     }
 
     /// Discard the overlay and release all transaction-scope locks (`locks.release_txn`).
     /// Idempotent; sets `finished = true`. Used by rollback, commit (after durability) and Drop.
-    #[allow(unused_variables)]
     pub fn release_all(&mut self) -> Result<()> {
-        Err(PgError::unimplemented("CORE-04", "transaction resource release"))
+        self.overlay.clear();
+        self.savepoints.clear();
+        self.held_keys.clear();
+        let res = self.engine.locks().release_txn(self.session.id, self.id);
+        self.finished = true;
+        res
     }
+}
+
+/// Fresh branch head with the generation guard (module docs).
+fn fresh_head(txn: &Txn) -> Result<crate::engine::BranchHead> {
+    let head = txn.engine.branch_head(&txn.branch, txn.database)?;
+    if !head.record.is_active() || head.record.generation != txn.generation {
+        return Err(error::branch_changed_under_transaction(&txn.branch_name));
+    }
+    Ok(head)
+}
+
+/// Row-lock strength order: ForKeyShare < ForShare < ForNoKeyUpdate < ForUpdate. Table-level modes
+/// never reach a key lock (the manager rejects them); they rank 0.
+fn strength(mode: LockMode) -> u8 {
+    match mode {
+        LockMode::ForKeyShare => 1,
+        LockMode::ForShare => 2,
+        LockMode::ForNoKeyUpdate => 3,
+        LockMode::ForUpdate => 4,
+        _ => 0,
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 impl Drop for Txn {
@@ -282,6 +429,26 @@ impl Drop for Txn {
     fn drop(&mut self) {
         if !self.finished {
             let _ = self.release_all();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strength_order() {
+        assert!(strength(LockMode::ForKeyShare) < strength(LockMode::ForShare));
+        assert!(strength(LockMode::ForShare) < strength(LockMode::ForNoKeyUpdate));
+        assert!(strength(LockMode::ForNoKeyUpdate) < strength(LockMode::ForUpdate));
+        assert_eq!(strength(LockMode::AccessShare), 0);
+    }
+
+    #[test]
+    fn isolation_parse_roundtrip() {
+        for l in [IsolationLevel::ReadCommitted, IsolationLevel::RepeatableRead, IsolationLevel::Serializable] {
+            assert_eq!(IsolationLevel::parse(l.as_pg_str()).unwrap(), l);
         }
     }
 }

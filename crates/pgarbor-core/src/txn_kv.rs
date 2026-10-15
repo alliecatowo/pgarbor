@@ -18,8 +18,11 @@
 //! `put_fresh`: insert of a key whose uniqueness is guaranteed by construction (a table row key
 //! built from a rowid just returned by `alloc::next_rowid` for this txn) — skips step 2 (no lock
 //! entry, no outcome check), keeping bulk INSERT memory O(rows written), not O(rows * lock state).
+use crate::error;
+use crate::locks::mode::LockMode;
 use crate::txn::Txn;
-use pgarbor_common::{KvIter, KvRead, KvWrite, PgError, Result};
+use crate::types::{LockOutcome, WaitPolicy};
+use pgarbor_common::{KvIter, KvRead, KvWrite, Result, SpaceId};
 use std::ops::Bound;
 
 // CONTRACT
@@ -51,30 +54,91 @@ impl<'t> TxnKv<'t> {
     }
 
     /// Unlocked insert of a freshly allocated row key (module docs).
-    #[allow(unused_variables)]
     pub fn put_fresh(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        Err(PgError::unimplemented("CORE-06", "fresh-key insert"))
+        self.prepare_write(key, false)?;
+        self.txn.overlay.put(key, value)?;
+        self.note_write();
+        Ok(())
+    }
+
+    /// Steps 1-2 of the write protocol: state/read-only checks and (optionally) the implicit key lock.
+    fn prepare_write(&mut self, key: &[u8], lock: bool) -> Result<()> {
+        self.txn.check_not_failed()?;
+        if self.txn.read_only {
+            return Err(error::read_only_transaction(self.command));
+        }
+        if !lock || key.starts_with(&SpaceId::SEQUENCES.prefix()) {
+            return Ok(());
+        }
+        let mode = if self.no_key_update { LockMode::ForNoKeyUpdate } else { LockMode::ForUpdate };
+        let outcome = self.txn.lock_key(key, mode, WaitPolicy::Block)?;
+        if !self.txn.isolation.uses_statement_snapshot() {
+            match outcome {
+                LockOutcome::Changed(Some(_)) => return Err(error::serialization_concurrent_update()),
+                LockOutcome::Changed(None) => return Err(error::serialization_concurrent_delete()),
+                LockOutcome::Unchanged | LockOutcome::NotAvailable => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Bookkeeping after a successful overlay write.
+    fn note_write(&mut self) {
+        let first = !self.txn.wrote;
+        self.txn.wrote = true;
+        if first {
+            let id = self.txn.id;
+            self.txn.session.update_activity(|a| a.backend_xid = Some(id));
+        }
     }
 }
 
+fn no_snapshot() -> pgarbor_common::PgError {
+    error::internal("no snapshot: begin_statement was not called")
+}
+
 impl KvRead for TxnKv<'_> {
-    #[allow(unused_variables)]
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        Err(PgError::unimplemented("CORE-06", "transactional point read"))
+        let snap = self.txn.snapshot.as_ref().ok_or_else(no_snapshot)?;
+        match self.txn.overlay.get(key) {
+            Some(entry) => Ok(entry.map(|v| v.to_vec())),
+            None => snap.tree.get(key),
+        }
     }
-    #[allow(unused_variables)]
     fn scan<'a>(&'a self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<KvIter<'a>> {
-        Err(PgError::unimplemented("CORE-06", "transactional range scan"))
+        let snap = self.txn.snapshot.as_ref().ok_or_else(no_snapshot)?;
+        let base = snap.tree.scan(lower, upper)?;
+        crate::overlay::merge_scan(base, &self.txn.overlay, lower, upper)
     }
 }
 
 impl KvWrite for TxnKv<'_> {
-    #[allow(unused_variables)]
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        Err(PgError::unimplemented("CORE-06", "transactional put"))
+        self.prepare_write(key, true)?;
+        self.txn.overlay.put(key, value)?;
+        self.note_write();
+        Ok(())
     }
-    #[allow(unused_variables)]
     fn delete(&mut self, key: &[u8]) -> Result<bool> {
-        Err(PgError::unimplemented("CORE-06", "transactional delete"))
+        self.prepare_write(key, true)?;
+        let existed = self.get(key)?.is_some();
+        self.txn.overlay.delete(key)?;
+        self.note_write();
+        Ok(existed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // A `Txn` needs a live `Engine`; behavioral tests (read-only put -> 25006, get before
+    // begin_statement -> XX000, own writes visible in get/scan) live in tests/core-07.rs.
+    use super::*;
+
+    #[test]
+    fn sequence_prefix_detection() {
+        let mut k = SpaceId::SEQUENCES.prefix().to_vec();
+        k.extend_from_slice(b"x");
+        assert!(k.starts_with(&SpaceId::SEQUENCES.prefix()));
+        assert!(!SpaceId::CATALOG.prefix().starts_with(&SpaceId::SEQUENCES.prefix()));
     }
 }

@@ -1,0 +1,1801 @@
+{
+ "submissions": [
+  {
+   "lease_id": "BR-09",
+   "branch": "worktree-wf_6e87169c-3d0-9",
+   "sha": "b90d20d5a29f2e76abac65c83c05dad2bf769117",
+   "files_changed": [
+    "crates/pgarbor-branches/src/reflink.rs"
+   ],
+   "implemented_behaviors": [
+    "clone_file dispatches to per-platform clone_file_impl",
+    "Linux FICLONE ioctl with create_new dst, unsupported errno classification (removes dst), other errno -> PgError::io, fsync on success",
+    "macOS clonefile path with NUL check, dst-exists check, fsync",
+    "fallback platform returns Unsupported"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "libc::ENOTSUP and EOPNOTSUPP are separate consts on Linux; both compared with == so no duplicate-pattern issue",
+    "destination_exists is crate::error::destination_exists in pgarbor-branches (not storage)"
+   ],
+   "contract_breaks": [
+    "Lease text says destination_exists lives in pgarbor_storage::error; it is actually crate::error::destination_exists"
+   ],
+   "proposed_tests_unexecuted": [
+    "clone_or_unsupported_leaves_no_stray_dst",
+    "existing_destination_is_58p02",
+    "missing_source_is_58p01",
+    "platform_flag"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json BR-09",
+    "crates/pgarbor-storage/src/error.rs",
+    "crates/pgarbor-branches/src/error.rs",
+    "libc-0.2.190 FICLONE/clonefile"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/reflink.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-05",
+   "branch": "worktree-wf_6e87169c-3d0-5",
+   "sha": "41c7cbe959aaf77a54e801c94ae4d910b71fa0f2",
+   "files_changed": [
+    "crates/pgarbor-branches/src/resolver.rs"
+   ],
+   "implemented_behaviors": [
+    "BranchRootResolver::roots: for B keys, classify via keys::classify, decode with BranchRecord::decode, check record.id == key id (else XX001 'branch record <key_id> has id <id>'), push NamedRoot for each record.live_roots(); N/M/unknown keys embed nothing.",
+    "BranchRootResolver::remap: for B keys with live records (Active or Deleted with roots_retained), map data_root, extra_databases roots, then snapshot roots in live_roots() order, skipping NONE (map never called on NONE), re-encode and return Some(bytes); dropped tombstones and non-B keys return Ok(None).",
+    "remap guards against a map closure returning NONE for a live root (PgError::internal), since that would silently drop data.",
+    "Unit tests in #[cfg(test)] mod tests: active roots with NONE skipped and labels; remap shift by +100 with NONE preserved and map call order [5,7]; retained tombstone 'deleted branch' labels; dropped tombstone empty and remap None; N/M/unknown keys embed nothing; garbage B value gives XX001; id mismatch gives XX001 with exact message."
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "BranchRecord::encode and decode are implemented by BR-01 (currently stubbed in this worktree); the resolver calls them unchanged.",
+    "PgError::corruption maps to SQLSTATE XX001 (DATA_CORRUPTED) as used by error::directory_corrupt.",
+    "Tests rely on BR-01 decode rejecting b\"garbage\" with XX001 (its first byte is not version 1, so unsupported_record_format applies, which is also XX001)."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-branches resolver::tests (central run; not executed by this worker)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-05 entry)",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-branches/src/record.rs (live_roots, is_active, BranchRecord fields)",
+    "crates/pgarbor-branches/src/keys.rs (classify, branch_key, name_key, meta_key)",
+    "crates/pgarbor-branches/src/error.rs (directory_corrupt)",
+    "crates/pgarbor-storage/src/roots.rs (RootResolver, NamedRoot, PrefixU64Roots reference pattern)",
+    "crates/pgarbor-common/src/ids.rs (PageId::NONE, BranchId)",
+    "crates/pgarbor-common/src/error.rs (PgError::corruption, internal, Result)"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/resolver.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-02",
+   "branch": "worktree-wf_6e87169c-3d0-13",
+   "sha": "11d66e954b127a5c035b6e614f1f93accfec0074",
+   "files_changed": [
+    "crates/pgarbor-core/src/session.rs"
+   ],
+   "implemented_behaviors": [
+    "SessionRegistry::register: FATAL 53300 'sorry, too many clients already' when sessions.len() >= max_sessions; pid allocation from next_pid skipping live pids, wrapping i32::MAX back to FIRST_PID (1000); cancel key of clamp(cancel_key_len, 4, 256) bytes from random_bytes; SessionShared built with Idle activity (state_change_ms = backend_start_ms = now_ms), empty query, default SessionSequences; inserted under the sessions write lock.",
+    "SessionRegistry::unregister: removes the entry and returns whether it was present.",
+    "SessionRegistry::cancel_with_key: unknown pid or wrong key returns Ok(false) and sets nothing; exact key (equal length, constant-time XOR fold) calls interrupts.request_cancel() and returns Ok(true).",
+    "random_bytes(n): per 8-byte chunk, RandomState-keyed SipHash over (process id, chunk index, SystemTime nanos as u128, static AtomicU64 counter), truncated to n.",
+    "Private helper constant_time_eq.",
+    "Unit tests in #[cfg(test)] mod tests: pids unique and start at 1000 with wrap from i32::MAX; pid skips in-use; max_sessions FATAL 53300; activity init; cancel requires exact key and fires once (57014 then Ok); random_bytes(32) differs between calls; constant_time_eq."
+   ],
+   "still_unimplemented": [
+    "none in session.rs: all CORE-02 stubs (register, unregister, cancel_with_key, random_bytes) are replaced. The PgError::unimplemented(\"CORE-02\", ...) calls are gone from this file."
+   ],
+   "assumptions": [
+    "Pid allocation holds the sessions write lock while taking next_pid (lock order sessions then next_pid). No other code path takes these locks in the reverse order, as far as session.rs shows.",
+    "unregister does not wake lock waiters. The contract's doc comment on SessionHandle::drop says the handle's drop path handles that via engine.locks().release_session.",
+    "cancel_with_key does not check the is_terminating flag. The spec does not require it.",
+    "The defensive lap bound in register is (i32::MAX - FIRST_PID + 1) attempts. It returns PgError::internal only when next_pid is corrupted or the pid space is exhausted.",
+    "SessionRequest::embedded(\"main\") is used in tests. It exists in options.rs as a public constructor."
+   ],
+   "contract_breaks": [
+    "None. Public signatures marked CONTRACT are unchanged. The added private helper constant_time_eq and the tests module are inside session.rs."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-core session::tests (pids_unique_start_at_1000_and_wrap, pid_skips_in_use, max_sessions_enforced_fatal_53300, activity_initialized_idle, cancel_requires_exact_key, random_bytes_length_and_variation, constant_time_eq_behaves). Not run, per the RightShift rules."
+   ],
+   "provenance": [
+    "crates/pgarbor-core/src/session.rs (frozen doc comments)",
+    "contracts/leases/pgarbor-core.json CORE-02 spec and acceptance",
+    "contracts/crates/pgarbor-core.md (error conventions table: 53300 FATAL, 57014, 57P01)",
+    "crates/pgarbor-core/src/error.rs (query_canceled, statement_timeout)",
+    "crates/pgarbor-core/src/options.rs (SessionRequest, cancel_key_len, max_sessions)",
+    "crates/pgarbor-core/src/types.rs (SessionId derives)",
+    "crates/pgarbor-common/src/error.rs (SqlState::TOO_MANY_CONNECTIONS, Severity, PgError::with_severity, PgError::internal)",
+    "crates/pgarbor-common/src/ids.rs (BranchId, TxnId)",
+    "crates/pgarbor-core/src/sequence/state.rs (SessionSequences: Default)"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/session.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-02",
+   "branch": "worktree-wf_6e87169c-3d0-2",
+   "sha": "8f0d97a466018b455487b1def5a36a454c36f64c",
+   "files_changed": [
+    "crates/pgarbor-branches/src/directory.rs"
+   ],
+   "implemented_behaviors": [
+    "check_format: no keys -> Empty; first key but no Mformat -> XX001 'branch directory is corrupt: missing format marker'; Mformat != 1 -> XX001 'unsupported branch directory format version <v>' (with hint); else Ready",
+    "load_record: absent -> None; decodes via BranchRecord::decode; key/id mismatch -> XX001 'branch record <key id> has id <id>'",
+    "lookup_name: absent -> None; non-16-byte N value -> XX001 'name entry \"<name>\" has a malformed id'",
+    "resolve(Name): N lookup (absent -> 42704 'branch \"x\" does not exist'); dangling -> XX001 'name \"x\" points to missing branch <id>'; deleted record -> XX001 'name \"x\" points to deleted branch <id>'; record name mismatch -> XX001 'name \"x\" points to branch <id> named \"<rec name>\"'",
+    "resolve(Id): absent -> 42704 'branch with id <id> does not exist'; Deleted -> 42704 'branch \"<name>\" has been deleted' with detail 'Branch id: <id>.' (via error::branch_deleted)",
+    "resolve_any_state: same as resolve for Name; for Id returns the record in any state",
+    "list: scan_prefix(B), decode every value, key/id check, optional filter to Active, sorted by (name bytes, id)",
+    "default_branch / origin: read Mdefault_branch and Morigin via meta helpers, None when absent",
+    "store_record: encode then put at B+id (N untouched)",
+    "Unit tests in #[cfg(test)] mod tests covering: empty/ready/format-2/missing-marker, list sort and deleted filtering, resolve by name and id, deleted-id 42704, dangling N, N->deleted, N->wrong name, malformed N, key/id mismatch, default/origin roundtrip, remove_name"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "A malformed B key (B prefix but not 17 bytes) is reported as XX001 'malformed branch record key' in list(); the contract did not specify a message.",
+    "When an N entry points to a deleted record, the 'deleted' check runs before the name-mismatch check, so a deleted record yields the 'to deleted branch' message.",
+    "Tests depend on BranchRecord::encode/decode from BR-01 (record.rs), which must be implemented for the tests to pass.",
+    "Tests use MemKv from pgarbor_common and panic only inside #[cfg(test)] helpers (err_of), never in non-test code."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "directory::tests::{empty_directory_is_empty, format_marker_is_ready, unsupported_format_version_is_xx001, missing_marker_with_keys_is_xx001}",
+    "directory::tests::list_sorts_by_name_then_id_and_filters_deleted",
+    "directory::tests::{resolve_by_name_and_id, resolve_deleted_id_is_deleted_but_any_state_returns_it}",
+    "directory::tests::{dangling_name_entry_is_xx001, name_entry_pointing_at_deleted_record_is_xx001, name_entry_pointing_at_other_name_is_xx001, malformed_name_value_is_xx001, record_key_id_mismatch_is_xx001}",
+    "directory::tests::{default_branch_and_origin_roundtrip, remove_name_reports_presence}"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-02 entry)",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-common/src/kv.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-common/src/ids.rs",
+    "crates/pgarbor-branches/src/{error,keys,meta,options,record,directory}.rs",
+    "crates/pgarbor-branches/src/manager.rs and ops.rs (call sites of directory::*)"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/directory.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-01",
+   "branch": "worktree-wf_6e87169c-3d0-1",
+   "sha": "d3e8ba8cdece26c4131df82d40f0fe88739c3497",
+   "files_changed": [
+    "crates/pgarbor-branches/src/record.rs"
+   ],
+   "implemented_behaviors": [
+    "BranchRecord::encode: calls validate() (failure -> internal 'invalid branch record: <msg>'), u16/u32 length conversions with internal errors, flags bit0 has_parent / bit1 roots_retained, byte layout per module doc table (99-byte fixed prefix, name, snapshots, extra databases).",
+    "BranchRecord::decode: empty input -> XX001 'branch directory is corrupt: empty branch record'; version != 1 -> XX001 'unsupported branch record format version <v>'; bounds-checked private Cursor (take/array/u8/u16/u32/u64) returning XX001 'truncated branch record' on every short read; unknown state, unknown flag bits, stray parent bytes with has_parent=0, unknown snapshot kind, non-UTF-8 name/label, trailing bytes -> XX001 'invalid branch record: <what>'; finally runs validate() to enforce active-with-deletion-fields and extra database oid 5 / duplicate rejection.",
+    "Capacity reservations for snapshot and database vectors are capped by remaining input bytes so an attacker-controlled count cannot force a huge allocation.",
+    "Unit tests in #[cfg(test)] mod tests: roundtrip (minimal, parent+3 snapshots of all kinds+2 extra dbs, deleted+retained, deleted dropped); byte-exact layout check of new_active(BranchId([1;16]),\"main\",None,PageId(7),CommitSeq(2),1000) (len 113, offsets 35/43/51/75/83/99/101/105/109); every strict prefix of three valid records -> XX001; version 2 message; empty input; trailing byte; bad state/flags/stray parent/active deletion fields; bad snapshot kind; non-UTF-8 name; duplicate and oid-5 extra databases; encode rejects invalid record with INTERNAL_ERROR."
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Decode does not enforce MAX_SNAPSHOTS_PER_BRANCH (1024); that limit is an operations-layer check (54000), not a format rule in the spec.",
+    "Names and labels are not checked against the [A-Za-z0-9._/-] pattern in the format layer; the spec's decoding rules only require UTF-8, and the name pattern belongs to the name-validation path.",
+    "Non-zero parent bytes with has_parent=1 and an all-zero parent id with has_parent=1 are both accepted, since the spec only forbids non-zero parent bytes when has_parent=0.",
+    "Deleted records with roots_retained=false and non-zero data_root are not rejected, since no rule in the spec forbids them.",
+    "The unit test uses `BranchRecord::decode(&[])`, relying on `&[]` coercing to `&[u8]`; this is standard but was not compiled.",
+    "Commit message follows the lease's one-line form and omits Co-Authored-By and Claude-Session trailers, because the user's global rules forbid claude.ai session links."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-branches record::tests (roundtrips, minimal byte layout, every-strict-prefix XX001, version-2 message, empty input, trailing byte, bad state/flags/parent/deletion fields, bad snapshot kind, non-UTF-8 name, duplicate and oid-5 extra databases, encode rejects invalid records)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-01 entry)",
+    "contracts/crates/pgarbor-branches.md (Directory format, BranchRecord v1 byte table)",
+    "crates/pgarbor-branches/src/record.rs module doc (byte format v1 and decoding rules 1-6)",
+    "crates/pgarbor-branches/src/error.rs (directory_corrupt, unsupported_record_format)",
+    "crates/pgarbor-common/src/error.rs (PgError::new/internal/corruption/with_*, SqlState constants)",
+    "crates/pgarbor-common/src/ids.rs (PageId, CommitSeq, BranchId, Oid)"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/record.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-04",
+   "branch": "worktree-wf_6e87169c-3d0-4",
+   "sha": "d9cf02f24c2ef2317278d5056876a7615026cd5a",
+   "files_changed": [
+    "crates/pgarbor-branches/src/history.rs"
+   ],
+   "implemented_behaviors": [
+    "create_snapshot: resolves active branch, validates label (42602), duplicate label (42710), limit (54000), appends User snapshot pinning data_root, stamps updated_unix_ms, generation unchanged",
+    "drop_snapshot: removes snapshot of any kind; absent -> 42704 snapshot_not_found; stamps updated_unix_ms",
+    "reset: all target resolution and recovery-label checks run before any write; Snapshot target (same branch, extra databases kept), Branch(other) (data_root and extra_databases copied, same-branch allowed), Parent (55000 no-parent / deleted-parent messages via load_record)",
+    "reset: optional recovery snapshot (kind ResetRecovery, previous data_root) appended before root switch; data_root replaced; head_seq = ctx.commit_seq; generation += 1 (checked_add, internal error on overflow); updated_unix_ms = now; parent pointer unchanged",
+    "Unit tests (#[cfg(test)]) on MemKv using ops::initialize/create/advance_head covering: snapshot+reset restores root, recovery snapshot keeps old root with kind ResetRecovery, duplicate label 42710, invalid label 42602, drop snapshot, reset to parent, parent-missing and parent-deleted 55000, reset to another branch, self-reset bumps generation, limit 1024 -> 54000, failed reset leaves directory unchanged, unknown branch 42704"
+   ],
+   "still_unimplemented": [
+    "None in history.rs. All three BR-04 functions have real bodies. Tests depend on BR-02 (directory::resolve/load_record/store_record) and BR-03 (ops::initialize/create/advance_head/delete) being implemented by other leases; they cannot pass until those land."
+   ],
+   "assumptions": [
+    "drop_snapshot stamps updated_unix_ms = now (the contract was silent; mirrors create_snapshot).",
+    "Reset to Parent copies the parent's extra_databases as well as data_root, matching the Branch(other) rule (the spec says 'parent's current head', and head covers all database roots).",
+    "Snapshot-target reset does not validate the label first; an invalid label can never be present, so it reports snapshot_not_found (42704).",
+    "Recovery-label checks (validate, exists, limit) run after target resolution, so a missing target reports 42704 before any recovery-label error.",
+    "Generation overflow (u64::MAX) reports PgError::internal (XX000); not reachable in practice.",
+    "Trait upcast &dyn KvWrite -> &dyn KvRead is relied on (toolchain is 1.97, rust-version 1.97)."
+   ],
+   "contract_breaks": [
+    "None. Public signatures are unchanged and match their CONTRACT comments."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-branches history:: (unit tests in history.rs: snapshot_then_reset_restores_root, reset_with_recovery_keeps_old_root, duplicate_label_is_42710, invalid_label_is_42602, drop_snapshot_removes_and_reports_absence, reset_to_parent, reset_to_parent_errors, reset_to_another_branch_copies_root, snapshot_limit_is_54000, failed_reset_leaves_directory_unchanged, reset_unknown_branch_is_42704)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-04 entry)",
+    "contracts/crates/pgarbor-branches.md (via lease reads)",
+    "crates/pgarbor-branches/src/{history,ops,directory,record,options,error,name}.rs",
+    "crates/pgarbor-common/src/{kv,error,ids}.rs",
+    "rust-toolchain.toml (1.97.0)"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/history.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-07",
+   "branch": "worktree-wf_6e87169c-3d0-7",
+   "sha": "80926722fa50f4b2305ddfbd7749865fdac7c137",
+   "files_changed": [
+    "crates/pgarbor-branches/src/space.rs"
+   ],
+   "implemented_behaviors": [
+    "branch_space(): builds one snapshot, calls doctor::space_report with BranchRootResolver, lists records from the same snapshot via directory::list(.., true)",
+    "Sorts records active-first then by name",
+    "Per record with live roots: R_b = gc::trace(branch roots), R_o = gc::trace(roots of all other records), pages = |R_b|, exclusive = |{p in R_b, not in R_o}| over pages 1..=page_count",
+    "bytes and exclusive_bytes = pages * page_size (saturating), page_size taken from SpaceReport",
+    "Records with no live roots (dropped tombstones, empty trees) get zero pages/bytes",
+    "Unit tests: shared root gives equal pages and exclusive 0 in both branches; 100 writes on one branch make only that branch exclusive; dropped tombstone reports 0 pages while retained tombstone reports pages; active-then-name ordering"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "snapshot_count is reported as rec.snapshots.len() only when the record's roots are live (Active or roots_retained); a dropped tombstone reports 0.",
+    "The lease's test claim 'after writing 100 keys on one branch the other's exclusive_pages stays 0' only holds when the other branch's data tree is empty or its pages are not superseded; copy-on-write rewrites of shared pages become exclusive to the other branch. The test uses an empty source branch to match the claim.",
+    "Tests depend on BR-02 (directory::list, store_record, initialize/create/delete in ops) and BR-05 (BranchRootResolver) being implemented; they are not compiled or run in this worktree."
+   ],
+   "contract_breaks": [
+    "none: all CONTRACT signatures unchanged; the public signature of branch_space is as declared"
+   ],
+   "proposed_tests_unexecuted": [
+    "space::tests::shared_root_is_counted_in_both_branches_but_never_exclusive",
+    "space::tests::writes_on_one_branch_make_only_its_pages_exclusive",
+    "space::tests::dropped_tombstone_reports_zero_pages_and_retained_one_does_not",
+    "space::tests::rows_are_sorted_active_first_then_by_name"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-07)",
+    "contracts/crates/pgarbor-branches.md",
+    "crates/pgarbor-storage/src/doctor/space.rs",
+    "crates/pgarbor-storage/src/gc/trace.rs",
+    "crates/pgarbor-storage/src/container/snapshot.rs",
+    "crates/pgarbor-storage/src/container/write.rs",
+    "crates/pgarbor-branches/src/record.rs",
+    "crates/pgarbor-branches/src/manager.rs",
+    "crates/pgarbor-branches/src/ops.rs",
+    "crates/pgarbor-branches/src/options.rs"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/space.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-05",
+   "branch": "worktree-wf_6e87169c-3d0-16",
+   "sha": "2faa43fa5404251e79528a0f892b56059dcfd7b0",
+   "files_changed": [
+    "crates/pgarbor-core/src/savepoint.rs"
+   ],
+   "implemented_behaviors": [
+    "SAVEPOINT: 25P01 for implicit, 25P02 if failed, set_logging(true), push Savepoint with a new subxact id and the current overlay mark",
+    "RELEASE: 25P01, then 25P02, then innermost-name lookup (3B001). Reassigns locks and held_keys to the parent subxact, pops the savepoint and everything above it, and turns overlay logging off when no savepoints remain",
+    "ROLLBACK TO: 25P01, then 3B001 (allowed in Failed state). Undoes the overlay to the mark, releases locks with subxact >= the savepoint's and drops matching held_keys. Pops savepoints above the target, keeps the target with a fresh subxact id, and sets Failed to InProgress",
+    "In-file unit tests for each of the cases in the lease spec, plus a duplicate-name test"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Engine::create, attach_session, Txn::begin, Overlay and LockManager are implemented by other leases (CORE-01/03/04/09). The unit tests depend on them.",
+    "Tests touch pub(crate) fields (txn.overlay, txn.held_keys) directly.",
+    "SessionRequest::embedded(\"main\") exists in options.rs; I saw it declared but did not read its body."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "savepoint::tests::implicit_requires_block",
+    "savepoint::tests::rollback_to_undoes_overlay",
+    "savepoint::tests::duplicate_names_use_innermost",
+    "savepoint::tests::unknown_name_is_3b001",
+    "savepoint::tests::failed_state_rules",
+    "savepoint::tests::locks_released_on_rollback_to"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json (CORE-05)",
+    "crates/pgarbor-core/src/savepoint.rs docs",
+    "crates/pgarbor-core/src/txn.rs",
+    "crates/pgarbor-core/src/overlay.rs",
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/src/error.rs",
+    "crates/pgarbor-core/src/engine.rs and options.rs (for the test setup)"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/savepoint.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-03",
+   "branch": "worktree-wf_6e87169c-3d0-3",
+   "sha": "0031dc84a862dfacc395cc9da6df01a26d0debd9",
+   "files_changed": [
+    "crates/pgarbor-branches/src/ops.rs"
+   ],
+   "implemented_behaviors": [
+    "initialize: check_format must be Empty (else 55000 'database file already has a branch directory'); validates name (42602); writes Mformat, B, N, Mdefault_branch; id = opts id or new_branch_id",
+    "create: validates name, N collision -> 42710, resolves active source; Branch source copies data_root + extra_databases with parent = source id; Snapshot source uses snapshot root (absent -> 42704 snapshot_not_found) and parent = branch id; copy_snapshots copies snapshots as Inherited (54000 if over limit); B+id collision -> 42710; writes B and N only; all validation before writes",
+    "rename: validates new name; same name is a no-op returning record; N collision -> 42710; moves N entry, stores record with new name and updated_unix_ms; id and generation unchanged",
+    "delete: resolves active; default branch guard (55000) unless allow_default (then Mdefault_branch removed); removes N; Deleted state, deleted_at_seq/deleted_unix_ms, generation += 1; retain keeps roots, otherwise drops data_root, snapshots and extra_databases and sets roots_retained=false",
+    "restore: B absent -> 42704 branch_id_not_found; active -> 55000 not deleted; !roots_retained -> 55000 purged; name validated and collision -> 42710; reactivates with generation += 1 and writes B and N",
+    "purge_deleted: PurgeFilter::All / DeletedBefore / Id (Id of active -> 55000, unknown -> 42704); deletes B keys; returns ids sorted ascending",
+    "set_default: resolves active branch and writes Mdefault_branch; returns record unchanged",
+    "advance_head: B absent -> 42704; Deleted -> branch_deleted; generation mismatch -> 55000; missing database -> 3D000 with the specified message; updates head_seq and updated_unix_ms, generation untouched; writes only on success",
+    "Unit tests (#[cfg(test)] in ops.rs, MemKv) cover every acceptance case in the BR-03 spec including byte-identical MemKv on failing calls"
+   ],
+   "still_unimplemented": [
+    "none in ops.rs; all BR-03 functions have real bodies. Behaviour depends on BR-01 (BranchRecord::encode/decode via store_record) and BR-02 (directory readers and store helpers), which are still stubs in this worktree"
+   ],
+   "assumptions": [
+    "initialize: check_format errors (e.g. XX001 for a non-empty dir without Mformat) propagate unchanged; only an Ok(Ready) result maps to 55000",
+    "restore: restored record gets roots_retained=false (per spec), so a second delete of it then restore needs a new delete cycle",
+    "create copy_snapshots: copied snapshots keep label, root, created_seq and created_unix_ms and change only kind to Inherited",
+    "purge_deleted: uses directory::list(dir, true) for All/DeletedBefore, which decodes every B value",
+    "delete: when is_default is true and allow_default is set, Mdefault_branch is removed in the same write set",
+    "Upcast coercion: &mut dyn KvWrite is passed to &dyn KvRead readers as &*dir (trait upcasting is stable on the pinned 1.97 toolchain)",
+    "Commit message carries only the Co-Authored-By trailer; the Claude-Session trailer from the harness reminder was omitted per the user's CLAUDE.md rule against session links",
+    "Nothing was compiled or run, per the epoch rules; the central build will be the first compile"
+   ],
+   "contract_breaks": [
+    "none: all public signatures in ops.rs are unchanged; OpCtx and the CONTRACT doc comments are preserved"
+   ],
+   "proposed_tests_unexecuted": [
+    "ops::tests::initialize_twice_is_55000",
+    "ops::tests::initialize_rejects_invalid_name_without_writing",
+    "ops::tests::create_from_main_copies_root_and_sets_parent",
+    "ops::tests::create_duplicate_name_is_42710",
+    "ops::tests::create_invalid_name_is_42602",
+    "ops::tests::create_from_missing_snapshot_is_42704",
+    "ops::tests::rename_keeps_id_and_generation",
+    "ops::tests::rename_to_existing_is_42710",
+    "ops::tests::delete_default_is_55000",
+    "ops::tests::delete_retain_keeps_roots_and_frees_name",
+    "ops::tests::restore_after_retain_bumps_generation",
+    "ops::tests::restore_after_drop_roots_is_55000",
+    "ops::tests::purge_removes_branch_key",
+    "ops::tests::purge_active_is_55000",
+    "ops::tests::advance_head_stale_generation_is_55000",
+    "ops::tests::advance_head_updates_head_and_root",
+    "ops::tests::advance_head_missing_database_is_3d000"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-03 entry)",
+    "contracts/crates/pgarbor-branches.md (lifecycle, generation guard, retention sections)",
+    "crates/pgarbor-branches/src/ops.rs (frozen doc comments)",
+    "crates/pgarbor-branches/src/directory.rs, record.rs, options.rs, error.rs, name.rs, keys.rs, meta.rs (upstream signatures)",
+    "crates/pgarbor-common/src/kv.rs, error.rs, ids.rs (MemKv, PgError constructors, SqlState consts)"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/ops.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-04",
+   "branch": "worktree-wf_6e87169c-3d0-15",
+   "sha": "9b27ad297074741d066e11dfd92a7692a75d21bc",
+   "files_changed": [
+    "crates/pgarbor-core/src/txn.rs"
+   ],
+   "implemented_behaviors": [
+    "Txn::begin (head read, active check, activity update, read-only engine forces read_only)",
+    "begin_statement with RC/RR snapshot policy and generation guard",
+    "set_isolation/set_read_only/set_deferrable following variable.c order",
+    "lock_key with strength fast path, post-grant head outcome (Unchanged/Changed/NotAvailable)",
+    "lock_key_for_write with 40001 update/delete on RR/SERIALIZABLE",
+    "lock_relation",
+    "rollback and release_all (finished set even on release error)",
+    "unit tests for strength order and isolation parse"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Engine::branch_head already errors for deleted branches; begin also checks is_active defensively",
+    "set_isolation checks snapshot before subtransaction, matching variable.c (doc listed the reverse)",
+    "Not compiled; pgarbor_branches::error::branch_deleted(&str,&BranchId) signature taken from source"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "Engine-over-MemVfs tests for SET TRANSACTION errors (25001) after begin_statement and inside a savepoint",
+    "RC vs RR visibility of another session's commit (core-07.rs)",
+    "lock_key_for_write raising 40001 on Changed under RR"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json CORE-04",
+    "crates/pgarbor-core/src/{txn,types,error,engine,session,locks/*}.rs",
+    "pgarbor-branches record.rs and error.rs",
+    "postgres-18 src/backend/commands/variable.c"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/txn.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-01",
+   "branch": "worktree-wf_6e87169c-3d0-12",
+   "sha": "bcd6ae904369c407c4827a5b539e6a4280af8d03",
+   "files_changed": [
+    "crates/pgarbor-core/src/engine.rs"
+   ],
+   "implemented_behaviors": [
+    "Engine::create/open via Container::create_with/open_with (OsVfs default) + BranchManager initialize/open",
+    "close: idempotent, sets closed, flush_all unless read-only",
+    "branch_head: one snapshot for record+tree; branch_id_not_found / branch_deleted / database_not_in_branch",
+    "attach_session: closed -> FATAL 57P01; resolve branch; check database root; sessions.register",
+    "create_branch: lock order seqs->begin_write, flush_branch + advance_head per changed database root for Branch sources, ops::create, single commit",
+    "delete/reset: 55006 branch_in_use unless force (caller excluded, terminating sessions ignored); force terminates+wakes without waiting; forgets sequence/id caches",
+    "rename_branch refreshes SessionShared.branch_name; restore_branch forgets caches",
+    "cancel_backend/terminate_backend/cancel_request with locks.wake",
+    "unit tests for all spec'd scenarios"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "locks.wake errors are ignored (wake is best effort; interrupt flag is already set)",
+    "On force delete/reset, sessions are terminated after the branch operation succeeds (not before) so a refused operation (e.g. default branch) does not kill sessions; commits are still rejected by the generation guard",
+    "Delete/reset operate by BranchRef::Id of the resolved record to avoid name races",
+    "flush_branch is assumed to update the rec roots in place; changed roots are published via advance_head per database",
+    "Tests depend on CORE-02 (register/cancel_with_key) being implemented"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "engine::tests::* (create_then_open_same_vfs, attach_unknown_branch, attach_closed_engine, delete_with_other_session_is_55006, caller_is_excluded_from_count, force_delete_terminates_session, terminating_sessions_are_ignored, fresh_branch_head_equals_parent_root, branch_head_errors, rename_refreshes_session_branch_name, cancel_unknown_backend_is_false, cancel_and_terminate_backend)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json CORE-01",
+    "crates/pgarbor-core/src/{engine,session,options,error,sequence/store,sequence/state}.rs",
+    "crates/pgarbor-branches/src/{manager,ops,directory,record,options,history}.rs",
+    "crates/pgarbor-storage container handle/options/write/snapshot/tree_writer"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/engine.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-10",
+   "branch": "worktree-wf_6e87169c-3d0-10",
+   "sha": "4bcca9065ba1dd3d88b12399971bef9177c5b2b7",
+   "files_changed": [
+    "crates/pgarbor-branches/src/export.rs",
+    "crates/pgarbor-branches/tests/br-10.rs"
+   ],
+   "implemented_behaviors": [
+    "export_branch: snapshot, resolve, name validation (42602), dest-exists 58P02, stale .detach-tmp removal, ExportBuilder copy of data and optional snapshot trees (Inherited), standalone directory build, finish, then verify_and_publish; temp removed on every error",
+    "standalone_directory_entries: B, Mdefault_branch, Mformat, Morigin, N entries in ascending key order",
+    "verify_and_publish: reopen with opts.verify, full verify (any Error issue gives export_verify_failed), directory checks (format Ready, default branch, name, data_root and snapshot roots, exactly one B record), PublishedFile with garbage pages, dest race recheck, rename, sync_dir when Full; tmp removed on any error",
+    "unit test for entry ordering; integration tests in tests/br-10.rs"
+   ],
+   "still_unimplemented": [
+    "Exporting branches with extra_databases returns PgError::unimplemented(BR-10), as the spec requires for v1"
+   ],
+   "assumptions": [
+    "Depends on BR-01 (record encode/decode), BR-02 (directory), BR-03 (ops) and BR-05 (resolver) being implemented centrally",
+    "ExportBuilder is given tmp as its dest, so its own temp is tmp + the export suffix and it renames to tmp",
+    "Snapshot created_seq and created_unix_ms are carried over unchanged for inherited snapshots",
+    "Container is Clone and Send, as BranchManager derives Clone; the concurrent-commit test spawns a thread with a manager clone"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-branches --test br-10",
+    "cargo test -p pgarbor-branches export::tests"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-10)",
+    "crates/pgarbor-storage/src/export.rs",
+    "crates/pgarbor-storage/src/container/{handle,snapshot,options,write}.rs",
+    "crates/pgarbor-storage/src/doctor/report.rs",
+    "crates/pgarbor-branches/src/{detach,directory,keys,meta,record,error,options,name,manager,ops}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/export.rs",
+    "crates/pgarbor-branches/tests/br-10.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-11",
+   "branch": "worktree-wf_6e87169c-3d0-11",
+   "sha": "20b075dcfd47bad13628bdf52716585831c3f9f1",
+   "files_changed": [
+    "crates/pgarbor-branches/src/detach.rs",
+    "crates/pgarbor-branches/tests/br-11.rs"
+   ],
+   "implemented_behaviors": [
+    "detach_branch: Copy goes to export_branch; ReflinkRequired returns 0A000 reflink_unsupported when unsupported (including !os_filesystem or no platform reflink); Auto falls back to export_branch with fallback_reason set",
+    "reflink_detach: validates target name, checks dest exists vs overwrite (58P02), removes stale temp, holds the WriteTxn barrier across clone_file, aborts it right after, returns Ok(Err(reason)) on Unsupported, and removes the temp on any later error",
+    "finish_clone: reidentify_file, open the temp, prune_to_branch, optional compact (re-resolves the record after compaction so verify_and_publish compares the renumbered data_root), close, verify_and_publish, DetachReport::from_parts with Reflink",
+    "reidentify_file: ReadWrite open, exclusive try_lock (locked error on WouldBlock), read_slots, choose_slot, new-UUID superblock written to the winning slot, other slot zeroed, sync_data on Full",
+    "prune_to_branch: fresh single-branch directory via build_tree(standalone_directory_entries), set_directory_root, commit; snapshots carried as Inherited when include_snapshots; extra_databases carried over",
+    "Integration tests in tests/br-11.rs (MemVfs fallback, 0A000, Copy, OsVfs Auto reflink-or-copy, ReflinkRequired, destination exists/overwrite, reidentify, locked file)"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "BR-10 export_branch, verify_and_publish and standalone_directory_entries, BR-09 clone_file, BR-05 resolver and BR-03 ops are implemented by their leases",
+    "The detach-tmp suffix is shared by export and detach; a stale temp is removed before use",
+    "FileIo locks use flock-style semantics, so reidentify_file on a file held open by another Container fails with the locked error. The test tolerates platforms where it does not.",
+    "Reflink detach preserves keep.extra_databases in the new record (export_branch refuses them). This is harmless because v1 has none.",
+    "The tests reach Container::create_with, tree(), and directory::store_record, all of which are pub"
+   ],
+   "contract_breaks": [
+    "Amendment pgarbor-branches-02: reidentify and publish still live in the branches crate, as the amendment describes. No new break.",
+    "reidentify_file has no way to flush directory metadata; the caller's verify_and_publish handles sync_dir after the rename."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-branches --test br-11",
+    "Test with compact_after_reflink=true on a reflink-capable filesystem (btrfs/xfs) to check the post-compaction record re-resolve",
+    "Fault-injection test: crash after clone but before publish leaves only the .detach-tmp file and dest untouched"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-11)",
+    "contracts/amendments/pgarbor-branches-02-storage-reidentify-and-export-publish.md",
+    "crates/pgarbor-branches/src/{export,reflink,options,record,meta,error,directory,ops,manager,resolver}.rs",
+    "crates/pgarbor-storage/src/{container/{recovery,write,handle,options,snapshot}.rs,format/superblock.rs,io/{vfs,file_io}.rs,error.rs}"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/detach.rs",
+    "crates/pgarbor-branches/tests/br-11.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-06",
+   "branch": "worktree-wf_6e87169c-3d0-17",
+   "sha": "b0e425ea82e2b23aaaf7504e3836cc5cb3bf7e65",
+   "files_changed": [
+    "crates/pgarbor-core/src/txn_kv.rs"
+   ],
+   "implemented_behaviors": [
+    "get: overlay entry wins (tombstone = absent), else snapshot tree; XX000 'no snapshot: begin_statement was not called' when no snapshot",
+    "scan: snapshot tree scan merged with overlay via overlay::merge_scan; same XX000 without a snapshot",
+    "put/delete: check_not_failed, 25006 read-only error with the command name, implicit key lock (ForNoKeyUpdate or ForUpdate, Block), skipped for sequence-space keys",
+    "Changed(Some) maps to 40001 concurrent update and Changed(None) to 40001 concurrent delete under RR/SERIALIZABLE; under RC/RU the write proceeds",
+    "overlay write, txn.wrote = true, and session backend_xid = Some(txn.id) on the first write",
+    "delete returns merged-view existence computed after the lock and before the tombstone is written",
+    "put_fresh: same state and read-only checks, no key lock, no outcome check"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Overlay methods (CORE-03) and Txn::lock_key (CORE-04) work as documented",
+    "LockOutcome::NotAvailable cannot occur with WaitPolicy::Block and is ignored",
+    "delete checks existence after taking the lock, so under RC a concurrent change is not reflected in the returned bool, because the snapshot is stale"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "tests/core-07.rs: put in a read-only txn returns 25006 'cannot execute INSERT in a read-only transaction'",
+    "tests/core-07.rs: get before begin_statement returns XX000",
+    "tests/core-07.rs: own puts and deletes are visible in get and scan",
+    "tests/core-07.rs: put in the sequence keyspace takes no key lock (held_keys empty)",
+    "tests/core-07.rs: put_fresh leaves held_keys empty",
+    "tests/core-07.rs: RR put on a key changed by a concurrent commit gives 40001"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json (CORE-06)",
+    "crates/pgarbor-core/src/txn.rs, txn_kv.rs, overlay.rs, types.rs, session.rs, error.rs",
+    "crates/pgarbor-common/src/kv.rs, error.rs, ids.rs",
+    "crates/pgarbor-storage/src/container/snapshot.rs"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/txn_kv.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-03",
+   "branch": "worktree-wf_6e87169c-3d0-14",
+   "sha": "a7d439e48198d3c7009f55788828b607ec8250c0",
+   "files_changed": [
+    "crates/pgarbor-core/src/overlay.rs"
+   ],
+   "implemented_behaviors": [
+    "Overlay::put: write_entry with bytes accounting (key+value on insert, replaced entry's size subtracted), logs UndoRecord with previous entry when logging is on",
+    "Overlay::delete: records tombstone (None) via the same path; counts key bytes only",
+    "Overlay::put_unlogged: writes without an undo record",
+    "Overlay::rollback_to: pops undo records back to mark, restoring absent (remove) or previous entry; mark > undo length returns XX000 internal error",
+    "Overlay::set_logging: toggles logging; turning off clears the undo log",
+    "Overlay::range: owned bounds copied, WriteBatch::range empty-range guard (inverted, or both-Excluded at same key) yields empty iterator, never panics",
+    "Overlay::to_batch: clones map into WriteBatch::from_map",
+    "merge_scan: owned bounds with same empty guard; MergeIter two-way merge with overlay precedence, tombstones hidden, base Err yielded once then fused",
+    "Unit tests in #[cfg(test)] mod tests: put/delete/get and bytes, rollback across 3 nested marks (absent/tombstone/value), rollback beyond log XX000, put_unlogged survives rollback, set_logging(false) clears undo, range bounds and inverted guard, to_batch, merge unbounded/overlay-precedence, merge same-key override, bounded merges, inverted merge, base error propagates once"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Tombstone bytes accounting counts key.len() only (value length 0), since the doc says key+value lengths of entries in map.",
+    "merge_scan with an empty (inverted or both-Excluded) range returns an empty iterator and drops the base iterator without polling it, rather than draining it; a base scan over the same inverted bounds should yield nothing anyway.",
+    "A base Err is yielded as soon as it reaches the head of the base iterator, before any overlay entries with greater keys; overlay entries smaller than the base position have already been emitted.",
+    "put_unlogged on a key that also has earlier logged undo records can be reverted by a later rollback_to that pops those earlier records, because rollback restores the recorded previous entry. Doc only promises that unlogged writes made after a mark survive; this is what was implemented.",
+    "Tests were not executed (per rules); code was re-read for borrowck, edition 2024 let-else and match-ergonomics."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-core overlay::tests (all overlay unit tests in crates/pgarbor-core/src/overlay.rs)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json (CORE-03 entry)",
+    "contracts/crates/pgarbor-core.md (overlay section, lines ~73-110)",
+    "crates/pgarbor-core/src/overlay.rs module and contract docs",
+    "crates/pgarbor-storage/src/batch.rs (WriteBatch::range guard logic, from_map)",
+    "crates/pgarbor-common/src/kv.rs (KvIter, KvRead, MemKv)",
+    "crates/pgarbor-common/src/error.rs (PgError::internal, unimplemented)",
+    "Rust std BTreeMap::range panic conditions (start > end; both Excluded at equal key)"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/overlay.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-11",
+   "branch": "worktree-wf_6e87169c-3d0-22",
+   "sha": "75da8f38983b060a77a6cb94a1d6f447a83004a4",
+   "files_changed": [
+    "crates/pgarbor-core/src/locks/advisory.rs"
+   ],
+   "implemented_behaviors": [
+    "lock(): maps AdvisoryMode to LockMode::Exclusive/Share, builds the advisory tag, uses LockScope::Session or LockScope::Transaction{txn, current_subxact}, WaitPolicy::Block when wait=true and NoWait otherwise; returns matches!(Acquired{..}).",
+    "unlock(): release_one(session, LockScope::Session, tag, mode); on false returns UnlockResult{released:false, warning: advisory_not_owned(\"ExclusiveLock\"|\"ShareLock\")}; on true warning None.",
+    "unlock_all(): release_session_where(session, filter matching LockTag::Advisory) and discards the count; transaction-level advisory locks untouched.",
+    "Private helpers lock_mode() and mode_name(); #[cfg(test)] mod tests with pure unit tests for tag_fields (-1, 0, i64::MIN/MAX, Pair(1,2), Pair(-1,-1), Pair(i32::MIN,0)), mode mapping, and the WARNING text."
+   ],
+   "still_unimplemented": [
+    "None in CORE-11 functions. Engine-level behavior tests from the lease spec (re-entrancy with two unlocks, xact lock + pg_advisory_unlock, shared vs exclusive, try_lock from other session, xact lock released at commit, session lock survives rollback) were NOT written: the Engine/MemVfs/session construction APIs are owned by other leases and I did not verify them, so writing them would risk compile errors. They are listed in proposed_tests_unexecuted."
+   ],
+   "assumptions": [
+    "SessionShared.id is a pub field and SessionId is Copy (verified in types.rs and session.rs), so txn.session().id is used directly.",
+    "Passing &Arc<SessionShared> (from txn.session()) to acquire(&SessionShared) relies on deref coercion, which is standard.",
+    "The lock manager's release_one with LockScope::Session returns false for keys held only at Transaction scope, which produces the PG WARNING behavior the module docs describe.",
+    "The Advisory tag's branch/database come from advisory_tag() as specified in the contract; no change made to it."
+   ],
+   "contract_breaks": [
+    "None. All CONTRACT signatures in advisory.rs are unchanged; the CORE-09 and CORE-04 functions the bodies call are used exactly as declared in manager.rs and txn.rs."
+   ],
+   "proposed_tests_unexecuted": [
+    "Engine tests (two sessions over MemVfs): session lock taken twice needs two pg_advisory_unlock calls; the third returns f with WARNING 'you don't own a lock of type ExclusiveLock'.",
+    "pg_advisory_xact_lock(3) then pg_advisory_unlock(3) returns f with the ExclusiveLock WARNING.",
+    "pg_advisory_lock(7) then pg_advisory_unlock_shared(7) returns f with ShareLock WARNING; pg_advisory_lock_shared(7) then pg_advisory_unlock(7) returns f with ExclusiveLock WARNING.",
+    "try_lock from another session returns false while the lock is held, and true after unlock.",
+    "Transaction-level advisory lock is released at commit; a session-level lock survives ROLLBACK and ROLLBACK TO SAVEPOINT.",
+    "unlock_all releases session advisory locks but leaves transaction-level advisory locks."
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json (CORE-11 entry)",
+    "contracts/crates/pgarbor-core.md",
+    "crates/pgarbor-core/src/locks/manager.rs (acquire, release_one, release_session_where signatures)",
+    "crates/pgarbor-core/src/locks/table.rs (LockScope)",
+    "crates/pgarbor-core/src/locks/mode.rs (LockMode)",
+    "crates/pgarbor-core/src/types.rs (AcquireResult, WaitPolicy, WaitLimits, SessionId)",
+    "crates/pgarbor-core/src/txn.rs (Txn accessors: id, engine, session, branch, database, current_subxact, limits)",
+    "crates/pgarbor-core/src/error.rs (advisory_not_owned)",
+    "crates/pgarbor-common/src/error.rs (PgError derives)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/lockfuncs.c (referenced via lease; semantics taken from the module docs, not copied)"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/advisory.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-10",
+   "branch": "worktree-wf_6e87169c-3d0-21",
+   "sha": "549fe7be0838ba56824041da9614d44e9c470dfa",
+   "files_changed": [
+    "crates/pgarbor-core/src/locks/deadlock.rs"
+   ],
+   "implemented_behaviors": [
+    "wait_for_edges: hard edges to conflicting granted holders and soft edges to conflicting earlier waiters, blocker_txn from scope, sorted by (waiter, queue pos, blocker), deduped",
+    "find_cycle: iterative DFS with visited set, returns path starting at start and ending with an edge whose blocker is start",
+    "describe_wait: ShareLock on transaction N for Key tags with blocker_txn, otherwise '<mode> on <tag.describe()>'",
+    "unit tests for 2-cycle, 3-cycle, non-start cycle, soft-edge cycle, describe_wait, 2-line report"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Duplicate edges (same waiter, queue position, blocker; e.g. several grants by one blocker) are collapsed, hard preferred over soft",
+    "TxnId has no Display, so the inner u64 is printed",
+    "Tests depend on CORE-08 (conflicts_with, pg_name, describe) being implemented"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-core locks::deadlock"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json CORE-10",
+    "crates/pgarbor-core/src/locks/{table,mode,tag}.rs",
+    "crates/pgarbor-core/src/types.rs",
+    "crates/pgarbor-common/src/ids.rs"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/deadlock.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-06",
+   "branch": "worktree-wf_6e87169c-3d0-6",
+   "sha": "3dd581e0c35b1421383bb2b15f6fc9d6fb939884",
+   "files_changed": [
+    "crates/pgarbor-branches/src/compare.rs"
+   ],
+   "implemented_behaviors": [
+    "diff_trees: two stack cursors over decoded nodes; equal PageId subtrees skipped unread; otherwise descend the side with smaller lower bound (higher level first on ties), merge leaf entries by key",
+    "Equal root ids (or both empty) return immediately without reading any page",
+    "Overflow values: same first page and length are equal without reading, else length check then materialize and compare",
+    "Per-space accumulation in a BTreeMap keyed by SpaceKind (sorted output), hex samples up to samples_per_space, stop at max_differences with truncated=true",
+    "compare(): resolves both branches from snap.directory(), same_root shortcut, 0A000 for extra databases, optional page accounting via gc::trace (shared = reachable - exclusive_a - exclusive_b), parent flags",
+    "Unit tests: classification, known-edits fork, identical/empty, truncation, overflow values, 20 randomized cases against a naive full-scan merge (also checked in reverse)"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "BranchId is Copy (macro derive confirmed)",
+    "directory::resolve (BR-02) is implemented centrally; compare() depends on it, but the tests only exercise diff_trees",
+    "InternalNode.level counts leaf as 0 so child level = level-1",
+    "trace() returns RootUsage entries aligned with the input roots, even for NONE roots (as read in trace.rs)",
+    "A subtree's inherited lower bound for child 0 (the parent's bound, empty at the root) is a safe conservative bound"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-branches compare::",
+    "A compare() integration test through BranchManager once BR-02 and the manager land: fresh fork has same_root=true and identical=true; a_is_parent_of_b is set; page counts add up",
+    "Check that diff_trees on a fresh fork reads zero data pages, using a counting Vfs or page-read counter"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-06)",
+    "crates/pgarbor-branches/src/{compare,directory,options,record}.rs",
+    "crates/pgarbor-storage/src/btree/{node,read,insert,delete,mod}.rs",
+    "crates/pgarbor-storage/src/container/{snapshot,write,options,handle}.rs",
+    "crates/pgarbor-storage/src/gc/trace.rs",
+    "crates/pgarbor-storage/src/roots.rs",
+    "crates/pgarbor-common/src/{error,ids,kv}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/compare.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-12",
+   "branch": "worktree-wf_6e87169c-3d0-23",
+   "sha": "a86f81d370ce923db4668bd99e06b0b2b820822e",
+   "files_changed": [
+    "crates/pgarbor-core/src/sequence/state.rs"
+   ],
+   "implemented_behaviors": [
+    "SequenceState::encode/decode (18-byte LE v1, XX001 on bad length/version/is_called)",
+    "next_value with checked_add, cycle wrap, 2200H limit errors",
+    "advance: line-by-line port of nextval_internal fetch/log/log_cnt/rescnt loop with CACHE extras and persist image (next, 0, true)",
+    "force_log triggers logging branch",
+    "validate_setval with 22003 bounds message",
+    "unit tests for oracle cache=1 sequence, max/min limits, cycle, cache, setval, codec"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "params.cache < 1 treated as 1",
+    "log_cnt clamped to >= 0 defensively",
+    "persist uses 'next' after loop (including early break at limit), matching sequence.c"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "unit tests in sequence/state.rs: oracle_cache1, max_reached, descending_and_cycle, cache_values, setval_checks, codec"
+   ],
+   "provenance": [
+    "postgres-18 src/backend/commands/sequence.c nextval_internal",
+    "contracts/leases/pgarbor-core.json CORE-12",
+    "crates/pgarbor-common/src/error.rs"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/sequence/state.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-07",
+   "branch": "worktree-wf_6e87169c-3d0-18",
+   "sha": "5339e5c9e64769984279f7ded02b119f2bbe8e94",
+   "files_changed": [
+    "crates/pgarbor-core/src/commit.rs",
+    "crates/pgarbor-core/tests/core-07.rs"
+   ],
+   "implemented_behaviors": [
+    "Txn::commit: Failed state -> release_all + activity cleared -> RolledBack",
+    "Empty overlay -> no begin_write, Committed{seq:None}",
+    "SSI pre_commit hook only if ssi.is_active()",
+    "begin_write on a cloned Arc<Engine> so error paths can release_all while the writer is live",
+    "apply_commit: load current branch record inside write txn (absent -> branch_id_not_found; Deleted or generation mismatch -> 55000), database_root (None -> 3D000), w.apply(overlay batch), ops::advance_head with OpCtx{w.commit_seq(), now}, set_directory_root",
+    "w.commit() durable; on any error abort/release_all/clear activity and return the error",
+    "After durability: sequences.invalidate_keys for space-2 overlay keys, then release_all (locks released only after publish), activity cleared, Committed{seq:Some}",
+    "Unit tests (describe_commit, sequence key extraction) and 9 integration scenarios in tests/core-07.rs"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "release_all (CORE-04) discards the overlay, so sequence relids are extracted before it is called",
+    "Lock-release failure after a durable commit is ignored (commit already durable)",
+    "Purged (absent) branch record yields branch_id_not_found per the lease spec rather than 55000",
+    "Integration tests rely on APIs from other leases (Engine::create/open/attach_session, Txn begin/lock, TxnKv, reset_branch) behaving per their docs"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-core --lib commit::",
+    "cargo test -p pgarbor-core --test core-07"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json (CORE-07)",
+    "crates/pgarbor-core/src/{txn,engine,overlay,session,ssi,types,error}.rs and sequence/{store,state}.rs",
+    "crates/pgarbor-branches/src/{ops,directory,record,error,options}.rs",
+    "crates/pgarbor-storage/src/container/{write,tree_writer,handle}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/commit.rs",
+    "crates/pgarbor-core/tests/core-07.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-08",
+   "branch": "worktree-wf_6e87169c-3d0-19",
+   "sha": "6c7586ae58df68acaf35f127518ba30b719fe18b",
+   "files_changed": [
+    "crates/pgarbor-core/src/locks/mode.rs",
+    "crates/pgarbor-core/src/locks/tag.rs"
+   ],
+   "implemented_behaviors": [
+    "LockMode::conflicts_with: table-level 8x8 matrix from lock.c LockConflicts as [u8;8] bitmasks; row-level 4x4 matrix from PG docs Table 13.3 as [u8;4]; mixed table/row pairs return false; always Ok",
+    "LockMode::pg_name: pg_locks mode strings, row modes mapped per heapam.c tupleLockExtraInfo",
+    "LockMode::parse_table_mode: case-insensitive, whitespace-tolerant exact match of the 8 LOCK TABLE mode phrases; unknown/empty/extra words give Ok(None)",
+    "LockTag::locktype: relation/tuple/advisory/object",
+    "LockTag::describe: lmgr.c DescribeLockTag formats for relation, advisory, object; Key formatted as 'tuple of relation <relid> of database <db>'",
+    "LockTag::wait_event: relation/transactionid/advisory/object",
+    "Unit tests: 144-pair symmetry, hand-transcribed lock.c and docs expected matrices, mixed-pair falsity, spot checks, pg_name strings, parse words, describe formats, key relid threshold"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Key describe uses key_relation() and falls back to relid 0 when the key has no normal (>=16384) relid prefix; debug-only string.",
+    "Row-level matrix follows PG docs Table 13.3 (ForNoKeyUpdate conflicts with itself; ForShare with ForShare does not). The lease's test expectations (KeyShare vs NoKeyUpdate none, KeyShare vs Update conflict) are satisfied.",
+    "row masks are [u8;4] rather than [u8;8] since there are only four row modes.",
+    "parse_table_mode tolerates extra internal whitespace; the lease says single spaces, and all valid inputs still match."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-core locks::mode::tests",
+    "cargo test -p pgarbor-core locks::tag::tests"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/lock.c (LockConflicts, lines 65-100)",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/lmgr.c (DescribeLockTag)",
+    "~/develop/reference/postgres-18/src/backend/access/heap/heapam.c (tupleLockExtraInfo)",
+    "contracts/leases/pgarbor-core.json (CORE-08)",
+    "PG docs 13.3.1 and 13.3.2 as summarized in the mode.rs doc comments"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/mode.rs",
+    "crates/pgarbor-core/src/locks/tag.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-14",
+   "branch": "worktree-wf_6e87169c-3d0-25",
+   "sha": "a1f1fd96728784348a0a8dad8a8275479f560594",
+   "files_changed": [
+    "crates/pgarbor-core/src/alloc.rs"
+   ],
+   "implemented_behaviors": [
+    "next_rowid/next_rowids: per (branch,db,relid) counter seeded under the mutex from engine.branch_head latest tree via max_rowid+1 (1 if empty); n==0 gives empty range; overflow gives 54000 'row id space of relation N is exhausted'",
+    "next_oid: per (branch,db) counter seeded once by caller closure on latest head tree, clamped to >=16384; exhaustion at u32::MAX gives 54000 'OID counter exhausted in branch \"name\"'",
+    "max_rowid: binary search over u64 using scan-exists probes bounded by relid+1 (Unbounded for u32::MAX); final rowid decoded from first key",
+    "unit tests with MemKv for max_rowid (empty, neighbors, extremes), row_key layout, forget_branch"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "BranchId is Copy and constructible as BranchId([u8;16]) (seen in ids.rs tests)",
+    "TreeSnapshot implements KvRead (storage snapshot.rs)",
+    "Counters are not rolled back if the OID/rowid allocation succeeds but txn aborts (gaps allowed per docs)"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "Engine-level tests (MemVfs): empty table gives 1,2,3; committed rowids up to 1000 then reopen gives 1001; two sessions interleaved get distinct ids; forget_branch then re-seed; next_oid seed 20000 gives 20000,20001; seed below 16384 clamps to 16384 (need Engine/Txn harness not available to this worker)"
+   ],
+   "provenance": [
+    "crates/pgarbor-core/src/alloc.rs docs",
+    "contracts/leases/pgarbor-core.json CORE-14",
+    "crates/pgarbor-common/src/kv.rs, error.rs, ids.rs",
+    "crates/pgarbor-core/src/engine.rs, txn.rs"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/alloc.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-15",
+   "branch": "worktree-wf_6e87169c-3d0-26",
+   "sha": "62fc036e257709d721dde6fe10a804bc027bcf52",
+   "files_changed": [
+    "crates/pgarbor-core/src/diag.rs"
+   ],
+   "implemented_behaviors": [
+    "activity_rows: one ActivityRow per session in engine.sessions().all() (pid-sorted); when branch_filter is Some only sessions whose branch equals it; usesysid 10, backend_type 'client backend', state via BackendState::as_pg_str, wait_event_type/wait_event from Activity.wait, client_port passed through from the session as given at attach, branch from branch_name().",
+    "lock_rows: maps LockManager::snapshot() to LockRow (locktype/database/relation/classid/objid/objsubid per locktype; relation and tuple get database+relation, advisory and object get database+classid/objid/objsubid with field4/objsubid truncated to i16 like PG), mode via LockMode::pg_name, virtualtransaction '<pid>/<txn>' (txn 0 when no open transaction), waitstart_ms only for waiting rows, fastpath false.",
+    "lock_rows: per session with an open transaction (Activity.txn) one virtualxid ExclusiveLock row (virtualxid = virtualtransaction = '<pid>/<txn>'); per session with backend_xid one transactionid ExclusiveLock row.",
+    "lock_rows: branch filter applied via the owning session's branch (LockInfo carries no branch); result stable-sorted by (pid, locktype).",
+    "blocking_pids: LockManager::blocking_sessions mapped to i32 pids.",
+    "Unit tests: advisory wait across two sessions (activity wait_event_type 'Lock'/wait_event 'advisory'/state 'active'; lock rows one granted and one waiting advisory row with classid 0, objid 42, objsubid 1; blocking_pids(waiter) == [holder]); branch filter excludes other branches for activity and locks."
+   ],
+   "still_unimplemented": [
+    "None in diag.rs. All three CONTRACT functions are implemented; their results depend on CORE-08 (LockMode::pg_name, LockTag::locktype) and CORE-09 (LockManager::snapshot, blocking_sessions) and on CORE-01 (Engine::create/attach_session/begin) and CORE-11 (advisory::lock/unlock, used only in tests) being implemented, which they currently are not in this worktree.",
+    "fastpath is always false; PG reports true for some weak relation locks, which the lock manager does not model."
+   ],
+   "assumptions": [
+    "client_port is passed through unchanged from SharedSession.client_port (the lease said None for embedded sessions, while the CONTRACT doc comment said -1); the attach layer decides which value is stored.",
+    "usesysid is the constant 10 for every session (v1 has only the postgres role).",
+    "virtualxid rows are emitted only for sessions with Activity.txn set (the lease wording 'open transaction'), not for every idle backend as PG does.",
+    "Session-scope locks with no open transaction report virtualtransaction '<pid>/0'.",
+    "database is None for virtualxid and transactionid rows, as in PG.",
+    "lock_rows(None) includes locks of every branch; the lock-table snapshot does not carry a branch, so the filter uses the owning session's branch."
+   ],
+   "contract_breaks": [
+    "LockInfo has no branch field, so pg_locks branch filtering has to go through the owning session; a branch on LockTagInfo would avoid the session lookup. Worked around inside diag.rs."
+   ],
+   "proposed_tests_unexecuted": [
+    "diag::tests::advisory_wait_is_visible_in_activity_locks_and_blocking: Engine::create over MemVfs, two embedded sessions, holder takes advisory Single(42) Session lock, waiter thread blocks; asserts activity wait fields, two advisory lock rows (one granted for holder, one waiting for waiter, classid 0/objid 42/objsubid 1, mode ExclusiveLock), blocking_pids(waiter) == [holder], then unlock and waiter acquires.",
+    "diag::tests::branch_filter_excludes_other_branches: one session, Some(own branch) and None give 1 activity row, Some(BranchId([0xee;16])) gives none for activity and locks."
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json (CORE-15 entry)",
+    "crates/pgarbor-core/src/session.rs (SessionShared, Activity, BackendState, WaitEvent)",
+    "crates/pgarbor-core/src/locks/manager.rs and table.rs (snapshot, blocking_sessions, LockInfo, LockTagInfo)",
+    "crates/pgarbor-core/src/locks/tag.rs and mode.rs (LockTag, LockMode::pg_name)",
+    "crates/pgarbor-core/src/locks/advisory.rs (AdvisoryKey::tag_fields, lock/unlock signatures for the test)",
+    "crates/pgarbor-common/src/ids.rs (TxnId, BranchId, Oid)",
+    "contracts/reference/pg18/catalog_attributes.csv (pg_locks and pg_stat_activity column names, referenced through the CONTRACT structs)"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/diag.rs"
+   ]
+  },
+  {
+   "lease_id": "BR-08",
+   "branch": "worktree-wf_6e87169c-3d0-8",
+   "sha": "7570e2ec7c4af031c57b1817241a3e48c294e316",
+   "files_changed": [
+    "crates/pgarbor-branches/src/handle.rs"
+   ],
+   "implemented_behaviors": [
+    "HandleFile::to_bytes: pretty JSON (serde_json to_string_pretty) + trailing newline, members in contract order, crc32c of the compact six-member body as 8 lowercase hex digits",
+    "HandleFile::parse: 64 KiB size check, non-JSON / unknown or missing member -> 22023 'not valid JSON: <serde error>', 'unsupported format \"x\"', canonical lowercase UUIDs (DatabaseUuid/BranchId::parse plus to_hyphenated equality) -> 'invalid db_uuid' / 'invalid branch_id', crc recompute -> 'checksum mismatch'",
+    "HandleFile::check: db_uuid mismatch -> 55000 handle_db_mismatch; otherwise directory::resolve(dir, BranchRef::Id) (deleted -> branch_deleted, missing -> 42704 branch_id_not_found); renamed branch resolves by id",
+    "write_handle: 58P02 destination_exists when present and !overwrite; db_path_hint relative (lexical, '/' separators) unless absolute_db_path; tmp sibling '<handle>.tmp' via CreateTruncate, write_all_at, sync_all, rename, sync_dir; io errors mapped to storage_error helpers",
+    "read_handle: open_failed (58P01 on missing), len > MAX_HANDLE_BYTES rejected, read_exact_at, then parse",
+    "resolve_db_path: reads handle, candidates = explicit path, then hint joined to handle dir (if relative), then hint as-is; first existing wins; none -> error::handle_db_not_found with every tried path",
+    "relative_path: absolutizes against current_dir when relative, lexical normalization of . and .., common-prefix computation, Ok(None) when first component (Prefix/RootDir) differs",
+    "Private helpers: lexical_normalize, absolutize, hint_from_relative, db_path_hint, oversize_error, push_unique, non_utf8_error",
+    "Unit tests (#[cfg(test)] mod tests, MemVfs/MemKv): roundtrip, exact golden bytes (crc 5102720c), flipped name hint -> checksum mismatch, extra member, wrong format, bad uuid, oversize/non-JSON, relative_path examples, lexical normalize, write/read roundtrip with relative hint, absolute hint option, 58P02 on existing handle and overwrite, 58P01 missing, resolve explicit-then-hint-then-fallback, tried-path list, renamed branch and cross-database check, missing branch 42704"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Golden crc32c 5102720c was computed with an independent pure-Python CRC-32C (Castagnoli, reflected, init/xorout 0xFFFFFFFF; check value for '123456789' verified as 0xE3069283) over the compact body of the fixed sample; no cargo run was done, so the golden test depends on the central run confirming serde_json's compact member order matches.",
+    "UUIDs in a handle file must be canonical lowercase hyphenated (stricter than DatabaseUuid::parse, which also accepts uppercase and bare hex); anything else is 'invalid db_uuid' / 'invalid branch_id'.",
+    "crc is recomputed over the body built from the file's own strings (after the canonical-UUID check), so it detects truncation and hand edits as documented.",
+    "Schema violations (unknown or missing member, wrong JSON types, non-UTF-8) are all reported with the 'not valid JSON: <serde error>' prefix.",
+    "Non-UTF-8 database paths cannot be written into a handle and return 22023 'database path ... cannot be stored in a branch handle'; this message is ours, not in the contract.",
+    "Path joins in resolve_db_path and relative_path are lexical (no symlink resolution); MemVfs keys are literal so normalization is required for the '../dev.pga' hint to resolve in tests.",
+    "The 'tried' list for resolve_db_path includes the relative hint as-is when the hint is relative, so the list may hold up to three entries.",
+    "Tests that store a record (check tests) depend on directory::store_record and directory::resolve from BR-02 being implemented."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "handle::tests::roundtrip",
+    "handle::tests::golden_bytes_are_stable",
+    "handle::tests::parses_golden_text",
+    "handle::tests::flipped_name_hint_is_checksum_mismatch",
+    "handle::tests::extra_member_is_rejected",
+    "handle::tests::wrong_format_is_rejected",
+    "handle::tests::bad_uuid_is_rejected",
+    "handle::tests::oversize_and_non_json_are_rejected",
+    "handle::tests::relative_path_examples",
+    "handle::tests::lexical_normalize_folds_parent_components",
+    "handle::tests::write_then_read_roundtrip_with_relative_hint",
+    "handle::tests::write_absolute_hint_when_requested",
+    "handle::tests::existing_handle_needs_overwrite",
+    "handle::tests::missing_handle_is_58p01",
+    "handle::tests::resolve_prefers_explicit_then_hint",
+    "handle::tests::resolve_reports_every_tried_path",
+    "handle::tests::check_accepts_renamed_branch_and_rejects_other_database",
+    "handle::tests::check_reports_missing_branch"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-branches.json (BR-08 entry)",
+    "contracts/crates/pgarbor-branches.md (referenced via lease reads; module docs of handle.rs used as frozen spec)",
+    "crates/pgarbor-branches/src/handle.rs module docs (format pgabranch/1, resolution rules)",
+    "crates/pgarbor-branches/src/error.rs (handle_invalid, handle_db_mismatch, handle_db_not_found, destination_exists)",
+    "crates/pgarbor-branches/src/directory.rs (resolve, store_record signatures)",
+    "crates/pgarbor-branches/src/options.rs (HandleOptions, BranchRef)",
+    "crates/pgarbor-branches/src/record.rs (BranchRecord fields)",
+    "crates/pgarbor-storage/src/io/vfs.rs (Vfs, OpenMode, sibling_path, parent_dir)",
+    "crates/pgarbor-storage/src/io/file_io.rs (FileIo read_exact_at, write_all_at)",
+    "crates/pgarbor-storage/src/io/mem.rs (MemVfs semantics)",
+    "crates/pgarbor-storage/src/error.rs (open_failed, read_failed, write_failed, fsync_failed, rename_failed)",
+    "crates/pgarbor-common/src/ids.rs and kv.rs (DatabaseUuid/BranchId parse, to_hyphenated, MemKv)",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crc32c-0.6.8/src/lib.rs (crc32c(&[u8]) -> u32)",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154 (to_vec, to_string_pretty, from_slice)"
+   ],
+   "files": [
+    "crates/pgarbor-branches/src/handle.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-13",
+   "branch": "worktree-wf_6e87169c-3d0-24",
+   "sha": "f490c688693b2ceeae71e157f8f2f15d49ed32ce",
+   "files_changed": [
+    "crates/pgarbor-core/src/sequence/store.rs"
+   ],
+   "implemented_behaviors": [
+    "nextval: failed-txn and read-only checks (25006), session CACHE pop, overlay path for sequences created or restarted in the same txn (put_unlogged), otherwise entries-lock then load from latest head (force_log on first load), state::advance, durable mini-commit before handing out the value, entry updated only after commit success, currval/lastval/CACHE range recorded",
+    "setval: 25006 check, validate_setval, overlay update or immediate mini-commit, entry update, session CACHE cleared, currval set only if is_called (as PG do_setval), lastval pointer set",
+    "currval/lastval from session memory with the PG 55000 errors",
+    "read_state: overlay, then cached entry, then latest head; missing gives XX000",
+    "create/restart/drop write through TxnKv in the txn overlay; restart clears the session CACHE range",
+    "mini_commit helper: begin_write, load record, Active check, apply batch to the db root, ops::advance_head with the current generation, set_directory_root, commit",
+    "flush_branch: writes visible states (skipping dropped keys and unchanged bytes) for all entries of rec.id, updates rec via set_database_root, drops those entries, returns the number written",
+    "flush_all: one commit that advances every active branch with cached entries, then clears the cache; no-op on read-only engines",
+    "unit tests for interleaved sessions, currval/lastval/read-only errors, setval, rollback of an in-txn sequence, crash reopen (34) vs clean close (4), and branch fork"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "An overlay entry for the sequence key (even when the head also has the key, e.g. ALTER SEQUENCE RESTART in the same txn) routes nextval/setval/read_state to the overlay; this deviates slightly from the spec text, which only covers the case where the head lacks the key",
+    "Overlay tombstone for the key (dropped in this txn) yields XX000 sequence state missing",
+    "A cached entry is treated as fresh; force_log applies only when the entry is absent and has to be loaded",
+    "flush_branch leaves the advance_head of the source branch to the caller, as the engine docs describe",
+    "Tests use sequence relid 20000 and rely on Engine::create/open/close/attach_session/create_branch, Txn::begin/commit and TxnKv from other leases",
+    "setval on a durable sequence requires the state key to exist in the head (checked via load_from_head) so a dropped sequence is not resurrected"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "All #[cfg(test)] tests in sequence/store.rs, none run (RightShift rule: no cargo)",
+    "Concurrent nextval from many threads yields no duplicate values",
+    "Fork flush: parent log_cnt visible after create_branch, and the next parent nextval re-reserves ahead",
+    "ALTER SEQUENCE RESTART then nextval in the same txn",
+    "Cache > 1: extras are served from the session range without touching shared state"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json (CORE-13)",
+    "crates/pgarbor-core/src/sequence/state.rs, txn.rs, engine.rs, overlay.rs, txn_kv.rs, commit.rs, session.rs, error.rs",
+    "crates/pgarbor-branches/src/ops.rs, directory.rs, record.rs, manager.rs, error.rs",
+    "crates/pgarbor-storage/src/container/write.rs",
+    "PG 18 src/backend/commands/sequence.c (do_setval, nextval_internal currval/lastval semantics)"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/sequence/store.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-09",
+   "branch": "worktree-wf_6e87169c-3d0-20",
+   "sha": "123bcd45e8c487fff5517a13086afff38cdd2938",
+   "files_changed": [
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/tests/core-09.rs"
+   ],
+   "implemented_behaviors": [
+    "acquire: row/table mode vs tag validation (XX000), re-entrant count, PG-style grantability with FIFO queue rule, NoWait/SkipLocked -> NotAvailable without queueing, blocking wait loop",
+    "wait loop checks Granted before interrupts/lock_timeout/statement deadline, once-per-wait deadlock check, 100ms interrupt poll, session wait event set and cleared on every exit",
+    "cancel_wait releases a raced grant or dequeues the waiter, then re-runs grant_waiters",
+    "grant_waiters: FIFO grants, wakes slot, removes empty entries",
+    "release_one, release_txn, release_subxacts, reassign_subxacts (with count merge), release_session (also dequeues stale waiter), release_session_where",
+    "wake (takes slot lock before notify so no lost wake-up), holds, snapshot (sorted pg_locks rows), blocking_sessions",
+    "unit tests in manager.rs and integration tests in tests/core-09.rs"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "Depends on CORE-08 (LockMode::conflicts_with, LockTag::locktype/wait_event) and CORE-10 (wait_for_edges, find_cycle, describe_wait) being implemented; they are still stubs in this worktree",
+    "Releasers also clear waiting_on for a waiter they grant, in addition to the waiter's own cleanup",
+    "Tests assume SqlState::code() gives '55P03', '57014', '57P01', '40P01', 'XX000'",
+    "release_session returns the number of Grant entries removed, not summed counts"
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-core --test core-09",
+    "cargo test -p pgarbor-core --lib locks::manager"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-core.json CORE-09",
+    "crates/pgarbor-core/src/locks/{table,deadlock,mode,tag,mod}.rs",
+    "crates/pgarbor-core/src/session.rs, error.rs, types.rs",
+    "PG lock.c / proc.c semantics from lease spec docs (not re-read)"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/locks/manager.rs",
+    "crates/pgarbor-core/tests/core-09.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-45",
+   "branch": "worktree-wf_6e87169c-3d0-35",
+   "sha": "93cf6edf87ccaad7b254e88dee52d359a3f617d7",
+   "files_changed": [
+    "crates/pgarbor-types/src/agg/basic.rs"
+   ],
+   "implemented_behaviors": [
+    "count(*) and count(x): int8, zero rows give 0, retract supported",
+    "sum(int2|int4) -> int8 with 22003 'bigint out of range' check at finalize; retract supported",
+    "sum(int8) and sum(numeric) -> numeric; numeric tracks NaN/+Inf/-Inf counts separately; dscale via arith::add; retract supported",
+    "avg(int2|int4|int8|numeric) -> numeric via arith::div of exact sum by count",
+    "sum(float4)/sum(float8): first input copied, IEEE add, 22003 'value out of range: overflow' only when finite inputs give infinite result",
+    "avg(float4|float8) -> float8 using float8_accum Youngs-Cramer Sx/Sxx with its overflow check",
+    "sum(interval) and avg(interval): per-field checked add/sub, infinities counted separately, avg via interval::div",
+    "min/max over all types accepted by cmp_datums; ties take the newer value (PG larger/smaller semantics); money/inet/pg_lsn/tid/xid8 give 0A000 via unimplemented(TYP-45)",
+    "bool_and/every/bool_or via true/false counts (retract supported)",
+    "bit_and/bit_or/bit_xor over int2/int4/int8 with sign-extended i64 state; bit (1560) and other types give 0A000",
+    "any_value: first non-NULL value",
+    "#[cfg(test)] mod tests: sum/avg/count/min-max/interval/bit/bool/float overflow cases, built via make_aggregate with builtin_env and TestSession"
+   ],
+   "still_unimplemented": [
+    "bit(1560) bit_and/bit_or/bit_xor: 0A000 via PgError::unimplemented(TYP-45); needs bit-string Datum variant (not in datum.rs)",
+    "sum(money) (2112) and min/max over money (cash), inet, pg_lsn, tid, xid8: 0A000 via unimplemented; no Datum/type semantics available in this lease",
+    "Any aggregate name not listed in this file falls through to unimplemented(TYP-45)"
+   ],
+   "assumptions": [
+    "count(*) is identified by empty spec.arg_types, which matches the AggSpec contract",
+    "interval::div(&Interval, f64) implements PG interval_div rounding (used for avg(interval) = '00:00:02.333333')",
+    "float4 avg follows float8_accum overflow semantics (float4_accum assumed to match float8_accum for overflow checks)",
+    "PG aggregate interval Infinity handling matches interval_sum/interval_avg: same-sign infinities produce infinity, mixed signs give 22008 'interval out of range'",
+    "any_value returns the first non-NULL input, per the doc comment (not verified against PG 18 transfn)",
+    "NULL result for numeric/interval sums when no non-NULL input seen; count returns 0"
+   ],
+   "contract_breaks": [
+    "none; all public signatures (make and the AggState impls) are unchanged"
+   ],
+   "proposed_tests_unexecuted": [
+    "basic::tests::sum_int4_is_int8 (sum(1,2,4)=Int8(7))",
+    "basic::tests::sum_int4_large_is_int8 (sum(2147483647 x3)=6442450941)",
+    "basic::tests::sum_int8_is_numeric (sum(int8 max x2)=18446744073709551614)",
+    "basic::tests::avg_int4_is_numeric (avg(1,2,4)='2.3333333333333333')",
+    "basic::tests::avg_float4_is_float8 (avg(float4 1,2,4)=7/3 as Float8)",
+    "basic::tests::empty_input_count_zero_sum_null",
+    "basic::tests::count_column_skips_nulls",
+    "basic::tests::max_text_codepoint_order (max text 'b','B','a' = 'b')",
+    "basic::tests::avg_interval_seconds (avg(interval 1s,2s,4s)=2333333 micros)",
+    "basic::tests::bit_and_or_int4 (bit_and=0, bit_or=7)",
+    "basic::tests::bool_and_or",
+    "basic::tests::float_sum_overflow_errors (sum(float8 MAX x2) -> 22003)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-45 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/agg/mod.rs",
+    "crates/pgarbor-types/src/agg/basic.rs (pre-existing doc comments)",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/compare.rs (cmp_datums)",
+    "crates/pgarbor-types/src/numeric/arith.rs (add, sub, div)",
+    "crates/pgarbor-types/src/datetime/interval.rs (add, div)",
+    "crates/pgarbor-types/src/catalog_data/aggregates.rs (AggBasic rows)",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (interval_avg_accum, interval_avg, interval_sum, do_interval_accum)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/float.c (float4pl, float8_accum)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/basic.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-46",
+   "branch": "worktree-wf_6e87169c-3d0-36",
+   "sha": "02cc8353cc65a5b188acf21bd29b921f93e7a369",
+   "files_changed": [
+    "crates/pgarbor-types/src/agg/collect.rs"
+   ],
+   "implemented_behaviors": [
+    "make() dispatches on agg.oid: 3538 string_agg(text), 3545 string_agg(bytea), 2335 array_agg(anynonarray), 4053 array_agg(anyarray), 3175/6276 json_agg(_strict), 3267/6284 jsonb_agg(_strict), 3197/6280/6281/6282 json_object_agg(_strict/_unique/_unique_strict), 3270/6288/6289/6290 jsonb_object_agg(_strict/_unique/_unique_strict); other oids -> unsupported_aggregate.",
+    "string_agg: NULL values skipped, NULL delimiter treated as empty, delimiter placed before every value except the first non-NULL, no non-NULL -> NULL; bytea variant identical.",
+    "array_agg(anynonarray): 1-D result including NULLs, zero rows -> NULL. array_agg(anyarray): leading dimension added; 22004 'cannot accumulate null arrays', 2202E 'cannot accumulate empty arrays', 2202E 'cannot accumulate arrays of different dimensionality' (dims and lower bounds compared), 54000 when exceeding MAXDIM.",
+    "json_agg / json_agg_strict: '[' + elements joined by ', ' + ']', NULL -> 'null', strict skips NULLs; state created on first row so strict over only NULLs gives '[]' (matches json.c); a '\\n ' is inserted before non-first array/composite elements as json.c does.",
+    "jsonb_agg / jsonb_agg_strict: Jsonb::Array of datum_to_jsonb values; strict over only NULLs gives empty array; zero rows -> NULL.",
+    "json_object_agg(_strict/_unique/_unique_strict): '{ ' + '\"k\" : v' joined by ', ' + ' }', duplicates kept for non-unique, NULL key -> 22004 'null value not allowed for object key', key of array/composite/json type -> 22023, unique duplicate -> 22030 'duplicate JSON object key value: \"a\"' (json-quoted key), strict skips NULL values after the key checks, all-NULL strict gives '{  }' per json.c.",
+    "jsonb_object_agg(_strict/_unique/_unique_strict): NULL key -> 22023 'field name must not be null'; keys decoded to raw text; object_from_pairs gives last-wins and normalized key order; unique duplicate -> 22030; zero rows -> NULL, all-NULL strict -> empty object.",
+    "retract() left at trait default (Ok(false)) for all collecting aggregates, which matches PG (no inverse transition)."
+   ],
+   "still_unimplemented": [
+    "No PgError::unimplemented remains in collect.rs. Actual output of values depends on TYP-35 (json::build::datum_to_json_text and datum_to_jsonb are still unimplemented in this worktree), so every aggregate that converts a non-text value to JSON will return 0A000 until TYP-35 lands. string_agg, array_agg and bytea string_agg do not depend on it."
+   ],
+   "assumptions": [
+    "PG 18 reference C sources were followed where they differ from the frozen module doc: json_object_agg NULL key is 22004 'null value not allowed for object key' (json.c), while jsonb_object_agg NULL key is 22023 'field name must not be null' (jsonb.c).",
+    "jsonb_object_agg_unique duplicate error uses message 'duplicate JSON object key value' with no key text, per jsonb_util.c:1969 (the frozen doc and acceptance text show the key form, which matches only the json variant in json.c:1126).",
+    "Aggregate argument types are taken from AggSpec.arg_types captured at make() time, not from the per-call FuncCtx.arg_types, so the executor does not need to keep ctx.arg_types in sync during transition.",
+    "Object-key text uses json::build::datum_to_json_text and then decodes it, which is correct for text, bool, numeric and date/timestamp keys as json.c's key_scalar path produces them.",
+    "Commit trailer: Claude-Session omitted per the user's CLAUDE.md attribution rule, which overrides the harness reminder."
+   ],
+   "contract_breaks": [
+    "The frozen module doc says json_object_agg NULL key -> 22023; PG 18 json.c raises 22004 (implemented as the C source does). Doc should be corrected.",
+    "No SqlState constant exists for 22030 (duplicate_json_object_key_value) in pgarbor-common; collect.rs defines a private const SqlState(*b\"22030\"). Adding it to error.rs would be cleaner."
+   ],
+   "proposed_tests_unexecuted": [
+    "agg/collect.rs #[cfg(test)] mod tests: array_agg NULL/zero rows/2-D/mismatched dims/null array; string_agg and bytea string_agg NULL skipping and delimiter placement; json_agg NULL, strict all-NULL '[]', zero rows; jsonb_agg_strict all-NULL; json_object_agg duplicate kept, NULL key 22004, strict all-NULL '{  }', unique duplicate 22030; jsonb_object_agg NULL key 22023, last duplicate wins, zero rows NULL; decode_json_string round-trips escape_json. The json-valued tests need TYP-35 to pass."
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-46 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/agg/collect.rs (module doc)",
+    "crates/pgarbor-types/src/agg/mod.rs, agg/basic.rs",
+    "crates/pgarbor-types/src/datum.rs, context.rs, array/mod.rs, json/mod.rs, json/parse.rs (escape_json), json/build.rs (signatures), registry.rs, oids.rs",
+    "crates/pgarbor-common/src/error.rs (PgError, SqlState)",
+    "catalog_data/aggregates.rs (AggCollect rows and OIDs)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/json.c (json_agg_transfn_worker, json_object_agg_transfn_worker, datum_to_json_internal, finalfns)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonb.c (jsonb_agg_transfn_worker, jsonb_object_agg_transfn_worker, finalfns)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonb_util.c (duplicate key message)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/collect.rs"
+   ]
+  },
+  {
+   "lease_id": "CORE-16",
+   "branch": "worktree-wf_6e87169c-3d0-27",
+   "sha": "ec0370c7aa9afd5608abdc736e0568b788ce3c06",
+   "files_changed": [
+    "crates/pgarbor-core/src/ssi.rs"
+   ],
+   "implemented_behaviors": [
+    "SIREAD key-range tracking per (branch, database), with duplicate-range elision and hull collapse beyond 1024 ranges",
+    "rw-antidependency edges are created on read (against concurrent writers' keys) and on write (against concurrent readers' ranges)",
+    "Dangerous-structure detection T1->T2->T3: T3 committed first, plus the read-only T1 rule (T3 must be possibly visible to T1's snapshot)",
+    "Victim selection prefers the active pivot, else T1. A victim that is not the caller is doomed and fails at its next hook or at pre_commit",
+    "pre_commit: pivot check, first-committer (T3) check that dooms active pivots, and the 'conflict in from prepared pivot' failure",
+    "40001 error with PG message, 'Reason code: ...' detail and 'The transaction might succeed if retried.' hint",
+    "on_finish: rollback removes the transaction and its edges. Commit marks it Committed, and committed state is garbage-collected once all active transactions can see it, with a 64-entry grace window",
+    "All hooks are no-ops for non-SERIALIZABLE and unknown transactions. is_active() now returns true",
+    "Unit tests: write skew (two doctors), the PG read-only anomaly and its safe variant, disjoint ranges, bound edge cases, visibility, rollback, GC, range collapse"
+   ],
+   "still_unimplemented": [
+    "READ ONLY DEFERRABLE safe-snapshot waiting: the contract has no begin-of-transaction hook, so deferrable read-only transactions are tracked like ordinary read-only SERIALIZABLE ones (they may abort instead of waiting)",
+    "Wiring in txn_kv.rs and commit.rs, which belongs to the CORE-06/07 owners"
+   ],
+   "assumptions": [
+    "Snapshot ordering uses Txn::snapshot().commit_seq and Engine::container().commit_seq(). Commit bounds are lo/hi, resolved toward reporting a conflict, so there are possible false positives but no missed anomalies.",
+    "Wiring will call on_finish exactly once per SERIALIZABLE txn, including read-only commits that skip the write path.",
+    "BranchId is Copy+Hash+Eq (verified in ids.rs) and Container::commit_seq exists (verified in the storage crate)."
+   ],
+   "contract_breaks": [
+    "The contract has no begin hook, so transactions are registered lazily at their first on_read/on_write. A grace window of 64 retained committed transactions mitigates the late-registration race, but it is not airtight.",
+    "is_active() was flipped to true as the lease spec allows once hooks are implemented. If the wiring owners do not call on_finish for every SERIALIZABLE txn, tracker state leaks until its writers/readers are cleaned up by other finishes.",
+    "The CONTRACT struct SsiTracker gained a private Mutex field, so it is no longer an empty brace struct. new() and Default are preserved."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-core ssi::",
+    "An integration test, once wired, running two sessions at SERIALIZABLE through the write-skew scenario and asserting SQLSTATE 40001 on the second commit",
+    "A multi-thread stress test of SsiTracker hooks for deadlock-freedom (single mutex, no nested locks)"
+   ],
+   "provenance": [
+    "crates/pgarbor-core/src/ssi.rs (original doc)",
+    "contracts/leases/pgarbor-core.json CORE-16",
+    "crates/pgarbor-core/src/txn.rs, commit.rs, engine.rs",
+    "crates/pgarbor-common/src/error.rs and ids.rs",
+    "~/develop/reference/postgres-18/src/backend/storage/lmgr/predicate.c (reason-code strings, victim policy)",
+    "README-SSI semantics"
+   ],
+   "files": [
+    "crates/pgarbor-core/src/ssi.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-48",
+   "branch": "worktree-wf_6e87169c-3d0-38",
+   "sha": "5a008fcf60c98d8c5743a20f22adb82a30e3ff68",
+   "files_changed": [
+    "crates/pgarbor-types/src/agg/ordered_set.rs"
+   ],
+   "implemented_behaviors": [
+    "make() dispatches on pg_aggregate OID: 3972 percentile_disc(float8), 3974 percentile_cont(float8), 3976 percentile_cont(interval), 3978/3980/3982 array-of-fractions variants, 3984 mode, 3986/3988/3990/3992 rank/percent_rank/cume_dist/dense_rank; all others return unimplemented",
+    "percentile_disc: buffers non-NULL sort values, index = max(ceil(p*N),1)-1, PG order of checks (NULL fraction -> NULL, range check, no rows -> NULL)",
+    "percentile_cont float8: PG float8_lerp (lo + pct*(hi-lo)) with PG row positions floor/ceil of p*(N-1)",
+    "percentile_cont interval: PG lerp via datetime::interval add/mul (hi - lo, * pct, + lo)",
+    "Array variants: NULL array -> NULL, empty fraction array -> empty array of sort type, NULL elements -> NULL elements, every non-NULL fraction validated in array order before results, result keeps input dims/lower bounds",
+    "range error: SQLSTATE 22003 'percentile value %g is not between 0 and 1' with C %g formatting (fmt_g, includes nan)",
+    "mode(): streaming run-length over sorted input, NULLs skipped, ties keep earliest run (strict > comparison), result is first value of the winning run",
+    "hypothetical rank/dense_rank/percent_rank/cume_dist: all rows kept (NULLs included); rank = 1 + rows strictly before hypo; cume_dist = (1 + rows <= hypo)/(N+1); percent_rank = (rank-1)/N; dense_rank = 1 + distinct sort values strictly before hypo; N=0 gives 1 / 0.0 / 1.0",
+    "sort direction and NULLS placement inferred per column from the first informative adjacent pair of the sorted input; a comparison needing an undetermined direction returns PgError::unimplemented",
+    "unit tests in #[cfg(test)] mod tests: oracle (cont/disc median of 1,2,4 = 2, mode of 1,2,2,3 = 2), 22003 message, NULL handling, array variants, hypothetical rank/dense/percent/cume incl. descending input, interval midpoint, fmt_g"
+   ],
+   "still_unimplemented": [
+    "hypothetical-set aggregates over input whose WITHIN GROUP direction cannot be determined from the sorted rows (e.g. all rows equal or all NULL in a column that a comparison decides on) return PgError::unimplemented(TYP-48) instead of guessing; needs ORDER BY direction and NULLS placement in AggSpec to close fully"
+   ],
+   "assumptions": [
+    "Rows arrive sorted per WITHIN GROUP; transition args for hypothetical aggregates are the sort columns only (no flag column), and direct_args are the hypothetical row with the same width as arg_types",
+    "percentile and mode ignore NULL sort values (PG ordered_set_transition skips NULL inputs; mode_final skips NULLs)",
+    "interval lerp uses datetime::interval::add/mul as stand-ins for PG interval_mi/interval_mul/interval_pl; infinite-interval edge cases may differ slightly from PG interval_mi",
+    "Float4 sort values or fractions are accepted and widened to float8 although the binder normally coerces them",
+    "percent_rank/cume_dist/rank/dense_rank with no input rows return 0.0 / 1.0 / 1 / 1 as PG does (N=0 path of hypothetical_rank_common)"
+   ],
+   "contract_breaks": [
+    "AggSpec has no per-column ORDER BY direction or NULLS FIRST/LAST for WITHIN GROUP. Hypothetical-set aggregates need both to compare the hypothetical row with the rows; the implementation infers them from the sorted input and reports unimplemented when it cannot. Suggest adding sort_desc: Vec<bool> and nulls_first: Vec<bool> to AggSpec (frozen v1, so not edited here)."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types agg::ordered_set (all #[cfg(test)] cases in the file, not run; nothing compiled per RightShift rules)",
+    "SQL oracle: percentile_cont(0.5) WITHIN GROUP (ORDER BY x) over 1,2,4 = 2; percentile_disc(0.5) = 2; mode() over 1,2,2,3 = 2; percentile_cont(1.5) -> 22003 'percentile value 1.5 is not between 0 and 1'",
+    "SQL check: percentile_cont(ARRAY[0,1]) over 1,2,4 returns {1,4} as float8[]; percentile_disc(ARRAY[0,1]) over 1,2,4 returns {1,4}; rank(2) WITHIN GROUP (ORDER BY x) over 1,2,2,4 = 2; cume_dist(2) = 0.8"
+   ],
+   "provenance": [
+    "crates/pgarbor-types/src/agg/mod.rs (AggState, AggSpec, make_aggregate)",
+    "crates/pgarbor-types/src/context.rs (FuncCtx, TypeEnv, TestSession)",
+    "crates/pgarbor-types/src/compare.rs (cmp_datums, cmp_sort, sql_eq, not_distinct)",
+    "crates/pgarbor-types/src/datetime/interval.rs (add, mul)",
+    "crates/pgarbor-types/src/array/mod.rs (Array)",
+    "crates/pgarbor-types/src/catalog_data/aggregates.rs and contracts/reference/pg18/pg_aggregate.csv, pg_proc.csv (OIDs 3972-3992)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/orderedsetaggs.c (percentile_disc_final, percentile_cont_final_common, setup_pct_info, percentile_*_multi_final, mode_final, hypothetical_rank_common, hypothetical_dense_rank_final, hypothetical_percent_rank_final, hypothetical_cume_dist_final)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/ordered_set.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-47",
+   "branch": "worktree-wf_6e87169c-3d0-37",
+   "sha": "16866b27c6318abcc326cc08e7472e7dce7ec118",
+   "files_changed": [
+    "crates/pgarbor-types/src/agg/stats.rs"
+   ],
+   "implemented_behaviors": [
+    "make() dispatches on pg_aggregate finalfn/transfn: numeric family (variance, var_samp, var_pop, stddev, stddev_samp, stddev_pop over int2/int4/int8/numeric incl. numeric_poly_* finalizers) accumulates exact N, sumX, sumX2 plus NaN/+Inf/-Inf counts as BigDecimal with PG dscale rules; numerator and denominator are exact, the quotient uses arith::select_div_scale + arith::div_scale (half-up), stddev applies a half-up sqrt at the same rscale (sqrt_numeric replicates PG sqrt_var output), zero/one-row NULL rules, NaN/Inf give NaN, non-positive numerator gives 0 with dscale 0",
+    "float family (float4/float8 variance and stddev families) uses Youngs-Cramer in f64 with the same operation order as float.c, including the first-input NaN/Inf rule and the 22003 'value out of range: overflow' check; samp forms NULL for N<=1, pop NULL for N==0",
+    "regr family (float8_regr_accum): regr_sxx, regr_syy, regr_sxy, regr_avgx, regr_avgy, regr_r2, regr_slope, regr_intercept, covar_pop, covar_samp, corr with float.c's NULL rules (N<1, N<2 for covar_samp, Sxx==0 / Syy==0 cases, r2 returning 1.0 when Syy==0), first arg is Y, second is X, rows with any NULL skipped, same overflow and NaN rules as float.c",
+    "regr_count (int8inc_float8_float8): counts rows where both args are non-NULL, returns int8 0 for empty input",
+    "Unit tests in a #[cfg(test)] mod: stddev(int4 1,2,4)='1.5275252316519467', variance(int4 1,2,4)='2.3333333333333333', var_pop single row '0', var_samp single row NULL, zero rows NULL, NULL skipping, NaN propagation, stddev_pop(float8) approx 1.247219128924647, corr(x,2x) approx 1, regr_slope(2x,x)=2, regr_count, sqrt_numeric half-up rounding"
+   ],
+   "still_unimplemented": [
+    "retract() (moving-window inverse) is not provided: the default Ok(false) makes the executor recompute the frame, so results match but window performance is lower",
+    "No PgError::unimplemented(\"TYP-47\", ...) body remains: every builtin AggStats aggregate in catalog_data/aggregates.rs (48 rows) is handled by a branch in classify()"
+   ],
+   "assumptions": [
+    "Relies on arith::select_div_scale and arith::div_scale (TYP-10) returning a finite Numeric with dscale = rscale and half-up rounding as documented in arith.rs",
+    "Relies on num_bigint BigInt::sqrt (inherent, num-bigint 0.4.8) and BigDecimal::fractional_digit_count (returns the raw scale in bigdecimal 0.4.11)",
+    "Assumes BigDecimal add/sub results keep max(scale) and mul keeps sum of scales; add_keep_scale/sub_keep_scale force the max scale explicitly",
+    "PG sqrt_var result is the floor at >= rscale+1 digits then round_var, so half-up on the first discarded digit of an exact floor is treated as equal to PG's output",
+    "The numeric poly (int2/int4) variants are treated as identical to the numeric path because their sums are integer with dscale 0 in PG (verified against numeric.c numeric_poly_stddev_internal)",
+    "Test code uses unwrap/expect/panic only inside #[cfg(test)]; non-test paths return PgError values"
+   ],
+   "contract_breaks": [
+    "None. Public signatures are unchanged; make() keeps its CONTRACT shape (pub(crate) fn make(agg, spec, ctx) -> Result<Box<dyn AggState>>)"
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types agg::stats (the #[cfg(test)] mod in stats.rs: oracle values, NULL/NaN rules, float8 pop stddev, corr/regr_slope, regr_count, sqrt_numeric rounding)",
+    "Integration check that stddev(int8) and variance(numeric) over the same values agree with stddev(int4)",
+    "Oracle comparison against PG18.6 for stddev/variance over numeric inputs with mixed dscale (e.g. 1.50, 2.5, 3.250) once the central build runs"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-47 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/agg/mod.rs",
+    "crates/pgarbor-types/src/catalog_data/aggregates.rs (AggStats rows, transfn/finalfn names)",
+    "crates/pgarbor-types/src/numeric/arith.rs (div_scale, select_div_scale)",
+    "crates/pgarbor-types/src/numeric/mod.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/numeric.c (numeric_stddev_internal ~L6363, do_numeric_accum ~L4982, numeric_poly_stddev_internal ~L6516, sqrt_var ~L10458, make_result ~L7939)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/float.c (float8_accum ~L3043, float4_accum ~L3124, float8_var_samp/stddev ~L3227-3300, float8_regr_accum ~L3336, regr/covar/corr/r2/slope/intercept finalizers ~L3590-3830)",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bigdecimal-0.4.11 (fractional_digit_count, with_scale)",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8 (BigInt::sqrt)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/agg/stats.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-40",
+   "branch": "worktree-wf_6e87169c-3d0-33",
+   "sha": "2cd2738ae1292982ea1516b134e1e2f2e18b112e",
+   "files_changed": [
+    "crates/pgarbor-types/src/record.rs"
+   ],
+   "implemented_behaviors": [
+    "output_record: PG record_out text with NULL-as-empty and quoting/escaping rules for (\"\", whitespace, \" \\ ( ) ,)",
+    "input (record_in) for named composites: full PG parser (dropped columns skipped, Too few/Too many columns, Missing left parenthesis, Unexpected end of input, Junk after right parenthesis) with 22P02 + DETAIL; per-field io::input with the field typmod; anonymous record -> 0A000",
+    "output (record_out) for named composites: dropped columns skipped; accepts full-length or live-only value vectors",
+    "recv/send (record_recv/record_send): column count check 22P03-free 42804 'wrong number of columns', per-column type-oid check for builtin types (<10000), NULL as -1, insufficient data as 08P01/22P03",
+    "lookup() covers all 18 ImplModule::Record procs by prosrc: record_eq/ne/lt/le/gt/ge, btrecordcmp, record_larger/smaller, record_image_eq/ne/lt/gt/le/ge, btrecordimagecmp, hash_record, hash_record_extended",
+    "record_eq/ordering delegate to compare::sql_eq / compare::cmp_datums with ctx.arg_type(0) (unknown read as record); column-count mismatch 42804",
+    "record_image_* compare tuple::encode_value bytes per column; NULL handling as PG",
+    "hash_record(_extended): PG accumulation (result<<5)-result+element_hash in uint32 or uint64; element hashes for bool, char, int2/4/8, date, time, timestamp(tz), oid and reg*, enum (label oid), text/varchar/name/bpchar, bytea, uuid, and nested records, using the pg_hash_* helpers in compare.rs; json -> 42883 'could not identify a hash function for type json'",
+    "Unit tests in #[cfg(test)] mod: output quoting, input parsing and error paths with a composite env with a dropped column, output skipping dropped columns, anonymous eq with NULL"
+   ],
+   "still_unimplemented": [
+    "hash_record of column types with no PG hash mapped here (float4/float8, numeric, interval, array, jsonb, and other types): returns PgError::unimplemented(\"TYP-40\", ...) rather than PG's value (needs hashfloat/hashnumeric/hash_array/jsonb_hash ports)",
+    "output()/send() for the plain anonymous record type (2249) with no field types: 0A000; the executor must call output_record for anonymous rows",
+    "input()/recv() of the plain anonymous record type: 0A000 'input of anonymous composite types is not implemented' (PG text)"
+   ],
+   "assumptions": [
+    "Anonymous record eq: a NULL column (no type known from the Datum) reached in column order gives 42883 'could not identify an equality operator for type unknown', matching the module doc's oracle case. Anonymous ordering (record_lt etc.) instead uses compare::cmp_datums with NULL-last semantics, to satisfy the acceptance 'record_lt with NULL fields sorts NULL last'.",
+    "Anonymous records are detected when ctx.arg_type(0) is 2249 or 705 (unknown); composite types use their own composite_fields via compare.rs.",
+    "record_larger/record_smaller return the original Datum argument clones, per rowtypes.c.",
+    "btrecordcmp and btrecordimagecmp return -1/0/1.",
+    "hash_record uses per-type PG hash algorithms as ported in this file (hash_uint32, hashint8 lo^hi trick, hash_any bytes for text/bytea/uuid/bpchar with trailing spaces trimmed), relying on compare::pg_hash_* being PG-faithful (TYP-49).",
+    "Could not compile or run tests (per worker rules). Acceptance text 'record_lt with NULL fields sorts NULL last' is not covered by a local unit test because a named composite needs a TypeInfo with typtype 'c'.",
+    "Output of io::output_opt for each field relies on TYP-43/io dispatch; no change made to io.rs or other files."
+   ],
+   "contract_breaks": [
+    "Plain anonymous record (oid 2249) has no field types in Datum, so output(), send(), input() and recv() cannot handle it without binder-supplied types; output_record covers text output only. No binary anonymous path exists in the contract."
+   ],
+   "proposed_tests_unexecuted": [
+    "output_record(row(1,'a b',NULL)) == \"(1,\\\"a b\\\",)\" and field 'a\"b' -> \"\\\"a\\\"\\\"b\\\"\"",
+    "input(named composite, \"(1)\") -> 22P02 with DETAIL Too few columns.; \"(1,2) x\" -> DETAIL Junk after right parenthesis.",
+    "input of plain record -> 0A000 'input of anonymous composite types is not implemented'",
+    "record_lt over named composite with NULL fields: NULL sorts last",
+    "hash_record(row) equals PG 18.6 for int/text columns; record_eq with differing column counts -> 42804",
+    "record_image_eq over numeric 1.0 vs 1.00 is false (image bytes differ)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-40 entry; TYP-49, TYP-51 depends_on)",
+    "contracts/crates/pgarbor-types.md (Text/Binary I/O, anonymous record note)",
+    "crates/pgarbor-types/src/compare.rs (cmp_datums, sql_eq, pg_hash_* helpers)",
+    "crates/pgarbor-types/src/tuple.rs (encode_value)",
+    "crates/pgarbor-types/src/io.rs (input/output_opt/recv/send)",
+    "crates/pgarbor-types/src/context.rs, datum.rs, func/mod.rs, names.rs, registry.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/rowtypes.c (record_in, record_out, record_recv, record_send, record_cmp, record_eq, hash_record, hash_record_extended, record_larger/smaller)",
+    "~/develop/reference/postgres-18/src/include/access/transam.h (FirstGenbkiObjectId 10000)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/record.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-43",
+   "branch": "worktree-wf_6e87169c-3d0-34",
+   "sha": "7e7663d70f76efd0bc99a6140eef77d40826a415",
+   "files_changed": [
+    "crates/pgarbor-types/src/system_funcs.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup(): all 32 ImplModule::System procs routed by prosrc (lang 12) or oid (lang 14 information_schema helpers 13298-13305); unsupported() kept as the 0A000 call site",
+    "version() -> 'PostgreSQL 18.6 (PGArbor <ver>) on <arch>-<os>, compiled by rustc, 64-bit'",
+    "pg_typeof(any) -> regtype from ctx.arg_type(0)",
+    "format_type(oid,int4) non-strict: NULL oid -> NULL, NULL typmod -> -1, via names::format_type",
+    "oidvectortypes via names::format_type(typmod -1)",
+    "pg_basetype: domain chain walk, NULL for unknown oid, bounded depth",
+    "pg_num_nulls/pg_num_nonnulls over individual args",
+    "pg_column_size via tuple::encode_value length; pg_column_compression -> NULL",
+    "Encodings: getdatabaseencoding/pg_client_encoding -> UTF8; PG_encoding_to_char ('' when invalid); PG_char_to_encoding (-1 when unknown, PG clean_encoding_name normalization, full 81-alias table); pg_encoding_max_length_sql (maxmblen table from wchar.c)",
+    "pg_size_pretty(int8) and pg_size_pretty(numeric) follow dbsize.c unit ladder, half_rounded and div shifts; numeric output via numeric::io::format_numeric",
+    "pg_size_bytes(text) follows dbsize.c scanner: sign/digits/fraction/exponent (strtol-style), aliases B, case-insensitive units, 22023 invalid size with DETAIL/HINT, numeric_int8 HalfUp rounding and 22003 range error",
+    "to_regtype / to_regtypemod via names::parse_type_string, NULL only on 42704",
+    "timeofday() from clock_timestamp with civil-date conversion; fixed offsets honored; UTC default",
+    "parse_ident(text, strict) ported from misc.c: quoted identifiers with doubled quotes, ASCII downcase, PG error texts and DETAILs, non-strict trailing-garbage stop",
+    "unicode_version '16.0'; icu_unicode_version NULL; pg_settings_get_flags NULL; pg_collation_for '\"default\"' for collatable types",
+    "information_schema helpers _pg_char_max_length, _pg_char_octet_length (db max mblen 4), _pg_numeric_precision, _pg_numeric_precision_radix, _pg_numeric_scale, _pg_datetime_precision, _pg_interval_type ported from information_schema.sql",
+    "Unit tests in #[cfg(test)] mod tests cover the lease acceptance list and the parse/size/encoding edge cases (not executed)"
+   ],
+   "still_unimplemented": [
+    "timeofday() under a named IANA TimeZone returns 0A000 via PgError::unimplemented(\"TYP-43\", ...) because it needs tz rules (TYP-25). Fixed offsets and UTC are implemented.",
+    "Every other ImplModule::System proc is implemented; unsupported() is still the 0A000 fallback for any proc not matched by lookup()."
+   ],
+   "assumptions": [
+    "pg_num_nulls/pg_num_nonnulls count individual arguments as the module doc says. If a VARIADIC array argument is passed, FuncCtx gives no flag to detect it, so the array's elements are not counted and the result differs from PG.",
+    "pg_settings_get_flags returns NULL for every setting, as the module doc says. PGArbor has no GUC flag table here, so this is a documented stub rather than a PG-faithful answer.",
+    "pg_collation_for checks only the argument type's collatability (per the module doc), not FuncCtx.collation.",
+    "pg_column_size uses tuple::encode_value's encoding length, which is the documented divergence from PG varlena sizes.",
+    "_pg_char_octet_length uses the database encoding maximum multibyte length from the generated table (UTF8 = 4), matching the pinned UTF8 database.",
+    "pg_size_pretty(numeric) and pg_size_bytes depend on numeric::io::parse_numeric and format_numeric (TYP-09) and on numeric::arith (TYP-10). Their unit tests will only pass once those leases land.",
+    "to_regtype/to_regtypemod treat only SQLSTATE 42704 as not-found (NULL). Other parse errors propagate, as PG does for syntax errors.",
+    "timeofday %Z uses TimeZoneSetting::Fixed.name for fixed offsets. The module doc does not specify this label; PG's exact abbreviation for numeric offsets may differ."
+   ],
+   "contract_breaks": [
+    "None in the frozen signatures. The ScalarFn/FuncCtx shapes were sufficient. Helpers take (args, index) and return internal errors on missing or mistyped arguments rather than indexing.",
+    "The encoding tables (ENCODINGS, ENCODING_ALIASES) are generated from PG 18.6 encnames.c, wchar.c and pg_wchar.h and embedded in system_funcs.rs. They are data, not logic, and live in this file only because the lease owns only this file."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types system_funcs::tests: pg_typeof(1)=regtype 23; format_type(1043,14)='character varying(10)'; version prefix 'PostgreSQL 18.6 (PGArbor'; pg_size_pretty(10240)='10 kB' (plus 1024 bytes, -10240 -> '-10 kB', 1048576 -> '1024 kB', 20 MB); pg_size_pretty(1.50::numeric)='1.50 bytes'; pg_size_bytes('1 MB')=1048576, 'x' -> 22023 'invalid size: \"x\"', 1.5e3 -> 1500, '1 furlong' -> 22023",
+    "encodings: getdatabaseencoding='UTF8', PG_encoding_to_char(6)='UTF8', PG_char_to_encoding('UTF-8')=6, unknown -> -1, encoding_max_length(6)=4, id 99 -> NULL",
+    "information_schema helpers: _pg_char_max_length(1043,14)=10, _pg_char_octet_length(1043,14)=40, _pg_numeric_precision(23,-1)=32, _pg_numeric_precision_radix(1700,-1)=10, _pg_datetime_precision(1082,-1)=0",
+    "to_regtype('nosuch') = NULL, to_regtype('integer')=23, to_regtypemod('varchar(10)')=14",
+    "timeofday at clock 0 = 'Sat Jan 01 00:00:00.000000 2000 UTC'",
+    "parse_ident: '\"Foo\".Bar ' -> {Foo,bar}; strict 'abc junk' -> 22023 'string is not a valid identifier'; unclosed quote DETAIL",
+    "unicode_version='16.0', icu_unicode_version NULL, num_nulls/num_nonnulls counts, oidvectortypes('integer, character varying')",
+    "Integration tests (not written by this worker): pg_size_pretty and pg_size_bytes against the PG18.6 oracle for boundary values (10239/10240 bytes, 20479 kB rounding, negative half-rounding)"
+   ],
+   "provenance": [
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ImplModule::System rows, prosrc/lang/arg types)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/func/mod.rs",
+    "crates/pgarbor-types/src/context.rs",
+    "crates/pgarbor-types/src/datum.rs",
+    "crates/pgarbor-types/src/names.rs (format_type, parse_type_string)",
+    "crates/pgarbor-types/src/registry.rs (TypeInfo, is_domain, is_collatable, basetype)",
+    "crates/pgarbor-types/src/catalog_data/mod.rs",
+    "crates/pgarbor-common/src/error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/dbsize.c (pg_size_pretty, pg_size_pretty_numeric, pg_size_bytes, half_rounded)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/format_type.c (oidvectortypes)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/misc.c (parse_ident, num_nulls/count_nulls, pg_basetype, pg_collation_for)",
+    "~/develop/reference/postgres-18/src/backend/utils/mb/mbutils.c (encoding functions)",
+    "~/develop/reference/postgres-18/src/common/encnames.c, wchar.c, include/mb/pg_wchar.h (encoding names, aliases, maxmblen, ids; tables generated by script)",
+    "~/develop/reference/postgres-18/src/backend/catalog/information_schema.sql (_pg_* helper bodies)",
+    "~/.cargo/registry bigdecimal-0.4.11 (RoundingMode::HalfUp, with_scale_round, ToPrimitive re-export)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/system_funcs.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-35",
+   "branch": "worktree-wf_6e87169c-3d0-31",
+   "sha": "46ce7c7dcc4b0a3cdb470b9d9343e54bd668ec99",
+   "files_changed": [
+    "crates/pgarbor-types/src/json/build.rs"
+   ],
+   "implemented_behaviors": [
+    "datum_to_jsonb and datum_to_json_text (CONTRACT signatures kept) with PG categories: NULL, bool, numeric (NaN/Infinity quoted), date/timestamp/timestamptz XSD form with 'T' and +HH:MM offsets (infinity quoted), json/jsonb embedded (jsonb as jsonb_out text inside to_json), arrays nested per dimension, records as objects with f1.. names for anonymous ROW and dropped attributes skipped, everything else as quoted output text",
+    "lookup() maps all 35 JsonBuild procs by prosrc; every one returns FuncImpl::Scalar; unsupported() kept as the only fallback",
+    "to_json, to_jsonb, row_to_json(+pretty), array_to_json(+pretty) with PG composite/array pretty layout (\",\\n \" separators, outer dimension only)",
+    "json_build_object/array and jsonb_build_object/array (+noargs): ', ' and ' : ' spacing for json, odd-count 22023 with HINT, null key errors, 'argument N: key must not be null' for jsonb",
+    "json_object / jsonb_object (text[] 1-D and 2-D forms) and two-arg variants with PG 2202E and 22004 errors",
+    "json_strip_nulls (compact re-serialisation, decoded strings re-escaped) and jsonb_strip_nulls with strip_in_arrays",
+    "jsonb_set, jsonb_set_lax (all null_value_treatment branches incl. raise_exception detail/hint), jsonb_insert, following PG setPath/setPathObject/setPathArray semantics (no-op on missing intermediate keys, out-of-range index clamp, negative index sentinel, 'cannot replace existing key' with hint, 'cannot set path in scalar', non-integer index 22P02, null path element 22004)",
+    "jsonb_pretty (PG 4-space layout via json::io), json_typeof/jsonb_typeof, json_array_length/jsonb_array_length with PG messages",
+    "jsonb_bool/int2/int4/int8/float4/float8/numeric casts: jsonb null gives SQL NULL, wrong kinds give 22023 'cannot cast jsonb <kind> to type <t>', numeric rounding and range errors via numeric::funcs"
+   ],
+   "still_unimplemented": [],
+   "assumptions": [
+    "json_build_object null key uses 22023 as the lease states (oracle-verified per lease); the reference source ~/develop/reference/postgres-18 json.c uses 22004 (NULL_VALUE_NOT_ALLOWED) for json_build_object and json_object_agg. Easy to flip in null_key_error() if the oracle says otherwise.",
+    "Field types for anonymous RECORD values are inferred from the Datum variant (variant_type), since Datum::Record carries no types; e.g. a regclass field inside an anonymous ROW prints as its OID number.",
+    "Composite values are assumed to include dropped attributes in Datum::Record (as CompositeField documents), so zipping against composite_fields() skips dropped entries.",
+    "json_typeof and jsonb_typeof/json_array_length validate the whole input via parse_json_value; PG json_typeof only lexes the first token, so json_typeof('[1,2') differs (PG returns 'array', this returns a syntax error).",
+    "jsonb_numeric_of/jsonb scalar casts return SQL NULL for jsonb null (matching PG jsonb_bool's JsonbExtractScalar path); assumed the same for int/float casts.",
+    "jsonb_float4 overflow is detected after f64 conversion (to_f64 then f32 cast), so a value that rounds to f32 infinity only through double rounding could differ by an ulp at the boundary."
+   ],
+   "contract_breaks": [
+    "jsonb_build_object / jsonb_build_array keep duplicate keys in PG (jsonb.c pushes WJB_KEY without uniqueness), but Jsonb::Object's contract requires unique keys, so duplicates are normalised last-wins via Jsonb::object_from_pairs. This is a deliberate deviation from PG output (PG would print both pairs)."
+   ],
+   "proposed_tests_unexecuted": [
+    "json::build tests module (bottom of build.rs): to_jsonb numeric scale, NaN float as string, timestamptz XSD format, to_json anonymous row, json_build_object spacing and null, json_build_object odd args 22023, jsonb_set adds missing last key, jsonb_insert before index 0, jsonb_string_to_int 22023 message, json_object text[] pairs"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-35 entry)",
+    "contracts/crates/pgarbor-types.md",
+    "crates/pgarbor-types/src/json/build.rs (module doc, frozen contract)",
+    "crates/pgarbor-types/src/{json/mod.rs,json/io.rs,json/parse.rs,datum.rs,func/mod.rs,context.rs,registry.rs,array/mod.rs,numeric/io.rs,numeric/funcs.rs,datetime/calendar.rs,datetime/tz.rs,datetime/mod.rs,catalog_data/mod.rs,oids.rs}",
+    "crates/pgarbor-common/src/error.rs",
+    "catalog_data/procs.rs rows with module ImplModule::JsonBuild (35 rows)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/json.c (json_build_object, json_object, json_object_two_arg, array_dim_to_json, composite_to_json)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonb.c (jsonb_build_object, jsonb_object, cannotCastJsonbValue)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonfuncs.c (json_categorize_type, json_strip_nulls semantic actions, jsonb_strip_nulls, jsonb_set/jsonb_insert/jsonb_set_lax, setPath/setPathObject/setPathArray, JsonbExtractScalar, json_array_length messages)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/build.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-38",
+   "branch": "worktree-wf_6e87169c-3d0-32",
+   "sha": "812832ff7ea2e1d1b26662195bb5a5a19d10f8d6",
+   "files_changed": [
+    "crates/pgarbor-types/src/array/funcs.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup() maps all 48 ArrayFuncs procs (prosrc match; SQL-language _pg_expandarray matched by oid 13294)",
+    "array_eq/ne/lt/gt/le/ge, btarraycmp, array_larger/smaller: element-wise via compare (NULL=NULL true for eq, NULLs greater for ordering), dims/lbound tie-breaks; 42804 on element type mismatch",
+    "arrayoverlap/arraycontains/arraycontained via contain_compare (NULL elements never match)",
+    "array_append/array_prepend/array_cat with PG dimension rules, 2202E/42804 errors and DETAIL text, NULL-array element type from arg types",
+    "array_length/upper/lower/ndims/dims/cardinality",
+    "array_position(_start)/array_positions (multi-dim 0A000 genuine PG error; NULL search; 22004 on NULL start)",
+    "array_remove/array_replace with PG replace_internal semantics (multi-dim remove 0A000)",
+    "array_fill and array_fill_with_lower_bounds with PG validation messages",
+    "array_to_text(_null) and text_to_array(_null), text_to_table(_null) SRF with NULL-string and NULL-delimiter handling",
+    "array_unnest, generate_subscripts(_nodir) SRFs, _pg_expandarray SRF",
+    "trim_array, array_reverse, array_shuffle, array_sample (via ctx.session.random_f64), array_sort / array_sort_order / array_sort_order_nulls_first",
+    "width_bucket_array with float8 NaN path and generic binary search",
+    "hash_array and hash_array_extended for bool, char, int2/4/8, date/time/timestamp(tz), oid-family, float4/8, text/varchar/name, bpchar, bytea, uuid using compare::pg_hash_* ports; json gives 42883",
+    "unit tests in #[cfg(test)] mod tests (append/prepend, dims, position/remove, null eq/order, containment, text conversions, unnest/trim, width_bucket)"
+   ],
+   "still_unimplemented": [
+    "hash_array / hash_array_extended for element types other than the listed scalar families (numeric, interval, timetz, jsonb, enums, records, composites, arrays, xid/cid): 0A000 via PgError::unimplemented(\"TYP-38\", ...) because the PG element hash functions (hash_numeric, hash_any over interval/enum OID mapping, record hash) are not ported here",
+    "Multi-dimensional array_sort uses element-wise row comparison instead of PG's array_lt on sub-arrays; equivalent ordering, but the sub-array cache/array-type lookup error ('could not find array type') is not reproduced"
+   ],
+   "assumptions": [
+    "Element OIDs in the hash/eq fast paths follow oids.rs constants; hash_kind treats REG* OID-family types as hashoid, date as hashint4, time/timestamp(tz) as hashint8 (PG hashfunc.c / date.c / timestamp.c).",
+    "array_position/array_positions use compare::sql_eq for non-NULL elements; for non-NULL operands this is identical to PG's `=` lookup.",
+    "width_bucket_array for non-float8 element types uses compare::cmp_datums (PG cmp proc). Float8 keeps PG's NaN-specific path.",
+    "Randomness for array_shuffle/array_sample comes from SessionContext::random_f64 (not reproducible against PG's pg_prng, by design).",
+    "array_sort 1-D: sort_by is stable; PG's tuplesort is not, so equal-comparing elements with differing text (e.g. numeric 1.0 vs 1.00) may order differently from PG.",
+    "array_to_text element output uses io::output with ctx.io_ctx() (carries the session timestamp) and no typmod, matching OutputFunctionCall semantics.",
+    "Tests use io::output for array_to_text (depends on the int4 output implementation from TYP-04) and otherwise construct Datums directly.",
+    "No compile was run (per RightShift rules); code was re-read for borrowck and type issues."
+   ],
+   "contract_breaks": [
+    "none: all public signatures used are as frozen; no contract edits were required. The ArrayFuncs module shares prosrc 'array_fill' between two procs only via distinct prosrc names, so no ambiguity arose."
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types array::funcs::tests (append/prepend, dims, position/remove, null eq/order, containment, text conversions, unnest/trim, width_bucket)",
+    "Oracle check of hash_array('{1,2}'::int[]) against PG 18.6 once hash primitives are verified",
+    "Oracle check of array_sort/array_reverse/array_sample lb handling against PG 18.6 for multi-dim input",
+    "Oracle check of array_cat error DETAIL strings for mismatched dims/element types"
+   ],
+   "provenance": [
+    "crates/pgarbor-types/src/catalog_data/procs.rs (ArrayFuncs rows, 48 procs)",
+    "contracts/crates/pgarbor-types.md",
+    "contracts/leases/pgarbor-types.json (TYP-38 entry)",
+    "crates/pgarbor-types/src/array/subscript.rs, array/mod.rs, datum.rs, context.rs, func/mod.rs, compare.rs, catalog_data/mod.rs, registry.rs, io.rs, names.rs, oids.rs, pgarbor-common error.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/arrayfuncs.c (array_eq, array_cmp, array_contain_compare, hash_array, hash_array_extended, array_fill_internal, array_replace_internal, array_remove/replace, width_bucket_array, trim_array, array_get_slice, generate_subscripts, array_unnest, array_dims/lower/upper/length/cardinality)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/array_userfuncs.c (array_append, array_prepend, array_cat, array_position_common, array_positions, array_shuffle/sample/reverse, array_sort_internal)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/varlena.c (split_text, text_to_array, text_to_table, array_to_text_internal)",
+    "~/develop/reference/postgres-18/src/backend/access/hash/hashfunc.c (hashint2/4/8, hashoid, hashchar, hashfloat4/8 and extended variants)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/array/funcs.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-34",
+   "branch": "worktree-wf_6e87169c-3d0-30",
+   "sha": "5060d11dfa3024659ffb9cf3470bef23a19ad0f4",
+   "files_changed": [
+    "crates/pgarbor-types/src/json/ops.rs"
+   ],
+   "implemented_behaviors": [
+    "compare_jsonb: PG jsonb ordering (Object > Array > Bool > Number > String > Null; raw-scalar flag and element-count-first quirk so '[]' < 'null'; objects compared pair-by-pair in storage order, keys bytewise)",
+    "jsonb_contains: JsonbDeepContains semantics (object/array kind checks, scalar-in-array at top level, containers matched against any container element, raw scalar rules)",
+    "lookup() maps all 31 JsonOps procs by prosrc: json_object_field(_text), json_array_element(_text), json_extract_path(_text), jsonb_object_field(_text), jsonb_array_element(_text), jsonb_extract_path(_text), jsonb_exists, jsonb_exists_any, jsonb_exists_all, jsonb_contains, jsonb_contained, jsonb_concat, jsonb_delete (text), jsonb_delete_idx, jsonb_delete_array, jsonb_delete_path, jsonb_eq/ne/lt/le/gt/ge, jsonb_cmp, jsonb_hash, jsonb_hash_extended",
+    "json (text) navigation: whole-document validation via parse::parse_json_value, byte-span scanner returning verbatim value text for ->/#>, unescaped string or SQL NULL for ->>/#>>, last-match-wins for object fields, negative array subscripts counted from the end, PG strtoint rules for path elements",
+    "jsonb deletes and concat per jsonb_concat/IteratorConcat, jsonb_delete, delete_idx, delete_array, delete_path (setPath JB_PATH_DELETE incl. 22004 null-element and 22P02 non-integer errors, 22023 scalar errors, 2202E multi-dim path)",
+    "jsonb hash and hash_extended: PG rotate-and-xor fold, container flags, key then value hashing, numeric via hash_numeric(+_extended) through func::call (OIDs 432/780), strings via compare::pg_hash_bytes(_extended), bool constants and seed rules",
+    "unit tests in #[cfg(test)] mod tests covering subscripts, json text navigation, concat/delete, ordering quirks, containment/exists, empty-container hash"
+   ],
+   "still_unimplemented": [
+    "none: every JsonOps proc in the generated catalog has an implementation; unsupported() remains only as the fallback arm and is unreachable for listed procs"
+   ],
+   "assumptions": [
+    "Object key ordering in compare_jsonb is bytewise (C collation), since the engine treats every collation as codepoint order.",
+    "json (text) operators call parse::parse_json_value on the whole document first, so PG's need_escapes checks (lone surrogates, \\u0000 22P05) apply exactly as in get_worker; this costs a full parse per call.",
+    "A top-level scalar behaves as a raw one-element array for ->, ->>, ||, @>, <@, ?, ?|, ?&, #>, hashing and comparison, matching PG's JB_ROOT_IS_ARRAY on raw scalars.",
+    "jsonb_hash depends on hash_numeric (OID 432) and hash_numeric_extended (OID 780) being implemented by the numeric module (func::call dispatch); if that lease is incomplete, hashing a jsonb number returns that module's error.",
+    "Path-element integer parsing mirrors PG strtoint (long then int cast with ERANGE check): values outside int4 are treated as non-integers, and INT_MIN never matches an array position."
+   ],
+   "contract_breaks": [
+    "none: the frozen signatures of compare_jsonb and jsonb_contains and the lookup/unsupported module hooks were used as declared; no contract insufficiency found"
+   ],
+   "proposed_tests_unexecuted": [
+    "cargo test -p pgarbor-types json::ops::tests (not run per RightShift rules)",
+    "Oracle diff of PG18 for: '[1,2,3]'::jsonb -> -1; '{\"a\":[1,2]}'::jsonb #>> '{a,0}'; '{\"a\":1,\"b\":2}'::jsonb - 'a'; '[1]'::jsonb || '2'; '{\"a\":{\"b\":1}}'::jsonb #- '{a,b}'; '[]'::jsonb < 'null'; '[1,2]' > '[3]'; '{\"b\":1}' > '{\"aa\":1}'; '[1,2]' @> '1'",
+    "json ->/->> on documents with duplicate keys, escaped keys (a matching a), negative subscripts and whitespace preservation",
+    "jsonb_hash and jsonb_hash_extended values against PG18 for nested objects, numbers, booleans and null (hash fold order)",
+    "jsonb #- with NULL path elements and non-integer array subscripts (22004 and 22P02 messages)"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-34 entry)",
+    "crates/pgarbor-types/src/json/ops.rs (module docs and CONTRACT stubs)",
+    "crates/pgarbor-types/src/json/mod.rs, parse.rs, io.rs, datum.rs, context.rs, func/mod.rs, compare.rs, array/mod.rs, numeric/mod.rs, catalog_data/procs.rs",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonfuncs.c (get_worker, get_path_all, jsonb_object_field, jsonb_array_element, jsonb_get_element, jsonb_concat, jsonb_delete*, setPath/setPathObject/setPathArray, strtoint)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonb_op.c (jsonb_exists*, jsonb_contains, jsonb_eq/cmp, jsonb_hash, jsonb_hash_extended)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/jsonb_util.c (compareJsonbContainers, JsonbDeepContains, findJsonbValueFromContainer, IteratorConcat, JsonbHashScalarValue(Extended))",
+    "~/develop/reference/postgres-18/src/include/common/hashfn.h (ROTATE_HIGH_AND_LOW_32BITS), src/common/string.c (strtoint), src/include/utils/jsonb.h (JB_F* flags)"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/json/ops.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-30",
+   "branch": "worktree-wf_6e87169c-3d0-28",
+   "sha": "274b2385d57136b61c68ad5adca0ee6be8cb342c",
+   "files_changed": [
+    "crates/pgarbor-types/src/datetime/funcs.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup() maps all 55 DatetimeFuncs procs (prosrc match; SQL-language builtins by oid: 1305-1307, 1309-1311, 2042-2044 overlaps, 1384 date_part(text,date), 1386/2059 age(x))",
+    "extract_* (numeric, per-unit scale: epoch/second 6, millisecond 3, julian numeric via arith::div) and *_part (float8) for date/time/timetz/timestamp/timestamptz/interval, ported from timestamp_part_common, NonFiniteTimestampTzPart, NonFiniteIntervalPart, extract_date, time_part_common, timetz_part_common; DecodeUnits/DecodeSpecial unit tables with the 10-byte token truncation; 22023 'not recognized' and 0A000 'not supported' errors with PG type names; infinite inputs give NULL or +/-Infinity",
+    "date_trunc for timestamp, timestamptz (session zone and explicit zone) and interval, including the week, millennium, century and decade rules and the interval-week detail message",
+    "date_bin for timestamp and timestamptz with all PG error cases",
+    "age(ts,ts) for timestamp and timestamptz (symbolic y/m/d result with sign flip) and SQL age(ts) via current_date midnight",
+    "make_interval, make_timestamp, make_timestamptz, make_timestamptz_at_timezone (parse_sane_timezone, float_time_overflows, %g formatting in messages)",
+    "now, transaction_timestamp, statement_timestamp, clock_timestamp from ctx.session",
+    "to_timestamp(float8): NaN, +/-inf, and range errors with the C %g formatting ('-1e+20')",
+    "AT TIME ZONE for timestamp, timestamptz, timetz (name, interval and at_local forms), POSIX-sign bare numeric zones, abbreviations through tz::lookup_zone",
+    "date_add/date_subtract with a zone (fixed-offset zones)",
+    "OVERLAPS for timestamp/time/timetz with PG's NULL semantics, plus the SQL-language interval variants"
+   ],
+   "still_unimplemented": [
+    "IANA region zones and dynamic-offset abbreviations in AT TIME ZONE, trunc_zone, date_add/date_subtract and session Named zones: they return 0A000 via tz.rs (depends on TYP-25 tz rules).",
+    "unsupported() now has no call sites (kept, marked allow(dead_code))."
+   ],
+   "assumptions": [
+    "Bare numeric AT TIME ZONE strings ('+05') use POSIX sign (5h west), per the lease acceptance; accepted form is [+-]h[h][:mm[:ss]] with hours <= 24.",
+    "numeric julian scale for timestamps relies on numeric::arith::div matching PG select_div_scale.",
+    "SQL overlaps(timestamptz, interval, ...) variants delegate the timestamptz + interval step to proc oid 1189 (timestamptz_pl_interval) via func::call.",
+    "Unit text is ASCII-lowercased, without PG's 63-byte identifier truncation.",
+    "Zone-name errors echo the original (not lowercased) name, as PG does in DecodeTimezoneName.",
+    "In tz_fixed_add (date_add/date_subtract with a zone) the interval is applied on the local wall clock of a fixed offset, using timestamp::timestamp_add_interval.",
+    "Code was not compiled or run (RightShift rule); it was re-read for type and borrow errors."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "unit tests in funcs.rs: extract epoch/second/date fields, unknown-unit errors, date_part dow, date_trunc month/week/century, age 10 mons 29 days, date_bin 15 minutes and the months error, AT TIME ZONE '+05'/'PST'/UTC/unknown zone, to_timestamp NaN and -1e20, make_timestamp/make_interval and error text, overlaps NULL handling, fmt_g",
+    "to be added centrally: extract(julian from timestamp) scale, timetz AT TIME ZONE, date_add with zone, interval_trunc, infinite-input extract/trunc"
+   ],
+   "provenance": [
+    "contracts/leases/pgarbor-types.json (TYP-30)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/date.c",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/datetime.c (deltatktbl, datetktbl, DecodeTimezoneName)",
+    "~/develop/reference/postgres-18/src/include/utils/datetime.h (D* unit macros)",
+    "~/develop/reference/postgres-18/src/backend/catalog/system_functions.sql (overlaps variants)",
+    "crates/pgarbor-types/src/datetime/{calendar,tz,timestamp,interval,date,time,mod}.rs, context.rs, func/mod.rs, numeric/{mod,arith}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/datetime/funcs.rs"
+   ]
+  },
+  {
+   "lease_id": "TYP-31",
+   "branch": "worktree-wf_6e87169c-3d0-29",
+   "sha": "306ff23b80aff078a41e2fcc540e67fd578923bf",
+   "files_changed": [
+    "crates/pgarbor-types/src/formatting.rs"
+   ],
+   "implemented_behaviors": [
+    "lookup() maps all 11 Formatting procs by prosrc: timestamp_to_char, timestamptz_to_char, interval_to_char, numeric_to_char, int4_to_char, int8_to_char, float4_to_char, float8_to_char, numeric_to_number, to_date, to_timestamp(text,text)",
+    "parse_format port with DCH/NUM keyword tables in PG order, FM/TM prefix and TH/th/SP postfix suffixes, quoted literals and backslash handling",
+    "DCH_to_char for timestamp, timestamptz (session fixed/UTC zone) and interval: all PG18 patterns, FM/TH/TM, blank-padded names, RM/rm, BC/AD years, ISO fields, INVALID_FOR_INTERVAL error",
+    "DCH_from_char and do_to_timestamp: fixed-width and FM modes, FX, separators and extra_skip logic, seq_search for names/AM/PM/AD/BC/RM, Y,YYY, CC, J, ISO week and day-of-year resolution, 12-hour clock, TZ/OF/TZH/TZM, ValidateDate range checks, PG wording for errors and hints",
+    "to_date range checks (IS_VALID_JULIAN, IS_VALID_DATE); to_timestamp via the session zone (offset_at_local) or explicit offset, with FFn precision rounding",
+    "NUMDesc_prepare syntax errors and NUM_processor port for to_char and to_number: 9 0 . , D G S MI PL SG PR L TH th RN rn FM B V EEEE, with the fill-mode last_relevant logic",
+    "Roman numeral output (int_to_roman) and PG18 strict roman_to_int for input",
+    "Per-type to_char front ends: int4, int8 (EEEE via numeric), float4 (FLT_DIG=6) and float8 (DBL_DIG=15) with %.Nf/%+.Ne emulation, numeric with rounding and V multiplier",
+    "to_number: numeric_in-equivalent parsing, typmod check from picture, V scaling via numeric power and mul",
+    "Overflow-safe arithmetic on user-supplied field values (checked/wrapping ops)",
+    "13 unit tests in a cfg(test) module"
+   ],
+   "still_unimplemented": [
+    "Nothing returns PgError::unimplemented. unsupported() is kept but unreachable.",
+    "TZ/tz input resolves abbreviations only through tz::lookup_zone. Dynamic-offset abbreviations and IANA-like words give 0A000 where PG would resolve them or return 22007.",
+    "Named IANA session time zones give 0A000 (inherited from the tz module) in timestamptz to_char and in to_timestamp without an explicit zone.",
+    "For intervals, IDDD/IW/IYYY/IY/I return errors from the calendar helpers' date validation, where PG prints garbage values.",
+    "Standard-mode (STD_FLAG) parsing is not implemented because no owned proc uses it."
+   ],
+   "assumptions": [
+    "The locale is the pinned C.UTF-8, so NUM_prepare_locale fallbacks apply: negative '-', positive '+', decimal '.', thousands ',', currency ' ' (L prints one space).",
+    "float to_char uses glibc spellings 'nan'/'inf'/'-inf' when a non-finite value goes through the digit path.",
+    "Rust's format!(\"{:.N}\") and {:.Ne} round exactly and ties-to-even, matching glibc printf.",
+    "No format-picture cache; the picture is parsed on every call.",
+    "TM suffix names are English (C locale), so TM only suppresses blank padding.",
+    "The file was checked for syntax with rustfmt only and has not been compiled."
+   ],
+   "contract_breaks": [],
+   "proposed_tests_unexecuted": [
+    "tests::lookup_covers_all_owned_procs",
+    "tests::timestamp_acceptance",
+    "tests::timestamp_names_and_padding",
+    "tests::timestamp_null_cases",
+    "tests::timestamptz_utc",
+    "tests::interval_to_char_basic",
+    "tests::number_acceptance",
+    "tests::number_to_char_misc",
+    "tests::number_format_errors",
+    "tests::to_number_cases",
+    "tests::to_date_cases",
+    "tests::to_timestamp_cases",
+    "tests::roman_numerals"
+   ],
+   "provenance": [
+    "~/develop/reference/postgres-18/src/backend/utils/adt/formatting.c (DCH/NUM tables, parse_format, DCH_to_char, DCH_from_char, do_to_timestamp, NUM_processor, int_to_roman, roman_to_int, *_to_char, numeric_to_number)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/datetime.c (ValidateDate, DecodeTimezoneAbbrevPrefix)",
+    "~/develop/reference/postgres-18/src/backend/utils/adt/timestamp.c (isoweek2date, isoweekdate2date)",
+    "~/develop/reference/postgres-18/src/include/datatype/timestamp.h (JULIAN macros, MAX_TZDISP_HOUR)",
+    "contracts/leases/pgarbor-types.json (TYP-31)",
+    "contracts/ARCHITECTURE.md (locale C.UTF-8)",
+    "crates/pgarbor-types/src/{datum,context,func/mod,datetime/{mod,calendar,tz,timestamp},numeric/{mod,io,arith,funcs,transcendental}}.rs"
+   ],
+   "files": [
+    "crates/pgarbor-types/src/formatting.rs"
+   ]
+  }
+ ]
+}

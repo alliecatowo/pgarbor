@@ -24,7 +24,9 @@
 use crate::overlay::OverlayMark;
 use crate::txn::Txn;
 use crate::types::SubXactId;
-use pgarbor_common::{PgError, Result};
+use crate::error;
+use crate::types::{TxnKind, TxnState};
+use pgarbor_common::Result;
 
 // CONTRACT
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,25 +38,185 @@ pub struct Savepoint {
 
 impl Txn {
     /// `SAVEPOINT name`.
-    #[allow(unused_variables)]
     pub fn savepoint(&mut self, name: &str) -> Result<()> {
-        Err(PgError::unimplemented("CORE-05", "SAVEPOINT"))
+        if self.kind == TxnKind::Implicit {
+            return Err(error::outside_transaction_block("SAVEPOINT"));
+        }
+        self.check_not_failed()?;
+        // Logging must be on before the mark is taken so the mark is meaningful.
+        self.overlay.set_logging(true)?;
+        self.last_subxact += 1;
+        let sp = Savepoint { name: name.to_string(), mark: self.overlay.mark(), subxact: SubXactId(self.last_subxact) };
+        self.savepoints.push(sp);
+        Ok(())
     }
 
     /// `RELEASE [SAVEPOINT] name`.
-    #[allow(unused_variables)]
     pub fn release_savepoint(&mut self, name: &str) -> Result<()> {
-        Err(PgError::unimplemented("CORE-05", "RELEASE SAVEPOINT"))
+        if self.kind == TxnKind::Implicit {
+            return Err(error::outside_transaction_block("RELEASE SAVEPOINT"));
+        }
+        self.check_not_failed()?;
+        let idx = self
+            .savepoints
+            .iter()
+            .rposition(|s| s.name == name)
+            .ok_or_else(|| error::savepoint_does_not_exist(name))?;
+        let from = self.savepoints[idx].subxact;
+        let parent = if idx > 0 { self.savepoints[idx - 1].subxact } else { SubXactId::TOP };
+        self.engine.locks().reassign_subxacts(self.session.id, self.id, from, parent)?;
+        for h in self.held_keys.values_mut() {
+            if h.subxact >= from {
+                h.subxact = parent;
+            }
+        }
+        self.savepoints.truncate(idx);
+        if self.savepoints.is_empty() {
+            self.overlay.set_logging(false)?;
+        }
+        Ok(())
     }
 
     /// `ROLLBACK TO [SAVEPOINT] name`.
-    #[allow(unused_variables)]
     pub fn rollback_to_savepoint(&mut self, name: &str) -> Result<()> {
-        Err(PgError::unimplemented("CORE-05", "ROLLBACK TO SAVEPOINT"))
+        if self.kind == TxnKind::Implicit {
+            return Err(error::outside_transaction_block("ROLLBACK TO SAVEPOINT"));
+        }
+        let idx = self
+            .savepoints
+            .iter()
+            .rposition(|s| s.name == name)
+            .ok_or_else(|| error::savepoint_does_not_exist(name))?;
+        let mark = self.savepoints[idx].mark;
+        let from = self.savepoints[idx].subxact;
+        self.overlay.rollback_to(mark)?;
+        self.engine.locks().release_subxacts(self.session.id, self.id, from)?;
+        self.held_keys.retain(|_, h| h.subxact < from);
+        // Pop everything above the target; keep the target, re-armed with a fresh subxact id.
+        self.savepoints.truncate(idx + 1);
+        self.last_subxact += 1;
+        self.savepoints[idx].subxact = SubXactId(self.last_subxact);
+        if self.state == TxnState::Failed {
+            self.state = TxnState::InProgress;
+        }
+        Ok(())
     }
 
     /// Number of active savepoints.
     pub fn savepoint_depth(&self) -> usize {
         self.savepoints.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Engine;
+    use crate::locks::mode::LockMode;
+    use crate::options::{EngineOptions, SessionRequest};
+    use crate::types::{TxnOptions, WaitPolicy};
+        use pgarbor_storage::MemVfs;
+    use std::sync::Arc;
+
+    fn engine() -> Arc<Engine> {
+        let opts = EngineOptions { vfs: Some(Arc::new(MemVfs::new())), ..EngineOptions::default() };
+        Engine::create("sp-test.pga".as_ref(), &opts).unwrap()
+    }
+
+    fn session(e: &Arc<Engine>) -> crate::session::SessionHandle {
+        e.attach_session(&SessionRequest::embedded("main"))
+        .unwrap()
+    }
+
+    fn explicit() -> TxnOptions {
+        TxnOptions { kind: TxnKind::Explicit, ..TxnOptions::default() }
+    }
+
+    #[test]
+    fn implicit_requires_block() {
+        let e = engine();
+        let s = session(&e);
+        let mut t = e.begin(&s, &TxnOptions::default()).unwrap();
+        let err = t.savepoint("s1").unwrap_err();
+        assert_eq!(err.message, "SAVEPOINT can only be used in transaction blocks");
+        assert!(t.release_savepoint("s1").is_err());
+        assert!(t.rollback_to_savepoint("s1").is_err());
+    }
+
+    #[test]
+    fn rollback_to_undoes_overlay() {
+        let e = engine();
+        let s = session(&e);
+        let mut t = e.begin(&s, &explicit()).unwrap();
+        t.overlay.put(b"a", b"1").unwrap();
+        t.savepoint("s1").unwrap();
+        t.overlay.put(b"b", b"2").unwrap();
+        t.rollback_to_savepoint("s1").unwrap();
+        assert!(t.overlay.get(b"a").is_some());
+        assert!(t.overlay.get(b"b").is_none());
+        // Twice works and the savepoint survives.
+        t.overlay.put(b"c", b"3").unwrap();
+        t.rollback_to_savepoint("s1").unwrap();
+        assert!(t.overlay.get(b"c").is_none());
+        assert_eq!(t.savepoint_depth(), 1);
+    }
+
+    #[test]
+    fn duplicate_names_use_innermost() {
+        let e = engine();
+        let s = session(&e);
+        let mut t = e.begin(&s, &explicit()).unwrap();
+        t.savepoint("x").unwrap();
+        t.overlay.put(b"a", b"1").unwrap();
+        t.savepoint("x").unwrap();
+        t.overlay.put(b"b", b"2").unwrap();
+        t.rollback_to_savepoint("x").unwrap();
+        assert!(t.overlay.get(b"a").is_some());
+        assert!(t.overlay.get(b"b").is_none());
+        assert_eq!(t.savepoint_depth(), 2);
+        t.release_savepoint("x").unwrap();
+        assert_eq!(t.savepoint_depth(), 1);
+        t.release_savepoint("x").unwrap();
+        assert_eq!(t.savepoint_depth(), 0);
+        assert!(t.overlay.get(b"a").is_some());
+    }
+
+    #[test]
+    fn unknown_name_is_3b001() {
+        let e = engine();
+        let s = session(&e);
+        let mut t = e.begin(&s, &explicit()).unwrap();
+        let err = t.release_savepoint("nope").unwrap_err();
+        assert_eq!(err.message, "savepoint \"nope\" does not exist");
+        assert!(t.rollback_to_savepoint("nope").is_err());
+    }
+
+    #[test]
+    fn failed_state_rules() {
+        let e = engine();
+        let s = session(&e);
+        let mut t = e.begin(&s, &explicit()).unwrap();
+        t.savepoint("s1").unwrap();
+        t.mark_failed();
+        assert!(t.release_savepoint("s1").is_err());
+        assert!(t.savepoint("s2").is_err());
+        t.rollback_to_savepoint("s1").unwrap();
+        assert_eq!(t.state(), TxnState::InProgress);
+    }
+
+    #[test]
+    fn locks_released_on_rollback_to() {
+        let e = engine();
+        let s1 = session(&e);
+        let s2 = session(&e);
+        let mut t1 = e.begin(&s1, &explicit()).unwrap();
+        let mut t2 = e.begin(&s2, &explicit()).unwrap();
+        t1.savepoint("s1").unwrap();
+        t1.lock_key(b"k", LockMode::ForUpdate, WaitPolicy::Block).unwrap();
+        assert!(t1.held_keys.contains_key(b"k".as_slice()));
+        t1.rollback_to_savepoint("s1").unwrap();
+        assert!(t1.held_keys.is_empty());
+        let out = t2.lock_key(b"k", LockMode::ForUpdate, WaitPolicy::NoWait);
+        assert!(out.is_ok());
     }
 }

@@ -24,13 +24,23 @@
 //!
 //! The clone initially shares extents with the source; pages of other branches remain as
 //! unreachable garbage inside it (`DetachReport::garbage_pages`) until `pgarbor compact`.
-use crate::export::PublishedFile;
+use crate::directory;
+use crate::error;
+use crate::export::{self, PublishedFile, DETACH_TEMP_SUFFIX};
 use crate::meta::ExportOrigin;
-use crate::options::{BranchRef, DetachOptions};
-use crate::record::BranchRecord;
+use crate::name;
+use crate::ops;
+use crate::options::{BranchRef, DetachOptions, DetachStrategy};
+use crate::record::{BranchRecord, NamedSnapshot, SnapshotKind};
+use crate::reflink::{self, CloneOutcome};
+use crate::resolver::BranchRootResolver;
 use pgarbor_common::{BranchId, CommitSeq, DatabaseUuid, PgError, Result};
-use pgarbor_storage::{Container, SyncMode, Vfs};
+use pgarbor_storage::format::superblock::now_unix_ms;
+use pgarbor_storage::format::{choose_slot, random_db_uuid, slot_offset, SUPERBLOCK_SLOT_SIZE};
+use pgarbor_storage::io::sibling_path;
+use pgarbor_storage::{CompactOptions, Container, LockMode, OpenMode, OpenOptions, SyncMode, VerifyLevel, Vfs};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 // CONTRACT
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -89,21 +99,135 @@ impl DetachReport {
     }
 }
 
+fn io_err(what: &str, path: &Path, e: &std::io::Error) -> PgError {
+    PgError::io(&format!("could not {what} \"{}\"", path.display()), e)
+}
+
+fn remove_if_exists(vfs: &dyn Vfs, path: &Path) -> Result<()> {
+    if vfs.exists(path).map_err(|e| io_err("access file", path, &e))? {
+        vfs.remove_file(path).map_err(|e| io_err("remove file", path, &e))?;
+    }
+    Ok(())
+}
+
 /// Detach per `opts.strategy` (module docs).
-#[allow(unused_variables)]
 pub fn detach_branch(container: &Container, branch: &BranchRef, dest: &Path, opts: &DetachOptions) -> Result<DetachReport> {
-    Err(PgError::unimplemented("BR-11", "branch detach"))
+    if opts.strategy == DetachStrategy::Copy {
+        return export::export_branch(container, branch, dest, opts);
+    }
+    let pre = if !opts.os_filesystem {
+        Some("the database is not on the operating system file system".to_string())
+    } else if !reflink::platform_has_reflink() {
+        Some("reflink cloning is not available on this platform".to_string())
+    } else {
+        None
+    };
+    let unsupported = match pre {
+        Some(reason) => reason,
+        None => match reflink_detach(container, branch, dest, opts)? {
+            Ok(report) => return Ok(report),
+            Err(reason) => reason,
+        },
+    };
+    match opts.strategy {
+        DetachStrategy::ReflinkRequired => Err(error::reflink_unsupported(container.path(), &unsupported)),
+        _ => {
+            let mut report = export::export_branch(container, branch, dest, opts)?;
+            report.strategy_used = StrategyUsed::Copy;
+            report.fallback_reason = Some(unsupported);
+            Ok(report)
+        }
+    }
 }
 
 /// Reflink path; `Ok(Err(reason))` = unsupported, nothing left behind.
-#[allow(unused_variables)]
 pub fn reflink_detach(
     container: &Container,
     branch: &BranchRef,
     dest: &Path,
     opts: &DetachOptions,
 ) -> Result<std::result::Result<DetachReport, String>> {
-    Err(PgError::unimplemented("BR-11", "reflink detach"))
+    if !opts.os_filesystem {
+        return Ok(Err("the database is not on the operating system file system".to_string()));
+    }
+    if !reflink::platform_has_reflink() {
+        return Ok(Err("reflink cloning is not available on this platform".to_string()));
+    }
+    // 1. Validate and prepare the destination.
+    name::validate_branch_name(&opts.target_name)?;
+    let vfs: Arc<dyn Vfs> = container.vfs().clone();
+    let temp = sibling_path(dest, DETACH_TEMP_SUFFIX);
+    if !opts.overwrite && vfs.exists(dest).map_err(|e| io_err("access file", dest, &e))? {
+        return Err(error::destination_exists(dest));
+    }
+    remove_if_exists(&*vfs, &temp)?;
+
+    // 2. Barrier: the writer lock keeps commits and spills out while the clone is taken.
+    let barrier = if container.is_read_only() { None } else { Some(container.begin_write()?) };
+    let snap = container.snapshot();
+    let rec = directory::resolve(&snap.directory(), branch)?;
+
+    // 3-4. Clone, then release the barrier.
+    let outcome = reflink::clone_file(container.path(), &temp);
+    if let Some(w) = barrier {
+        w.abort();
+    }
+    match outcome? {
+        CloneOutcome::Unsupported { reason } => return Ok(Err(reason)),
+        CloneOutcome::Cloned => {}
+    }
+
+    let new_uuid = opts.new_db_uuid.unwrap_or_else(random_db_uuid);
+    let new_id = opts.new_branch_id.unwrap_or_else(ops::new_branch_id);
+    let origin = ExportOrigin {
+        source_db_uuid: container.db_uuid().to_hyphenated(),
+        source_branch_id: rec.id.to_hyphenated(),
+        source_branch_name: rec.name.clone(),
+        source_commit_seq: snap.commit_seq().0,
+        exported_unix_ms: now_unix_ms(),
+        strategy: "reflink".to_string(),
+    };
+    let result = finish_clone(&vfs, &temp, dest, opts, &rec, new_uuid, new_id, &origin);
+    if result.is_err() {
+        let _ = vfs.remove_file(&temp);
+    }
+    result.map(Ok)
+}
+
+/// Steps 5-8 of `reflink_detach`, on the private temp clone.
+#[allow(clippy::too_many_arguments)]
+fn finish_clone(
+    vfs: &Arc<dyn Vfs>,
+    temp: &Path,
+    dest: &Path,
+    opts: &DetachOptions,
+    rec: &BranchRecord,
+    new_uuid: DatabaseUuid,
+    new_id: BranchId,
+    origin: &ExportOrigin,
+) -> Result<DetachReport> {
+    reidentify_file(&**vfs, temp, new_uuid, opts.sync)?;
+    let open_opts = OpenOptions { sync: opts.sync, verify: VerifyLevel::Roots, ..OpenOptions::default() };
+    let c = Container::open_with(vfs.clone(), temp, &open_opts)?;
+    let (mut new_rec, _seq) = prune_to_branch(&c, rec, new_id, &opts.target_name, opts.include_snapshots, origin)?;
+    let mut compacted = false;
+    if opts.compact_after_reflink {
+        c.compact(&BranchRootResolver, &CompactOptions::default())?;
+        // Compaction renumbers pages: re-read the record to compare against the real roots.
+        new_rec = directory::resolve(&c.snapshot().directory(), &BranchRef::Id(new_id))?;
+        compacted = true;
+    }
+    c.close()?;
+    let published = export::verify_and_publish(vfs, temp, dest, opts, &new_rec)?;
+    Ok(DetachReport::from_parts(
+        dest,
+        StrategyUsed::Reflink,
+        None,
+        origin.clone(),
+        &new_rec,
+        &published,
+        compacted,
+    ))
 }
 
 /// Give a CLOSED, not-yet-published database file a new identity. Only safe on a private temp file
@@ -115,9 +239,26 @@ pub fn reflink_detach(
 /// at the OTHER slot (two valid slots with different UUIDs are refused by `choose_slot`, so the
 /// older slot must be erased); `sync_data` when `sync == Full`.
 /// See amendment `pgarbor-branches-02` (proposes moving this into storage as `reidentify`).
-#[allow(unused_variables)]
 pub fn reidentify_file(vfs: &dyn Vfs, path: &Path, new_uuid: DatabaseUuid, sync: SyncMode) -> Result<()> {
-    Err(PgError::unimplemented("BR-11", "database file re-identification"))
+    let f = vfs.open(path, OpenMode::ReadWrite).map_err(|e| pgarbor_storage::error::open_failed(path, &e))?;
+    match f.try_lock(LockMode::Exclusive) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(pgarbor_storage::error::locked(path)),
+        Err(e) => return Err(io_err("lock file", path, &e)),
+    }
+    let slots = pgarbor_storage::container::read_slots(&*f, path)?;
+    let choice = choose_slot(path, &slots)?;
+    let mut sb = choice.superblock;
+    sb.db_uuid = new_uuid;
+    let image = sb.encode()?;
+    f.write_all_at(slot_offset(choice.slot), &image).map_err(|e| pgarbor_storage::error::write_failed(path, &e))?;
+    let zeros = vec![0u8; SUPERBLOCK_SLOT_SIZE];
+    f.write_all_at(slot_offset(1 - choice.slot), &zeros).map_err(|e| pgarbor_storage::error::write_failed(path, &e))?;
+    if sync == SyncMode::Full {
+        f.sync_data().map_err(|e| pgarbor_storage::error::fsync_failed(path, &e))?;
+    }
+    let _ = f.unlock();
+    Ok(())
 }
 
 /// Rewrite the (cloned) container's directory so it holds exactly one branch: `keep`'s roots
@@ -125,7 +266,6 @@ pub fn reidentify_file(vfs: &dyn Vfs, path: &Path, new_uuid: DatabaseUuid, sync:
 /// (+ `keep.snapshots` as `Inherited` when `include_snapshots`), built with
 /// `w.build_tree(export::standalone_directory_entries(..))` into a FRESH directory tree,
 /// `set_directory_root`, `commit`. Returns the new record and the commit seq.
-#[allow(unused_variables)]
 pub fn prune_to_branch(
     c: &Container,
     keep: &BranchRecord,
@@ -134,5 +274,21 @@ pub fn prune_to_branch(
     include_snapshots: bool,
     origin: &ExportOrigin,
 ) -> Result<(BranchRecord, CommitSeq)> {
-    Err(PgError::unimplemented("BR-11", "post-clone prune"))
+    name::validate_branch_name(new_name)?;
+    let mut w = c.begin_write()?;
+    let mut new_rec =
+        BranchRecord::new_active(new_id, new_name, None, keep.data_root, w.commit_seq(), now_unix_ms());
+    new_rec.extra_databases = keep.extra_databases.clone();
+    if include_snapshots {
+        new_rec.snapshots = keep
+            .snapshots
+            .iter()
+            .map(|s| NamedSnapshot { kind: SnapshotKind::Inherited, ..s.clone() })
+            .collect();
+    }
+    let entries = export::standalone_directory_entries(&new_rec, origin)?;
+    let dir = w.build_tree(&mut entries.into_iter().map(Ok::<(Vec<u8>, Vec<u8>), PgError>))?;
+    w.set_directory_root(dir);
+    let seq = w.commit()?;
+    Ok((new_rec, seq))
 }

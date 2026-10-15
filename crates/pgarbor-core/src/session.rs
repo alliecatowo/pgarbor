@@ -10,11 +10,13 @@ use crate::engine::Engine;
 use crate::error;
 use crate::sequence::SessionSequences;
 use crate::types::{SessionId, TxnState};
-use pgarbor_common::{BranchId, Oid, PgError, Result, TxnId};
+use pgarbor_common::{BranchId, Oid, PgError, Result, Severity, SqlState, TxnId};
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::hash::{BuildHasher, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 // CONTRACT
 /// Asynchronous interrupt flags of one session (PG `ProcessInterrupts`). Set from other threads
@@ -185,7 +187,7 @@ impl SessionRegistry {
     /// - pid: take `next_pid`, skip pids in use, wrap from `i32::MAX` back to `FIRST_PID`;
     /// - cancel key: `key_len` bytes (clamped to 4..=256) from `random_bytes`;
     /// - activity: state Idle, empty query, `state_change_ms = backend_start_ms = now`.
-    #[allow(unused_variables, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn register(
         &self,
         branch: BranchId,
@@ -194,13 +196,66 @@ impl SessionRegistry {
         max_sessions: usize,
         now_ms: u64,
     ) -> Result<Arc<SessionShared>> {
-        Err(PgError::unimplemented("CORE-02", "session registration"))
+        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+        if sessions.len() >= max_sessions {
+            return Err(PgError::new(SqlState::TOO_MANY_CONNECTIONS, "sorry, too many clients already")
+                .with_severity(Severity::Fatal));
+        }
+        let id = {
+            let mut next = self.next_pid.lock().unwrap_or_else(|e| e.into_inner());
+            let mut candidate = (*next).max(FIRST_PID);
+            // Ids in use are bounded by max_sessions, so a free pid is found well before a full
+            // lap; the bound only guards against a corrupted `next_pid`.
+            let lap = (i32::MAX as i64 - FIRST_PID as i64 + 1) as u64;
+            let mut attempts: u64 = 0;
+            let found = loop {
+                if attempts >= lap {
+                    return Err(PgError::internal("no free backend pid"));
+                }
+                attempts += 1;
+                let pid = SessionId(candidate);
+                candidate = if candidate == i32::MAX { FIRST_PID } else { candidate + 1 };
+                if !sessions.contains_key(&pid) {
+                    break pid;
+                }
+            };
+            *next = candidate;
+            found
+        };
+        let cancel_key = random_bytes(req.cancel_key_len.clamp(4, 256))?;
+        let shared = Arc::new(SessionShared {
+            id,
+            branch,
+            branch_name: Mutex::new(branch_name.to_string()),
+            database_oid: req.database_oid,
+            database_name: req.database_name.clone(),
+            user: req.user.clone(),
+            application_name: Mutex::new(req.application_name.clone()),
+            client_addr: req.client_addr.clone(),
+            client_port: req.client_port,
+            backend_start_ms: now_ms,
+            cancel_key,
+            interrupts: Interrupts::new(),
+            activity: Mutex::new(Activity {
+                state: BackendState::Idle,
+                query: String::new(),
+                query_start_ms: None,
+                xact_start_ms: None,
+                state_change_ms: now_ms,
+                backend_xid: None,
+                txn: None,
+                wait: None,
+            }),
+            sequences: Mutex::new(SessionSequences::default()),
+        });
+        sessions.insert(id, Arc::clone(&shared));
+        Ok(shared)
     }
 
     /// Remove a session; returns whether it was registered.
-    #[allow(unused_variables)]
     pub fn unregister(&self, id: SessionId) -> Result<bool> {
-        Err(PgError::unimplemented("CORE-02", "session unregistration"))
+        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+        Ok(sessions.remove(&id).is_some())
     }
 
     pub fn get(&self, id: SessionId) -> Option<Arc<SessionShared>> {
@@ -223,10 +278,25 @@ impl SessionRegistry {
     /// Wire CancelRequest: if a session with `pid` exists AND `secret` equals its cancel key
     /// (constant-time comparison: fold XOR over all bytes, lengths must match), request cancel and
     /// return true. Wrong key or unknown pid → false, silently (PG logs only).
-    #[allow(unused_variables)]
     pub fn cancel_with_key(&self, pid: i32, secret: &[u8]) -> Result<bool> {
-        Err(PgError::unimplemented("CORE-02", "cancel request matching"))
+        let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
+        let Some(session) = sessions.get(&SessionId(pid)) else {
+            return Ok(false);
+        };
+        if !constant_time_eq(&session.cancel_key, secret) {
+            return Ok(false);
+        }
+        session.interrupts.request_cancel();
+        Ok(true)
     }
+}
+
+/// Equal lengths and no differing byte; the scan never exits early on a mismatch.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// First backend pid handed out.
@@ -235,9 +305,142 @@ pub const FIRST_PID: i32 = 1000;
 /// `n` unpredictable bytes without an RNG dependency: repeatedly hash (pid, counter, nanos since
 /// UNIX_EPOCH, a static AtomicU64 counter) with `std::collections::hash_map::RandomState::new()
 /// .build_hasher()` (randomly keyed SipHash) and append the 8-byte outputs.
-#[allow(unused_variables)]
 pub fn random_bytes(n: usize) -> Result<Vec<u8>> {
-    Err(PgError::unimplemented("CORE-02", "cancel key generation"))
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let mut out = Vec::with_capacity(n + 8);
+    let mut chunk: u64 = 0;
+    while out.len() < n {
+        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut hasher = RandomState::new().build_hasher();
+        hasher.write_u32(pid);
+        hasher.write_u64(chunk);
+        hasher.write_u128(nanos);
+        hasher.write_u64(counter);
+        out.extend_from_slice(&hasher.finish().to_le_bytes());
+        chunk += 1;
+    }
+    out.truncate(n);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::SessionRequest;
+
+    fn branch() -> BranchId {
+        BranchId([7u8; 16])
+    }
+
+    fn req() -> SessionRequest {
+        SessionRequest::embedded("main")
+    }
+
+    #[test]
+    fn pids_unique_start_at_1000_and_wrap() {
+        let reg = SessionRegistry::new();
+        let a = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        let b = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        let c = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        assert_eq!(a.id, SessionId(FIRST_PID));
+        assert_eq!(b.id, SessionId(FIRST_PID + 1));
+        assert_eq!(c.id, SessionId(FIRST_PID + 2));
+        // A freed pid is not reused immediately: allocation continues from next_pid.
+        assert!(reg.unregister(a.id).unwrap());
+        let d = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        assert_eq!(d.id, SessionId(FIRST_PID + 3));
+        // Wrap: i32::MAX is handed out, then the next allocation returns to FIRST_PID.
+        *reg.next_pid.lock().unwrap() = i32::MAX;
+        let e = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        let f = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        assert_eq!(e.id, SessionId(i32::MAX));
+        assert_eq!(f.id, SessionId(FIRST_PID));
+        // Live ids are never duplicated.
+        let ids: Vec<SessionId> = reg.all().iter().map(|s| s.id).collect();
+        let mut dedup = ids.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(ids.len(), dedup.len());
+    }
+
+    #[test]
+    fn pid_skips_in_use() {
+        let reg = SessionRegistry::new();
+        let _a = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        *reg.next_pid.lock().unwrap() = FIRST_PID;
+        let b = reg.register(branch(), "main", &req(), 100, 1).unwrap();
+        assert_eq!(b.id, SessionId(FIRST_PID + 1));
+    }
+
+    #[test]
+    fn max_sessions_enforced_fatal_53300() {
+        let reg = SessionRegistry::new();
+        let _a = reg.register(branch(), "main", &req(), 2, 1).unwrap();
+        let _b = reg.register(branch(), "main", &req(), 2, 1).unwrap();
+        match reg.register(branch(), "main", &req(), 2, 1) {
+            Ok(_) => panic!("third session must be refused"),
+            Err(e) => {
+                assert!(e.sqlstate == SqlState::TOO_MANY_CONNECTIONS);
+                assert_eq!(e.severity, Severity::Fatal);
+                assert_eq!(e.message, "sorry, too many clients already");
+            }
+        }
+        assert_eq!(reg.all().len(), 2);
+    }
+
+    #[test]
+    fn activity_initialized_idle() {
+        let reg = SessionRegistry::new();
+        let s = reg.register(branch(), "main", &req(), 10, 42).unwrap();
+        let act = s.activity();
+        assert_eq!(act.state, BackendState::Idle);
+        assert!(act.query.is_empty());
+        assert_eq!(act.state_change_ms, 42);
+        assert_eq!(s.backend_start_ms, 42);
+        assert_eq!(s.cancel_key.len(), 4);
+    }
+
+    #[test]
+    fn cancel_requires_exact_key() {
+        let reg = SessionRegistry::new();
+        let s = reg.register(branch(), "main", &req(), 10, 1).unwrap();
+        let pid = s.id.0;
+        let key = s.cancel_key.clone();
+        let mut wrong = key.clone();
+        wrong[0] ^= 0xff;
+        // Wrong key: false, and nothing is set.
+        assert!(!reg.cancel_with_key(pid, &wrong).unwrap());
+        assert!(!reg.cancel_with_key(pid, &key[..key.len() - 1]).unwrap());
+        assert!(!reg.cancel_with_key(pid + 1000, &key).unwrap());
+        assert!(s.interrupts.check().is_ok());
+        // Right key: cancel fires exactly once.
+        assert!(reg.cancel_with_key(pid, &key).unwrap());
+        match s.interrupts.check() {
+            Ok(()) => panic!("cancel must fire"),
+            Err(e) => assert!(e.sqlstate == SqlState::QUERY_CANCELED),
+        }
+        assert!(s.interrupts.check().is_ok());
+    }
+
+    #[test]
+    fn random_bytes_length_and_variation() {
+        let a = random_bytes(32).unwrap();
+        let b = random_bytes(32).unwrap();
+        assert_eq!(a.len(), 32);
+        assert_eq!(b.len(), 32);
+        assert_ne!(a, b);
+        assert!(random_bytes(0).unwrap().is_empty());
+        assert_eq!(random_bytes(13).unwrap().len(), 13);
+    }
+
+    #[test]
+    fn constant_time_eq_behaves() {
+        assert!(constant_time_eq(b"abcd", b"abcd"));
+        assert!(!constant_time_eq(b"abcd", b"abce"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+    }
 }
 
 // CONTRACT
