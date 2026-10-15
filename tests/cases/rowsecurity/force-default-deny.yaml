@@ -4,21 +4,27 @@ title: "Forced row-level security with no policies denies reads and inserts by d
 family: rowsecurity
 tier: core
 feature_ids: [rls, policies, select, insert, update, delete, errors]
-required_capabilities: [create-table, insert, select, update, delete, rls]
+required_capabilities: [create-table, insert, select, update, delete, rls, roles]
 provenance:
   source: pg-regress
   ref: "src/test/regress/sql/rowsecurity.sql"
 sessions: [a]
 setup: |
+  CREATE ROLE pgarbor_case_role_fdd;
   CREATE TABLE document (did int4 PRIMARY KEY, dlevel int4 NOT NULL, dtitle text);
   INSERT INTO document VALUES (1, 1, 'a'), (2, 2, 'b'), (3, 3, 'c');
   ALTER TABLE document ENABLE ROW LEVEL SECURITY;
   ALTER TABLE document FORCE ROW LEVEL SECURITY;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON document TO pgarbor_case_role_fdd;
 steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_fdd
+    expect: ok
+    comment: superusers bypass RLS, so the checks run as a plain role that owns nothing
   - sql: |
       SELECT count(*) FROM document
     expect: rows
-    comment: no permissive policy means no rows are visible to the owner
+    comment: no permissive policy means no rows are visible to the role
   - sql: |
       INSERT INTO document VALUES (4, 1, 'd')
     expect: error
@@ -32,3 +38,10 @@ steps:
       DELETE FROM document
     expect: ok
     comment: invisible rows are silently skipped, no error
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP OWNED BY pgarbor_case_role_fdd; DROP ROLE pgarbor_case_role_fdd
+    expect: ok
+    comment: drop the cluster-global case role so a retry can recreate it

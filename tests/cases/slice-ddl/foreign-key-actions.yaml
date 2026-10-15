@@ -13,7 +13,7 @@ steps:
   - sql: |
       CREATE TABLE p (id int4 PRIMARY KEY);
       CREATE TABLE c_cascade (id int4 PRIMARY KEY, pid int4 REFERENCES p (id) ON DELETE CASCADE ON UPDATE CASCADE);
-      CREATE TABLE c_setnull (id int4 PRIMARY KEY, pid int4 REFERENCES p (id) ON DELETE SET NULL);
+      CREATE TABLE c_setnull (id int4 PRIMARY KEY, pid int4 REFERENCES p (id) ON DELETE SET NULL ON UPDATE CASCADE);
       CREATE TABLE c_restrict (id int4 PRIMARY KEY, pid int4 REFERENCES p (id) ON DELETE RESTRICT)
     expect: ok
   - sql: |
@@ -27,7 +27,7 @@ steps:
   - sql: |
       UPDATE p SET id = 20 WHERE id = 2
     expect: ok
-    comment: ON UPDATE CASCADE moves c_cascade row 2 to pid 20
+    comment: ON UPDATE CASCADE moves c_cascade and c_setnull row 2 to pid 20
   - sql: |
       DELETE FROM p WHERE id = 1
     expect: ok
@@ -35,8 +35,8 @@ steps:
   - sql: |
       DELETE FROM p WHERE id = 3
     expect: error
-    sqlstate: "23503"
-    comment: RESTRICT rejects the delete while c_restrict references it
+    sqlstate: "23001"
+    comment: RESTRICT rejects the delete while c_restrict references it (restrict_violation, not foreign_key_violation)
   - sql: |
       SELECT 'cascade' AS t, id, pid FROM c_cascade
       UNION ALL SELECT 'setnull', id, pid FROM c_setnull

@@ -10,24 +10,28 @@ provenance:
   ref: "src/test/regress/sql/alter_generic.sql (ALTER FUNCTION alt_func2(int) OWNER TO regress_alter_generic_user2 -- failed (no role membership))"
 sessions: [a]
 setup: |
+  DROP SCHEMA IF EXISTS ag_own_s CASCADE;
   DROP ROLE IF EXISTS ag_own_a;
   DROP ROLE IF EXISTS ag_own_b;
   DROP ROLE IF EXISTS ag_own_c;
   CREATE ROLE ag_own_c;
   CREATE ROLE ag_own_b;
   CREATE ROLE ag_own_a IN ROLE ag_own_b;
+  CREATE SCHEMA ag_own_s AUTHORIZATION ag_own_b;
+  GRANT USAGE, CREATE ON SCHEMA ag_own_s TO ag_own_a;
 steps:
   - sql: |
       SET SESSION AUTHORIZATION ag_own_a;
-      CREATE FUNCTION ag_fn1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
+      CREATE FUNCTION ag_own_s.ag_fn1(int) RETURNS int LANGUAGE sql AS 'SELECT $1';
     expect: ok
+    comment: public schema grants no CREATE to ordinary roles on PG 15+, so the function lives in a schema ag_own_a can write to
   - sql: |
-      ALTER FUNCTION ag_fn1(int) OWNER TO ag_own_c
+      ALTER FUNCTION ag_own_s.ag_fn1(int) OWNER TO ag_own_c
     expect: error
     sqlstate: "42501"
     comment: ag_own_a is not a member of ag_own_c
   - sql: |
-      ALTER FUNCTION ag_fn1(int) OWNER TO ag_own_b
+      ALTER FUNCTION ag_own_s.ag_fn1(int) OWNER TO ag_own_b
     expect: ok
   - sql: |
       RESET SESSION AUTHORIZATION

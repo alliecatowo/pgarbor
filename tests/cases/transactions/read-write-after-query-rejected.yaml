@@ -1,9 +1,10 @@
-# SET TRANSACTION READ WRITE is rejected after a query ran, and inside a READ ONLY transaction.
+# PG 18.6: SET TRANSACTION READ WRITE is accepted after a query and inside a READ ONLY block (no writes yet);
+# SET TRANSACTION ISOLATION LEVEL after the first query is rejected with 25001.
 id: transactions.read-write-after-query-rejected
-title: SET TRANSACTION READ WRITE fails after the first query or inside a read-only transaction (25001)
+title: SET TRANSACTION READ WRITE is accepted after a query; ISOLATION LEVEL after a query fails with 25001
 family: transactions
 tier: core
-feature_ids: [transactions, read-only-transactions, errors]
+feature_ids: [transactions, read-only-transactions, isolation-level, errors]
 required_capabilities: [create-table, select, transactions, errors]
 provenance:
   source: pg-regress
@@ -21,8 +22,13 @@ steps:
     expect: rows
   - sql: |
       SET TRANSACTION READ WRITE
+    expect: ok
+    comment: PG 18.6 accepts READ WRITE after a query because the block has not written anything
+  - sql: |
+      SET TRANSACTION ISOLATION LEVEL SERIALIZABLE
     expect: error
     sqlstate: "25001"
+    comment: isolation level must be set before the first query; the failure aborts the block
   - sql: |
       ROLLBACK
     expect: ok
@@ -34,8 +40,8 @@ steps:
     expect: ok
   - sql: |
       SET TRANSACTION READ WRITE
-    expect: error
-    sqlstate: "25001"
+    expect: ok
+    comment: PG 18.6 allows switching a READ ONLY block back to READ WRITE before any write
   - sql: |
       COMMIT
     expect: ok

@@ -1,6 +1,7 @@
-# A foreign key from a table without ON COMMIT to a table with ON COMMIT DELETE ROWS is rejected.
+# A foreign key from a table without ON COMMIT to a table with ON COMMIT DELETE ROWS is accepted at CREATE time
+# but the COMMIT that would empty the referenced table is rejected (0A000) and the transaction is rolled back.
 id: temp.fk-on-commit-mismatch
-title: Foreign key across mismatched ON COMMIT settings is rejected and rolled back
+title: Foreign key across mismatched ON COMMIT settings is rejected at commit and rolled back
 family: temp
 tier: extended
 feature_ids: [temp-tables, on-commit, foreign-keys, transactions, errors]
@@ -19,13 +20,21 @@ steps:
     expect: ok
   - sql: |
       CREATE TEMP TABLE temptest4 (col int REFERENCES temptest3)
+    expect: ok
+    comment: the CREATE itself succeeds, the ON COMMIT mismatch is checked at commit
+  - sql: |
+      INSERT INTO temptest3 VALUES (1)
+    expect: ok
+  - sql: |
+      INSERT INTO temptest4 VALUES (1)
+    expect: ok
+  - sql: |
+      COMMIT
     expect: error
     sqlstate: "0A000"
-    comment: unsupported ON COMMIT and foreign key combination
-  - sql: |
-      ROLLBACK
-    expect: ok
+    comment: unsupported ON COMMIT and foreign key combination, raised by heap_truncate_check_FKs
   - sql: |
       SELECT count(*) FROM temptest3
     expect: error
     sqlstate: "42P01"
+    comment: the failed commit rolled back the CREATE, so the table does not exist

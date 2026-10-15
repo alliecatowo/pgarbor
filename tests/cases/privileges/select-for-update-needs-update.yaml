@@ -1,6 +1,6 @@
-# FOR SHARE needs only SELECT; FOR UPDATE also needs UPDATE privilege on the table.
+# Row-locking clauses (FOR SHARE, FOR UPDATE) need UPDATE privilege on the table; a plain SELECT needs only SELECT.
 id: privileges.select-for-update-needs-update
-title: SELECT FOR UPDATE requires UPDATE privilege while FOR SHARE needs only SELECT
+title: SELECT FOR SHARE and FOR UPDATE require UPDATE privilege while plain SELECT needs only SELECT
 family: privileges
 tier: extended
 feature_ids: [select, row-locks, grant, privileges, errors]
@@ -19,8 +19,13 @@ steps:
       SET ROLE pv_fu_r
     expect: ok
   - sql: |
-      SELECT id FROM pv_fu_t FOR SHARE
+      SELECT id FROM pv_fu_t
     expect: rows
+  - sql: |
+      SELECT id FROM pv_fu_t FOR SHARE
+    expect: error
+    sqlstate: "42501"
+    comment: any row-locking clause needs UPDATE privilege, SELECT alone is not enough
   - sql: |
       SELECT id FROM pv_fu_t FOR UPDATE
     expect: error
@@ -28,3 +33,20 @@ steps:
   - sql: |
       RESET ROLE
     expect: ok
+  - sql: |
+      GRANT UPDATE ON pv_fu_t TO pv_fu_r
+    expect: ok
+  - sql: |
+      SET ROLE pv_fu_r
+    expect: ok
+  - sql: |
+      SELECT id FROM pv_fu_t FOR SHARE
+    expect: rows
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP OWNED BY pv_fu_r;
+      DROP ROLE pv_fu_r
+    expect: ok
+    comment: drop the case role (cluster-global) so a second attempt can recreate it

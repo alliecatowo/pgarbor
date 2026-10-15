@@ -1,7 +1,8 @@
-# Schema elements run in the order written, so a view cannot reference a table listed after it.
-# The failed CREATE SCHEMA is atomic: no schema is left behind.
+# PostgreSQL reorders CREATE SCHEMA elements (sequences, then tables, then views, ...), so a view
+# written before the table it reads from is still created. A view on a relation that exists nowhere
+# fails the whole CREATE SCHEMA atomically: no schema is left behind.
 id: create-schema.element-order-view-before-table
-title: View element referencing a later table element fails and leaves no schema behind
+title: CREATE SCHEMA creates tables before views regardless of element order; a failing view leaves no schema
 family: create-schema
 tier: core
 feature_ids: [create-schema, create-view, errors]
@@ -16,16 +17,16 @@ steps:
       CREATE SCHEMA s2
         CREATE VIEW v2 AS SELECT id FROM s2.t2
         CREATE TABLE t2 (id int4)
-    expect: error
-    sqlstate: "42P01"
-  - sql: |
-      SELECT count(*) FROM pg_namespace WHERE nspname = 's2'
-    expect: rows
-  - sql: |
-      CREATE SCHEMA s2
-        CREATE TABLE t2 (id int4)
-        CREATE VIEW v2 AS SELECT id FROM s2.t2
     expect: ok
   - sql: |
       SELECT count(*) FROM s2.v2
+    expect: rows
+  - sql: |
+      CREATE SCHEMA s3
+        CREATE VIEW v3 AS SELECT id FROM s3.nosuch
+        CREATE TABLE t3 (id int4)
+    expect: error
+    sqlstate: "42P01"
+  - sql: |
+      SELECT count(*) FROM pg_namespace WHERE nspname = 's3'
     expect: rows

@@ -4,18 +4,24 @@ title: "INSERT WITH CHECK rejects the whole statement, including NULL check resu
 family: rowsecurity
 tier: core
 feature_ids: [rls, policies, insert, errors, nulls]
-required_capabilities: [create-table, insert, select, rls]
+required_capabilities: [create-table, insert, select, rls, roles]
 provenance:
   source: pg-regress
   ref: "src/test/regress/sql/rowsecurity.sql"
 sessions: [a]
 setup: |
-  CREATE TABLE t (id int4 PRIMARY KEY, lvl int4 NOT NULL, owner text);
+  CREATE ROLE pgarbor_case_role_ic;
+  CREATE TABLE t (id int4 PRIMARY KEY, lvl int4, owner text);
   CREATE POLICY ins_low ON t FOR INSERT WITH CHECK (lvl <= 2);
   CREATE POLICY sel_all ON t FOR SELECT USING (true);
   ALTER TABLE t ENABLE ROW LEVEL SECURITY;
   ALTER TABLE t FORCE ROW LEVEL SECURITY;
+  GRANT SELECT, INSERT ON t TO pgarbor_case_role_ic;
 steps:
+  - sql: |
+      SET ROLE pgarbor_case_role_ic
+    expect: ok
+    comment: superusers bypass RLS, so the checks run as a plain role
   - sql: |
       INSERT INTO t VALUES (1, 1, 'alice'), (2, 2, 'alice')
     expect: ok
@@ -32,4 +38,15 @@ steps:
       INSERT INTO t VALUES (5, NULL, 'alice')
     expect: error
     sqlstate: "42501"
-    comment: NULL check result fails; RLS is checked before the NOT NULL constraint per the regress comment
+    comment: lvl is nullable here, so the NULL check result fails the WITH CHECK
+  - sql: |
+      INSERT INTO t VALUES (5, 1, 'alice')
+    expect: ok
+    comment: a non-NULL passing check inserts normally
+  - sql: |
+      RESET ROLE
+    expect: ok
+  - sql: |
+      DROP OWNED BY pgarbor_case_role_ic; DROP ROLE pgarbor_case_role_ic
+    expect: ok
+    comment: drop the cluster-global case role so a retry can recreate it

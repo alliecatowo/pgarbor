@@ -1,27 +1,39 @@
 # Copy an object with lo_from_bytea(0, lo_get(...)) and round-trip a bytea literal.
+# The new oid is not usable inside the same statement that creates it (catalog snapshot), so copies
+# are stored in a table first and read back in a later statement; new oids are never printed.
 id: largeobject.from-bytea-copy
 title: lo_from_bytea creates a fresh object with identical contents
 family: largeobject
 tier: core
 feature_ids: [large-objects, lo-from-bytea, lo-get, bytea]
-required_capabilities: [large-objects, select]
+required_capabilities: [large-objects, select, create-table, insert]
 provenance:
   source: pg-regress
   ref: "src/test/regress/sql/largeobject.sql"
   license: PostgreSQL
 sessions: [a]
 setup: |
+  CREATE TABLE copies (tag text, loid oid);
   SELECT lo_from_bytea(50, convert_to('copy me', 'UTF8'));
 steps:
   - sql: |
-      SELECT encode(lo_get(lo_from_bytea(0, lo_get(50))), 'escape')
+      INSERT INTO copies SELECT 'copy', lo_from_bytea(0, lo_get(50))
+    expect: ok
+  - sql: |
+      SELECT encode(lo_get(loid), 'escape') FROM copies WHERE tag = 'copy'
     expect: rows
   - sql: |
-      SELECT lo_get(50) = lo_get(lo_from_bytea(0, lo_get(50)))
+      SELECT lo_get(50) = lo_get(loid) FROM copies WHERE tag = 'copy'
     expect: rows
   - sql: |
-      SELECT encode(lo_get(lo_from_bytea(0, '\xdeadbeef'::bytea)), 'hex')
+      INSERT INTO copies SELECT 'hex', lo_from_bytea(0, '\xdeadbeef'::bytea)
+    expect: ok
+  - sql: |
+      SELECT encode(lo_get(loid), 'hex') FROM copies WHERE tag = 'hex'
     expect: rows
   - sql: |
-      SELECT length(lo_get(lo_from_bytea(0, ''::bytea)))
+      INSERT INTO copies SELECT 'empty', lo_from_bytea(0, ''::bytea)
+    expect: ok
+  - sql: |
+      SELECT length(lo_get(loid)) FROM copies WHERE tag = 'empty'
     expect: rows

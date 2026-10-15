@@ -4,18 +4,29 @@ title: "Concurrent sessions see rows according to their own policy setting"
 family: rowsecurity
 tier: core
 feature_ids: [rls, policies, select, insert, multi-session, errors]
-required_capabilities: [create-table, insert, select, rls, guc, multi-session]
+required_capabilities: [create-table, insert, select, rls, guc, multi-session, roles]
 provenance:
   source: pg-regress
   ref: "src/test/regress/sql/rowsecurity.sql"
 sessions: [a, b]
 setup: |
+  CREATE ROLE pgarbor_case_role_msi;
   CREATE TABLE t (id int4 PRIMARY KEY, owner text);
   INSERT INTO t VALUES (1, 'alice'), (2, 'bob'), (3, 'alice');
   CREATE POLICY sel_own ON t FOR SELECT USING (owner = current_setting('app.uid', true));
   ALTER TABLE t ENABLE ROW LEVEL SECURITY;
   ALTER TABLE t FORCE ROW LEVEL SECURITY;
+  GRANT SELECT, INSERT ON t TO pgarbor_case_role_msi;
 steps:
+  - session: a
+    sql: |
+      SET ROLE pgarbor_case_role_msi
+    expect: ok
+    comment: superusers bypass RLS, so both sessions run as a plain role
+  - session: b
+    sql: |
+      SET ROLE pgarbor_case_role_msi
+    expect: ok
   - session: a
     sql: |
       SET app.uid = 'alice'
@@ -40,3 +51,16 @@ steps:
     expect: error
     sqlstate: "42501"
     comment: there is no INSERT policy, so the insert is refused for session a
+  - session: b
+    sql: |
+      RESET ROLE
+    expect: ok
+  - session: a
+    sql: |
+      RESET ROLE
+    expect: ok
+  - session: a
+    sql: |
+      DROP OWNED BY pgarbor_case_role_msi; DROP ROLE pgarbor_case_role_msi
+    expect: ok
+    comment: drop the cluster-global case role so a retry can recreate it
