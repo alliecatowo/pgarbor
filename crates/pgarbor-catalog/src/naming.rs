@@ -192,6 +192,27 @@ pub fn choose_relation_name(
     Ok(choose_relation_name_impl(snapshot, namespace, name1, name2, label, others, false))
 }
 
+/// Name of an identity sequence: an explicit `SEQUENCE NAME` is used as given and must be unused in
+/// `namespace` (42P07 `relation "x" already exists`); otherwise the PG-chosen name.
+pub fn choose_identity_sequence_name(
+    snapshot: &CatalogSnapshot,
+    namespace: Oid,
+    name1: &str,
+    name2: Option<&str>,
+    explicit: Option<&str>,
+    others: &[String],
+) -> Result<String> {
+    match explicit {
+        Some(n) => {
+            if snapshot.class_in_namespace(namespace, n).is_some() || others.iter().any(|o| o == n) {
+                return Err(crate::errors::relation_already_exists(n));
+            }
+            Ok(n.to_string())
+        }
+        None => choose_relation_name(snapshot, namespace, name1, name2, "seq", others),
+    }
+}
+
 /// PG `ChooseConstraintName`: unique constraint name in `namespace` (module docs).
 // CONTRACT
 pub fn choose_constraint_name(

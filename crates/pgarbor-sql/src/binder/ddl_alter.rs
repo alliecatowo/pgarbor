@@ -85,6 +85,7 @@ use crate::names::QualName;
 use super::coerce::try_coerce;
 use super::context::{Binder, BoundArg, ExprCtx};
 use super::ddl_constraint::{bind_column_constraint, bind_table_constraint, ConstraintTableCtx};
+use super::ddl_table::identity_option_list;
 use super::expr::bind_expr;
 use super::stored::{bind_ddl_expr, bind_stored_expr, store_expr, table_expr_scope};
 use super::types::{is_pseudo_type, resolve_data_type};
@@ -799,11 +800,9 @@ fn bind_column_def(b: &mut Binder, cd: &ColumnDef, ev: &Evolving) -> Result<Boun
                             "identity column type must be smallint, integer, or bigint",
                         ));
                     }
-                    let options = match sequence_options {
-                        Some(v) => seq_options(v)?,
-                        None => CatSeqOpts::default(),
-                    };
-                    spec.identity = Some(IdentitySpec { kind, options });
+                    let (opts, sequence_name) = identity_option_list(b, sequence_options.as_deref())?;
+                    let options = seq_options(&opts)?;
+                    spec.identity = Some(IdentitySpec { kind, options, sequence_name });
                     is_identity = true;
                 }
             },
@@ -1181,13 +1180,11 @@ fn cmd_alter_column(
                 Some(GeneratedAs::ByDefault) => IdentityKind::ByDefault,
                 _ => return Err(syntax_at("AS")),
             };
-            let options = match sequence_options {
-                Some(v) => seq_options(v)?,
-                None => CatSeqOpts::default(),
-            };
+            let (opts, sequence_name) = identity_option_list(b, sequence_options.as_deref())?;
+            let options = seq_options(&opts)?;
             out.push(AlterTableCmd::AddIdentity {
                 column: col,
-                identity: IdentitySpec { kind, options },
+                identity: IdentitySpec { kind, options, sequence_name },
             });
             ev.cols[idx].identity = true;
         }

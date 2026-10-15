@@ -696,7 +696,14 @@ impl<'a> CatalogTxn<'a> {
             ));
         }
 
-        let seq_name = naming::choose_relation_name(&snap, rel.namespace, &rel.name, Some(column), "seq", &[])?;
+        let seq_name = naming::choose_identity_sequence_name(
+            &snap,
+            rel.namespace,
+            &rel.name,
+            Some(column),
+            identity.sequence_name.as_deref(),
+            &[],
+        )?;
         let mut options = identity.options.clone();
         options.type_oid = None;
         let seq = self.create_column_sequence(
@@ -1744,7 +1751,7 @@ mod tests {
     #[test]
     fn add_identity_requires_not_null() -> Result<()> {
         let (mut kv, env, t) = setup(vec![int_col("a"), ColumnSpec::new("b", TypeId::TEXT)])?;
-        let spec = IdentitySpec { kind: IdentityKind::Always, options: SequenceOptions::default() };
+        let spec = IdentitySpec { kind: IdentityKind::Always, options: SequenceOptions::default(), sequence_name: None };
         let err = testing::run(&mut kv, &env, |c| c.add_identity(t, "a", &spec)).unwrap_err();
         assert_eq!(err.sqlstate.code(), "55000");
         assert_eq!(err.message, "column \"a\" of relation \"t\" must be declared NOT NULL before identity can be added");
@@ -1760,7 +1767,7 @@ mod tests {
     fn identity_lifecycle() -> Result<()> {
         let (mut kv, env, t) = setup(vec![int_col("a"), int_col("b")])?;
         let (_, env) = testing::run(&mut kv, &env, |c| c.set_not_null(t, "a"))?;
-        let spec = IdentitySpec { kind: IdentityKind::ByDefault, options: SequenceOptions::default() };
+        let spec = IdentitySpec { kind: IdentityKind::ByDefault, options: SequenceOptions::default(), sequence_name: None };
         let (res, env) = testing::run(&mut kv, &env, |c| c.add_identity(t, "a", &spec))?;
         let ident = rel_of(&env, t).columns[0].identity.expect("identity set");
         assert_eq!(ident.kind, IdentityKind::ByDefault);

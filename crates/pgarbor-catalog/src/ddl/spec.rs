@@ -76,6 +76,9 @@ impl SerialKind {
 pub struct IdentitySpec {
     pub kind: IdentityKind,
     pub options: SequenceOptions,
+    /// `SEQUENCE NAME n`: the identity sequence's name (unqualified, in the table's schema).
+    /// `None` = the PG-chosen `<table>_<column>_seq`.
+    pub sequence_name: Option<String>,
 }
 
 /// Generated column request (`GENERATED ALWAYS AS (expr) [STORED|VIRTUAL]`; PG 18 default is VIRTUAL).

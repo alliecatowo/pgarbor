@@ -263,7 +263,14 @@ impl<'a> CatalogTxn<'a> {
                 });
             } else if let Some(id) = &c.identity {
                 needs_nn = true;
-                let name = naming::choose_relation_name(&snap, ns, &spec.name, Some(&c.name), "seq", &chosen)?;
+                let name = naming::choose_identity_sequence_name(
+                    &snap,
+                    ns,
+                    &spec.name,
+                    Some(&c.name),
+                    id.sequence_name.as_deref(),
+                    &chosen,
+                )?;
                 chosen.push(name.clone());
                 let t = id.options.type_oid.unwrap_or(type_id.oid);
                 plans.push(SeqPlan {

@@ -122,6 +122,24 @@ pub fn bind_create_table(b: &mut Binder, ct: &CreateTable) -> Result<BoundStatem
 
 /// `CREATE TABLE name [(cols)] AS query [WITH [NO] DATA]` (called by `bind_create_table` when
 /// `ct.query` is set).
+/// The identity option list of the next `AS IDENTITY` in the statement: the parsed group from
+/// `identity_opts` (its options and `SEQUENCE NAME`), or, when the statement was not extracted, the
+/// sqlparser option list with no name.
+pub(super) fn identity_option_list(
+    b: &mut Binder,
+    ast_options: Option<&[AstSequenceOption]>,
+) -> Result<(Vec<AstSequenceOption>, Option<String>)> {
+    match b.identity_groups.pop_front() {
+        Some(g) => {
+            if g.sequence_name_qualified {
+                return Err(PgError::unimplemented("SQL-30", "SEQUENCE NAME with a schema-qualified name"));
+            }
+            Ok((g.options, g.sequence_name))
+        }
+        None => Ok((ast_options.map(|o| o.to_vec()).unwrap_or_default(), None)),
+    }
+}
+
 pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundStatement> {
     let Some(query) = ct.query.as_deref() else {
         return Err(PgError::internal("CREATE TABLE AS bound without a query"));
@@ -502,12 +520,9 @@ fn bind_column_clauses(
                                 GeneratedAs::ByDefault => IdentityKind::ByDefault,
                                 GeneratedAs::ExpStored => return Err(syntax_near("GENERATED", None)),
                             };
-                            let seq: &[AstSequenceOption] = match sequence_options {
-                                Some(list) => list.as_slice(),
-                                None => &[],
-                            };
-                            let options = bind_sequence_options(b, seq, oid, None)?;
-                            columns[i].identity = Some(IdentitySpec { kind, options });
+                            let (seq, sequence_name) = identity_option_list(b, sequence_options.as_deref())?;
+                            let options = bind_sequence_options(b, &seq, oid, None)?;
+                            columns[i].identity = Some(IdentitySpec { kind, options, sequence_name });
                             set_implied_not_null(&mut columns[i]);
                         }
                     }

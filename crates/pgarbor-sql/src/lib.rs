@@ -25,6 +25,7 @@ pub mod classify;
 pub mod deparse;
 pub mod diag;
 pub mod extra_stmt;
+pub mod identity_opts;
 pub mod ir;
 pub mod names;
 pub mod parser;

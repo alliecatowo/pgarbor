@@ -380,8 +380,14 @@ impl<'a> CatalogTxn<'a> {
             // identity: sequence + link.
             if let Some(idn) = &column.identity {
                 let snap = self.snapshot()?;
-                let seq_name =
-                    naming::choose_relation_name(&snap, rel.namespace, &rel.name, Some(&column.name), "seq", &[])?;
+                let seq_name = naming::choose_identity_sequence_name(
+                    &snap,
+                    rel.namespace,
+                    &rel.name,
+                    Some(&column.name),
+                    idn.sequence_name.as_deref(),
+                    &[],
+                )?;
                 let seq_type = idn.options.type_oid.unwrap_or(column.type_id.oid);
                 let seq = self.create_column_sequence(
                     rel.namespace,

@@ -1,5 +1,5 @@
 //! Shared binder state and helper types. Fully implemented, frozen (v1).
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use pgarbor_catalog::CatalogEnv;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
@@ -203,6 +203,9 @@ pub struct Binder<'a> {
     pub deps: Vec<pgarbor_catalog::ObjectAddress>,
     /// Scratch map for modules that need to remember a per-statement fact by name.
     pub scratch: HashMap<&'static str, String>,
+    /// Identity option lists of the statement (`identity_opts`), consumed front to back by each
+    /// identity column the binder processes.
+    pub identity_groups: VecDeque<crate::identity_opts::IdentityGroup>,
 }
 
 /// Maximum recursion depth of expression/query binding before 54001 `stack depth limit exceeded`.
@@ -224,6 +227,7 @@ impl<'a> Binder<'a> {
             expanding_views: Vec::new(),
             deps: Vec::new(),
             scratch: HashMap::new(),
+            identity_groups: VecDeque::new(),
         }
     }
 

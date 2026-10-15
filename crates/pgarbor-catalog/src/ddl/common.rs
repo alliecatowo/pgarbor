@@ -499,7 +499,7 @@ mod tests {
 
         let mut c = ColumnSpec::new("id", TypeId::INT4);
         c.serial = Some(SerialKind::Int);
-        c.identity = Some(IdentitySpec { kind: IdentityKind::Always, options: SequenceOptions::default() });
+        c.identity = Some(IdentitySpec { kind: IdentityKind::Always, options: SequenceOptions::default(), sequence_name: None });
         let e = validate_column_specs(&env, "t", &[c]).err().expect("serial + identity");
         assert_eq!(e.sqlstate.code(), "42601");
         assert_eq!(e.message, "both default and identity specified for column \"id\" of table \"t\"");

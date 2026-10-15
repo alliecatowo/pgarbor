@@ -64,6 +64,7 @@ use sqlparser::tokenizer::{Span, Token, TokenWithSpan, Tokenizer};
 use crate::classify;
 use crate::diag;
 use crate::extra_stmt::ExtraStatement;
+use crate::identity_opts::{self, IdentityGroup};
 use crate::parser_extra;
 use crate::source::SourceMap;
 use crate::syntax_error;
@@ -90,6 +91,9 @@ pub struct RawStatement {
     /// the terminating `;` (what `pg_stat_activity.query` / `pg_prepared_statements.statement` show
     /// for a multi-statement string is the WHOLE string; callers wanting that use `source.text()`).
     pub text: String,
+    /// Identity option lists of this statement, one per `AS IDENTITY` in source order (see
+    /// `identity_opts`). The binder consumes them in the same order.
+    pub identity_groups: Vec<IdentityGroup>,
     /// Byte range of `text` inside `source.text()`.
     pub byte_start: usize,
     pub byte_end: usize,
@@ -149,14 +153,18 @@ pub fn parse(sql: &str) -> Result<Vec<RawStatement>> {
         let eof_loc = last.span.end;
         toks.push(TokenWithSpan::new(Token::EOF, Span::new(eof_loc, eof_loc)));
 
+        let mut identity_groups = Vec::new();
         let parsed = if parser_extra::is_extra_statement(&toks)? {
             Parsed::Extra(parser_extra::parse_extra(toks, &src)?)
         } else {
-            Parsed::Ast(Box::new(parse_ast_chunk(&toks, &src)?))
+            let (ast_toks, groups) = identity_opts::extract(&toks, &src)?;
+            identity_groups = groups;
+            Parsed::Ast(Box::new(parse_ast_chunk(&ast_toks, &src)?))
         };
 
         staged.push(Staged {
             parsed,
+            identity_groups,
             text: src.slice(byte_start, byte_end).to_string(),
             byte_start,
             byte_end,
@@ -171,6 +179,7 @@ pub fn parse(sql: &str) -> Result<Vec<RawStatement>> {
         classify::check_supported(&st.parsed, &st.first_text, Some(st.pos))?;
         out.push(RawStatement {
             parsed: st.parsed,
+            identity_groups: st.identity_groups,
             text: st.text,
             byte_start: st.byte_start,
             byte_end: st.byte_end,
@@ -186,6 +195,7 @@ pub fn parse(sql: &str) -> Result<Vec<RawStatement>> {
 /// is reported before any "unsupported" error, as PostgreSQL's grammar phase does).
 struct Staged {
     parsed: Parsed,
+    identity_groups: Vec<IdentityGroup>,
     text: String,
     byte_start: usize,
     byte_end: usize,

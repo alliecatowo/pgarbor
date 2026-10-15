@@ -65,6 +65,7 @@ const STMT_TEXT_KEY: &str = "statement text";
 /// Bind one statement (module docs).
 pub fn bind_statement(stmt: &RawStatement, ctx: &BindContext) -> Result<BindOutput> {
     let mut b = Binder::new(ctx, &stmt.source);
+    b.identity_groups = stmt.identity_groups.iter().cloned().collect();
     classify::check_supported(&stmt.parsed, first_token(&stmt.text), Some(stmt.pos))?;
     if let Parsed::Ast(ast) = &stmt.parsed {
         if matches!(&**ast, Statement::Prepare { .. }) {
@@ -254,6 +255,7 @@ mod tests {
     fn raw(sql: &str) -> RawStatement {
         RawStatement {
             parsed: Parsed::Ast(Box::new(parse_one_ast(sql))),
+            identity_groups: Vec::new(),
             text: sql.to_string(),
             byte_start: 0,
             byte_end: sql.len(),
