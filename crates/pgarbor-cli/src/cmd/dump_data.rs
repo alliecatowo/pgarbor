@@ -109,7 +109,7 @@ fn literal_from_text(oid: u32, text: Option<&str>) -> String {
         700 | 701 if matches!(text, "NaN" | "Infinity" | "-Infinity") => quote_literal_text(text),
         700 | 701 | 1700 if text != "NaN" => text.to_owned(),
         1700 => quote_literal_text(text),
-        17 if text.starts_with("\\x") => quote_literal_text(text),
+        17 if text.starts_with("\\x") => format!("'{}'", text.replace('\'', "''")),
         _ => quote_literal_text(text),
     }
 }
@@ -135,6 +135,6 @@ mod tests {
         assert_eq!(literal_from_text(701, Some("Infinity")), "'Infinity'");
         assert_eq!(literal_from_text(1700, Some("1.25")), "1.25");
         assert_eq!(literal_from_text(17, Some("\\x00ff")), "'\\x00ff'");
-        assert_eq!(literal_from_text(25, Some("it's \\")), r"E'it''s \\\\'");
+        assert_eq!(literal_from_text(25, Some("it's \\")), r"E'it''s \\'");
     }
 }

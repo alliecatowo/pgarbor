@@ -62,7 +62,7 @@ restore,purge,set-default}`. Global flags `--json`, `-q`, `-v`. Database resolut
 
 * `<db>.serve.json`: `ServeInfo` JSON, `format = "pgarbor-serve/1"`.
 * Control protocol: newline-delimited JSON over a Unix socket (`ping`, `status`, `listen`).
-* Dump format: plain SQL in `pg_dump` order (`cmd/dump.rs`), INSERT data by default, `COPY ... FROM stdin` blocks with `--copy`.
+* Dump format: conservative ordinary-table SQL and INSERT data (`cmd/dump.rs`, cli-02). Unsupported inventory is refused before publication; `--copy` remains unsupported.
 * `.pgabranch` handles are owned by `pgarbor-branches`; the CLI only creates/validates them.
 
 ## Error conventions
@@ -73,7 +73,7 @@ wording. Lock errors are enriched with the owner (`serve_registry`) and a remedy
 ## Known gaps / non-goals (v1)
 
 * No line editing or history in `shell` (std stdin only); no query cancel with Ctrl-C in the embedded shell.
-* COPY FROM stdin blocks (import, exec, shell, `dump --copy`) are blocked on amendment `pgarbor-wire-01` (`pgarbor::MemChannel`).
+* COPY FROM stdin blocks in import/exec use the API memory channel (wire-01 partial acceptance). Shell COPY, wire streaming and `dump --copy` remain unsupported.
 * `branch create --copy-snapshots` uses the engine directly; `branch delete --allow-default` and reset with `ResetOptions` are not
   reachable through `pgarbor::Database` (documented fallbacks in the lease specs).
 * The control socket is unix-only; on other targets `branch exec` against a served database exits 4.

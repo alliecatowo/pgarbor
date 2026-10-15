@@ -48,6 +48,7 @@ pub mod txn_block;
 pub mod types;
 
 pub use database::Database;
+pub use pgarbor_exec::copy::{CopyChannel, MemChannel};
 pub use guc::{GucScope, GucSource, GucTable};
 pub use session::Session;
 pub use types::{

@@ -53,3 +53,21 @@ fn copy_import_stream_preserves_rows() {
     ok(output);
     assert_eq!(c.rows("main","SELECT id, value FROM copied ORDER BY id"),json!([[1,"alpha"],[2,"beta"]]));
 }
+
+#[test]
+fn unsupported_dump_inventory_never_publishes_partial_file() {
+    let c=Cli::new();c.init();
+    json_ok(c.sql("main","CREATE TABLE supported(id int); CREATE SEQUENCE unsupported"));
+    let dump=c.dir.path().join("must-not-exist.sql");
+    let output=c.run(&["dump",path(&c.db),"--output",path(&dump)]);
+    code(&output,8);
+    assert!(!dump.exists(),"partial dump was published");
+}
+
+#[test]
+fn malformed_copy_rolls_back_single_transaction_import() {
+    let c=Cli::new();c.init();
+    let output=c.input(&["import","-","--single-transaction","--db",path(&c.db)],"CREATE TABLE copied(id int);\nCOPY copied FROM stdin;\nnot-an-integer\n\\.\n");
+    code(&output,1);
+    sqlstate(c.sql("main","SELECT * FROM copied"),"42P01");
+}

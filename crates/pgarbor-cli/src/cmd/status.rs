@@ -147,21 +147,14 @@ fn format_status(report: &StatusReport) -> String {
     lines.push(("problems", if report.problems.is_empty() { "none".to_string() } else { report.problems.join("; ") }));
 
     let width = lines.iter().map(|(key, _)| key.chars().count()).max().unwrap_or(0);
-    lines.into_iter().map(|(key, value)| format!("{key:<width$}:  {value}")).collect::<Vec<_>>().join("\n")
+    lines.into_iter().map(|(key, value)| format!("{:<label_width$}{value}", format!("{key}:"), label_width = width + 3)).collect::<Vec<_>>().join("\n")
 }
 
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
         return format!("{bytes} B");
     }
-    let units = ["KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < units.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    format!("{value:.1} {}", units[unit])
+    crate::humanize::bytes(bytes).unwrap_or_else(|_| format!("{bytes} B"))
 }
 
 #[cfg(test)]

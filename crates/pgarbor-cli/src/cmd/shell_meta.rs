@@ -138,7 +138,6 @@ fn pattern_to_regex(pattern: &str) -> String {
         match ch {
             '*' => out.push_str(".*"),
             '?' => out.push('.'),
-            '.' if pattern.contains('.') => out.push('.'),
             c if "\\.+()|{}[]^$".contains(c) => { out.push('\\'); out.push(c); }
             c => out.push(c),
         }

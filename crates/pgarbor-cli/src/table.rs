@@ -91,7 +91,7 @@ pub fn render_aligned(t: &Table, footer: bool) -> Result<String, CliError> {
         }
     }
     if footer {
-        if !t.rows.is_empty() { out.push('\n'); }
+        out.push('\n');
         let n = t.rows.len();
         out.push_str(&format!("({n} row{})", if n == 1 { "" } else { "s" }));
     }
@@ -136,7 +136,7 @@ fn write_csv_record<'a>(out: &mut String, fields: impl Iterator<Item = Option<&'
         match field {
             None => {},
             Some(value) => {
-                let quote = value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
+                let quote = value.is_empty() || value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
                 if quote { out.push('"'); }
                 for ch in value.chars() {
                     if ch == '"' { out.push_str("\"\""); } else { out.push(ch); }
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn aligned_example_and_footer() {
         assert_eq!(render_aligned(&example(), true).expect("render"),
-            " id | name  |  price\n----+-------+--------\n  1 | apple |   1.50\n 22 | pear  |       \n(2 rows)");
+            " id | name  | price\n----+-------+-------\n  1 | apple |  1.50\n 22 | pear  |      \n(2 rows)");
     }
 
     #[test]
@@ -187,7 +187,7 @@ mod tests {
             right_align: vec![true, false],
         };
         assert_eq!(render_aligned(&t, false).expect("render"),
-            " n  | v\n-----+---\n 123 | \n   4 | x");
+            "  n  | v\n-----+---\n 123 | \n   4 | x");
     }
 
     #[test]

@@ -74,14 +74,16 @@ fn execute_items(ctx: &mut Ctx, args: &ExecArgs, session: &mut Session, branch: 
     let mut report = ExecReport { branch: branch.to_string(), statements: Vec::new(), ok: true };
     let mut failed = false;
     for item in items {
+        let copying = if let ItemKind::CopyFromStdin { data } = &item.kind {
+            session.set_copy_channel(Some(Box::new(pgarbor::MemChannel { input: Some(data.clone()), output: Vec::new() })));
+            true
+        } else { false };
         match &item.kind {
             ItemKind::Meta if item.text.trim() == "\\." => continue,
             ItemKind::Meta => ctx.info(&format!("ignoring psql meta-command {}", item.text.trim())),
-            ItemKind::CopyFromStdin { .. } => {
-                return Err(CliError::from(PgError::unimplemented("CLI-10", "COPY FROM stdin blocks are not supported yet")));
-            }
-            ItemKind::Statement => {
+            ItemKind::CopyFromStdin { .. } | ItemKind::Statement => {
                 let output = session.simple_query_raw(&item.text);
+                if copying { session.set_copy_channel(None); }
                 for statement in &output.statements {
                     let index = report.statements.len() + 1;
                     if ctx.json {

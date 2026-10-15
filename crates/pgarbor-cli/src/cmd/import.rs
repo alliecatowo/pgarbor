@@ -51,6 +51,10 @@ pub fn run(ctx: &mut Ctx, args: &ImportArgs) -> CliResult<Exit> {
     let mut process = |item: ScriptItem, session: &mut pgarbor::Session, ctx: &mut Ctx,
                        statements_run: &mut u64, copy_rows: &mut u64, errors: &mut Vec<ScriptErrorJson>,
                        failed: &mut bool| -> CliResult<bool> {
+        let copying = if let ItemKind::CopyFromStdin { data } = &item.kind {
+            session.set_copy_channel(Some(Box::new(pgarbor::MemChannel { input: Some(data.clone()), output: Vec::new() })));
+            true
+        } else { false };
         match item.kind {
             ItemKind::Meta => {
                 if !matches!(item.text.trim(), "\\." | "\\connect" | "\\c" | "\\restrict" | "\\unrestrict") {
@@ -58,9 +62,9 @@ pub fn run(ctx: &mut Ctx, args: &ImportArgs) -> CliResult<Exit> {
                 }
                 Ok(true)
             }
-            ItemKind::CopyFromStdin { .. } => Err(CliError::from(PgError::unimplemented("CLI-28", "COPY FROM stdin requires the wire memory channel"))),
-            ItemKind::Statement => {
+            ItemKind::CopyFromStdin { .. } | ItemKind::Statement => {
                 let out = session.simple_query_raw(&item.text);
+                if copying { session.set_copy_channel(None); }
                 if let Some(e) = out.error {
                     errors.push(ScriptErrorJson { statement: item.index, line: item.line,
                         sqlstate: e.sqlstate.code().to_string(), message: e.message.clone() });

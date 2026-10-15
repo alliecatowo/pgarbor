@@ -36,3 +36,10 @@ are documented as a known gap (`contracts/crates/pgarbor-wire.md`).
 ## Steward decision (2026-10-15)
 
 The complete ordered COPY streaming contract is not installed. Keep WIR-13 leased 0A000; do not install a zero-column lazy response or acknowledge COPY bytes without executing them. API reexports alone would not establish ordering. CLI COPY import/export remains unsupported.
+
+Partial acceptance (2026-10-15): re-export `CopyChannel` and `MemChannel` from the embedded
+API. CLI import/exec can install a memory channel for one complete COPY FROM stdin block,
+execute that statement through Session, remove the channel on success or failure, and
+retain the actual COPY tag/count. This needs no wire event ordering or fake response.
+The wire start hook and streaming simple-query interface remain DEFERRED, WIR-13 remains
+unsupported, and this partial acceptance makes no wire COPY compatibility claim.
