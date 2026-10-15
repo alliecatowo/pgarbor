@@ -716,23 +716,24 @@ struct OutCol {
 /// `\b \f \n \r \t \v` become letters.
 fn escape_text_into(out: &mut Vec<u8>, bytes: &[u8], fmt: &Fmt) {
     for &c in bytes {
-        if c == fmt.delim {
-            out.push(b'\\');
-        }
-        let mapped = match c {
-            8 => b'b',
-            12 => b'f',
-            b'\n' => b'n',
-            b'\r' => b'r',
-            b'\t' => b't',
-            11 => b'v',
-            b'\\' => {
-                out.push(b'\\');
-                b'\\'
-            }
-            other => other,
+        let letter = match c {
+            8 => Some(b'b'),
+            12 => Some(b'f'),
+            b'\n' => Some(b'n'),
+            b'\r' => Some(b'r'),
+            b'\t' => Some(b't'),
+            11 => Some(b'v'),
+            _ => None,
         };
-        out.push(mapped);
+        if let Some(l) = letter {
+            out.push(b'\\');
+            out.push(l);
+        } else if c == b'\\' || c == fmt.delim {
+            out.push(b'\\');
+            out.push(c);
+        } else {
+            out.push(c);
+        }
     }
 }
 

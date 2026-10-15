@@ -407,7 +407,13 @@ mod tests {
                             for rowid in [Some(1000 + i as u64), None] {
                                 let key = hand_key(TEST_OID, &[(v, desc, nulls_first)], rowid);
                                 let actual = iv.as_ref().map_or(false, |iv| in_interval(iv, &key));
-                                let expected = sql_matches(v, lower, upper);
+                                // No range at all is a full-prefix scan (module docs): it has no
+                                // predicate, so NULL keys are included. A range never matches NULL.
+                                let expected = if lower.is_none() && upper.is_none() {
+                                    true
+                                } else {
+                                    sql_matches(v, lower, upper)
+                                };
                                 assert_eq!(
                                     actual, expected,
                                     "desc={desc} nulls_first={nulls_first} lower={lower:?} upper={upper:?} v={v:?} rowid={rowid:?}"
