@@ -38,7 +38,7 @@ use sqlparser::ast::{
     AlterFunctionAction, AlterFunctionKind, AlterFunctionOperation, AlterRoleOperation, AlterSchemaOperation,
     AlterTypeAddValuePosition, AlterTypeOperation, AlterTypeRename, AlterUser, Expr, FunctionBehavior,
     FunctionCalledOnNull, FunctionParallel, FunctionSecurity, FunctionSetValue, Ident, ObjectName, ObjectNamePart,
-    Owner, Password, ResetConfig, RoleOption, SetConfigValue, Statement, UnaryOperator, Value, ValueWithSpan,
+    Owner, ResetConfig, SetConfigValue, Statement, UnaryOperator, Value, ValueWithSpan,
 };
 use sqlparser::ast::{ArgMode as AstArgMode, SequenceOptions as AstSequenceOption};
 use sqlparser::tokenizer::Span;
@@ -49,7 +49,8 @@ use super::stored;
 use super::types::resolve_data_type;
 use crate::diag;
 use crate::extra_stmt::{
-    AlterDatabaseAction, AlterDomainAction, AlterMatViewAction, AlterSequenceAction, SequenceOptionAst,
+    AlterDatabaseAction, AlterDomainAction, AlterMatViewAction, AlterSequenceAction, RoleOptionAst, RoleOptionItem,
+    SequenceOptionAst,
 };
 use crate::ir::{AlterAction, AlterRelKeyword, AlterTableCmd, BoundAlterTable, BoundExpr, BoundStatement};
 use crate::names::QualName;
@@ -248,10 +249,8 @@ pub fn bind_alter_role(b: &mut Binder, stmt: &Statement) -> Result<BoundStatemen
                 AlterRoleOperation::AddMember { .. } | AlterRoleOperation::DropMember { .. } => {
                     Err(unsupported("ALTER ROLE ... ADD MEMBER / DROP MEMBER"))
                 }
-                AlterRoleOperation::WithOptions { options } => {
-                    let changes = role_changes(b, options)?;
-                    Ok(alter(AlterAction::Role { role, changes }))
-                }
+                // The option-list form is parsed by `parser_extra` (`ExtraStatement::AlterRole`).
+                AlterRoleOperation::WithOptions { .. } => Err(unsupported("ALTER ROLE ... WITH options")),
                 AlterRoleOperation::Set { config_name, config_value, in_database } => {
                     if in_database.is_some() {
                         return Err(unsupported("ALTER ROLE ... IN DATABASE"));
@@ -623,14 +622,6 @@ fn value_text(b: &mut Binder, e: &Expr) -> Option<String> {
     literal_text(e)
 }
 
-/// Option value that must be a single-quoted string (PASSWORD, VALID UNTIL).
-fn string_literal(e: &Expr) -> Result<String> {
-    match e {
-        Expr::Value(ValueWithSpan { value: Value::SingleQuotedString(s), .. }) => Ok(s.clone()),
-        _ => Err(diag::syntax_error_near(&e.to_string(), None)),
-    }
-}
-
 fn positive_number(e: &Expr, msg: &str) -> Result<f64> {
     let text = number_text(e).ok_or_else(|| diag::syntax_error_near(&e.to_string(), None))?;
     let v: f64 = text.parse().map_err(|_| diag::syntax_error_near(&text, None))?;
@@ -638,15 +629,6 @@ fn positive_number(e: &Expr, msg: &str) -> Result<f64> {
         return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg));
     }
     Ok(v)
-}
-
-fn conn_limit_value(e: &Expr) -> Result<i32> {
-    let text = number_text(e).ok_or_else(|| diag::syntax_error_near(&e.to_string(), None))?;
-    let n: i32 = text.parse().map_err(|_| diag::syntax_error_near(&text, None))?;
-    if n < -1 {
-        return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid connection limit: {n}")));
-    }
-    Ok(n)
 }
 
 /// PG `AlterRole`: an empty password clears it with a NOTICE; NULL clears it silently.
@@ -670,60 +652,98 @@ fn timestamptz_input(b: &Binder, text: &str) -> Result<i64> {
     }
 }
 
-/// CREATE/ALTER ROLE option list -> `RoleChanges` (PG `AlterRole` option handling).
-fn role_changes(b: &mut Binder, options: &[RoleOption]) -> Result<RoleChanges> {
+/// ALTER ROLE option list -> `RoleChanges` (PG `AlterRole` option handling: a repeated option is
+/// 42601 `conflicting or redundant options` at the repeat, `CONNECTION LIMIT` below -1 is 22023).
+fn role_changes(b: &mut Binder, options: &[RoleOptionItem]) -> Result<RoleChanges> {
     let mut ch = RoleChanges::default();
     let mut seen: Vec<&'static str> = Vec::new();
-    for o in options {
-        match o {
-            RoleOption::SuperUser(v) => {
-                note_option(&mut seen, "superuser")?;
+    let mut conflict = |key: &'static str, item: &RoleOptionItem| -> Result<()> {
+        if seen.contains(&key) {
+            return Err(diag::syntax("conflicting or redundant options", item.pos));
+        }
+        seen.push(key);
+        Ok(())
+    };
+    let mut valid_until: Option<(&str, Option<u32>)> = None;
+    for item in options {
+        match &item.option {
+            RoleOptionAst::Superuser(v) => {
+                conflict("superuser", item)?;
                 ch.superuser = Some(*v);
             }
-            RoleOption::CreateDB(v) => {
-                note_option(&mut seen, "createdb")?;
+            RoleOptionAst::CreateDb(v) => {
+                conflict("createdb", item)?;
                 ch.create_db = Some(*v);
             }
-            RoleOption::CreateRole(v) => {
-                note_option(&mut seen, "createrole")?;
+            RoleOptionAst::CreateRole(v) => {
+                conflict("createrole", item)?;
                 ch.create_role = Some(*v);
             }
-            RoleOption::Inherit(v) => {
-                note_option(&mut seen, "inherit")?;
+            RoleOptionAst::Inherit(v) => {
+                conflict("inherit", item)?;
                 ch.inherit = Some(*v);
             }
-            RoleOption::Login(v) => {
-                note_option(&mut seen, "login")?;
+            RoleOptionAst::Login(v) => {
+                conflict("canlogin", item)?;
                 ch.can_login = Some(*v);
             }
-            RoleOption::Replication(v) => {
-                note_option(&mut seen, "replication")?;
+            RoleOptionAst::Replication(v) => {
+                conflict("isreplication", item)?;
                 ch.replication = Some(*v);
             }
-            RoleOption::BypassRLS(v) => {
-                note_option(&mut seen, "bypassrls")?;
+            RoleOptionAst::BypassRls(v) => {
+                conflict("bypassrls", item)?;
                 ch.bypass_rls = Some(*v);
             }
-            RoleOption::ConnectionLimit(e) => {
-                note_option(&mut seen, "connlimit")?;
-                ch.conn_limit = Some(conn_limit_value(e)?);
+            RoleOptionAst::ConnectionLimit(v) => {
+                conflict("connectionlimit", item)?;
+                ch.conn_limit = Some(*v);
             }
-            RoleOption::Password(p) => {
-                note_option(&mut seen, "password")?;
-                let raw = match p {
-                    Password::NullPassword => None,
-                    Password::Password(e) => Some(string_literal(e)?),
-                };
-                ch.password = password_value(b, raw);
+            RoleOptionAst::Password(p) => {
+                conflict("password", item)?;
+                ch.password = password_value(b, p.clone());
             }
-            RoleOption::ValidUntil(e) => {
-                note_option(&mut seen, "validuntil")?;
-                let s = string_literal(e)?;
-                ch.valid_until = Some(Some(timestamptz_input(b, &s)?));
+            RoleOptionAst::ValidUntil(t) => {
+                conflict("validUntil", item)?;
+                valid_until = Some((t.as_str(), item.pos));
+            }
+            RoleOptionAst::RoleMembers(_) => {
+                conflict("rolemembers", item)?;
+                return Err(unsupported("ALTER ROLE ... USER member list"));
+            }
+            // The parser does not produce the CREATE-only options for ALTER ROLE.
+            RoleOptionAst::AddRoleTo(_) | RoleOptionAst::AdminMembers(_) | RoleOptionAst::Sysid => {
+                return Err(diag::syntax("syntax error", item.pos));
             }
         }
     }
+    if let Some(limit) = ch.conn_limit {
+        if limit < -1 {
+            return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid connection limit: {limit}")));
+        }
+    }
+    if let Some((text, pos)) = valid_until {
+        let us = timestamptz_input(b, text).map_err(|e| diag::with_position(e, pos))?;
+        ch.valid_until = Some(Some(us));
+    }
     Ok(ch)
+}
+
+/// `ExtraStatement::AlterRole`: `ALTER ROLE|USER r [WITH] options`. The target role is resolved after
+/// the option list is checked (PG `AlterRole`); `CURRENT_USER` / `CURRENT_ROLE` / `SESSION_USER` are
+/// the keyword roles.
+pub fn bind_alter_role_options(b: &mut Binder, name: &Ident, options: &[RoleOptionItem]) -> Result<BoundStatement> {
+    let changes = role_changes(b, options)?;
+    let role = if name.quote_style.is_none() {
+        match name.value.to_ascii_lowercase().as_str() {
+            "current_user" | "current_role" => b.env.current_user(),
+            "session_user" => b.env.session_user(),
+            _ => ident_role(b, name)?,
+        }
+    } else {
+        ident_role(b, name)?
+    };
+    Ok(alter(AlterAction::Role { role, changes }))
 }
 
 /// ALTER USER (sqlparser `AlterUser`): the PostgreSQL subset (rename, password) is bound; the
@@ -1140,6 +1160,10 @@ fn alter_sequence_options(
             SequenceOptionAst::OwnedBy(v) => {
                 note_option(&mut seen, "owned_by")?;
                 owned_opt = Some(v.clone());
+            }
+            // Produced only for CREATE SEQUENCE; the ALTER parser reports these as unsupported.
+            SequenceOptionAst::Logged(_) | SequenceOptionAst::SequenceName => {
+                return Err(unsupported("ALTER SEQUENCE ... LOGGED / UNLOGGED / SEQUENCE NAME"));
             }
         }
     }

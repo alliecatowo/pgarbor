@@ -64,6 +64,59 @@ pub enum SequenceOptionAst {
     Cycle(bool),
     /// `OWNED BY NONE` = None; `OWNED BY t.c` = Some(name parts).
     OwnedBy(Option<ObjectName>),
+    /// `LOGGED` (true) / `UNLOGGED` (false) inside a CREATE SEQUENCE option list. PG's grammar
+    /// accepts them there and `init_params` rejects them (XX000 `option "logged" not recognized`).
+    /// ALTER SEQUENCE never produces this variant (it reports 0A000 at parse time).
+    Logged(bool),
+    /// `SEQUENCE NAME n`: legal grammar, rejected for CREATE SEQUENCE (42601 `invalid sequence option
+    /// SEQUENCE NAME`). Only produced for CREATE SEQUENCE.
+    SequenceName,
+}
+
+/// `CREATE ROLE`, `CREATE USER` or `CREATE GROUP`.
+// CONTRACT
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleStmtKind {
+    Role,
+    /// Implies `LOGIN` unless the options say otherwise.
+    User,
+    /// Same as `Role`.
+    Group,
+}
+
+/// One role option (PG `CreateOptRoleElem` / `AlterOptRoleElem`).
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub enum RoleOptionAst {
+    /// `[ENCRYPTED] PASSWORD 'x'` (`Some`) or `PASSWORD NULL` (`None`).
+    Password(Option<String>),
+    Superuser(bool),
+    Inherit(bool),
+    CreateRole(bool),
+    CreateDb(bool),
+    Login(bool),
+    Replication(bool),
+    BypassRls(bool),
+    /// `CONNECTION LIMIT n`; the sign is folded in. Range checking (`< -1`) is the binder's.
+    ConnectionLimit(i32),
+    /// `VALID UNTIL 'timestamp'` (the text; the binder parses it).
+    ValidUntil(String),
+    /// `ROLE r, ...` or `USER r, ...` (same PG defname `rolemembers`).
+    RoleMembers(Vec<Ident>),
+    /// `IN ROLE r, ...` or `IN GROUP r, ...` (CREATE only).
+    AddRoleTo(Vec<Ident>),
+    /// `ADMIN r, ...` (CREATE only).
+    AdminMembers(Vec<Ident>),
+    /// `SYSID n` (CREATE only, ignored by PG with a NOTICE).
+    Sysid,
+}
+
+/// A role option with the 1-based character position of its first token (for 42601 conflicts).
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoleOptionItem {
+    pub option: RoleOptionAst,
+    pub pos: Option<u32>,
 }
 
 /// One action of `ALTER DOMAIN name ...`.
@@ -112,6 +165,13 @@ pub enum ExtraStatement {
     SetConstraints { names: Option<Vec<ObjectName>>, deferred: bool },
     /// `DO [LANGUAGE lang] 'code'` (code = the string literal contents, dollar-quotes removed).
     Do { language: Option<Ident>, code: String },
+    /// `CREATE [TEMP|TEMPORARY|UNLOGGED] SEQUENCE [IF NOT EXISTS] name [options in any order]`.
+    CreateSequence { temporary: bool, unlogged: bool, if_not_exists: bool, name: ObjectName, options: Vec<SequenceOptionAst> },
+    /// `CREATE {ROLE|USER|GROUP} name [WITH] [options in any order]`.
+    CreateRole { kind: RoleStmtKind, name: Ident, options: Vec<RoleOptionItem> },
+    /// `ALTER {ROLE|USER} name [WITH] [options in any order]` (the option-list form only; RENAME,
+    /// SET, RESET and IN DATABASE stay with sqlparser).
+    AlterRole { name: Ident, options: Vec<RoleOptionItem> },
     /// `ALTER SEQUENCE [IF EXISTS] name action`.
     AlterSequence { if_exists: bool, name: ObjectName, action: AlterSequenceAction },
     /// `ALTER DOMAIN name action`.

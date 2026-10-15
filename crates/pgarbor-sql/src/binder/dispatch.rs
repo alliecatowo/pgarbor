@@ -101,10 +101,8 @@ pub fn bind_inner_statement(b: &mut Binder, stmt: &Statement, top_level: bool) -
         Statement::CreateIndex(ci) => ddl_index::bind_create_index(b, ci),
         Statement::CreateView(_) => ddl_view::bind_create_view(b, stmt),
         Statement::CreateSchema { .. } => ddl_objects::bind_create_schema(b, stmt),
-        Statement::CreateSequence { .. } => ddl_objects::bind_create_sequence(b, stmt),
         Statement::CreateType { .. } => ddl_objects::bind_create_type(b, stmt),
         Statement::CreateDomain(_) => ddl_objects::bind_create_domain(b, stmt),
-        Statement::CreateRole(_) | Statement::CreateUser(_) => ddl_objects::bind_create_role(b, stmt),
         Statement::CreateDatabase { .. } => ddl_objects::bind_create_database(b, stmt),
         Statement::CreateFunction(_) | Statement::CreateProcedure { .. } => ddl_function::bind_create_function(b, stmt),
 
@@ -179,6 +177,11 @@ pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<Bou
         ExtraStatement::AlterSequence { if_exists, name, action } => {
             ddl_alter_other::bind_alter_sequence(b, *if_exists, name, action)
         }
+        ExtraStatement::CreateSequence { temporary, unlogged, if_not_exists, name, options } => {
+            ddl_objects::bind_create_sequence(b, *temporary, *unlogged, *if_not_exists, name, options)
+        }
+        ExtraStatement::CreateRole { kind, name, options } => ddl_objects::bind_create_role(b, *kind, name, options),
+        ExtraStatement::AlterRole { name, options } => ddl_alter_other::bind_alter_role_options(b, name, options),
         ExtraStatement::AlterDomain { name, action } => ddl_alter_other::bind_alter_domain(b, name, action),
         ExtraStatement::AlterDatabase { name, action } => ddl_alter_other::bind_alter_database(b, name, action),
         ExtraStatement::AlterMaterializedView { if_exists, name, action } => {

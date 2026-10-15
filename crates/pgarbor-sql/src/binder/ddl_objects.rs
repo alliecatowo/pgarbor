@@ -51,14 +51,15 @@ use pgarbor_catalog::StoredExpr;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_types::{oids, Datum, TypeId};
 use sqlparser::ast::{
-    CreateRole, Expr, Ident, ObjectName, ObjectNamePart, Password, SchemaName, SequenceOptions as AstSequenceOption,
-    Statement, TableConstraint, UnaryOperator, UserDefinedTypeRepresentation, Value,
+    Expr, Ident, ObjectName, ObjectNamePart, SchemaName, SequenceOptions as AstSequenceOption, Statement,
+    TableConstraint, UnaryOperator, UserDefinedTypeRepresentation, Value,
 };
 
 use super::context::{Binder, ExprCtx};
 use super::stored;
 use super::types;
 use crate::diag;
+use crate::extra_stmt::{RoleOptionAst, RoleOptionItem, RoleStmtKind, SequenceOptionAst};
 use crate::ir::{BoundCreateDatabase, BoundStatement};
 
 /// Column names that PG rejects in a composite type (`SystemAttributeByName`).
@@ -129,23 +130,15 @@ fn role_oid(b: &mut Binder, id: &Ident) -> Result<Oid> {
     env.role_oid(&name)
 }
 
-/// The string of a `'...'` / `$$...$$` / `E'...'` literal.
-fn string_literal(e: &Expr) -> Option<String> {
-    match e {
-        Expr::Value(v) => match &v.value {
-            Value::SingleQuotedString(s) | Value::EscapedStringLiteral(s) => Some(s.clone()),
-            Value::DollarQuotedString(d) => Some(d.value.clone()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// An integer literal with its sign folded in (`-5` is `UnaryOp(Minus, 5)`), if the expression is one.
 fn signed_number(e: &Expr) -> Option<(bool, &str)> {
     match e {
         Expr::Value(v) => match &v.value {
-            Value::Number(s, _) => Some((false, s.as_str())),
+            // A number kept as text may carry its sign (`-5`): the option parsers keep it that way.
+            Value::Number(s, _) => match s.strip_prefix('-') {
+                Some(rest) => Some((true, rest)),
+                None => Some((false, s.strip_prefix('+').unwrap_or(s.as_str()))),
+            },
             _ => None,
         },
         Expr::UnaryOp { op: UnaryOperator::Minus, expr, .. } => signed_number(expr).map(|(neg, s)| (!neg, s)),
@@ -301,18 +294,83 @@ pub fn bind_create_schema(b: &mut Binder, stmt: &Statement) -> Result<BoundState
     Ok(BoundStatement::CreateSchema { name, owner, if_not_exists: *if_not_exists })
 }
 
-/// `Statement::CreateSequence`.
-pub fn bind_create_sequence(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
-    let Statement::CreateSequence { temporary, if_not_exists, name, data_type, sequence_options, owned_by } = stmt
-    else {
-        return Err(PgError::internal("binder: bind_create_sequence called for another statement"));
-    };
+/// `ExtraStatement::CreateSequence` (PG `DefineSequence` + `init_params`). The options arrive in the
+/// order written; PG accepts any order, and a repeated option is 42601 `conflicting or redundant
+/// options`.
+pub fn bind_create_sequence(
+    b: &mut Binder,
+    temporary: bool,
+    unlogged: bool,
+    if_not_exists: bool,
+    name: &ObjectName,
+    options: &[SequenceOptionAst],
+) -> Result<BoundStatement> {
     let pos = obj_pos(b, name);
-    if *temporary {
+    if temporary {
         return Err(unsupported("TEMPORARY sequences", pos));
+    }
+    if unlogged {
+        return Err(unsupported("UNLOGGED sequences", pos));
     }
     let (schema, seq_name, qpos) = target_name(b, name)?;
     let namespace = creation_namespace(b, schema.as_deref(), &seq_name, qpos)?;
+    // The option loop of `init_params`: conflicts and the two options CREATE rejects, in written order.
+    let mut seen: Vec<&'static str> = Vec::new();
+    let mut note = |key: &'static str| -> Result<()> {
+        if seen.contains(&key) {
+            return Err(conflicting_options(pos));
+        }
+        seen.push(key);
+        Ok(())
+    };
+    let mut data_type = None;
+    let mut owned_by: Option<&Option<ObjectName>> = None;
+    let mut ast: Vec<AstSequenceOption> = Vec::with_capacity(options.len());
+    for o in options {
+        match o {
+            SequenceOptionAst::As(dt) => {
+                note("as")?;
+                data_type = Some(dt);
+            }
+            SequenceOptionAst::IncrementBy(t) => {
+                note("increment")?;
+                ast.push(AstSequenceOption::IncrementBy(number_expr(t), true));
+            }
+            SequenceOptionAst::MinValue(v) => {
+                note("minvalue")?;
+                ast.push(AstSequenceOption::MinValue(v.as_deref().map(number_expr)));
+            }
+            SequenceOptionAst::MaxValue(v) => {
+                note("maxvalue")?;
+                ast.push(AstSequenceOption::MaxValue(v.as_deref().map(number_expr)));
+            }
+            SequenceOptionAst::StartWith(t) => {
+                note("start")?;
+                ast.push(AstSequenceOption::StartWith(number_expr(t), true));
+            }
+            // `RESTART` is accepted and has no effect on a new sequence.
+            SequenceOptionAst::Restart(_) => note("restart")?,
+            SequenceOptionAst::Cache(t) => {
+                note("cache")?;
+                ast.push(AstSequenceOption::Cache(number_expr(t)));
+            }
+            SequenceOptionAst::Cycle(c) => {
+                note("cycle")?;
+                ast.push(AstSequenceOption::Cycle(*c));
+            }
+            SequenceOptionAst::OwnedBy(v) => {
+                note("owned_by")?;
+                owned_by = Some(v);
+            }
+            SequenceOptionAst::Logged(l) => {
+                let word = if *l { "logged" } else { "unlogged" };
+                return Err(PgError::internal(format!("option \"{word}\" not recognized")));
+            }
+            SequenceOptionAst::SequenceName => {
+                return Err(diag::syntax("invalid sequence option SEQUENCE NAME", pos));
+            }
+        }
+    }
     // `AS type` picks the sequence type; without it the type is bigint (PG `init_params`).
     let as_type = match data_type {
         None => oids::INT8,
@@ -324,10 +382,10 @@ pub fn bind_create_sequence(b: &mut Binder, stmt: &Statement) -> Result<BoundSta
             resolved.id.oid
         }
     };
-    let options = bind_sequence_options(b, sequence_options, as_type, pos)?;
+    let bound = bind_sequence_options(b, &ast, as_type, pos)?;
     let owned = match owned_by {
-        Some(n) => bind_owned_by(b, n)?,
-        None => None,
+        Some(Some(n)) => bind_owned_by(b, n)?,
+        _ => None,
     };
     let owner = b.env.current_user();
     let spec = CreateSequenceSpec {
@@ -335,11 +393,20 @@ pub fn bind_create_sequence(b: &mut Binder, stmt: &Statement) -> Result<BoundSta
         name: seq_name,
         owner,
         persistence: Persistence::Permanent,
-        options,
+        options: bound,
         owned_by: owned,
-        if_not_exists: *if_not_exists,
+        if_not_exists,
     };
     Ok(BoundStatement::CreateSequence(Box::new(spec)))
+}
+
+/// A numeric option value kept as text (`-5`, `+3`, `99999999999999999999`) as an expression, so the
+/// shared option binder range-checks it like a parsed literal.
+pub(super) fn number_expr(text: &str) -> Expr {
+    Expr::Value(sqlparser::ast::ValueWithSpan {
+        value: Value::Number(text.to_string(), false),
+        span: sqlparser::tokenizer::Span::empty(),
+    })
 }
 
 /// Resolve sequence option lists (CREATE SEQUENCE, identity columns) into `SequenceOptions`,
@@ -616,119 +683,109 @@ pub fn bind_create_domain(b: &mut Binder, stmt: &Statement) -> Result<BoundState
     Ok(BoundStatement::CreateDomain(Box::new(spec)))
 }
 
-/// Role options of one `CREATE ROLE` / `CREATE USER` name (`CreateRole`, PG `CreateRole`).
-fn create_role_spec(b: &mut Binder, role: &CreateRole) -> Result<CreateRoleSpec> {
-    let pos = match role.names.first() {
-        Some(n) => obj_pos(b, n),
-        None => None,
-    };
-    if role.if_not_exists {
-        return Err(diag::syntax("syntax error at or near \"NOT\"", pos));
+/// 42601 `conflicting or redundant options` at the repeated role option.
+fn role_conflict(item: &RoleOptionItem) -> PgError {
+    conflicting_options(item.pos)
+}
+
+/// PG `CreateRole`: option loop (conflicts), then value checks, reserved name, member lists.
+/// `CREATE USER` defaults to LOGIN; `CREATE GROUP` is `CREATE ROLE`.
+fn create_role_spec(b: &mut Binder, kind: RoleStmtKind, name: &Ident, options: &[RoleOptionItem]) -> Result<CreateRoleSpec> {
+    let mut seen: Vec<&'static str> = Vec::new();
+    let mut spec = CreateRoleSpec::new(b.ident(name));
+    if kind == RoleStmtKind::User {
+        spec.can_login = true;
     }
-    if role.names.len() != 1 || role.authorization_owner.is_some() {
-        return Err(diag::syntax("syntax error", pos));
-    }
-    let name = single_name(b, &role.names[0])?;
-    if name.starts_with("pg_") {
-        return Err(errors::reserved_role_name(&name));
-    }
-    let mut spec = CreateRoleSpec::new(name);
-    if let Some(v) = role.superuser {
-        spec.superuser = v;
-    }
-    if let Some(v) = role.inherit {
-        spec.inherit = v;
-    }
-    if let Some(v) = role.create_role {
-        spec.create_role = v;
-    }
-    if let Some(v) = role.create_db {
-        spec.create_db = v;
-    }
-    if let Some(v) = role.login {
-        spec.can_login = v;
-    }
-    if let Some(v) = role.replication {
-        spec.replication = v;
-    }
-    if let Some(v) = role.bypassrls {
-        spec.bypass_rls = v;
-    }
-    if let Some(e) = &role.connection_limit {
-        let raw = seq_int(b, e, pos)?;
-        let limit = match i32::try_from(raw) {
-            Ok(v) => v,
-            Err(_) => {
-                let err = PgError::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, format!("value \"{raw}\" is out of range for type integer"));
-                return Err(diag::with_position(err, pos));
+    let mut conn_limit: Option<i32> = None;
+    let mut password: Option<Option<String>> = None;
+    let mut valid_until: Option<(&str, Option<u32>)> = None;
+    let mut in_roles: &[Ident] = &[];
+    let mut members: &[Ident] = &[];
+    let mut admins: &[Ident] = &[];
+    for item in options {
+        let key = match &item.option {
+            RoleOptionAst::Password(_) => "password",
+            RoleOptionAst::Superuser(_) => "superuser",
+            RoleOptionAst::Inherit(_) => "inherit",
+            RoleOptionAst::CreateRole(_) => "createrole",
+            RoleOptionAst::CreateDb(_) => "createdb",
+            RoleOptionAst::Login(_) => "canlogin",
+            RoleOptionAst::Replication(_) => "isreplication",
+            RoleOptionAst::BypassRls(_) => "bypassrls",
+            RoleOptionAst::ConnectionLimit(_) => "connectionlimit",
+            RoleOptionAst::ValidUntil(_) => "validUntil",
+            RoleOptionAst::RoleMembers(_) => "rolemembers",
+            RoleOptionAst::AddRoleTo(_) => "addroleto",
+            RoleOptionAst::AdminMembers(_) => "adminmembers",
+            RoleOptionAst::Sysid => {
+                // PG only warns, once per SYSID, and does not treat repeats as conflicts.
+                b.notice(PgError::notice("SYSID can no longer be specified"));
+                continue;
             }
         };
+        if seen.contains(&key) {
+            return Err(role_conflict(item));
+        }
+        seen.push(key);
+        match &item.option {
+            RoleOptionAst::Password(p) => password = Some(p.clone()),
+            RoleOptionAst::Superuser(v) => spec.superuser = *v,
+            RoleOptionAst::Inherit(v) => spec.inherit = *v,
+            RoleOptionAst::CreateRole(v) => spec.create_role = *v,
+            RoleOptionAst::CreateDb(v) => spec.create_db = *v,
+            RoleOptionAst::Login(v) => spec.can_login = *v,
+            RoleOptionAst::Replication(v) => spec.replication = *v,
+            RoleOptionAst::BypassRls(v) => spec.bypass_rls = *v,
+            RoleOptionAst::ConnectionLimit(v) => conn_limit = Some(*v),
+            RoleOptionAst::ValidUntil(t) => valid_until = Some((t.as_str(), item.pos)),
+            RoleOptionAst::RoleMembers(l) => members = l,
+            RoleOptionAst::AddRoleTo(l) => in_roles = l,
+            RoleOptionAst::AdminMembers(l) => admins = l,
+            RoleOptionAst::Sysid => {}
+        }
+    }
+    if let Some(limit) = conn_limit {
         if limit < -1 {
-            let e = PgError::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid connection limit: {limit}"));
-            return Err(diag::with_position(e, pos));
+            return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid connection limit: {limit}")));
         }
         spec.conn_limit = limit;
     }
-    if let Some(p) = &role.password {
-        spec.password = match p {
-            Password::NullPassword => None,
-            Password::Password(e) => match string_literal(e) {
-                Some(s) => Some(s),
-                None => return Err(syntax_at_expr(b, e, pos)),
-            },
-        };
+    if spec.name.starts_with("pg_") {
+        return Err(errors::reserved_role_name(&spec.name));
     }
-    if let Some(e) = &role.valid_until {
-        let text = match string_literal(e) {
-            Some(s) => s,
-            None => return Err(syntax_at_expr(b, e, pos)),
-        };
-        let text_pos = expr_pos(b, e, pos);
+    if let Some((text, tpos)) = valid_until {
         let ctx = b.io_ctx();
-        let datum = pgarbor_types::io::input(&ctx, TypeId::of(oids::TIMESTAMPTZ), &text)
-            .map_err(|err| diag::with_position(err, text_pos))?;
+        let datum = pgarbor_types::io::input(&ctx, TypeId::of(oids::TIMESTAMPTZ), text).map_err(|err| diag::with_position(err, tpos))?;
         match datum {
             Datum::TimestampTz(us) => spec.valid_until = Some(us),
             _ => return Err(PgError::internal("binder: timestamptz input produced another datum")),
         }
     }
-    for id in role.in_role.iter().chain(role.in_group.iter()) {
+    if let Some(p) = password {
+        spec.password = match p {
+            Some(s) if s.is_empty() => {
+                b.notice(PgError::notice("empty string is not a valid password, clearing password"));
+                None
+            }
+            other => other,
+        };
+    }
+    for id in in_roles {
         spec.in_roles.push(role_oid(b, id)?);
     }
-    for id in role.role.iter().chain(role.user.iter()) {
+    for id in members {
         spec.members.push(role_oid(b, id)?);
     }
-    for id in role.admin.iter() {
+    for id in admins {
         spec.admins.push(role_oid(b, id)?);
     }
     Ok(spec)
 }
 
-/// `Statement::CreateRole` / `CreateUser`.
-pub fn bind_create_role(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
-    match stmt {
-        Statement::CreateRole(role) => {
-            let spec = create_role_spec(b, role)?;
-            Ok(BoundStatement::CreateRole(Box::new(spec)))
-        }
-        Statement::CreateUser(user) => {
-            // PG `CREATE USER` is `CREATE ROLE ... LOGIN`.
-            if user.or_replace || user.if_not_exists {
-                return Err(diag::syntax("syntax error", None));
-            }
-            if !user.options.options.is_empty() || user.with_tags || !user.tags.options.is_empty() {
-                return Err(unsupported("CREATE USER options", None));
-            }
-            let name = b.ident(&user.name);
-            if name.starts_with("pg_") {
-                return Err(errors::reserved_role_name(&name));
-            }
-            let mut spec = CreateRoleSpec::new(name);
-            spec.can_login = true;
-            Ok(BoundStatement::CreateRole(Box::new(spec)))
-        }
-        _ => Err(PgError::internal("binder: bind_create_role called for another statement")),
-    }
+/// `ExtraStatement::CreateRole` (`CREATE ROLE|USER|GROUP`).
+pub fn bind_create_role(b: &mut Binder, kind: RoleStmtKind, name: &Ident, options: &[RoleOptionItem]) -> Result<BoundStatement> {
+    let spec = create_role_spec(b, kind, name, options)?;
+    Ok(BoundStatement::CreateRole(Box::new(spec)))
 }
 
 /// `Statement::CreateDatabase`.
@@ -767,19 +824,32 @@ mod tests {
     use crate::source::SourceMap;
     use pgarbor_catalog::testing;
     use pgarbor_types::context::IoConfig;
-    use sqlparser::dialect::PostgreSqlDialect;
-    use sqlparser::parser::Parser;
+    use crate::extra_stmt::ExtraStatement;
+    use crate::parser::{parse, Parsed};
 
-    fn parse_one(sql: &str) -> Statement {
-        let mut stmts = Parser::parse_sql(&PostgreSqlDialect {}, sql).expect("test SQL parses");
-        stmts.remove(0)
+    /// Parse one statement with PGArbor's own parser (the one the server uses).
+    fn parse_one(sql: &str) -> Parsed {
+        let mut stmts = parse(sql).expect("test SQL parses");
+        stmts.remove(0).parsed
     }
 
+    /// The option list of a `CREATE SEQUENCE`, as the numeric binder sees it (`AS` / `OWNED BY` left out).
     fn sequence_options(sql: &str) -> Vec<AstSequenceOption> {
-        match parse_one(sql) {
-            Statement::CreateSequence { sequence_options, .. } => sequence_options,
-            other => panic!("not a CREATE SEQUENCE: {other}"),
-        }
+        let Parsed::Extra(ExtraStatement::CreateSequence { options, .. }) = parse_one(sql) else {
+            panic!("not a CREATE SEQUENCE: {sql}");
+        };
+        options
+            .iter()
+            .filter_map(|o| match o {
+                SequenceOptionAst::IncrementBy(t) => Some(AstSequenceOption::IncrementBy(number_expr(t), true)),
+                SequenceOptionAst::MinValue(v) => Some(AstSequenceOption::MinValue(v.as_deref().map(number_expr))),
+                SequenceOptionAst::MaxValue(v) => Some(AstSequenceOption::MaxValue(v.as_deref().map(number_expr))),
+                SequenceOptionAst::StartWith(t) => Some(AstSequenceOption::StartWith(number_expr(t), true)),
+                SequenceOptionAst::Cache(t) => Some(AstSequenceOption::Cache(number_expr(t))),
+                SequenceOptionAst::Cycle(c) => Some(AstSequenceOption::Cycle(*c)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Run `f` with a binder over the bootstrapped catalog (search path pg_catalog, public).
@@ -799,15 +869,20 @@ mod tests {
 
     /// Bind one DDL statement of the families this file owns.
     fn bind_sql(sql: &str) -> Result<BoundStatement> {
-        let stmt = parse_one(sql);
-        with_binder(|b| match &stmt {
-            Statement::CreateSchema { .. } => bind_create_schema(b, &stmt),
-            Statement::CreateSequence { .. } => bind_create_sequence(b, &stmt),
-            Statement::CreateType { .. } => bind_create_type(b, &stmt),
-            Statement::CreateDomain(_) => bind_create_domain(b, &stmt),
-            Statement::CreateRole(_) | Statement::CreateUser(_) => bind_create_role(b, &stmt),
-            Statement::CreateDatabase { .. } => bind_create_database(b, &stmt),
-            other => panic!("unexpected statement in test: {other}"),
+        let parsed = parse_one(sql);
+        with_binder(|b| match &parsed {
+            Parsed::Extra(ExtraStatement::CreateSequence { temporary, unlogged, if_not_exists, name, options }) => {
+                bind_create_sequence(b, *temporary, *unlogged, *if_not_exists, name, options)
+            }
+            Parsed::Extra(ExtraStatement::CreateRole { kind, name, options }) => bind_create_role(b, *kind, name, options),
+            Parsed::Extra(other) => panic!("unexpected statement in test: {other:?}"),
+            Parsed::Ast(stmt) => match &**stmt {
+                Statement::CreateSchema { .. } => bind_create_schema(b, stmt),
+                Statement::CreateType { .. } => bind_create_type(b, stmt),
+                Statement::CreateDomain(_) => bind_create_domain(b, stmt),
+                Statement::CreateDatabase { .. } => bind_create_database(b, stmt),
+                other => panic!("unexpected statement in test: {other}"),
+            },
         })
     }
 
@@ -983,5 +1058,112 @@ mod tests {
         let e = err_of(bind_sql("create type c as (a int, a text)"));
         assert_eq!(e.sqlstate, SqlState::DUPLICATE_COLUMN);
         assert_eq!(e.message, "column name \"a\" specified more than once");
+    }
+
+    #[test]
+    fn sequence_options_in_any_order_bind_alike() {
+        let spec = |sql: &str| match bind_sql(sql).unwrap() {
+            BoundStatement::CreateSequence(spec) => spec.options,
+            _ => panic!("expected CreateSequence"),
+        };
+        let a = spec("create sequence s maxvalue 100 as smallint minvalue 3 cache 4 no cycle increment by -1 start with 50");
+        let b = spec("create sequence s increment -1 start 50 cache 4 minvalue 3 maxvalue 100 as smallint no cycle");
+        assert_eq!(a, b);
+        assert_eq!(a.type_oid, Some(oids::INT2));
+        assert_eq!(a.increment, Some(-1));
+        assert_eq!(a.start, Some(50));
+        assert_eq!(a.minvalue, Some(SeqBound::Value(3)));
+        assert_eq!(a.maxvalue, Some(SeqBound::Value(100)));
+        assert_eq!(a.cache, Some(4));
+        // `RESTART` is accepted and ignored for a new sequence; signs may be explicit.
+        let c = spec("create sequence s restart increment +3");
+        assert_eq!(c.increment, Some(3));
+        let d = spec("create sequence s increment - 3");
+        assert_eq!(d.increment, Some(-3));
+    }
+
+    #[test]
+    fn sequence_negative_and_signed_values() {
+        let e = options_error("create sequence s increment 0", oids::INT8);
+        assert_eq!(e.message, "INCREMENT must not be zero");
+        let opts = sequence_options("create sequence s minvalue -10 maxvalue -2 start -5 increment -1");
+        let r = with_binder(|b| bind_sequence_options(b, &opts, oids::INT8, None)).unwrap();
+        assert_eq!(r.minvalue, Some(SeqBound::Value(-10)));
+        assert_eq!(r.maxvalue, Some(SeqBound::Value(-2)));
+        assert_eq!(r.start, Some(-5));
+        // A signed number kept as text (the ALTER SEQUENCE path) binds the same way.
+        let opts = vec![AstSequenceOption::IncrementBy(number_expr("-4"), true)];
+        let r = with_binder(|b| bind_sequence_options(b, &opts, oids::INT8, None)).unwrap();
+        assert_eq!(r.increment, Some(-4));
+    }
+
+    #[test]
+    fn sequence_repeated_and_rejected_options() {
+        for sql in [
+            "create sequence s increment 1 increment by 2",
+            "create sequence s as int as bigint",
+            "create sequence s cycle no cycle",
+            "create sequence s owned by none owned by none",
+            "create sequence s as int increment 0 as int",
+        ] {
+            let e = err_of(bind_sql(sql));
+            assert_eq!(e.sqlstate, SqlState::SYNTAX_ERROR, "{sql}");
+            assert_eq!(e.message, "conflicting or redundant options", "{sql}");
+        }
+        let e = err_of(bind_sql("create sequence s as text"));
+        assert_eq!(e.sqlstate, SqlState::INVALID_PARAMETER_VALUE);
+        assert_eq!(e.message, "sequence type must be smallint, integer, or bigint");
+        let e = err_of(bind_sql("create sequence s sequence name x"));
+        assert_eq!(e.sqlstate, SqlState::SYNTAX_ERROR);
+        assert_eq!(e.message, "invalid sequence option SEQUENCE NAME");
+        let e = err_of(bind_sql("create sequence s logged"));
+        assert_eq!(e.message, "option \"logged\" not recognized");
+        let e = err_of(bind_sql("create sequence s increment 1.5"));
+        assert_eq!(e.sqlstate, SqlState::INVALID_TEXT_REPRESENTATION);
+        assert_eq!(e.message, "invalid input syntax for type bigint: \"1.5\"");
+    }
+
+    #[test]
+    fn role_options_in_any_order_with_signed_limit() {
+        let spec = |sql: &str| match bind_sql(sql).unwrap() {
+            BoundStatement::CreateRole(spec) => spec,
+            _ => panic!("expected CreateRole"),
+        };
+        let a = spec("create role r connection limit -1 createdb nologin noinherit password 'x'");
+        let b = spec("create role r with password 'x' noinherit nologin createdb connection limit -1");
+        assert_eq!(a, b);
+        assert_eq!(a.conn_limit, -1);
+        assert!(a.create_db && !a.can_login && !a.inherit);
+        assert_eq!(spec("create role r connection limit +5").conn_limit, 5);
+        // CREATE USER implies LOGIN, an explicit NOLOGIN wins; CREATE GROUP is a plain role.
+        assert!(spec("create user u").can_login);
+        assert!(!spec("create user u nologin").can_login);
+        assert!(!spec("create group g").can_login);
+        let c = spec("create role r valid until '2030-01-01 00:00:00+00' superuser");
+        assert!(c.superuser);
+        assert!(c.valid_until.is_some());
+    }
+
+    #[test]
+    fn role_option_errors_match_pg() {
+        let e = err_of(bind_sql("create role r connection limit -1 connection limit 3"));
+        assert_eq!(e.sqlstate, SqlState::SYNTAX_ERROR);
+        assert_eq!(e.message, "conflicting or redundant options");
+        for sql in ["create role r login nologin", "create role r superuser nosuperuser", "create role r noinherit inherit"] {
+            assert_eq!(err_of(bind_sql(sql)).message, "conflicting or redundant options", "{sql}");
+        }
+        let e = err_of(bind_sql("create role r connection limit - 5"));
+        assert_eq!(e.sqlstate, SqlState::INVALID_PARAMETER_VALUE);
+        assert_eq!(e.message, "invalid connection limit: -5");
+        // A number that does not fit `int` is a syntax error at the number, not a range error.
+        let e = crate::parser::parse("create role r connection limit 2147483648").unwrap_err();
+        assert_eq!(e.sqlstate, SqlState::SYNTAX_ERROR);
+        assert_eq!(e.message, "syntax error at or near \"2147483648\"");
+        let e = crate::parser::parse("create role r foo").unwrap_err();
+        assert_eq!(e.sqlstate, SqlState::SYNTAX_ERROR);
+        assert_eq!(e.message, "unrecognized role option \"foo\"");
+        let e = crate::parser::parse("create role r unencrypted password 'x'").unwrap_err();
+        assert_eq!(e.sqlstate, SqlState::FEATURE_NOT_SUPPORTED);
+        assert_eq!(e.message, "UNENCRYPTED PASSWORD is no longer supported");
     }
 }
