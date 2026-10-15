@@ -1,0 +1,719 @@
+{
+ "crate": "pgarbor-wire",
+ "contract_version": "v1",
+ "leases": [
+  {
+   "lease_id": "WIR-01",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-04",
+    "WIRE-05"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/frontend.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Decode all frontend messages (Q P B E D C S H X d c f p F).",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-01\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement decode_frontend, parse_password, parse_sasl_initial using buf::MsgReader. Follow the layout table in the module docs. Unknown tag -> 08P01 `invalid frontend message type N` (decimal). Counts (Int16) must be >= 0 and are never used for with_capacity beyond `remaining()`. Bind: formats vec, then param count, then per param Int32 len (-1 NULL, else 0..=remaining, anything else `invalid message format`), then result formats; finish() the reader. Describe/Close subtype other than b'S'/b'P' -> `invalid DESCRIBE message subtype N` / `invalid CLOSE message subtype N` (N decimal of the byte). Execute max_rows is Int32 (keep sign). Empty-body messages with a non-empty body -> `invalid message format`. Tests: one hand-built byte vector per message type; truncation of every prefix of a Bind body errors with 08P01 and never panics; negative counts; unknown tag.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml",
+    "crates/pgarbor-wire/src/frontend.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "decode_frontend(b'Q', b\"select 1\\0\") == Query(\"select 1\")",
+    "every strict prefix of a valid Bind body fails with SQLSTATE 08P01 and never panics",
+    "unknown tag 90 gives message `invalid frontend message type 90`"
+   ]
+  },
+  {
+   "lease_id": "WIR-02",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-05",
+    "WIRE-06"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/backend.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Encode all backend messages byte-exactly.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-02\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement encode_backend with buf::MsgWriter (tag + Int32 length counting itself; patched by finish()). Follow the layout table and the limits (Int16 counts -> 54000 `too many columns` / `too many parameters`; buffer restored to entry length on error). ErrorResponse/NoticeResponse: for each (code,value) in fields write the code byte then put_cstr(value), then a final 0 byte. AuthenticationSASL: mechanisms as cstrs then an extra 0 byte. BackendKeyData secret = rest of body. ReadyForQuery byte from TxnStatus::byte(). Tests: every hex example in the docs byte for byte; a decode-by-hand round trip for RowDescription/DataRow; limit error leaves `out` unchanged.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml",
+    "crates/pgarbor-wire/src/backend.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "crates/pgarbor/src/types.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "ReadyForQuery(Idle) encodes to 5a 00 00 00 05 49",
+    "DataRow([Some(b\"1\"),None]) encodes to 44 0000000f 0002 00000001 31 ffffffff",
+    "encode errors leave the output buffer unchanged"
+   ]
+  },
+  {
+   "lease_id": "WIR-03",
+   "task_ids": [
+    "WIRE-01"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/startup_packet.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Parse the untagged first packet (Startup/SSL/GSSENC/Cancel).",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-03\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement parse_startup_packet. First Int32 is the code: 80877103/80877104/80877102 per consts.rs else protocol version (major=code>>16, minor=code&0xffff). SslRequest/GssEncRequest bodies must be exactly 4 bytes else FATAL 08P01 `invalid length of startup packet`. Cancel: Int32 pid then 4..=256 secret bytes. Startup: parse name/value cstr pairs until an empty name; the terminator must be the LAST byte, otherwise FATAL 08P01 `invalid startup packet layout: expected terminator as last byte`. All errors via .with_severity(Severity::Fatal). Tests: each packet kind, missing terminator, trailing bytes after terminator, 3.2 version code, cancel with 3 and 257 secret bytes.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml",
+    "~/develop/reference/postgres-18/src/backend/postmaster/postmaster.c (ProcessStartupPacket)"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "80877103 parses to SslRequest",
+    "Startup with user/database parses params in arrival order",
+    "missing terminator is FATAL 08P01"
+   ]
+  },
+  {
+   "lease_id": "WIR-04",
+   "task_ids": [
+    "WIRE-06"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/error_fields.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "PgError -> ErrorResponse/NoticeResponse field list.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-04\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement fields_from_pg_error exactly per the table in the module docs (order S V C M D H P s t c d n; omit None/empty optional fields; M always present; P is position as decimal). Tests: full error with every optional field, minimal error, NOTICE severity, empty detail omitted.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "fields order is S,V,C,M,D,H,P,s,t,c,d,n",
+    "no F/L/R/W fields are ever emitted"
+   ]
+  },
+  {
+   "lease_id": "WIR-05",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-03",
+    "WIRE-10"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/framing.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Resumable frame reader and buffered writer.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-05\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement FrameReader::poll_frame/poll_startup and FrameWriter::push/flush per the module docs. Accumulate bytes in `buf`; return a frame only when complete; timeouts (WouldBlock/TimedOut) return Polled::TimedOut WITHOUT discarding partial data; Interrupted retried; read of 0 = Eof if nothing buffered else Io(UnexpectedEof). Validate the length field BEFORE reading the body (len < 4 or len-4 > max_body => FATAL 08P01 `invalid message length`; startup length outside 8..=max_len => FATAL 08P01 `invalid length of startup packet`). Compact the buffer (drain consumed prefix) when pos > buf.len()/2 to keep memory bounded. poll_startup sets the stream read timeout from `timeout` for each read. FrameWriter::push encodes with backend::encode_backend into a scratch Vec then appends (so errors leave the buffer unchanged), auto-flushes when pending > AUTO_FLUSH_BYTES; flush uses write_all + flush and clears the buffer even on error. Tests with a connected pair of std::net::TcpStream on 127.0.0.1:0 (bind a listener in the test): frame split across two writes arrives intact after a TimedOut; two pipelined frames; oversized length rejected without allocation; EOF mid-frame is Io error; writer auto-flush.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/transport.rs",
+    "crates/pgarbor-wire/src/backend.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-02"
+   ],
+   "acceptance": [
+    "a frame delivered in two TCP segments is returned once complete and a poll between them returns TimedOut",
+    "len=3 is FATAL 08P01 invalid message length",
+    "clean close at a frame boundary yields Polled::Eof"
+   ]
+  },
+  {
+   "lease_id": "WIR-06",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-12"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/conn_io.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Typed connection I/O with transcript recording.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-06\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement ConnIo::new/send/flush/poll/poll_raw/poll_startup/write_ssl_answer per the module docs. new: stream.try_clone() for the writer; FrameReader::new(stream, cfg.max_frame_bytes); set_nodelay(cfg.tcp_nodelay); peer = stream.peer_info() BEFORE moving; transcript = cfg.transcript.clone(). send: encode with backend::encode_backend into a scratch Vec, record(ServerToClient, Some(tag), msg.name(), &bytes[5..]) then self.writer.push_raw (auto-flush threshold via pending()). poll/poll_raw: if writer.pending() > 0 flush FIRST (never block on read with unflushed output), then reader.poll_frame; record ClientToServer with the frontend name (use frontend::decode_frontend then Frontend::name(); on decode error record name `Invalid`); poll_startup records the packet (tag None) with names per the docs. write_ssl_answer writes the single byte through writer.push_raw + flush and records `SSLResponse`.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/framing.rs",
+    "crates/pgarbor-wire/src/transcript.rs",
+    "crates/pgarbor-wire/src/config.rs",
+    "crates/pgarbor-wire/src/frontend.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-01",
+    "WIR-02",
+    "WIR-05"
+   ],
+   "acceptance": [
+    "pending output is flushed before every blocking read",
+    "each message in both directions is recorded exactly once with increasing seq"
+   ]
+  },
+  {
+   "lease_id": "WIR-07",
+   "task_ids": [
+    "WIRE-01"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/options_parse.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Parse the startup `options` string and assemble startup GUCs.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-07\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement split_options (backslash escapes; split on space, tab, \\n, \\r, \\x0c, \\x0b), parse_options and build_startup_gucs per the module docs. Errors are FATAL 42601 `invalid command-line argument for server process: <token>`. -c accepts `-c n=v`, `-cn=v`; `--n=v` converts '-' to '_' in the name. Tests: escapes, both -c forms, long form, missing '=', unknown short option, assembly order with defaults/params/options, reserved params excluded (user, database, options, replication, application_name, _pq_.*).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/src/backend/postmaster/postmaster.c (process_startup_options)",
+    "~/develop/reference/postgres-18/src/backend/utils/misc/guc.c (ParseLongOption)"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "`-c DateStyle=ISO,MDY --statement-timeout=5s` parses to two pairs with statement_timeout",
+    "`-c foo` is FATAL 42601"
+   ]
+  },
+  {
+   "lease_id": "WIR-08",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-09",
+    "WIRE-13"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/startup_flow.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Startup negotiation: SSL/GSS refusal, cancel, version negotiation, parameter extraction.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-08\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement negotiate exactly per the numbered algorithm in the module docs, using io.poll_startup, startup_packet::parse_startup_packet, tls::encryption_answer, cancel::handle, options_parse::build_startup_gucs and io.send_flush for NegotiateProtocolVersion. Truncate user/database to 63 bytes on a char boundary. Send each FATAL error with error_fields::error_message BEFORE returning Err (the caller only closes). Tests (use a connected TCP pair + ConnIo): SSLRequest then StartupMessage proceeds and the peer saw one 'N'; major 4 => FATAL 0A000; minor 5 => NegotiateProtocolVersion(newest_minor 2) and cancel_key_len 32; _pq_.foo => listed in the negotiate message; missing user => FATAL 28000; replication=true rejected.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/startup_packet.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/options_parse.rs",
+    "crates/pgarbor-wire/src/cancel.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "contracts/amendments/pgarbor-wire-02-protocol-3-2-native.md"
+   ],
+   "depends_on_leases": [
+    "WIR-03",
+    "WIR-06",
+    "WIR-07"
+   ],
+   "acceptance": [
+    "SSLRequest is answered with exactly one byte N",
+    "protocol 3.0 => cancel_key_len 4, 3.2 => 32",
+    "unsupported major version is FATAL 0A000 with the documented text"
+   ]
+  },
+  {
+   "lease_id": "WIR-09",
+   "task_ids": [
+    "WIRE-02"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/scram.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "SCRAM-SHA-256 server and client state machines, verifier handling.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-09\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement parse_verifier, make_verifier, mock_verifier, ScramServer::{client_first, client_final}, ScramClient::{client_first, client_final, verify_server_final} per the module docs and RFC 5802/7677. Crates: sha2 0.10 (Sha256, Digest), hmac 0.12 (Hmac<Sha256>, Mac::new_from_slice, update, finalize().into_bytes()), pbkdf2 0.12 (`pbkdf2::pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut out)`), base64 0.22 (`base64::engine::general_purpose::STANDARD`, Engine trait encode/decode), rand 0.9 (`rand::fill(&mut buf)`): READ their sources. Constant-time comparison for StoredKey (fold XOR over bytes). Nonces: 18 random bytes base64. Parse attributes like auth-scram.c read_attr (single-char key, '=', value up to ','). Reject channel binding (`p=` gs2) with 08P01. The client-final channel-binding attribute must equal base64(gs2 header) i.e. `biws` for `n,,`. Tests: RFC 7677 test vector (user, password `pencil`, salt W22ZaJ0SNY7soEsUEjb6gQ==, 4096 iterations, nonces from the RFC) for both sides; full client<->server loop with random nonces; wrong password => Ok(Failed); mock verifier is deterministic per (secret,user) and the exchange always ends Failed; parse_verifier rejects bad strings.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "~/develop/reference/postgres-18/src/backend/libpq/auth-scram.c",
+    "~/develop/reference/postgres-18/src/common/scram-common.c",
+    "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pbkdf2-0.12.2/src/lib.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "RFC 7677 vector verifies",
+    "make_verifier output round-trips through parse_verifier",
+    "wrong proof => Ok(ScramOutcome::Failed) not Err"
+   ]
+  },
+  {
+   "lease_id": "WIR-10",
+   "task_ids": [
+    "WIRE-02"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/auth.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Authentication: method choice, cleartext, md5, SCRAM exchanges, failure shapes.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-10\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement choose_method, md5_verifier, md5_response, verify_plain_password, authenticate per the module docs (method table, exchanges, failures). md-5 crate: library name `md5` (`use md5::{Md5, Digest}`); hex-encode by hand. Use io.poll_raw for `p` frames with timeout = deadline - now (TimedOut => FATAL 57014 `canceling authentication due to timeout`), check tag == b'p' else FATAL 08P01 `expected password response, got message type <decimal>`. Unknown role / no verifier under a password policy must take the SAME code path and timing shape as a wrong password (mock SCRAM for Scram; for Cleartext/Md5 still read the response, then fail 28P01). Role `valid_until` (timestamptz \u00b5s since 2000-01-01) in the past => 28P01. All failures: FATAL, sent via error_fields::error_message and flushed BEFORE returning Err. After success send_flush AuthenticationOk. Tests with a connected TCP pair + WireClient-style raw bytes or the scram::ScramClient: trust => AuthenticationOk only; cleartext right/wrong; md5 right/wrong (known vector: user `postgres`, password `secret`); SCRAM right/wrong; non-local peer + Auto without verifier => 28000 pg_hba text.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/scram.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/startup_flow.rs",
+    "crates/pgarbor/src/types.rs",
+    "crates/pgarbor/src/database.rs",
+    "~/develop/reference/postgres-18/src/backend/libpq/auth.c",
+    "~/develop/reference/postgres-18/src/backend/libpq/crypt.c"
+   ],
+   "depends_on_leases": [
+    "WIR-06",
+    "WIR-09"
+   ],
+   "acceptance": [
+    "wrong password => FATAL 28P01 `password authentication failed for user \"x\"`",
+    "unknown role under scram runs a full mock exchange before failing",
+    "md5 response matches PG's formula"
+   ]
+  },
+  {
+   "lease_id": "WIR-11",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-06"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/simple_query.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Simple Query message handling.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-11\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement handle per the numbered steps in the module docs using Session::simple_query_raw and result_encode::{send_statement_output, send_error_cycle, finish_cycle}. Borrow the SharedIo with ctx.io.borrow_mut() only for the duration of each call (do not hold it across session calls: COPY channels borrow it during execution). Tests (marked #[ignore = \"needs API-07\"] where they need a real Session): empty query => EmptyQueryResponse + ReadyForQuery; two statements => two CommandCompletes; error => ErrorResponse then ReadyForQuery('I'); FATAL error closes without ReadyForQuery.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/result_encode.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "crates/pgarbor/src/simple_query.rs",
+    "crates/pgarbor/src/types.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-14"
+   ],
+   "acceptance": [
+    "every Query ends with ReadyForQuery carrying SimpleQueryOutput.status unless the error is FATAL",
+    "statement outputs are sent in order, errors after the completed statements"
+   ]
+  },
+  {
+   "lease_id": "WIR-12",
+   "task_ids": [
+    "WIRE-04",
+    "WIRE-05",
+    "WIRE-06",
+    "WIRE-07"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/extended.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Extended protocol messages with skip-until-Sync semantics.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-12\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement handle per the table and error-handling rules in the module docs. Convert wire format codes with pgarbor::FormatCode::from_i16 (08P01 `unsupported format code: N`). Describe portal uses ctx.portal_formats (map FormatCode lists with backend::format_for_column via result_encode::row_fields); Describe statement uses empty formats. Execute: max_rows <= 0 => 0. On any Err from a session call: result_encode::send_error_cycle(.., err), set ctx.skipping_until_sync = true and return Ok(()) (FATAL errors: flush and return Err(WireError::Pg)). Sync: call session.sync(); on Ok(status) finish_cycle(status); on Err(e) send the error then finish_cycle(session.txn_status()); always clear skipping_until_sync. Flush: io.flush(). Close portal removes ctx.portal_formats entry. Tests (ignored where a real Session is needed): unit-test the format mapping helper functions you add privately; Parse error then Execute is skipped until Sync; Describe portal reports the Bind-time formats.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor/src/extended.rs",
+    "crates/pgarbor/src/types.rs",
+    "crates/pgarbor-wire/src/result_encode.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "crates/pgarbor-wire/src/frontend.rs",
+    "~/develop/reference/postgres-18/src/backend/tcop/postgres.c"
+   ],
+   "depends_on_leases": [
+    "WIR-14"
+   ],
+   "acceptance": [
+    "after an error no message is answered until Sync",
+    "Describe(P) uses the result formats given at Bind",
+    "Sync always ends with exactly one ReadyForQuery"
+   ]
+  },
+  {
+   "lease_id": "WIR-13",
+   "task_ids": [
+    "WIRE-08"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/copy.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "COPY IN/OUT message handling (channel logic; installation blocked on amendment pgarbor-wire-01).",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-13\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement WireCopyChannel::read_chunk/write_chunk and CopyHandle::finish_statement per the module docs. The io is `Rc<RefCell<ConnIo>>`: borrow_mut only inside each method. CopyData chunks are returned as-is (no re-framing). `install` MUST stay `Err(PgError::unimplemented(\"WIR-13\", ..))` until the amendment lands (keep that single call site). Tests: construct a WireCopyChannel over a connected TCP pair and drive it with raw frames: d,d,c => chunks then None; f => 57014 `COPY from stdin failed: msg`; H and S ignored; stray 'Q' => `unexpected message type 0x51 during COPY from stdin`; OUT: first write queues CopyOutResponse, finish_statement(true) queues CopyDone.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "contracts/amendments/pgarbor-wire-01-copy-channel-and-streaming.md",
+    "crates/pgarbor-exec/src/copy.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "~/develop/reference/postgres-18/src/backend/commands/copyfromparse.c",
+    "~/develop/reference/postgres-18/src/backend/commands/copyto.c"
+   ],
+   "depends_on_leases": [
+    "WIR-06"
+   ],
+   "acceptance": [
+    "CopyFail yields 57014 with `COPY from stdin failed: ` prefix",
+    "CopyDone is sent exactly once per COPY TO statement and never after an error"
+   ]
+  },
+  {
+   "lease_id": "WIR-14",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-06",
+    "WIRE-07"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/result_encode.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Statement results to backend messages; error cycle; ReadyForQuery cycle.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-14\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement send_notices, send_statement_output, send_error_cycle, finish_cycle per the module docs (message order; rows encoded BEFORE the RowDescription is queued; param_status handed to the ParamReporter; FATAL flush). Use ConnIo::send, error_fields::{error_message, notice_message}, Session::encode_row(columns, &[], row) for DataRows. Tests with a ConnIo over a TCP pair and a hand-built StatementOutput: Rows => T D D C order; Command => C; Empty => I; notices precede the result; finish_cycle emits deduplicated ParameterStatus then Z.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor-wire/src/param_report.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "crates/pgarbor/src/types.rs",
+    "crates/pgarbor/src/portal.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-02",
+    "WIR-04",
+    "WIR-06"
+   ],
+   "acceptance": [
+    "ParameterStatus is emitted only before ReadyForQuery and only when the value changed",
+    "a row-encoding error leaves no partial RowDescription queued"
+   ]
+  },
+  {
+   "lease_id": "WIR-15",
+   "task_ids": [
+    "WIRE-11"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/notify_out.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "NotificationResponse delivery and idle poll interval.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-15\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement deliver (only when session.txn_status() == TxnStatus::Idle; drain session.take_notifications(); send Backend::NotificationResponse{pid, channel, payload}; flush if any) and refine poll_interval (min(idle_poll, 25ms) while `shared.db.notify_hub().listening(session.pid())` is non-empty, never below 1 ms). Tests: poll_interval arithmetic (needs a Shared: build one via an in-memory Database and mark #[ignore = \"needs API-04\"] if necessary).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor/src/notify.rs",
+    "crates/pgarbor/src/session.rs",
+    "crates/pgarbor-wire/src/conn_io.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-06"
+   ],
+   "acceptance": [
+    "notifications are delivered only while idle",
+    "each delivered NotificationResponse carries the notifying backend pid"
+   ]
+  },
+  {
+   "lease_id": "WIR-16",
+   "task_ids": [
+    "WIRE-03",
+    "WIRE-05",
+    "WIRE-06",
+    "WIRE-09",
+    "WIRE-10",
+    "WIRE-11"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/session_loop.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Per-connection command loop: dispatch, idle polling, timeouts, shutdown.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-16\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement parse_pg_duration_ms and run per the module docs. The loop borrows ctx.io only around poll/send calls (never across simple_query::handle/extended::handle which borrow it themselves). Track `idle_since: Instant` reset after every handled message; check idle_in_transaction_session_timeout / idle_session_timeout only when poll returns TimedOut; read them via session.setting(name) (errors => treat as 0). Decode errors from poll (WireError::Pg non-fatal) are reported with result_encode::send_error_cycle and followed by finish_cycle unless the current protocol state is extended (skipping). Panics are caught by connection.rs, not here. Tests: parse_pg_duration_ms table (`0`, `5000`, `5s`, `1min`, `250ms`, `1h`, `1d`, `garbage`); the dispatch table as a pure private helper `classify(&Frontend, skipping) -> Action` tested exhaustively (ignore-till-sync rules).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/simple_query.rs",
+    "crates/pgarbor-wire/src/extended.rs",
+    "crates/pgarbor-wire/src/notify_out.rs",
+    "crates/pgarbor-wire/src/conn_io.rs",
+    "crates/pgarbor/src/guc_derive.rs",
+    "~/develop/reference/postgres-18/src/backend/tcop/postgres.c (PostgresMain)"
+   ],
+   "depends_on_leases": [
+    "WIR-06",
+    "WIR-11",
+    "WIR-12",
+    "WIR-15"
+   ],
+   "acceptance": [
+    "while skipping until Sync every message except Sync is discarded",
+    "idle_in_transaction_session_timeout terminates with FATAL 25P03",
+    "Terminate ends the loop without sending anything"
+   ]
+  },
+  {
+   "lease_id": "WIR-17",
+   "task_ids": [
+    "WIRE-01",
+    "WIRE-02",
+    "WIRE-10"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/connection.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Connection lifecycle from accept to close.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-17\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement serve_connection (catch_unwind around run_connection; swallow the result; drop permit and registry guard) and run_connection per the numbered steps in the module docs. Sessions are created on this thread with shared.db.connect(Some(&branch), SessionOptions{..}); map ALL connect errors to FATAL via PgError::with_severity. Seed ParamReporter with session.startup_param_status(). Never hold the ConnIo RefCell borrow across Database/Session calls. Use std::panic::catch_unwind(AssertUnwindSafe(..)); print `pgarbor-wire: connection N panicked: <msg>` to stderr. Tests (ignored until API-04/05/07 exist): trust connect + `select 1`; unknown role => FATAL 28000 after AuthenticationOk; too many clients => FATAL 53300.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/startup_flow.rs",
+    "crates/pgarbor-wire/src/auth.rs",
+    "crates/pgarbor-wire/src/session_loop.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "crates/pgarbor-wire/src/registry.rs",
+    "crates/pgarbor-wire/src/limits.rs",
+    "crates/pgarbor/src/database.rs",
+    "crates/pgarbor/src/types.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-06",
+    "WIR-08",
+    "WIR-10",
+    "WIR-16"
+   ],
+   "acceptance": [
+    "a panic in session code does not kill the server process",
+    "the permit and registry entry are released on every path"
+   ]
+  },
+  {
+   "lease_id": "WIR-18",
+   "task_ids": [
+    "WIRE-10",
+    "WIRE-01"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/listener.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Bind TCP/Unix listeners and run non-blocking accept loops.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-18\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement bind_all and accept_loop per the module docs. Unix-only code under #[cfg(unix)]; fallback 0A000 otherwise. Never panic on accept errors. Spawn connection threads with std::thread::Builder (name `pgarbor-conn-<id>`); take the `shared.threads` permit BEFORE spawning and pass it into connection::serve_connection. Socket file removal when the loop ends only if this listener created it. Tests: bind 127.0.0.1:0 twice and check distinct ports; binding an in-use port yields message containing `address in use`; unix socket path too long error; stale socket file is replaced; accept loop exits within 200 ms of shared.request_stop().",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/config.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "crates/pgarbor-wire/src/connection.rs",
+    "crates/pgarbor-wire/src/transport.rs",
+    "~/develop/reference/postgres-18/src/backend/libpq/pqcomm.c"
+   ],
+   "depends_on_leases": [
+    "WIR-17"
+   ],
+   "acceptance": [
+    "port 0 resolves to a real port",
+    "in-use port message contains the substring `address in use`",
+    "accept loop stops promptly after request_stop"
+   ]
+  },
+  {
+   "lease_id": "WIR-19",
+   "task_ids": [
+    "WIRE-10",
+    "WIRE-09"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/server.rs",
+    "crates/pgarbor-wire/tests/wir_19.rs"
+   ],
+   "model_tier": "sonnet",
+   "summary": "Server start/stop, URL building, end-to-end tests.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-19\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement Server::start, url, shutdown, wait_for per the module docs (shutdown idempotent: guard with the stop flag + a Mutex<bool> `done`; join accept threads via take of accept_threads; poll the registry for emptiness; close sockets after grace). Percent-encode user/database in url (unreserved set A-Za-z0-9-._~). Also write tests/wir_19.rs: end-to-end tests using pgarbor_wire::client::WireClient against Server::start(Database::in_memory()?, ServerConfig::loopback(\"main\")): startup + ParameterStatus set contains server_version 18.6, simple query, extended query with a parameter, error recovery (ErrorResponse then next query works), cancel of a long statement, 3.2 vs 3.0 key lengths via raw bytes, SSLRequest answered N, many parallel clients, shutdown while a client is connected. Mark every test #[ignore = \"needs API-04..API-12 and engine\"] until the engine is complete.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/listener.rs",
+    "crates/pgarbor-wire/src/shared.rs",
+    "crates/pgarbor-wire/src/registry.rs",
+    "crates/pgarbor-wire/src/client.rs",
+    "crates/pgarbor/src/database.rs"
+   ],
+   "depends_on_leases": [
+    "WIR-18",
+    "WIR-21"
+   ],
+   "acceptance": [
+    "shutdown returns within shutdown_grace + 2s even with connected idle clients",
+    "url() percent-encodes and brackets IPv6",
+    "Server::start fails cleanly (no leaked threads) when binding fails"
+   ]
+  },
+  {
+   "lease_id": "WIR-20",
+   "task_ids": [
+    "WIRE-12"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/transcript.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Transcript JSON line and human summary formatting.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-20\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement to_jsonl and summarize per the module docs. Hand-write JSON escaping (no serde in this crate). summarize decodes only the fields listed using buf::MsgReader (ignore decode failures: fall back to `len=N`). Tests: exact JSON line for a ReadyForQuery entry; escaping of quotes/control chars; summaries for Query, ErrorResponse, ReadyForQuery, DataRow.",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/transcript.rs",
+    "crates/pgarbor-wire/src/error_fields.rs"
+   ],
+   "depends_on_leases": [],
+   "acceptance": [
+    "to_jsonl output is valid JSON with the documented key order",
+    "summarize never panics on arbitrary bodies"
+   ]
+  },
+  {
+   "lease_id": "WIR-21",
+   "task_ids": [
+    "WIRE-12",
+    "WIRE-07"
+   ],
+   "files": [
+    "crates/pgarbor-wire/src/client.rs"
+   ],
+   "model_tier": "haiku",
+   "summary": "Minimal test/diagnostic wire client.",
+   "spec": "Implement every `PgError::unimplemented(\"WIR-21\", ..)` body of the listed file EXACTLY per the module and function doc comments (they are the contract: PG 18.6 wording, SQLSTATEs, byte layouts, examples). Do not change any signature, `pub` item, `// CONTRACT` item, other file, Cargo.toml or dependency; you may add private helpers and private struct fields only where the docs say so. No todo!/unimplemented!/panic!/unwrap/expect on client-derived data; bound every length BEFORE allocating. You CANNOT compile or run anything: write simple, explicit Rust, re-read each function once for borrow/ownership/type errors, and use only APIs whose definitions you have READ (files under `reads`, dependency sources in ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/, PostgreSQL reference ~/develop/reference/postgres-18: cite paths in comments, never copy code). Remove `#[allow(unused_variables)]` and the `PgError::unimplemented` call of every function you implement. Add unit tests in a `#[cfg(test)] mod tests` at the bottom of the file; tests that need other not-yet-implemented leases are marked `#[ignore = \"needs <LEASE>\"]`. Implement WireClient per the module docs using only std + scram::ScramClient + md5 for the md5 password. Parse backend messages with buf::MsgReader. Keep it small and robust: bound all lengths (max message 64 MiB), 10 s default read timeout. extended_query: Parse(\"\" , sql, []), Bind(\"\",\"\", [], params as text, []), Describe('P',\"\"), Execute(\"\",0), Sync. Error messages -> PgError rebuilt from fields S/C/M. Tests (ignored until the server exists): none required beyond pure helpers you extract (message parsing from byte slices).",
+   "reads": [
+    "contracts/ARCHITECTURE.md",
+    "contracts/crates/pgarbor-wire.md",
+    "crates/pgarbor-common/src/error.rs",
+    "crates/pgarbor-wire/src/lib.rs",
+    "crates/pgarbor-wire/src/buf.rs",
+    "crates/pgarbor-wire/src/error.rs",
+    "crates/pgarbor-wire/src/consts.rs",
+    "crates/pgarbor-wire/src/scram.rs",
+    "crates/pgarbor-wire/src/backend.rs",
+    "crates/pgarbor-wire/src/error_fields.rs",
+    "~/develop/reference/postgres-18/doc/src/sgml/protocol.sgml"
+   ],
+   "depends_on_leases": [
+    "WIR-09"
+   ],
+   "acceptance": [
+    "connect_tcp completes startup against trust, cleartext, md5 and SCRAM servers",
+    "QueryResponse separates results, notices, error and notifications"
+   ]
+  }
+ ]
+}
