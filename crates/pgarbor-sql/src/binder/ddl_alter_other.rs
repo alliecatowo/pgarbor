@@ -45,7 +45,7 @@ use sqlparser::ast::{ArgMode as AstArgMode, SequenceOptions as AstSequenceOption
 use sqlparser::tokenizer::Span;
 
 use super::context::{Binder, ExprCtx};
-use super::dispatch::{ALTER_PROCEDURE_KEY, ALTER_ROUTINE_KEY};
+use super::dispatch::{ALTER_ACTION_POS_KEY, ALTER_PROCEDURE_KEY, ALTER_ROUTINE_KEY};
 use super::ddl_objects::bind_sequence_options;
 use super::stored;
 use super::types::resolve_data_type;
@@ -103,6 +103,21 @@ pub fn bind_alter_schema(b: &mut Binder, stmt: &Statement) -> Result<BoundStatem
 
 /// `Statement::AlterFunction`.
 pub fn bind_alter_function(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
+    let tag = if b.scratch.contains_key(ALTER_PROCEDURE_KEY) {
+        Some("ALTER PROCEDURE")
+    } else if b.scratch.contains_key(ALTER_ROUTINE_KEY) {
+        Some("ALTER ROUTINE")
+    } else {
+        None
+    };
+    let bound = bind_alter_function_inner(b, stmt)?;
+    Ok(match (tag, bound) {
+        (Some(tag), BoundStatement::Alter(inner)) => alter(AlterAction::Routine { tag, inner }),
+        (_, other) => other,
+    })
+}
+
+fn bind_alter_function_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
     let env = b.env;
     let af = match stmt {
         Statement::AlterFunction(af) => af,
@@ -139,7 +154,8 @@ pub fn bind_alter_function(b: &mut Binder, stmt: &Statement) -> Result<BoundStat
             Some(c) => c.oid,
             None => {
                 let shown: Vec<String> = types.iter().map(|t| b.type_name(TypeId::of(*t))).collect();
-                let sig = format!("{}({})", qn.display(), shown.join(","));
+                // PG `func_signature_string` separates argument types with ", ".
+                let sig = format!("{}({})", qn.display(), shown.join(", "));
                 return Err(if is_procedure {
                     PgError::new(SqlState::UNDEFINED_FUNCTION, format!("procedure {sig} does not exist"))
                 } else {
@@ -334,6 +350,22 @@ pub fn bind_alter_sequence(
     let schema = qn.schema_str();
     let oid = match env.lookup_class(schema, &qn.name)? {
         Some(ClassRef::Sequence(oid)) => oid,
+        // AlterSequence() opens the relation with sequence_open: "cannot open relation" + DETAIL.
+        Some(other) if matches!(action, AlterSequenceAction::Options(_)) => {
+            let word = match other {
+                ClassRef::Relation(rel_oid) => match env.snapshot().relation(rel_oid).map(|r| &r.kind) {
+                    Some(RelKind::Table) => "tables",
+                    Some(RelKind::PartitionedTable) => "partitioned tables",
+                    Some(RelKind::View) => "views",
+                    Some(RelKind::MatView) => "materialized views",
+                    Some(RelKind::CompositeType) => "composite types",
+                    Some(RelKind::ForeignTable) => "foreign tables",
+                    _ => "this kind of relation",
+                },
+                _ => "indexes",
+            };
+            return Err(errors::operation_not_supported_for(&format!("cannot open relation \"{}\"", qn.name), word));
+        }
         Some(_) => return Err(errors::not_a(&qn.name, "sequence")),
         None if if_exists => {
             return Ok(noop("ALTER SEQUENCE", errors::kind_does_not_exist_skipping("relation", schema, &qn.name)))
@@ -446,6 +478,156 @@ pub fn bind_alter_type_set_schema(b: &mut Binder, name: &ObjectName, schema: &Id
     let s = b.ident(schema);
     let new_schema = env.namespace_oid(&s)?;
     Ok(alter(AlterAction::SetTypeSchema { ty, new_schema }))
+}
+
+/// `ExtraStatement::AlterTypeOwner`: `ALTER TYPE name OWNER TO role` for enums, domains and composite
+/// types (PG `ExecAlterOwnerStmt`: the role is resolved first, then the type).
+pub fn bind_alter_type_owner(b: &mut Binder, name: &ObjectName, role: &Ident) -> Result<BoundStatement> {
+    let env = b.env;
+    let new_owner = ident_role(b, role)?;
+    let qn = bind_name(b, name)?;
+    let ty = env
+        .lookup_type(qn.schema_str(), &qn.name)?
+        .ok_or_else(|| errors::type_does_not_exist(&qn.display()))?;
+    classify_alter_type(env, ty, &qn.display())?;
+    Ok(alter(AlterAction::TypeOwner { ty, new_owner }))
+}
+
+/// `ExtraStatement::AlterTableSetSchema`: `ALTER TABLE [IF EXISTS] [ONLY] t SET SCHEMA s`. A non-table
+/// relation is 42809 `"x" is not a table`.
+pub fn bind_alter_table_set_schema(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    schema: &Ident,
+) -> Result<BoundStatement> {
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let rel_schema = qn.schema_str();
+    let rel = match env.lookup_class(rel_schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::Table | RelKind::PartitionedTable) {
+                return Err(errors::not_a(&qn.name, "table"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "table")),
+        None if if_exists => {
+            return Ok(noop("ALTER TABLE", errors::kind_does_not_exist_skipping("relation", rel_schema, &qn.name)))
+        }
+        None => return Err(errors::relation_does_not_exist(rel_schema, &qn.name)),
+    };
+    let s = b.ident(schema);
+    let new_schema = env.namespace_oid(&s)?;
+    Ok(alter(AlterAction::SetRelationSchema { rel, new_schema, keyword: AlterRelKeyword::Table }))
+}
+
+/// `ExtraStatement::AlterViewOwner`: `ALTER VIEW [IF EXISTS] v OWNER TO role`. A non-view relation is
+/// 42809 `"x" is not a view`.
+pub fn bind_alter_view_owner(b: &mut Binder, if_exists: bool, name: &ObjectName, role: &Ident) -> Result<BoundStatement> {
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let schema = qn.schema_str();
+    let rel = match env.lookup_class(schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::View) {
+                return Err(errors::not_a(&qn.name, "view"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "view")),
+        None if if_exists => {
+            return Ok(noop("ALTER VIEW", errors::kind_does_not_exist_skipping("relation", schema, &qn.name)))
+        }
+        None => return Err(errors::relation_does_not_exist(schema, &qn.name)),
+    };
+    let new_owner = ident_role(b, role)?;
+    Ok(alter(AlterAction::RelationOwner { rel, new_owner, keyword: AlterRelKeyword::View }))
+}
+
+/// `ExtraStatement::AlterViewRename`: `ALTER VIEW [IF EXISTS] v RENAME TO n` / `RENAME [COLUMN] a TO b`.
+/// A non-view relation is 42809 `"x" is not a view`.
+pub fn bind_alter_view_rename(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    action: &AlterMatViewAction,
+) -> Result<BoundStatement> {
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let schema = qn.schema_str();
+    let rel = match env.lookup_class(schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::View) {
+                return Err(errors::not_a(&qn.name, "view"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "view")),
+        None if if_exists => {
+            return Ok(noop("ALTER VIEW", errors::kind_does_not_exist_skipping("relation", schema, &qn.name)))
+        }
+        None => return Err(errors::relation_does_not_exist(schema, &qn.name)),
+    };
+    let keyword = AlterRelKeyword::View;
+    match action {
+        AlterMatViewAction::RenameTo(id) => {
+            let new_name = b.ident(id);
+            Ok(alter(AlterAction::RenameRelation { rel, new_name, keyword }))
+        }
+        AlterMatViewAction::RenameColumn { old, new } => {
+            let o = b.ident(old);
+            let n = b.ident(new);
+            Ok(BoundStatement::AlterTable(Box::new(BoundAlterTable {
+                relation: rel,
+                keyword,
+                commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+            })))
+        }
+        AlterMatViewAction::SetSchema(id) => {
+            let s = b.ident(id);
+            let new_schema = env.namespace_oid(&s)?;
+            Ok(alter(AlterAction::SetRelationSchema { rel, new_schema, keyword }))
+        }
+        AlterMatViewAction::OwnerTo(_) => Err(unsupported("ALTER VIEW action")),
+    }
+}
+
+/// `ExtraStatement::AlterTypeRenameAttribute`: `ALTER TYPE t RENAME ATTRIBUTE a TO b [CASCADE]`. PG
+/// looks `t` up as a relation, so an enum or domain is 42P01; a relation that is not a composite
+/// type is 42809. CASCADE only matters for typed tables, which PGArbor does not have.
+pub fn bind_alter_type_rename_attribute(
+    b: &mut Binder,
+    name: &ObjectName,
+    old: &Ident,
+    new: &Ident,
+    cascade: bool,
+) -> Result<BoundStatement> {
+    let _ = cascade;
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let schema = qn.schema_str();
+    let rel = match env.lookup_class(schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::CompositeType) {
+                return Err(errors::not_a(&qn.name, "composite type"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "composite type")),
+        None => return Err(errors::relation_does_not_exist(schema, &qn.name)),
+    };
+    let o = b.ident(old);
+    let n = b.ident(new);
+    Ok(BoundStatement::AlterTable(Box::new(BoundAlterTable {
+        relation: rel,
+        keyword: AlterRelKeyword::Type,
+        commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+    })))
 }
 
 /// `ExtraStatement::AlterDatabase`.
@@ -784,7 +966,8 @@ fn role_changes(b: &mut Binder, options: &[RoleOptionItem]) -> Result<RoleChange
         }
     }
     if let Some((text, pos)) = valid_until {
-        let us = timestamptz_input(b, text).map_err(|e| diag::with_position(e, pos))?;
+        let _ = pos; // PG evaluates the VALID UNTIL string without a statement position
+        let us = timestamptz_input(b, text)?;
         ch.valid_until = Some(Some(us));
     }
     Ok(ch)
@@ -943,12 +1126,21 @@ fn function_changes(
 ) -> Result<FunctionChanges> {
     let mut ch = FunctionChanges::default();
     let mut seen: Vec<&'static str> = Vec::new();
-    for a in actions {
+    let action_pos: Vec<u32> = b
+        .scratch
+        .get(ALTER_ACTION_POS_KEY)
+        .map(|t| t.split(',').filter_map(|p| p.parse().ok()).collect())
+        .unwrap_or_default();
+    for (idx, a) in actions.iter().enumerate() {
         // PG `compute_common_attribute` for procedures: only SECURITY, SET and RESET are allowed.
         if is_procedure
             && !matches!(a, AlterFunctionAction::Security { .. } | AlterFunctionAction::Set(_) | AlterFunctionAction::Reset(_))
         {
-            return Err(PgError::new(SqlState(*b"42P13"), "invalid attribute in procedure definition"));
+            let mut e = PgError::new(SqlState(*b"42P13"), "invalid attribute in procedure definition");
+            if let Some(p) = action_pos.get(idx) {
+                e = e.with_position(*p);
+            }
+            return Err(e);
         }
         match a {
             AlterFunctionAction::CalledOnNull(c) => {

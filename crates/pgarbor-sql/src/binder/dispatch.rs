@@ -74,6 +74,72 @@ pub(super) const EXPLAIN_BODY_POS_KEY: &str = "explain body pos";
 /// see `parser::alter_procedure_as_function`); read by `ddl_alter_other::bind_alter_function`.
 pub(super) const ALTER_PROCEDURE_KEY: &str = "alter procedure";
 
+/// `Binder::scratch` key set with ALTER PROCEDURE: comma-separated 1-based positions of each action
+/// clause (for errors that point at one action).
+pub(super) const ALTER_ACTION_POS_KEY: &str = "alter action positions";
+
+/// Byte offsets (inside `text`) of the action clauses of `ALTER PROCEDURE name(args) action ...`:
+/// top-level words that start an alter-function action, after the argument list.
+fn alter_action_starts(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let (mut i, mut depth, mut words, mut after_args) = (0usize, 0i32, 0usize, false);
+    let mut prev = String::new();
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\'' || c == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != c {
+                i += 1;
+            }
+            i += 1;
+            if depth == 0 {
+                words += 1;
+                prev.clear();
+            }
+            continue;
+        }
+        if c == b'(' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if c == b')' {
+            depth -= 1;
+            if depth == 0 {
+                after_args = true;
+            }
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_alphanumeric() || c == b'_' || c == b'.' {
+            let st = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+                i += 1;
+            }
+            if depth == 0 {
+                words += 1;
+                let w = text[st..i].to_ascii_lowercase();
+                if after_args || words > 3 {
+                    let starter = matches!(
+                        w.as_str(),
+                        "immutable" | "stable" | "volatile" | "strict" | "called" | "returns" | "not" | "external"
+                            | "parallel" | "cost" | "rows" | "support" | "set" | "reset"
+                    ) || (w == "leakproof" && prev != "not")
+                        || (w == "security" && prev != "external");
+                    if starter {
+                        out.push(st);
+                    }
+                }
+                prev = w;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
 /// `Binder::scratch` key set for `ALTER ROUTINE` (same parser rewrite as `ALTER PROCEDURE`); the name
 /// then resolves to a function, procedure or aggregate. Read by `ddl_alter_other::bind_alter_function`.
 pub(super) const ALTER_ROUTINE_KEY: &str = "alter routine";
@@ -103,6 +169,7 @@ pub fn bind_statement(stmt: &RawStatement, ctx: &BindContext) -> Result<BindOutp
     b.identity_groups = stmt.identity_groups.iter().cloned().collect();
     b.fk_set_groups = stmt.fk_set_groups.clone();
     b.view_trailer = stmt.view_trailer.clone();
+    b.overriding = stmt.overriding;
     classify::check_supported(&stmt.parsed, first_token(&stmt.text), Some(stmt.pos))?;
     if let Parsed::Ast(ast) = &stmt.parsed {
         if matches!(&**ast, Statement::Prepare { .. }) {
@@ -115,6 +182,11 @@ pub fn bind_statement(stmt: &RawStatement, ctx: &BindContext) -> Result<BindOutp
         }
         if matches!(&**ast, Statement::AlterFunction(_)) && is_alter_procedure_text(&stmt.text) {
             b.scratch.insert(ALTER_PROCEDURE_KEY, "procedure".to_string());
+            let starts: Vec<String> = alter_action_starts(&stmt.text)
+                .into_iter()
+                .map(|off| stmt.source.pos_of_byte(stmt.byte_start + off).to_string())
+                .collect();
+            b.scratch.insert(ALTER_ACTION_POS_KEY, starts.join(","));
         }
         if matches!(&**ast, Statement::AlterFunction(_)) && is_alter_routine_text(&stmt.text) {
             b.scratch.insert(ALTER_ROUTINE_KEY, "routine".to_string());
@@ -235,6 +307,9 @@ pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<Bou
         ExtraStatement::SetConstraints { names, deferred } => {
             utility_session::bind_set_constraints(b, names.as_deref(), *deferred)
         }
+        ExtraStatement::TransactionModes { kind, isolation, read_only, deferrable } => {
+            utility_session::bind_transaction_modes(*kind, *isolation, *read_only, *deferrable)
+        }
         ExtraStatement::Do { language, code } => ddl_function::bind_do(b, language.as_ref(), code),
         ExtraStatement::AlterSequence { if_exists, name, action } => {
             ddl_alter_other::bind_alter_sequence(b, *if_exists, name, action)
@@ -253,6 +328,9 @@ pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<Bou
             ddl_alter::bind_alter_index_options(b, *if_exists, name, actions)
         }
         ExtraStatement::AlterIndexAllInTablespace { from, to } => ddl_alter::bind_alter_index_all_tablespace(b, from, to),
+        ExtraStatement::AlterIndexRename { if_exists, name, new_name } => {
+            ddl_alter::bind_alter_index_rename(b, *if_exists, name, new_name)
+        }
         ExtraStatement::AlterView { if_exists, name, actions } => {
             ddl_alter::bind_alter_view_options(b, *if_exists, name, actions)
         }
@@ -261,6 +339,31 @@ pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<Bou
         }
         ExtraStatement::AlterTypeSetSchema { name, schema } => {
             ddl_alter_other::bind_alter_type_set_schema(b, name, schema)
+        }
+        ExtraStatement::AlterTableSetSchema { if_exists, name, schema } => {
+            ddl_alter_other::bind_alter_table_set_schema(b, *if_exists, name, schema)
+        }
+        ExtraStatement::GrantRole { roles, grantees, options, grantor } => {
+            ddl_grant::bind_grant_role_extra(b, roles, grantees, options, grantor.as_ref())
+        }
+        ExtraStatement::RevokeRole { option_for, roles, grantees, grantor, cascade } => {
+            ddl_grant::bind_revoke_role_extra(b, option_for.as_ref(), roles, grantees, grantor.as_ref(), *cascade)
+        }
+        ExtraStatement::AlterTableOptions { if_exists, name, actions } => {
+            ddl_alter::bind_alter_table_options(b, *if_exists, name, actions)
+        }
+        ExtraStatement::AlterTableCluster { if_exists, name, index } => {
+            ddl_alter::bind_alter_table_cluster(b, *if_exists, name, index.as_ref())
+        }
+        ExtraStatement::AlterTypeOwner { name, role } => ddl_alter_other::bind_alter_type_owner(b, name, role),
+        ExtraStatement::AlterViewOwner { if_exists, name, role } => {
+            ddl_alter_other::bind_alter_view_owner(b, *if_exists, name, role)
+        }
+        ExtraStatement::AlterViewRename { if_exists, name, action } => {
+            ddl_alter_other::bind_alter_view_rename(b, *if_exists, name, action)
+        }
+        ExtraStatement::AlterTypeRenameAttribute { name, old, new, cascade } => {
+            ddl_alter_other::bind_alter_type_rename_attribute(b, name, old, new, *cascade)
         }
         ExtraStatement::DropOwned { .. } | ExtraStatement::ReassignOwned { .. } => ddl_drop::bind_owned(b, stmt),
         ExtraStatement::Maintenance { vacuum, options, table, columns } => {
@@ -321,7 +424,7 @@ mod tests {
     use sqlparser::dialect::PostgreSqlDialect;
     use sqlparser::parser::Parser;
 
-    use super::{bind_extra_statement, bind_inner_statement};
+    use super::{alter_action_starts, bind_extra_statement, bind_inner_statement};
     use crate::binder::context::{BindContext, BindSession, Binder};
     use crate::binder::bind;
     use crate::extra_stmt::ExtraStatement;
@@ -342,6 +445,7 @@ mod tests {
             identity_groups: Vec::new(),
             fk_set_groups: Vec::new(),
             view_trailer: None,
+            overriding: None,
             text: sql.to_string(),
             byte_start: 0,
             byte_end: sql.len(),
@@ -440,5 +544,12 @@ mod tests {
         let c = ctx(&env);
         let out = bind(&raw("SHOW search_path"), &c).expect("SHOW binds");
         assert_eq!(out.statement.tag(), "SHOW");
+    }
+
+    #[test]
+    fn alter_action_starts_finds_each_clause() {
+        let t = "ALTER PROCEDURE p(integer) SECURITY DEFINER NOT LEAKPROOF EXTERNAL SECURITY INVOKER COST 10";
+        let got: Vec<&str> = alter_action_starts(t).into_iter().map(|o| &t[o..o + 4]).collect();
+        assert_eq!(got, vec!["SECU", "NOT ", "EXTE", "COST"]);
     }
 }

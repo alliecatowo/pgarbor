@@ -40,6 +40,7 @@ pub mod dispatch;
 pub mod expr;
 pub mod expr_agg;
 pub mod expr_func;
+pub mod expr_json;
 pub mod expr_misc;
 pub mod expr_ops;
 pub mod expr_sublink;

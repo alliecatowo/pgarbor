@@ -64,6 +64,13 @@ pub fn bind_target_list(b: &mut Binder, items: &[SelectItem], ec: ExprCtx, keep_
         match item {
             SelectItem::UnnamedExpr(e) => {
                 let pos = b.pos(e);
+                if let Some(inner) = star_marker_target(e) {
+                    // `(expr).*`: the parser marked the star (`crate::parser::STAR_MARKER`).
+                    let kind = SelectItemQualifiedWildcardKind::Expr(inner);
+                    let cols = bind_qualified_star(b, &kind, ec, pos)?;
+                    push_star(b, &mut out, cols)?;
+                    continue;
+                }
                 let bound = expr::bind_expr(b, e, ec)?;
                 let name = figure_inner(b, e, Some(&bound))?.1.unwrap_or_else(|| "?column?".to_string());
                 let bound = if keep_unknown { bound } else { finish_output(b, bound, pos)? };
@@ -71,6 +78,18 @@ pub fn bind_target_list(b: &mut Binder, items: &[SelectItem], ec: ExprCtx, keep_
                 push_target(b, &mut out, bound, name)?;
             }
             SelectItem::ExprWithAlias { expr: e, alias } => {
+                // sqlparser takes `'foo' 'bar'` (string constants on one line) as `'foo' AS 'bar'`;
+                // a string literal is never a column label in PG's grammar.
+                if alias.quote_style == Some('\'') {
+                    let lit = format!("'{}'", alias.value.replace('\'', "''"));
+                    let apos = b.pos_span(alias.span).or_else(|| {
+                        // The alias span is empty for this form: find the literal after the expression.
+                        let from = b.src.byte_offset(sqlparser::ast::Spanned::span(e).start)? + 1;
+                        let at = b.src.text().get(from..)?.find(&lit)?;
+                        Some(b.src.pos_of_byte(from + at))
+                    });
+                    return Err(diag::syntax_error_near(&lit, apos));
+                }
                 let pos = b.pos(e);
                 let bound = expr::bind_expr(b, e, ec)?;
                 let name = b.ident(alias);
@@ -99,6 +118,24 @@ pub fn bind_target_list(b: &mut Binder, items: &[SelectItem], ec: ExprCtx, keep_
     Ok(out)
 }
 
+/// The expression a `(expr).*` select item expands: `e` is a field access whose last step is the parser's
+/// star marker (`crate::parser::STAR_MARKER`). `None` for every other expression.
+fn star_marker_target(e: &Expr) -> Option<Expr> {
+    let Expr::CompoundFieldAccess { root, access_chain } = e else {
+        return None;
+    };
+    match access_chain.split_last() {
+        Some((AccessExpr::Dot(Expr::Identifier(id)), rest)) if id.value == crate::parser::STAR_MARKER => {
+            if rest.is_empty() {
+                Some((**root).clone())
+            } else {
+                Some(Expr::CompoundFieldAccess { root: root.clone(), access_chain: rest.to_vec() })
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Default output column name of an expression (table above). Pure over the AST; `Binder` is only
 /// needed to fold identifiers. Returns `"?column?"` when the rules give no name.
 pub fn figure_colname(b: &mut Binder, e: &Expr) -> Result<String> {
@@ -118,7 +155,16 @@ pub fn origin_of(b: &Binder, e: &BoundExpr) -> Result<Option<ColumnOrigin>> {
     }
     let cr = match &cur.kind {
         ExprKind::Column(cr) => *cr,
-        _ => return Ok(None),
+        // A VIRTUAL generated column reads as its expansion but still reports its stored column.
+        _ => {
+            return Ok(b
+                .scopes
+                .iter()
+                .rev()
+                .flat_map(|s| s.virtual_origins.iter())
+                .find(|(x, _)| x == e || x == cur)
+                .map(|(_, o)| *o));
+        }
     };
     // Scope that owns the referenced range table (levels_up 0 = innermost).
     let idx = match b.scopes.len().checked_sub(cr.levels_up as usize + 1) {
@@ -202,7 +248,7 @@ fn check_wildcard_options(opts: &WildcardAdditionalOptions, pos: Option<u32>) ->
 /// `(expr).*`, `t.*`, `schema.t.*`, and `col.*` on a composite column (PG `ExpandColumnRefStar`):
 /// a table name wins over a column of the same name; a non-table name that is a column expands
 /// the composite; anything else reaches `expand_star` for the PG 42P01 error.
-fn bind_qualified_star(
+pub(super) fn bind_qualified_star(
     b: &mut Binder,
     kind: &SelectItemQualifiedWildcardKind,
     ec: ExprCtx,
@@ -324,6 +370,8 @@ fn figure_inner(b: &mut Binder, e: &Expr, bound: Option<&BoundExpr>) -> Result<F
         Expr::Function(f) => match f.name.0.last().and_then(|p| p.as_ident()) {
             Some(id) => {
                 let n = plain_name(id);
+                // `JSON_OBJECTAGG(.. WITH UNIQUE KEYS)` carries a NUL-suffixed marker name (see the parser).
+                let n = n.split('\0').next().unwrap_or_default().to_string();
                 // PG parses TRIM(x) as the function btrim.
                 if n == "trim" {
                     named("btrim")

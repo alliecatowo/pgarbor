@@ -212,6 +212,9 @@ pub struct Binder<'a> {
     /// Trailing `WITH [NO] DATA` / `WITH [CASCADED|LOCAL] CHECK OPTION` of a CREATE [MATERIALIZED] VIEW
     /// (`view_trailer_opts`), read by `ddl_view::bind_create_view`.
     pub view_trailer: Option<crate::view_trailer_opts::ViewTrailer>,
+    /// `OVERRIDING {SYSTEM|USER} VALUE` of the top-level INSERT (`parser::extract_insert_overriding`), taken by
+    /// `insert::bind_insert_in_scope`.
+    pub overriding: Option<crate::ir::stmt::Overriding>,
 }
 
 /// Maximum recursion depth of expression/query binding before 54001 `stack depth limit exceeded`.
@@ -236,6 +239,7 @@ impl<'a> Binder<'a> {
             identity_groups: VecDeque::new(),
             fk_set_groups: Vec::new(),
             view_trailer: None,
+            overriding: None,
         }
     }
 

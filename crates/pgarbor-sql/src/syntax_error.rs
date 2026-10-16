@@ -290,6 +290,29 @@ fn tokenizer_problem(message: &str, loc: Option<Location>, src: &SourceMap) -> P
         };
     }
 
+    // sqlparser rejects a misplaced digit separator (`1__0`, `1_`, `1.5_e5`) inside the literal; PG's scanner
+    // reads the whole run as `integer_junk` / `real_junk` and reports it from the literal's first character.
+    if message.contains("Unexpected character '_'") {
+        if let Some(off) = loc_off {
+            let bytes = text.as_bytes();
+            let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+            let mut start = off;
+            while start > 0 && (word(bytes[start - 1]) || bytes[start - 1] == b'.') {
+                start -= 1;
+            }
+            let mut end = off;
+            while end < bytes.len() && word(bytes[end]) {
+                end += 1;
+            }
+            if start < off && (bytes[start].is_ascii_digit() || bytes[start] == b'.') {
+                return diag::syntax(
+                    format!("trailing junk after numeric literal at or near \"{}\"", src.slice(start, end)),
+                    Some(src.pos_of_byte(start)),
+                );
+            }
+        }
+    }
+
     match loc {
         Some(l) => error_at_location(l, src),
         None => diag::syntax("syntax error", None),

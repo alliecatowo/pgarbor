@@ -201,9 +201,28 @@ fn bind_array_elems(b: &mut Binder, elems: &[Expr], ec: ExprCtx) -> Result<Vec<B
 
 /// `ROW(..)` / `Expr::Tuple`.
 pub fn bind_row(b: &mut Binder, elems: &[Expr], ec: ExprCtx) -> Result<BoundExpr> {
+    let mut bound: Vec<BoundArg> = Vec::with_capacity(elems.len());
+    for e in elems {
+        bound.push(bind_arg(b, e, ec)?);
+    }
+    row_from_args(b, bound)
+}
+
+/// A `ROW` constructor whose unknown-typed fields stay unknown (row-wise comparisons resolve each
+/// field pair like any other operator call; callers that keep the row as a value must resolve it).
+pub fn bind_row_keep_unknown(b: &mut Binder, elems: &[Expr], ec: ExprCtx) -> Result<BoundExpr> {
     let mut args: Vec<BoundExpr> = Vec::with_capacity(elems.len());
     for e in elems {
-        let a = bind_arg(b, e, ec)?;
+        args.push(bind_arg(b, e, ec)?.expr);
+    }
+    let names: Vec<String> = (1..=args.len()).map(|i| format!("f{i}")).collect();
+    Ok(BoundExpr::new(ExprKind::Row(Box::new(RowExpr { args, names })), TypeId::of(oids::RECORD)))
+}
+
+/// A `ROW` constructor over already bound arguments (unknown literals resolve to text).
+pub fn row_from_args(b: &mut Binder, bound: Vec<BoundArg>) -> Result<BoundExpr> {
+    let mut args: Vec<BoundExpr> = Vec::with_capacity(bound.len());
+    for a in bound {
         let expr = if a.ty().oid == oids::UNKNOWN { coerce::resolve_unknown_output(b, &a)? } else { a.expr };
         args.push(expr);
     }
@@ -270,7 +289,11 @@ pub fn select_field(b: &mut Binder, arg: BoundExpr, field: &Ident, pos: Option<u
             ))
         }
         None => {
-            let msg = format!("column \"{}\" not found in data type {}", name, b.type_name(arg.ty));
+            let msg = if arg.ty.oid == oids::RECORD {
+                format!("could not identify column \"{}\" in record data type", name)
+            } else {
+                format!("column \"{}\" not found in data type {}", name, b.type_name(arg.ty))
+            };
             Err(diag::with_position(PgError::new(SqlState::UNDEFINED_COLUMN, msg), pos))
         }
     }

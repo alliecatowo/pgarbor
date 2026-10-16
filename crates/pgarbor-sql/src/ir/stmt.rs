@@ -314,6 +314,8 @@ pub enum AlterTableCmd {
     ReplicaIdentity(ReplicaIdentitySetting),
     /// `set_row_security(table, enable, force)`.
     RowSecurity { enable: Option<bool>, force: Option<bool> },
+    /// `CLUSTER ON index` (`Some`) / `SET WITHOUT CLUSTER` (`None`): sets or clears `indisclustered`.
+    ClusterOn { index: Option<Oid> },
 }
 
 /// `ALTER TABLE`/`VIEW`/`MATERIALIZED VIEW`/`TYPE (composite)` with a command list.
@@ -412,6 +414,8 @@ pub enum AlterAction {
     DatabaseOptions { name: String, allow_conn: Option<bool>, conn_limit: Option<i32>, is_template: Option<bool> },
     /// Generic `alter_owner(addr, new_owner)` for objects without a dedicated variant.
     Owner { addr: ObjectAddress, new_owner: Oid },
+    /// `ALTER PROCEDURE` / `ALTER ROUTINE`: runs `inner` (a function action) but reports `tag`.
+    Routine { tag: &'static str, inner: Box<AlterAction> },
 }
 
 impl AlterAction {
@@ -458,6 +462,7 @@ impl AlterAction {
             | AlterAction::DatabaseConfig { .. }
             | AlterAction::DatabaseOptions { .. } => "ALTER DATABASE",
             AlterAction::Owner { .. } => "ALTER OWNER",
+            AlterAction::Routine { tag, .. } => tag,
         }
     }
 }
@@ -705,6 +710,8 @@ pub struct BoundPrepare {
 pub struct BoundExecute {
     pub name: String,
     pub args: Vec<BoundExpr>,
+    /// Source position of each argument (for errors raised while coercing/evaluating it).
+    pub arg_positions: Vec<Option<u32>>,
 }
 
 /// `DISCARD {ALL|PLANS|SEQUENCES|TEMP}`.
@@ -764,6 +771,8 @@ pub enum MaintenanceKind {
     Vacuum,
     Analyze,
     Reindex,
+    /// `REINDEX ... CONCURRENTLY`: same work as `Reindex`, but forbidden inside a transaction block.
+    ReindexConcurrently,
     Cluster,
     Checkpoint,
 }
@@ -895,7 +904,7 @@ impl BoundStatement {
             BoundStatement::Maintenance { kind, .. } => match kind {
                 MaintenanceKind::Vacuum => "VACUUM",
                 MaintenanceKind::Analyze => "ANALYZE",
-                MaintenanceKind::Reindex => "REINDEX",
+                MaintenanceKind::Reindex | MaintenanceKind::ReindexConcurrently => "REINDEX",
                 MaintenanceKind::Cluster => "CLUSTER",
                 MaintenanceKind::Checkpoint => "CHECKPOINT",
             }

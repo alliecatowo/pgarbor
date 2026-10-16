@@ -278,10 +278,70 @@ fn array_element_name(b: &mut Binder, elem: &ArrayElemTypeDef, pos: Option<u32>)
 /// have none. A multi-dimensional array type resolves to the 1-D array type of the element
 /// (`int[][]` is `_int4`, `ndims = 2`).
 pub fn resolve_data_type(b: &mut Binder, dt: &DataType, pos: Option<u32>) -> Result<ResolvedType> {
+    if let DataType::Custom(name, _) = dt {
+        if let Some(parts) = pct_type_parts(name) {
+            return resolve_pct_type(b, &parts, pos);
+        }
+    }
     let tn = data_type_to_type_name(b, dt, pos)?;
     let ndims = tn.array_dims as i32;
     let id = resolve_type_name(b.env, &tn).map_err(|e| diag::with_position(e, pos))?;
     Ok(ResolvedType { id, ndims })
+}
+
+/// The parts of a `rel.col%TYPE` reference (`parser::pct_type_refs` writes it as one marker identifier).
+fn pct_type_parts(name: &ObjectName) -> Option<Vec<String>> {
+    match name.0.as_slice() {
+        [ObjectNamePart::Identifier(id)] => id
+            .value
+            .strip_prefix(crate::parser::PCT_TYPE_MARKER)
+            .map(|rest| rest.split('\u{1}').map(str::to_string).collect()),
+        _ => None,
+    }
+}
+
+/// `[schema.]table.column%TYPE`: the column's type (parse_type.c `typenameType` with `pct_type`), with
+/// the NOTICE `type reference t.c%TYPE converted to integer`. 42P01 for a missing table, 42703 for a
+/// missing column; the reference needs two or three names.
+fn resolve_pct_type(b: &mut Binder, parts: &[String], pos: Option<u32>) -> Result<ResolvedType> {
+    let written = format!("{}%TYPE", parts.join("."));
+    let (schema, table, column) = match parts {
+        [t, c] => (None, t.as_str(), c.as_str()),
+        [s, t, c] => (Some(s.as_str()), t.as_str(), c.as_str()),
+        _ => {
+            return Err(diag::with_position(
+                PgError::new(
+                    pgarbor_common::SqlState::SYNTAX_ERROR,
+                    format!("improper %TYPE reference (too many dotted names): {written}"),
+                ),
+                pos,
+            ))
+        }
+    };
+    let found = match b.env.lookup_class(schema, table)? {
+        Some(pgarbor_catalog::snapshot::ClassRef::Relation(oid)) => b.env.snapshot().relation(oid),
+        _ => None,
+    };
+    let Some(rel) = found else {
+        return Err(diag::with_position(catalog_errors::relation_does_not_exist(schema, table), pos));
+    };
+    let Some(col) = rel.column_by_name(column) else {
+        return Err(diag::with_position(
+            catalog_errors::column_of_relation_does_not_exist(column, table),
+            pos,
+        ));
+    };
+    let ty = col.type_id;
+    let ndims = col.ndims;
+    let shown = pgarbor_types::names::format_type(b.env, ty.oid, -1)?;
+    b.notice(
+        PgError::new(
+            pgarbor_common::SqlState::SUCCESSFUL_COMPLETION,
+            format!("type reference {written} converted to {shown}"),
+        )
+        .with_severity(pgarbor_common::Severity::Notice),
+    );
+    Ok(ResolvedType { id: TypeId::new(ty.oid, -1), ndims })
 }
 
 /// Resolve a type referenced by a (possibly schema-qualified) name: `CREATE TABLE t(c mood)`,

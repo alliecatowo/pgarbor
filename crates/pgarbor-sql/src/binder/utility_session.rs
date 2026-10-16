@@ -55,6 +55,7 @@ use sqlparser::ast::{
 
 use super::context::Binder;
 use crate::diag;
+use crate::extra_stmt::TxnCommandKind;
 use crate::ir::{
     BoundStatement, DiscardKind, IsolationLevel, SetScope, SetStmt, SetValue, TransactionStmt, TxnModes,
 };
@@ -187,6 +188,25 @@ fn set_value(b: &mut Binder, values: &[Expr], zone: bool, pos: Option<u32>) -> R
     }
 }
 
+/// Position (1-based char offset) of the first whole-word, case-insensitive occurrence of `word` in the
+/// statement text; the parser keeps no span for transaction modes.
+fn word_pos(b: &Binder, word: &str) -> Option<u32> {
+    let text = b.src.text();
+    let lower = text.to_ascii_lowercase();
+    let mut from = 0usize;
+    while let Some(i) = lower[from..].find(word) {
+        let start = from + i;
+        let end = start + word.len();
+        let before_ok = start == 0 || !lower.as_bytes()[start - 1].is_ascii_alphanumeric() && lower.as_bytes()[start - 1] != b'_';
+        let after_ok = end >= lower.len() || !lower.as_bytes()[end].is_ascii_alphanumeric() && lower.as_bytes()[end] != b'_';
+        if before_ok && after_ok {
+            return Some(b.src.pos_of_byte(start));
+        }
+        from = end;
+    }
+    None
+}
+
 /// Transaction characteristics. PG applies the items in order, so the last one given wins
 /// (`BEGIN READ ONLY, READ WRITE` is read-write). `SNAPSHOT` is not a PG isolation level.
 fn txn_modes(modes: &[TransactionMode], pos: Option<u32>) -> Result<TxnModes> {
@@ -233,7 +253,7 @@ pub fn bind_transaction(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
                 Some(BeginTransactionKind::Work) if !*begin => return Err(diag::syntax_error_near("WORK", pos)),
                 _ => {}
             }
-            let modes = txn_modes(modes, pos)?;
+            let modes = txn_modes(modes, word_pos(b, "snapshot").or(pos))?;
             Ok(BoundStatement::Transaction(TransactionStmt::Begin(modes)))
         }
         // END is COMMIT (`end` only records the spelling).
@@ -331,7 +351,7 @@ fn bind_set_stmt(b: &mut Binder, set: &Set, pos: Option<u32>) -> Result<BoundSta
             if modes.is_empty() {
                 return Err(PgError::syntax("syntax error at end of input", None));
             }
-            let modes = txn_modes(modes, pos)?;
+            let modes = txn_modes(modes, word_pos(b, "snapshot").or(pos))?;
             if *session {
                 Ok(BoundStatement::Transaction(TransactionStmt::SetSessionCharacteristics(modes)))
             } else {
@@ -378,7 +398,8 @@ pub fn bind_show(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
         return Ok(BoundStatement::Show(Some("session_authorization".to_string())));
     }
     if variable.is_empty() {
-        return Err(PgError::syntax("syntax error", b.pos(stmt)));
+        // `SHOW` with no name: the grammar needs a name, so the parser fails at end of input.
+        return Err(crate::diag::syntax_error_eof(b.src.end_pos()));
     }
     let mut parts = Vec::with_capacity(variable.len());
     for id in variable {
@@ -402,6 +423,23 @@ pub fn bind_discard(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> 
         }
         _ => Err(PgError::internal("bind_discard called with a non-DISCARD statement")),
     }
+}
+
+/// `BEGIN` / `START TRANSACTION` / `SET TRANSACTION` / `SET SESSION CHARACTERISTICS` carrying a
+/// `[NOT] DEFERRABLE` mode (from `ExtraStatement::TransactionModes`).
+pub fn bind_transaction_modes(
+    kind: TxnCommandKind,
+    isolation: Option<IsolationLevel>,
+    read_only: Option<bool>,
+    deferrable: Option<bool>,
+) -> Result<BoundStatement> {
+    let modes = TxnModes { isolation, read_only, deferrable };
+    let stmt = match kind {
+        TxnCommandKind::Begin | TxnCommandKind::StartTransaction => TransactionStmt::Begin(modes),
+        TxnCommandKind::SetTransaction => TransactionStmt::SetTransaction(modes),
+        TxnCommandKind::SetSessionCharacteristics => TransactionStmt::SetSessionCharacteristics(modes),
+    };
+    Ok(BoundStatement::Transaction(stmt))
 }
 
 /// `SET CONSTRAINTS` (from `ExtraStatement::SetConstraints`).

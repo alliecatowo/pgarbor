@@ -12,9 +12,9 @@
 //!    Column list: each name must be a live column (42703 `column "x" of relation "t" does not exist`,
 //!    `diag::column_of_relation_missing`); duplicates 42701 `column "x" specified more than once`
 //!    (`column_specified_twice`); `INSERT INTO t(a.b)` subscripts/fields unsupported (0A000).
-//!    No list -> all non-dropped columns in attnum order (the implicit list EXCLUDES stored generated
-//!    columns - oracle: `insert into g values (1)` works for `g(a int, b int generated always as (a*2)
-//!    stored)`, while `values (1,2)` fails with 428C9).
+//!    No list -> all non-dropped columns in attnum order, generated ones included (oracle:
+//!    `insert into g values (1)` works for `g(a int, b int generated always as (a*2) stored)` since
+//!    fewer expressions fill only leading columns; `values (1,2)` fails with 428C9).
 //! 3. Source:
 //!    * `source: None` or `DEFAULT VALUES` -> `InsertSource::DefaultValues` (`columns` empty).
 //!    * `SetExpr::Values(v)` -> `values::bind_values_body(b, v, Some(targets))` (the `DEFAULT` keyword
@@ -166,8 +166,8 @@ fn bind_insert_in_scope(b: &mut Binder, ins: &Insert) -> Result<BoundInsert> {
     } else {
         Some(resolve_column_list(b, &ins.columns, &target)?)
     };
-    // sqlparser 0.63 has no OVERRIDING clause in its `Insert` node, so the binder never sees one.
-    let overriding: Option<Overriding> = None;
+    // sqlparser 0.63 has no OVERRIDING clause in its `Insert` node; the parser strips it and passes it here.
+    let overriding: Option<Overriding> = b.overriding.take();
 
     let (source, columns) = match ins.source.as_deref() {
         None => {
@@ -247,10 +247,11 @@ fn resolve_column_list(b: &mut Binder, names: &[ObjectName], target: &TargetTabl
     Ok(out)
 }
 
-/// Implicit column list: all live columns in attnum order, excluding generated columns (PG leaves
-/// them out of the implicit list; `insert into g values (1)` works for a stored generated `b`).
+/// Implicit column list: all live columns in attnum order, generated ones included (PG
+/// `checkInsertTargets`); `insert into g values (1)` works because fewer expressions than columns
+/// fill only the leading ones, and `values (1, DEFAULT)` addresses the generated column.
 fn implicit_column_list(target: &TargetTable) -> Vec<i16> {
-    target.live_columns().filter(|c| c.generated.is_none()).map(|c| c.attnum).collect()
+    target.live_columns().map(|c| c.attnum).collect()
 }
 
 /// Bind the row source. Returns the source and the target attnums it fills, in source order.
@@ -585,13 +586,13 @@ mod tests {
     }
 
     #[test]
-    fn implicit_list_skips_generated_columns() {
+    fn implicit_list_includes_generated_columns() {
         let t = table(vec![
             column(1, "a", None, false),
             column(2, "b", None, true),
             column(3, "c", Some(IdentityKind::ByDefault), false),
         ]);
-        assert_eq!(implicit_column_list(&t), vec![1, 3]);
+        assert_eq!(implicit_column_list(&t), vec![1, 2, 3]);
     }
 
     #[test]

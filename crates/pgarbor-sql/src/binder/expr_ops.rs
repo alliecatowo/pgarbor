@@ -80,6 +80,8 @@ use super::coerce;
 use super::context::{Binder, BoundArg, ExprCtx};
 use super::expr::{bind_arg, collate_keyword_pos};
 use super::expr_func;
+use super::expr_misc;
+use super::expr_sublink;
 use super::literal;
 use crate::diag;
 use crate::ir::{
@@ -265,6 +267,33 @@ fn bind_operand(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundArg> {
     Ok(arg)
 }
 
+/// Operand of a comparison: a row constructor keeps its unknown-typed fields unresolved so that the
+/// row-wise forms resolve them against the other row's fields (`ROW(NULL) = ROW(1)`).
+fn bind_cmp_operand(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundArg> {
+    if let Expr::Tuple(elems) = strip_nested(e) {
+        let pos = b.pos(strip_nested(e));
+        let expr = expr_misc::bind_row_keep_unknown(b, elems, ec)?;
+        return Ok(BoundArg::new(expr, pos));
+    }
+    bind_operand(b, e, ec)
+}
+
+/// A row operand that is not compared row-wise: unknown fields resolve to text like a plain `ROW`.
+fn finish_row_operand(b: &mut Binder, arg: BoundArg) -> Result<BoundArg> {
+    let pos = arg.pos;
+    let needs = match &arg.expr.kind {
+        ExprKind::Row(row) => row.args.iter().any(|a| a.ty.oid == oids::UNKNOWN),
+        _ => false,
+    };
+    if !needs {
+        return Ok(arg);
+    }
+    let fields = take_row(arg.expr)?;
+    let fields: Vec<BoundArg> = fields.into_iter().map(|f| BoundArg::new(f, pos)).collect();
+    let expr = expr_misc::row_from_args(b, fields)?;
+    Ok(BoundArg::new(expr, pos))
+}
+
 /// Resolve `name` for the given operand types (`left` `None` for prefix operators) and coerce both
 /// operands to the resolved types. Returns the resolution and the coerced operands (left first).
 fn resolve_coerce(
@@ -413,8 +442,21 @@ fn bind_plain_binary(
     op_pos: Option<u32>,
     ec: ExprCtx,
 ) -> Result<BoundExpr> {
-    let l = bind_operand(b, left, ec)?;
-    let r = bind_operand(b, right, ec)?;
+    let row_cmp = matches!(name, "=" | "<>" | "<" | "<=" | ">" | ">=");
+    let (l, r) = match (strip_nested(left), strip_nested(right)) {
+        (Expr::Tuple(_), Expr::Subquery(q)) if row_cmp => {
+            let l = bind_operand(b, left, ec)?;
+            let pos = b.pos(right);
+            (l, BoundArg::new(expr_sublink::bind_row_operand_subquery(b, q, ec)?, pos))
+        }
+        (Expr::Subquery(q), Expr::Tuple(_)) if row_cmp => {
+            let pos = b.pos(left);
+            let l = BoundArg::new(expr_sublink::bind_row_operand_subquery(b, q, ec)?, pos);
+            (l, bind_operand(b, right, ec)?)
+        }
+        _ if row_cmp => (bind_cmp_operand(b, left, ec)?, bind_cmp_operand(b, right, ec)?),
+        _ => (bind_operand(b, left, ec)?, bind_operand(b, right, ec)?),
+    };
     if is_row(&l.expr) && is_row(&r.expr) {
         match name {
             "=" | "<>" => return row_equality(b, name, l, r, op_pos),
@@ -422,8 +464,58 @@ fn bind_plain_binary(
             _ => {}
         }
     }
+    let l = finish_row_operand(b, l)?;
+    let r = finish_row_operand(b, r)?;
     check_operator_collations(b, &l, &r, right)?;
+    check_implicit_collation_conflict(b, name, &l, &r)?;
     make_op(b, name, Some(l), r, op_pos)
+}
+
+/// Implicit (column) collation of a bare column operand of the current query level: `Some(oid)` for
+/// a collatable table column whose collation is not the default one. Any other shape is not
+/// modelled and yields `None`, which can only hide a conflict, never invent one.
+fn column_implicit_collation(b: &Binder, e: &BoundExpr) -> Option<Oid> {
+    let ExprKind::Column(cr) = &e.kind else {
+        return None;
+    };
+    if cr.levels_up != 0 || cr.attnum <= 0 {
+        return None;
+    }
+    let scope = b.scope().ok()?;
+    let entry = scope.range_table.get((cr.rt_index as usize).checked_sub(1)?)?;
+    let crate::ir::RangeKind::Relation { oid, .. } = &entry.kind else {
+        return None;
+    };
+    let col = b.env.snapshot().relation(*oid)?.columns.get((cr.attnum as usize) - 1)?;
+    if col.collation == 0 || col.collation == oids::DEFAULT_COLLATION {
+        return None;
+    }
+    Some(col.collation)
+}
+
+/// PG `assign_collations`: two operands of an ordering comparison with different implicit
+/// collations have no determinable collation; the comparison fails with 42P22 (PG raises it when
+/// the comparison function runs).
+fn check_implicit_collation_conflict(
+    b: &Binder,
+    name: &str,
+    l: &BoundArg,
+    r: &BoundArg,
+) -> Result<()> {
+    if !matches!(name, "<" | "<=" | ">" | ">=") {
+        return Ok(());
+    }
+    let (Some(lc), Some(rc)) = (column_implicit_collation(b, &l.expr), column_implicit_collation(b, &r.expr)) else {
+        return Ok(());
+    };
+    if lc == rc {
+        return Ok(());
+    }
+    Err(PgError::new(
+        SqlState::INDETERMINATE_COLLATION,
+        "could not determine which collation to use for string comparison",
+    )
+    .with_hint("Use the COLLATE clause to set the collation explicitly."))
 }
 
 /// PG `assign_collations` for a binary operator: two different explicit collations on the operands
@@ -612,6 +704,17 @@ pub fn bind_unary_op(
     }
 }
 
+/// `OPERATOR([schema.]op) operand`: a prefix operator applied by name (see `expr::qualified_prefix_operator`).
+pub(super) fn bind_named_prefix_op(
+    b: &mut Binder,
+    name: &str,
+    operand: &Expr,
+    op_pos: Option<u32>,
+    ec: ExprCtx,
+) -> Result<BoundExpr> {
+    prefix_op(b, name, operand, op_pos, ec)
+}
+
 fn prefix_op(
     b: &mut Binder,
     name: &str,
@@ -622,6 +725,22 @@ fn prefix_op(
     let a = bind_operand(b, operand, ec)?;
     let pos = op_pos.or_else(|| b.pos(operand));
     make_op(b, name, None, a, pos)
+}
+
+/// The lower bound of `x BETWEEN SYMMETRIC low AND high`: `parser::mark_between_symmetric` wraps it in a call of
+/// [`crate::parser::SYMMETRIC_MARKER`] because sqlparser 0.63 has no SYMMETRIC flag. `None` for a plain bound.
+fn symmetric_low(low: &Expr) -> Option<&Expr> {
+    use sqlparser::ast::{FunctionArg, FunctionArgExpr, FunctionArguments, ObjectNamePart};
+    let Expr::Function(f) = low else { return None };
+    let [ObjectNamePart::Identifier(id)] = f.name.0.as_slice() else { return None };
+    if id.quote_style != Some('"') || id.value != crate::parser::SYMMETRIC_MARKER {
+        return None;
+    }
+    let FunctionArguments::List(list) = &f.args else { return None };
+    match list.args.as_slice() {
+        [FunctionArg::Unnamed(FunctionArgExpr::Expr(inner))] => Some(inner),
+        _ => None,
+    }
 }
 
 /// `Between { expr, negated, low, high }`: `x >= a AND x <= b`, `NOT BETWEEN` is `x < a OR x > b`.
@@ -635,10 +754,28 @@ pub fn bind_between(
     ec: ExprCtx,
 ) -> Result<BoundExpr> {
     let pos = b.pos(e);
+    let symmetric = symmetric_low(low);
     let x = bind_operand(b, e, ec)?;
-    let lo = bind_operand(b, low, ec)?;
+    let lo = bind_operand(b, symmetric.unwrap_or(low), ec)?;
     let hi = bind_operand(b, high, ec)?;
     let x2 = x.clone();
+    if symmetric.is_some() {
+        // PG `transformAExprBetween`: `x BETWEEN SYMMETRIC a AND b` is
+        // `(x >= a AND x <= b) OR (x >= b AND x <= a)`; the negation is
+        // `(x < a OR x > b) AND (x < b OR x > a)`. Each operand is bound once and cloned.
+        let (x3, x4) = (x.clone(), x.clone());
+        let (lo2, hi2) = (lo.clone(), hi.clone());
+        let (lo_op, hi_op, join_inner) = if negated { ("<", ">", false) } else { (">=", "<=", true) };
+        let first_a = make_op(b, lo_op, Some(x), lo, pos)?;
+        let first_b = make_op(b, hi_op, Some(x2), hi, pos)?;
+        let second_a = make_op(b, lo_op, Some(x3), hi2, pos)?;
+        let second_b = make_op(b, hi_op, Some(x4), lo2, pos)?;
+        return Ok(if join_inner {
+            BoundExpr::or_all(vec![BoundExpr::and_all(vec![first_a, first_b]), BoundExpr::and_all(vec![second_a, second_b])])
+        } else {
+            BoundExpr::and_all(vec![BoundExpr::or_all(vec![first_a, first_b]), BoundExpr::or_all(vec![second_a, second_b])])
+        });
+    }
     if negated {
         let lt = make_op(b, "<", Some(x), lo, pos)?;
         let gt = make_op(b, ">", Some(x2), hi, pos)?;
@@ -850,7 +987,7 @@ pub fn bind_any_all_array(
         };
         let env: &dyn TypeEnv = b.env;
         let arr =
-            registry::array_type_of(env, base).ok_or_else(|| diag::any_all_needs_array(rpos))?;
+            registry::array_type_of(env, base).ok_or_else(|| diag::any_all_needs_array(pos))?;
         coerce_operand(b, r, arr)?
     } else {
         r.expr
@@ -859,7 +996,7 @@ pub fn bind_any_all_array(
     let env: &dyn TypeEnv = b.env;
     let elem = match registry::element_type_of(env, r_oid) {
         Some(e) => e,
-        None => return Err(diag::any_all_needs_array(rpos)),
+        None => return Err(diag::any_all_needs_array(pos)),
     };
     let cands = ops::builtin_operator_candidates(name)?;
     let resolved = ops::resolve_operator(env, name, Some(l.ty().oid), elem, &cands)
@@ -900,11 +1037,13 @@ pub fn bind_distinct_from(
     left: &Expr,
     right: &Expr,
     negated: bool,
+    op_pos: Option<u32>,
     ec: ExprCtx,
 ) -> Result<BoundExpr> {
-    let l = bind_operand(b, left, ec)?;
-    let r = bind_operand(b, right, ec)?;
-    let pos = b.pos(left);
+    let l = bind_cmp_operand(b, left, ec)?;
+    let r = bind_cmp_operand(b, right, ec)?;
+    // PG locates the A_Expr at the `IS` token.
+    let pos = op_pos.or_else(|| b.pos(left));
     if is_row(&l.expr) && is_row(&r.expr) {
         let la = take_row(l.expr)?;
         let ra = take_row(r.expr)?;
@@ -927,6 +1066,8 @@ pub fn bind_distinct_from(
             BoundExpr::or_all(parts)
         });
     }
+    let l = finish_row_operand(b, l)?;
+    let r = finish_row_operand(b, r)?;
     distinct_pair(b, l, r, negated, pos)
 }
 

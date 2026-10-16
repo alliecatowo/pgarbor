@@ -55,6 +55,8 @@ use sqlparser::ast::{
     TableConstraint, UnaryOperator, UserDefinedTypeRepresentation, Value,
 };
 
+use crate::parser::{DOMAIN_NOT_NULL_MARKER, DOMAIN_NULL_MARKER};
+
 use super::context::{Binder, ExprCtx};
 use super::stored;
 use super::types;
@@ -132,7 +134,11 @@ fn target_name(b: &mut Binder, name: &ObjectName) -> Result<(Option<String>, Str
 fn single_name(b: &mut Binder, name: &ObjectName) -> Result<String> {
     let q = b.qual(name)?;
     if q.catalog.is_some() || q.schema.is_some() {
-        return Err(diag::syntax_error_near(".", q.pos));
+        let dot = match name.0.first() {
+            Some(sqlparser::ast::ObjectNamePart::Identifier(id)) => super::ddl_index::dot_position(b, id),
+            _ => None,
+        };
+        return Err(diag::syntax_error_near(".", dot.or(q.pos)));
     }
     Ok(q.name)
 }
@@ -269,7 +275,7 @@ fn bind_owned_by(b: &mut Binder, name: &ObjectName) -> Result<Option<(Oid, i16)>
                 .ok_or_else(|| diag::with_position(errors::cache_lookup_failed("relation", oid), tpos))?;
             match rel.columns.iter().find(|c| !c.dropped && c.name == column) {
                 Some(col) => Ok(Some((oid, col.attnum))),
-                None => Err(diag::column_of_relation_missing(&column, &table, pos)),
+                None => Err(diag::column_of_relation_missing(&column, &table, None)),
             }
         }
         other => Ok(Some((other.oid(), 0))),
@@ -294,13 +300,40 @@ pub fn bind_create_schema(b: &mut Binder, stmt: &Statement) -> Result<BoundState
     let (name, owner) = match schema_name {
         SchemaName::Simple(n) => (single_name(b, n)?, env.current_user()),
         SchemaName::UnnamedAuthorization(auth) => {
-            let role = b.ident(auth);
-            let owner = env.role_oid(&role)?;
-            (role, owner)
+            // CURRENT_USER / CURRENT_ROLE / SESSION_USER are role specifications, not role names.
+            let special = if auth.quote_style.is_none() {
+                match auth.value.to_ascii_lowercase().as_str() {
+                    "current_user" | "current_role" => Some(env.current_user()),
+                    "session_user" => Some(env.session_user()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            match special {
+                Some(owner) => {
+                    let role = env
+                        .snapshot()
+                        .role_name(owner)
+                        .map(|n| n.to_string())
+                        .or_else(|| pgarbor_catalog::builtin::builtin_role(owner).map(|r| r.name.to_string()))
+                        .ok_or_else(|| PgError::internal("role of the session not found"))?;
+                    (role, owner)
+                }
+                None => {
+                    let role = b.ident(auth);
+                    let owner = env.role_oid(&role)?;
+                    (role, owner)
+                }
+            }
         }
         SchemaName::NamedAuthorization(n, auth) => {
             let name = single_name(b, n)?;
-            let owner = role_oid(b, auth)?;
+            let owner = match auth.value.to_ascii_lowercase().as_str() {
+                "current_user" | "current_role" if auth.quote_style.is_none() => env.current_user(),
+                "session_user" if auth.quote_style.is_none() => env.session_user(),
+                _ => role_oid(b, auth)?,
+            };
             (name, owner)
         }
     };
@@ -308,6 +341,69 @@ pub fn bind_create_schema(b: &mut Binder, stmt: &Statement) -> Result<BoundState
         return Err(errors::reserved_schema_name(&name));
     }
     Ok(BoundStatement::CreateSchema { name, owner, if_not_exists: *if_not_exists })
+}
+
+/// Positions of the options of `CREATE SEQUENCE name <options>`, in written order (PG's `DefElem`
+/// locations, used by `errorConflictingDefElem`). Empty when the statement text cannot be lexed.
+fn seq_option_starts(b: &Binder, name: &ObjectName) -> Vec<Option<u32>> {
+    use sqlparser::dialect::PostgreSqlDialect;
+    use sqlparser::tokenizer::{Token, Tokenizer};
+    let Some(ObjectNamePart::Identifier(last)) = name.0.last() else {
+        return Vec::new();
+    };
+    let dialect = PostgreSqlDialect {};
+    let Ok(toks) = Tokenizer::new(&dialect, b.src.text()).tokenize_with_location() else {
+        return Vec::new();
+    };
+    let after = (last.span.end.line, last.span.end.column);
+    let mut out: Vec<Option<u32>> = Vec::new();
+    let mut prev: Option<String> = None;
+    let mut depth = 0i32;
+    // 0 = not in an OWNED BY name, 1 = expecting a name part, 2 = after a name part.
+    let mut owned = 0u8;
+    for t in toks.iter().filter(|t| (t.span.start.line, t.span.start.column) >= after) {
+        match &t.token {
+            Token::Whitespace(_) => continue,
+            Token::SemiColon if depth == 0 => break,
+            Token::LParen => depth += 1,
+            Token::RParen => depth -= 1,
+            _ => {}
+        }
+        if owned == 2 {
+            if matches!(t.token, Token::Period) {
+                owned = 1;
+                prev = None;
+                continue;
+            }
+            owned = 0;
+        }
+        if let Token::Word(w) = &t.token {
+            if owned == 1 {
+                owned = 2;
+                prev = None;
+                continue;
+            }
+            if depth == 0 && w.quote_style.is_none() {
+                let up = w.value.to_ascii_uppercase();
+                let after_no = prev.as_deref() == Some("NO") && matches!(up.as_str(), "CYCLE" | "MINVALUE" | "MAXVALUE");
+                if up == "BY" && prev.as_deref() == Some("OWNED") {
+                    owned = 1;
+                } else if !after_no
+                    && matches!(
+                        up.as_str(),
+                        "AS" | "CACHE" | "CYCLE" | "NO" | "INCREMENT" | "MAXVALUE" | "MINVALUE" | "OWNED" | "START" | "RESTART"
+                            | "LOGGED" | "UNLOGGED" | "SEQUENCE"
+                    )
+                {
+                    out.push(b.pos_span(t.span));
+                }
+                prev = Some(up);
+                continue;
+            }
+        }
+        prev = None;
+    }
+    out
 }
 
 /// `ExtraStatement::CreateSequence` (PG `DefineSequence` + `init_params`). The options arrive in the
@@ -331,10 +427,11 @@ pub fn bind_create_sequence(
     let (schema, seq_name, qpos) = target_name(b, name)?;
     let namespace = creation_namespace(b, schema.as_deref(), &seq_name, qpos)?;
     // The option loop of `init_params`: conflicts and the two options CREATE rejects, in written order.
+    let starts = seq_option_starts(b, name);
     let mut seen: Vec<&'static str> = Vec::new();
-    let mut note = |key: &'static str| -> Result<()> {
+    let mut note = |key: &'static str, opos: Option<u32>| -> Result<()> {
         if seen.contains(&key) {
-            return Err(conflicting_options(pos));
+            return Err(conflicting_options(opos));
         }
         seen.push(key);
         Ok(())
@@ -342,40 +439,41 @@ pub fn bind_create_sequence(
     let mut data_type = None;
     let mut owned_by: Option<&Option<ObjectName>> = None;
     let mut ast: Vec<AstSequenceOption> = Vec::with_capacity(options.len());
-    for o in options {
+    for (idx, o) in options.iter().enumerate() {
+        let opos = starts.get(idx).copied().flatten().or(pos);
         match o {
             SequenceOptionAst::As(dt) => {
-                note("as")?;
+                note("as", opos)?;
                 data_type = Some(dt);
             }
             SequenceOptionAst::IncrementBy(t) => {
-                note("increment")?;
+                note("increment", opos)?;
                 ast.push(AstSequenceOption::IncrementBy(number_expr(t), true));
             }
             SequenceOptionAst::MinValue(v) => {
-                note("minvalue")?;
+                note("minvalue", opos)?;
                 ast.push(AstSequenceOption::MinValue(v.as_deref().map(number_expr)));
             }
             SequenceOptionAst::MaxValue(v) => {
-                note("maxvalue")?;
+                note("maxvalue", opos)?;
                 ast.push(AstSequenceOption::MaxValue(v.as_deref().map(number_expr)));
             }
             SequenceOptionAst::StartWith(t) => {
-                note("start")?;
+                note("start", opos)?;
                 ast.push(AstSequenceOption::StartWith(number_expr(t), true));
             }
             // `RESTART` is accepted and has no effect on a new sequence.
-            SequenceOptionAst::Restart(_) => note("restart")?,
+            SequenceOptionAst::Restart(_) => note("restart", opos)?,
             SequenceOptionAst::Cache(t) => {
-                note("cache")?;
+                note("cache", opos)?;
                 ast.push(AstSequenceOption::Cache(number_expr(t)));
             }
             SequenceOptionAst::Cycle(c) => {
-                note("cycle")?;
+                note("cycle", opos)?;
                 ast.push(AstSequenceOption::Cycle(*c));
             }
             SequenceOptionAst::OwnedBy(v) => {
-                note("owned_by")?;
+                note("owned_by", opos)?;
                 owned_by = Some(v);
             }
             SequenceOptionAst::Logged(l) => {
@@ -398,7 +496,7 @@ pub fn bind_create_sequence(
             resolved.id.oid
         }
     };
-    let bound = bind_sequence_options(b, &ast, as_type, pos)?;
+    let bound = bind_sequence_options(b, &ast, as_type, None)?;
     let owned = match owned_by {
         Some(Some(n)) => bind_owned_by(b, n)?,
         _ => None,
@@ -452,7 +550,7 @@ pub fn bind_sequence_options(b: &mut Binder, options: &[AstSequenceOption], data
                 }
                 let v = seq_int(b, e, pos)?;
                 if v == 0 {
-                    return Err(diag::with_position(errors::sequence_increment_zero(), pos));
+                    return Err(errors::sequence_increment_zero());
                 }
                 increment = Some(v);
             }
@@ -502,17 +600,17 @@ pub fn bind_sequence_options(b: &mut Binder, options: &[AstSequenceOption], data
         _ => default_max(inc, type_max),
     };
     if max < type_min || max > type_max {
-        return Err(diag::with_position(errors::sequence_bound_out_of_range("MAXVALUE", max, type_name), pos));
+        return Err(errors::sequence_bound_out_of_range("MAXVALUE", max, type_name));
     }
     let min = match min_opt {
         Some(SeqBound::Value(v)) => v,
         _ => default_min(inc, type_min),
     };
     if min < type_min || min > type_max {
-        return Err(diag::with_position(errors::sequence_bound_out_of_range("MINVALUE", min, type_name), pos));
+        return Err(errors::sequence_bound_out_of_range("MINVALUE", min, type_name));
     }
     if min >= max {
-        return Err(diag::with_position(errors::sequence_min_not_less_than_max(min, max), pos));
+        return Err(errors::sequence_min_not_less_than_max(min, max));
     }
     let start_value = match start {
         Some(v) => v,
@@ -525,14 +623,14 @@ pub fn bind_sequence_options(b: &mut Binder, options: &[AstSequenceOption], data
         }
     };
     if start_value < min {
-        return Err(diag::with_position(errors::sequence_start_below_min(start_value, min), pos));
+        return Err(errors::sequence_start_below_min(start_value, min));
     }
     if start_value > max {
-        return Err(diag::with_position(errors::sequence_start_above_max(start_value, max), pos));
+        return Err(errors::sequence_start_above_max(start_value, max));
     }
     let cache_value = cache.unwrap_or(1);
     if cache_value < 1 {
-        return Err(diag::with_position(errors::sequence_cache_not_positive(cache_value), pos));
+        return Err(errors::sequence_cache_not_positive(cache_value));
     }
 
     Ok(SequenceOptions {
@@ -690,8 +788,42 @@ pub fn bind_create_domain(b: &mut Binder, stmt: &Statement) -> Result<BoundState
         None => None,
     };
     let mut checks: Vec<DomainConstraintSpec> = Vec::new();
+    // PG DefineDomain: `nullDefined` / `typNotNull` over the NULL and NOT NULL constraints (the parser
+    // encodes them as `CHECK (marker)`).
+    let mut null_defined = false;
+    let mut not_null: Option<Option<String>> = None;
     for constraint in &dom.constraints {
         match constraint {
+            TableConstraint::Check(check)
+                if matches!(&*check.expr, Expr::Identifier(id)
+                    if id.value == DOMAIN_NOT_NULL_MARKER || id.value == DOMAIN_NULL_MARKER) =>
+            {
+                let (is_not_null, mpos) = match &*check.expr {
+                    Expr::Identifier(id) => (id.value == DOMAIN_NOT_NULL_MARKER, b.pos_span(id.span)),
+                    _ => (false, pos),
+                };
+                if is_not_null {
+                    if null_defined {
+                        return Err(if not_null.is_none() {
+                            PgError::syntax("conflicting NULL/NOT NULL constraints", mpos)
+                        } else {
+                            let mut e = PgError::new(
+                                SqlState::INVALID_OBJECT_DEFINITION,
+                                "redundant NOT NULL constraint definition",
+                            );
+                            e.position = mpos;
+                            e
+                        });
+                    }
+                    not_null = Some(check.name.as_ref().map(|id| b.ident(id)));
+                } else {
+                    if null_defined && not_null.is_some() {
+                        return Err(PgError::syntax("conflicting NULL/NOT NULL constraints", mpos));
+                    }
+                    not_null = None;
+                }
+                null_defined = true;
+            }
             TableConstraint::Check(check) => {
                 if check.enforced == Some(false) {
                     return Err(unsupported("NOT ENFORCED on a domain constraint", pos));
@@ -714,7 +846,7 @@ pub fn bind_create_domain(b: &mut Binder, stmt: &Statement) -> Result<BoundState
         base: base.id,
         collation,
         default,
-        not_null: None,
+        not_null,
         checks,
         ndims: base.ndims,
     };
@@ -791,9 +923,10 @@ fn create_role_spec(b: &mut Binder, kind: RoleStmtKind, name: &Ident, options: &
     if spec.name.starts_with("pg_") {
         return Err(errors::reserved_role_name(&spec.name));
     }
-    if let Some((text, tpos)) = valid_until {
+    if let Some((text, _tpos)) = valid_until {
+        // PG evaluates the VALID UNTIL string without a statement position.
         let ctx = b.io_ctx();
-        let datum = pgarbor_types::io::input(&ctx, TypeId::of(oids::TIMESTAMPTZ), text).map_err(|err| diag::with_position(err, tpos))?;
+        let datum = pgarbor_types::io::input(&ctx, TypeId::of(oids::TIMESTAMPTZ), text)?;
         match datum {
             Datum::TimestampTz(us) => spec.valid_until = Some(us),
             _ => return Err(PgError::internal("binder: timestamptz input produced another datum")),
@@ -1004,6 +1137,17 @@ mod tests {
 
         let e = options_error("create sequence s increment 99999999999999999999", oids::INT8);
         assert_eq!(e.sqlstate, SqlState::NUMERIC_VALUE_OUT_OF_RANGE);
+    }
+
+    #[test]
+    fn create_sequence_error_positions() {
+        // errorConflictingDefElem points at the repeated option; range errors carry no position.
+        let e = err_of(bind_sql("create sequence sx increment 2 increment 3"));
+        assert_eq!(e.message, "conflicting or redundant options");
+        assert_eq!(e.position, Some(32));
+        let e = err_of(bind_sql("create sequence sx minvalue 10 start 5"));
+        assert_eq!(e.message, "START value (5) cannot be less than MINVALUE (10)");
+        assert_eq!(e.position, None);
     }
 
     #[test]

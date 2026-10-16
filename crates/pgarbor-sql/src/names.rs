@@ -41,9 +41,11 @@ pub fn ident_name(id: &Ident, notices: &mut Vec<PgError>) -> String {
     let folded = fold_ident(id);
     match truncate_ident(&folded) {
         Some(t) => {
-            notices.push(PgError::notice(format!(
+            let mut n = PgError::notice(format!(
                 "identifier \"{folded}\" will be truncated to \"{t}\""
-            )));
+            ));
+            n.sqlstate = SqlState::NAME_TOO_LONG;
+            notices.push(n);
             t
         }
         None => folded,

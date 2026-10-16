@@ -277,6 +277,15 @@ fn entry_cols(entry: &RangeEntry) -> Vec<String> {
 }
 
 /// Plain set operation without ORDER BY / LIMIT / OFFSET / locking / WITH: PG `SetOperationStmt`.
+/// Output column names a query body produces before any alias list (PG `targetList` resnames).
+fn natural_output_names(q: &BoundQuery) -> Vec<String> {
+    match &q.body {
+        QueryBody::Select(s) => s.target_list.iter().filter(|t| !t.junk).map(|t| t.name.clone()).collect(),
+        QueryBody::Values(v) => (1..=v.types.len()).map(|n| format!("column{n}")).collect(),
+        QueryBody::SetOp(s) => natural_output_names(&s.left),
+    }
+}
+
 fn plain_setop(q: &BoundQuery) -> Option<&SetOpBody> {
     if !q.ctes.is_empty()
         || !q.order_by.is_empty()
@@ -633,13 +642,12 @@ impl<'e> Printer<'e> {
             self.buf.push_str(&qname);
             let needs_list = match &cte.body {
                 CteBody::Query(bq) => {
+                    // The binder renames `bq.output` with the alias list, so compare against the
+                    // names the body itself produces.
+                    let natural = natural_output_names(bq);
                     !cte.columns.is_empty()
-                        && (cte.columns.len() != bq.output.len()
-                            || cte
-                                .columns
-                                .iter()
-                                .zip(bq.output.iter())
-                                .any(|(a, b)| a.name != b.name))
+                        && (cte.columns.len() != natural.len()
+                            || cte.columns.iter().zip(natural.iter()).any(|(a, b)| a.name != *b))
                 }
                 CteBody::Modify(_) => false,
             };
@@ -966,10 +974,16 @@ impl<'e> Printer<'e> {
                 levels_up,
                 ..
             } => {
+                // The binder counts `levels_up` in WITH frames (`find_cte`), not query levels:
+                // skip the enclosing levels that have no WITH clause.
                 let depth = self
                     .cte_stack
-                    .len()
-                    .checked_sub(1 + *levels_up as usize)
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|(_, names)| !names.is_empty())
+                    .nth(*levels_up as usize)
+                    .map(|(i, _)| i)
                     .ok_or_else(|| PgError::internal("CTE reference to a missing query level"))?;
                 let cte_name = self.cte_stack[depth]
                     .get(*cte_index as usize)

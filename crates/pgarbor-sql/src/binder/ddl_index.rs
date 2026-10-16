@@ -82,7 +82,7 @@ pub fn bind_create_index(b: &mut Binder, ci: &CreateIndex) -> Result<BoundStatem
         None => None,
     };
     let rel = resolve_table(b, &ci.table_name)?;
-    let method = index_method(b, ci.using.as_ref())?;
+    let method = index_method(b, ci.using.as_ref(), ci)?;
 
     // Expression keys, the predicate and INCLUDE names are bound in a synthetic scope over the table's
     // columns. The scope is removed again whatever happens.
@@ -149,7 +149,7 @@ fn index_name(b: &mut Binder, n: &ObjectName) -> Result<String> {
 }
 
 /// Position of the `.` that follows identifier `id` (written without spaces, as PG reports it).
-fn dot_position(b: &Binder, id: &Ident) -> Option<u32> {
+pub(super) fn dot_position(b: &Binder, id: &Ident) -> Option<u32> {
     let end = id.span.end;
     let at_dot = Location { line: end.line, column: end.column + 1 };
     b.pos_span(Span::new(at_dot, at_dot))
@@ -164,7 +164,8 @@ fn resolve_table<'a>(b: &mut Binder<'a>, n: &ObjectName) -> Result<&'a Relation>
         }
     }
     let env: &'a CatalogEnv = b.env;
-    let rel = env.resolve_relation(qn.schema_str(), &qn.name).map_err(|e| at(e, qn.pos))?;
+    // DefineIndex looks the table up without a parse location: no POSITION field.
+    let rel = env.resolve_relation(qn.schema_str(), &qn.name)?;
     if rel.oid < FIRST_NORMAL_OID || rel.namespace == builtin::PG_CATALOG_NAMESPACE || rel.namespace == builtin::PG_TOAST_NAMESPACE {
         return Err(at(catalog_errors::system_catalog_permission(&rel.name), qn.pos));
     }
@@ -178,7 +179,7 @@ fn resolve_table<'a>(b: &mut Binder<'a>, n: &ObjectName) -> Result<&'a Relation>
 }
 
 /// Access method from `USING` (module docs): btree only; other known methods 0A000; unknown 42704.
-fn index_method(b: &mut Binder, using: Option<&IndexType>) -> Result<IndexMethod> {
+fn index_method(b: &mut Binder, using: Option<&IndexType>, ci: &CreateIndex) -> Result<IndexMethod> {
     let name: String = match using {
         None => return Ok(IndexMethod::Btree),
         Some(t) => match t {
@@ -194,7 +195,27 @@ fn index_method(b: &mut Binder, using: Option<&IndexType>) -> Result<IndexMethod
     };
     match IndexMethod::from_name(&name) {
         Some(IndexMethod::Btree) => Ok(IndexMethod::Btree),
-        Some(_) => Err(unsupported(&format!("index method \"{name}\""), None)),
+        Some(_) => {
+            // DefineIndex checks the access method's capabilities before anything is built.
+            let key_count = ci.columns.len();
+            let (multicol, unique, include) = match name.as_str() {
+                "hash" => (false, false, false),
+                "spgist" => (false, false, true),
+                "gist" => (true, false, true),
+                _ => (true, false, false),
+            };
+            let fail = |what: &str| PgError::new(SqlState::FEATURE_NOT_SUPPORTED, format!("access method \"{name}\" does not support {what}"));
+            if key_count > 1 && !multicol {
+                return Err(fail("multicolumn indexes"));
+            }
+            if ci.unique && !unique {
+                return Err(fail("unique indexes"));
+            }
+            if !ci.include.is_empty() && !include {
+                return Err(fail("included columns"));
+            }
+            Err(unsupported(&format!("index method \"{name}\""), None))
+        }
         None => Err(catalog_errors::access_method_does_not_exist(&name)),
     }
 }
@@ -211,7 +232,7 @@ fn bind_key(b: &mut Binder, rel: &Relation, ic: &IndexColumn) -> Result<IndexKey
         let name = b.ident(id);
         let col = rel.column_by_name(&name);
         if col.is_none() && !is_system_column(&name) {
-            return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
+            return Err(diag::undefined_column(None, &name, None));
         }
         if col.is_none() {
             return Err(system_column_index_error());
@@ -307,12 +328,10 @@ fn resolve_opclass(b: &mut Binder, n: &ObjectName, key_type: Option<Oid>) -> Res
     let row = match found {
         Some(r) => r,
         None => {
-            return Err(at(
-                PgError::new(
-                    SqlState::UNDEFINED_OBJECT,
-                    format!("operator class \"{}\" does not exist for access method \"btree\"", qn.display()),
-                ),
-                qn.pos,
+            // PG raises these without parser_errposition: no POSITION field.
+            return Err(PgError::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("operator class \"{}\" does not exist for access method \"btree\"", qn.display()),
             ));
         }
     };
@@ -326,7 +345,7 @@ fn resolve_opclass(b: &mut Binder, n: &ObjectName, key_type: Option<Oid>) -> Res
         let env: &dyn TypeEnv = b.env;
         if !is_binary_coercible(env, kt, intype)? {
             let msg = format!("operator class \"{}\" does not accept data type {}", qn.display(), b.type_name(TypeId::of(kt)));
-            return Err(at(PgError::new(SqlState::DATATYPE_MISMATCH, msg), qn.pos));
+            return Err(PgError::new(SqlState::DATATYPE_MISMATCH, msg));
         }
     }
     Ok(oid)
@@ -344,7 +363,7 @@ fn bind_include(b: &mut Binder, rel: &Relation, names: &[Ident]) -> Result<Vec<S
         let name = b.ident(id);
         if rel.column_by_name(&name).is_none() {
             if !is_system_column(&name) {
-                return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
+                return Err(diag::undefined_column(None, &name, None));
             }
             return Err(system_column_index_error());
         }
@@ -390,25 +409,25 @@ fn bind_with(b: &mut Binder, with: &[Expr]) -> Result<Vec<String>> {
                     Ok(v) => v,
                     Err(_) => {
                         let msg = format!("invalid value for integer option \"fillfactor\": {value}");
-                        return Err(at(PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg), pos));
+                        return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg));
                     }
                 };
                 if !(10..=100).contains(&v) {
                     let msg = format!("value {value} out of bounds for option \"fillfactor\"");
                     let err = PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg)
                         .with_detail("Valid values are between \"10\" and \"100\".");
-                    return Err(at(err, pos));
+                    return Err(err);
                 }
             }
             "deduplicate_items" => {
                 if parse_bool_option(&value).is_none() {
                     let msg = format!("invalid value for boolean option \"deduplicate_items\": {value}");
-                    return Err(at(PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg), pos));
+                    return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg));
                 }
             }
             _ => {
                 let msg = format!("unrecognized parameter \"{name}\"");
-                return Err(at(PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg), pos));
+                return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, msg));
             }
         }
         out.push(format!("{name}={value}"));
@@ -460,7 +479,8 @@ fn ensure_immutable(b: &Binder, e: &Expr, bound: &BoundExpr, what: &str) -> Resu
     if matches!(bound.volatility(), Volatility::Immutable) {
         return Ok(());
     }
-    Err(diag::invalid_object_definition(format!("functions in {what} must be marked IMMUTABLE"), b.pos(e)))
+    let _ = (b, e);
+    Err(diag::invalid_object_definition(format!("functions in {what} must be marked IMMUTABLE"), None))
 }
 
 /// Column name of attnum `a` for stored-expression deparsing (dropped columns have no name).

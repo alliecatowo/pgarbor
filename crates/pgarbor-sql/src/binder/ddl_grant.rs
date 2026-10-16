@@ -30,7 +30,7 @@
 //! NOT REACHABLE with sqlparser 0.63: its `parse_grant_permission` rejects a bare role name in the
 //! privilege list, so no `Statement` value represents the role form. See the function's body.
 //! Self-membership and other membership rules are enforced by the catalog (`ddl::spec::MembershipSpec`).
-use pgarbor_catalog::ddl::spec::{GrantSpec, GrantTarget, PrivilegeSet};
+use pgarbor_catalog::ddl::spec::{GrantSpec, GrantTarget, MembershipSpec, PrivilegeSet};
 use pgarbor_catalog::model::acl_mode;
 use pgarbor_catalog::snapshot::ClassRef;
 use pgarbor_catalog::{errors as cat_errors, CatalogEnv, ObjClass, ObjectAddress, RelKind};
@@ -202,6 +202,90 @@ pub fn bind_grant_role(b: &mut Binder, stmt: &Statement) -> Result<BoundStatemen
     ))
 }
 
+/// `ExtraStatement::GrantRole`: `GRANT r1, r2 TO m1, m2 [WITH ADMIN|INHERIT|SET ..] [GRANTED BY g]`, one
+/// [`MembershipSpec`] per (role, member) pair. Order of checks follows `GrantRole` in user.c: option
+/// names, grantor, grantees, then the granted roles.
+pub fn bind_grant_role_extra(
+    b: &mut Binder,
+    roles: &[Ident],
+    grantees: &[Ident],
+    options: &[(Ident, bool)],
+    grantor: Option<&Ident>,
+) -> Result<BoundStatement> {
+    let (mut admin_option, mut inherit_option, mut set_option) = (false, None, true);
+    for (name, value) in options {
+        match name.value.to_ascii_lowercase().as_str() {
+            "admin" => admin_option = *value,
+            "inherit" => inherit_option = Some(*value),
+            "set" => set_option = *value,
+            _ => return Err(unrecognized_role_option(b, name)),
+        }
+    }
+    let grantor = match grantor {
+        Some(id) => role_from_ident(b, id)?,
+        None => 0,
+    };
+    let mut members: Vec<Oid> = Vec::with_capacity(grantees.len());
+    for g in grantees {
+        members.push(role_from_ident(b, g)?);
+    }
+    let mut specs = Vec::with_capacity(roles.len() * members.len());
+    for r in roles {
+        let role = role_from_ident(b, r)?;
+        for &member in &members {
+            specs.push(MembershipSpec { role, member, grantor, admin_option, inherit_option, set_option });
+        }
+    }
+    Ok(BoundStatement::GrantRole(specs))
+}
+
+/// `ExtraStatement::RevokeRole`: `REVOKE [ADMIN OPTION FOR] r FROM m [GRANTED BY g] [CASCADE]`. Only the
+/// `ADMIN OPTION FOR` form is executed; `INHERIT` / `SET OPTION FOR` are 0A000.
+pub fn bind_revoke_role_extra(
+    b: &mut Binder,
+    option_for: Option<&Ident>,
+    roles: &[Ident],
+    grantees: &[Ident],
+    grantor: Option<&Ident>,
+    cascade: bool,
+) -> Result<BoundStatement> {
+    let mut admin_option_only = false;
+    if let Some(name) = option_for {
+        match name.value.to_ascii_lowercase().as_str() {
+            "admin" => admin_option_only = true,
+            "inherit" | "set" => {
+                return Err(diag::unsupported_construct("REVOKE INHERIT/SET OPTION FOR role membership", b.pos_span(name.span)))
+            }
+            _ => return Err(unrecognized_role_option(b, name)),
+        }
+    }
+    let grantor = match grantor {
+        Some(id) => role_from_ident(b, id)?,
+        None => 0,
+    };
+    let mut members: Vec<Oid> = Vec::with_capacity(grantees.len());
+    for g in grantees {
+        members.push(role_from_ident(b, g)?);
+    }
+    let mut specs = Vec::with_capacity(roles.len() * members.len());
+    for r in roles {
+        let role = role_from_ident(b, r)?;
+        for &member in &members {
+            specs.push(MembershipSpec { role, member, grantor, admin_option: false, inherit_option: None, set_option: true });
+        }
+    }
+    Ok(BoundStatement::RevokeRole { specs, admin_option_only, cascade })
+}
+
+/// 42601 `unrecognized role option "x"` at the option name.
+fn unrecognized_role_option(b: &Binder, name: &Ident) -> PgError {
+    let mut e = PgError::new(SqlState::SYNTAX_ERROR, format!("unrecognized role option \"{}\"", name.value));
+    if let Some(p) = b.pos_span(name.span) {
+        e = e.with_position(p);
+    }
+    e
+}
+
 /// Shared GRANT / REVOKE implementation over the sqlparser fields (PG `ExecuteGrantStmt`).
 fn bind_grant_input(b: &mut Binder, input: GrantInput<'_>) -> Result<BoundStatement> {
     // Syntax stage: privilege names become acl bits (unknown names are parse errors in PG).
@@ -334,6 +418,11 @@ fn privilege_bits(action: &Action) -> Result<(u32, Option<&[Ident]>)> {
         Action::Connect => (acl_mode::CONNECT, None),
         Action::Create { obj_type: None } => (acl_mode::CREATE, None),
         Action::Execute { obj_type: None } => (acl_mode::EXECUTE, None),
+        Action::Role { role }
+            if matches!(role.0.as_slice(), [ObjectNamePart::Identifier(id)] if id.value == crate::parser::MAINTAIN_PRIVILEGE_MARKER) =>
+        {
+            (acl_mode::MAINTAIN, None)
+        }
         other => return Err(diag::syntax_error_near(first_word(&other.to_string()), None)),
     };
     Ok(item)

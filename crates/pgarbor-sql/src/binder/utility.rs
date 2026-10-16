@@ -260,7 +260,9 @@ pub fn bind_execute(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> 
     }
 
     let mut args: Vec<BoundExpr> = Vec::with_capacity(parameters.len());
+    let mut arg_positions: Vec<Option<u32>> = Vec::with_capacity(parameters.len());
     for arg_ast in parameters {
+        arg_positions.push(b.pos(arg_ast));
         let arg = expr::bind_arg(b, arg_ast, ExprCtx::execute_args())?;
         if let Some(n) = first_param(&arg.expr) {
             let mut e = PgError::new(SqlState::UNDEFINED_PARAMETER, format!("there is no parameter ${n}"));
@@ -269,7 +271,7 @@ pub fn bind_execute(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> 
         }
         args.push(arg.expr);
     }
-    Ok(BoundStatement::Execute(Box::new(BoundExecute { name: qn.name, args })))
+    Ok(BoundStatement::Execute(Box::new(BoundExecute { name: qn.name, args, arg_positions: arg_positions })))
 }
 
 /// DEALLOCATE.
@@ -373,6 +375,12 @@ fn option_bool(name: &str, arg: Option<&Expr>) -> Result<bool> {
         Some(Expr::Value(v)) => match &v.value {
             Value::Boolean(flag) => Ok(*flag),
             Value::SingleQuotedString(text) => parse_bool_word(text).ok_or_else(not_boolean),
+            // `defGetBoolean` T_Integer: only 0 and 1.
+            Value::Number(text, _) => match text.as_str() {
+                "1" => Ok(true),
+                "0" => Ok(false),
+                _ => Err(not_boolean()),
+            },
             _ => Err(not_boolean()),
         },
         Some(Expr::Identifier(id)) => parse_bool_word(&id.value).ok_or_else(not_boolean),
@@ -641,14 +649,38 @@ pub fn bind_lock(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
     };
     let mut tables: Vec<Oid> = Vec::with_capacity(lock.tables.len());
     for target in &lock.tables {
-        let (rel, pos) = resolve_relation(b, &target.name)?;
+        // LockTableCommand uses RangeVarGetRelidExtended(missing_ok = false): errors carry no
+        // parse position, and a missing explicit schema is 3F000.
+        let qn = b.qual(&target.name)?;
+        check_database(b, &qn)?;
+        let env: &CatalogEnv = b.env;
+        if let Some(s) = qn.schema.as_deref() {
+            if s != "pg_temp" && env.lookup_namespace(s).is_none() {
+                return Err(PgError::new(SqlState::INVALID_SCHEMA_NAME, format!("schema \"{s}\" does not exist")));
+            }
+        }
+        let not_lockable = |name: &str, plural: &str| {
+            PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("cannot lock relation \"{name}\""))
+                .with_detail(format!("This operation is not supported for {plural}."))
+        };
+        match env.lookup_class(qn.schema.as_deref(), &qn.name)? {
+            None => {
+                let shown = match qn.schema.as_deref() {
+                    Some(s) => format!("{s}.{}", qn.name),
+                    None => qn.name.clone(),
+                };
+                return Err(PgError::new(SqlState::UNDEFINED_TABLE, format!("relation \"{shown}\" does not exist")));
+            }
+            Some(ClassRef::Index(_)) | Some(ClassRef::SystemIndex(_)) => {
+                return Err(not_lockable(&qn.name, "indexes"));
+            }
+            Some(ClassRef::Sequence(_)) => return Err(not_lockable(&qn.name, "sequences")),
+            Some(ClassRef::Relation(_)) => {}
+        }
+        let rel = env.resolve_relation(qn.schema.as_deref(), &qn.name)?.clone();
         match rel.kind {
             RelKind::Table | RelKind::PartitionedTable | RelKind::View => tables.push(rel.oid),
-            kind => {
-                let err = PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("cannot lock relation \"{}\"", rel.name))
-                    .with_detail(format!("This operation is not supported for {}.", kind_plural(kind)));
-                return Err(diag::with_position(err, pos));
-            }
+            kind => return Err(not_lockable(&rel.name, kind_plural(kind))),
         }
     }
     Ok(BoundStatement::Lock(BoundLock { tables, mode, nowait: lock.nowait }))
@@ -993,11 +1025,9 @@ fn index_oid(b: &mut Binder, name: &ObjectName) -> Result<Oid> {
     let env: &CatalogEnv = b.env;
     match env.resolve_class(qn.schema.as_deref(), &qn.name) {
         Ok(ClassRef::Index(oid)) | Ok(ClassRef::SystemIndex(oid)) => Ok(oid),
-        Ok(_) => Err(diag::with_position(
-            PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{}\" is not an index", qn.name)),
-            qn.pos,
-        )),
-        Err(e) => Err(diag::with_position(e, qn.pos)),
+        // ExecReindex errors carry no parse position (RangeVar locations are not reported).
+        Ok(_) => Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{}\" is not an index", qn.name))),
+        Err(e) => Err(e),
     }
 }
 
@@ -1014,13 +1044,21 @@ fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, co
         }
         ReindexKind::Table => {
             let name = name.ok_or_else(|| diag::syntax_error_near(";", None))?;
-            let (rel, pos) = resolve_relation(b, name)?;
+            let qn = b.qual(name)?;
+            check_database(b, &qn)?;
+            let env: &CatalogEnv = b.env;
+            let not_table = |n: &str| {
+                PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{n}\" is not a table or materialized view"))
+            };
+            match env.resolve_class(qn.schema.as_deref(), &qn.name)? {
+                ClassRef::Index(_) | ClassRef::SystemIndex(_) | ClassRef::Sequence(_) => {
+                    return Err(not_table(&qn.name));
+                }
+                ClassRef::Relation(_) => {}
+            }
+            let rel = env.resolve_relation(qn.schema.as_deref(), &qn.name)?;
             if !is_table_like(rel.kind) {
-                let err = PgError::new(
-                    SqlState::WRONG_OBJECT_TYPE,
-                    format!("\"{}\" is not a table or materialized view", rel.name),
-                );
-                return Err(diag::with_position(err, pos));
+                return Err(not_table(&rel.name));
             }
             vec![rel.oid]
         }
@@ -1057,7 +1095,8 @@ fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, co
             Vec::new()
         }
     };
-    Ok(BoundStatement::Maintenance { kind: MaintenanceKind::Reindex, targets })
+    let kind = if concurrently { MaintenanceKind::ReindexConcurrently } else { MaintenanceKind::Reindex };
+    Ok(BoundStatement::Maintenance { kind, targets })
 }
 
 /// CLUSTER [table [USING index]]. Plain `CLUSTER table` needs a previously clustered index

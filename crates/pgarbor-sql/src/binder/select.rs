@@ -134,12 +134,59 @@ pub(super) fn leftmost_select_into(body: &SetExpr) -> Option<&sqlparser::ast::Se
 
 /// Top-level `Statement::Query`: query or `SELECT INTO` (also `SELECT INTO ... UNION SELECT ...`).
 pub fn bind_query_statement(b: &mut Binder, q: &Query) -> Result<BoundStatement> {
+    if let SetExpr::Merge(_) = &*q.body {
+        // `WITH ... MERGE` (PG `transformMergeStmt`): WITH RECURSIVE is rejected; MERGE itself is not executed yet.
+        if q.with.as_ref().is_some_and(|w| w.recursive) {
+            return Err(PgError::new(SqlState::SYNTAX_ERROR, "WITH RECURSIVE is not supported for MERGE statement"));
+        }
+        return Err(diag::unsupported_construct("MERGE", None));
+    }
+    if let SetExpr::Insert(st) | SetExpr::Update(st) | SetExpr::Delete(st) = &*q.body {
+        return bind_with_dml(b, q, st);
+    }
     if let Some(into) = leftmost_select_into(&q.body) {
         return ddl_table::bind_select_into(b, q, into);
     }
     let ctx = QueryCtx { column_aliases: Vec::new(), top_level: true, keep_unknown_outputs: false };
     let bq = bind_query(b, q, &ctx)?;
     Ok(BoundStatement::Query(Box::new(bq)))
+}
+
+/// `WITH ... INSERT/UPDATE/DELETE`: the WITH list is bound at the top level (PG `transformWithClause`
+/// on the DML statement), then the DML statement with the CTE frame visible; the CTEs go to the
+/// statement's `ctes`.
+fn bind_with_dml(b: &mut Binder, q: &Query, st: &sqlparser::ast::Statement) -> Result<BoundStatement> {
+    if let Err(e) = b.enter() {
+        b.leave();
+        return Err(e);
+    }
+    let cte_base = b.cte_frames.len();
+    let scope_base = b.scopes.len();
+    let result = bind_with_dml_levels(b, q, st, cte_base);
+    b.cte_frames.truncate(cte_base);
+    b.scopes.truncate(scope_base);
+    b.leave();
+    result
+}
+
+fn bind_with_dml_levels(b: &mut Binder, q: &Query, st: &sqlparser::ast::Statement, cte_base: usize) -> Result<BoundStatement> {
+    let with = q.with.as_ref().ok_or_else(|| PgError::internal("binder: data-modifying query body without WITH"))?;
+    let mut ctes = cte::bind_with(b, with, true)?;
+    let mut bound = super::dispatch::bind_inner_statement(b, st, false)?;
+    if let Some(frame) = b.cte_frames.get(cte_base) {
+        for entry in &frame.entries {
+            if let Some(c) = ctes.get_mut(entry.index as usize) {
+                c.ref_count = entry.ref_count;
+            }
+        }
+    }
+    match &mut bound {
+        BoundStatement::Insert(x) => x.ctes = ctes,
+        BoundStatement::Update(x) => x.ctes = ctes,
+        BoundStatement::Delete(x) => x.ctes = ctes,
+        _ => return Err(PgError::internal("binder: WITH on a statement that is not INSERT/UPDATE/DELETE")),
+    }
+    Ok(bound)
 }
 
 /// Bind a query that is used as a sub-select source (derived table, view body, CTE body) with

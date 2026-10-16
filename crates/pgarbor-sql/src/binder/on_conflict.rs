@@ -11,8 +11,9 @@
 //!   (`ON CONFLICT (lower(a))`) reaches this module as a [`CONFLICT_EXPR_MARKER`] identifier carrying its
 //!   source text (the parser rewrites it, sqlparser 0.63 takes identifiers only); it is parsed, bound in
 //!   the target's scope and compared with the stored key expressions. A COLLATE element is 0A000 SQL-27.
-//!   `WHERE index_predicate` is not representable in sqlparser 0.63's
-//!   `ConflictTarget::Columns(Vec<Ident>)`; document as a gap. `ConflictTarget::OnConstraint(name)` ->
+//!   `WHERE index_predicate` (not representable in sqlparser 0.63's `ConflictTarget::Columns`) reaches
+//!   this module as a trailing [`CONFLICT_WHERE_MARKER`] identifier; a partial index qualifies only when
+//!   its bound predicate equals the written one (PG uses implication). `ConflictTarget::OnConstraint(name)` ->
 //!   the named unique/PK constraint's backing index (42704 `constraint "x" for table "t" does not
 //!   exist`, oracle; a CHECK constraint name: 42809 `constraint in ON CONFLICT clause has no associated
 //!   index`). No target: only legal with `DO NOTHING`
@@ -44,7 +45,7 @@ use super::stored::{bind_relation_expr, bind_stored_expr};
 use super::update_delete::bind_assignments;
 use crate::diag;
 use crate::ir::{Arbiter, BoundExpr, BoundOnConflict, ConflictAction, ExprKind, PseudoRelation, RangeKind, TargetTable};
-use crate::parser::{parse_expr_text, CONFLICT_EXPR_MARKER};
+use crate::parser::{parse_expr_text, CONFLICT_EXPR_MARKER, CONFLICT_WHERE_MARKER};
 
 /// Range-table index of the DML target in the INSERT scope (`open_target_table` registers the
 /// target first, so it is always entry 1).
@@ -111,7 +112,12 @@ fn infer_arbiter(b: &mut Binder, spec: Option<&ConflictTarget>, target: &TargetT
 fn infer_by_columns(b: &mut Binder, idents: &[Ident], target: &TargetTable) -> Result<Arbiter> {
     let mut attnums: Vec<i16> = Vec::with_capacity(idents.len());
     let mut exprs: Vec<BoundExpr> = Vec::new();
+    let mut predicate: Option<BoundExpr> = None;
     for id in idents {
+        if let Some(text) = id.value.strip_prefix(CONFLICT_WHERE_MARKER) {
+            predicate = Some(bind_inference_expr(b, text, id, target)?);
+            continue;
+        }
         if let Some(text) = id.value.strip_prefix(CONFLICT_EXPR_MARKER) {
             let bound = bind_inference_expr(b, text, id, target)?;
             // A parenthesized column (`((c))`) is the plain column, as in PG's parse tree.
@@ -148,9 +154,16 @@ fn infer_by_columns(b: &mut Binder, idents: &[Ident], target: &TargetTable) -> R
     let env = b.env;
     let mut matched: Vec<&Index> = Vec::new();
     for idx in env.snapshot().indexes_of(target.oid) {
-        match inference_candidate_columns(idx) {
+        match inference_candidate_columns(idx, predicate.is_some()) {
             Some(cols) if cols == attnums => {}
             _ => continue,
+        }
+        if let (Some(stored), Some(want)) = (&idx.predicate, &predicate) {
+            // A partial index arbitrates only when the written predicate is the index predicate.
+            let have = bind_stored_expr(b, &stored.sql, target.oid, ExprCtx::index_expr())?;
+            if &have != want {
+                continue;
+            }
         }
         if index_expressions_match(b, idx, target, &exprs)? {
             matched.push(idx);
@@ -222,10 +235,10 @@ fn check_arbiters_immediate(matched: &[&Index], target: &TargetTable) -> Result<
 
 /// Sorted attnum set of the plain key columns of an index usable for `ON CONFLICT (..)` inference, or
 /// None. Expression keys are matched by [`index_expressions_match`].
-fn inference_candidate_columns(idx: &Index) -> Option<Vec<i16>> {
+fn inference_candidate_columns(idx: &Index, allow_partial: bool) -> Option<Vec<i16>> {
     let n = idx.n_key_columns as usize;
     let keys: Vec<Option<i16>> = idx.keys.iter().take(n).map(|k| k.column).collect();
-    candidate_key_set(idx.unique, idx.exclusion, idx.valid, idx.predicate.is_some(), &keys)
+    candidate_key_set(idx.unique, idx.exclusion, idx.valid, idx.predicate.is_some() && !allow_partial, &keys)
 }
 
 /// Core of [`inference_candidate_columns`]: only unique, non-exclusion, valid, non-partial indexes

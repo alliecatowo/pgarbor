@@ -46,7 +46,7 @@ use pgarbor_common::{Oid, PgError, Result, Severity, SqlState};
 use pgarbor_types::catalog_data::ProcKind;
 use pgarbor_types::names::format_type;
 use sqlparser::ast::{
-    ArgMode, CascadeOption, CommentObject, DropBehavior, FunctionDesc, ObjectName, ObjectNamePart, ObjectType,
+    ArgMode, CascadeOption, CommentObject, DropBehavior, FunctionDesc, Ident, ObjectName, ObjectNamePart, ObjectType,
     OperateFunctionArg, Statement, TruncateIdentityOption,
 };
 
@@ -407,6 +407,10 @@ fn comment_column(b: &mut Binder, name: &ObjectName, if_exists: bool) -> Result<
             return Err(at(errors::operation_not_supported_for(&what, "indexes"), pos));
         }
         Some(ClassRef::Sequence(_)) => {
+            // A sequence's own columns are last_value, log_cnt and is_called; any other name is missing.
+            if !matches!(column, "last_value" | "log_cnt" | "is_called") {
+                return Err(at(errors::column_of_relation_does_not_exist(column, table), pos));
+            }
             let what = format!("cannot open relation \"{table}\"");
             return Err(at(errors::operation_not_supported_for(&what, "sequences"), pos));
         }
@@ -570,8 +574,21 @@ fn comment_database(b: &mut Binder, name: &ObjectName, if_exists: bool) -> Resul
     }
 }
 
+/// COMMENT resolves its object through `get_object_address`, which has no parse location: only syntax
+/// errors carry a position.
+fn drop_comment_position(mut e: PgError) -> PgError {
+    if e.sqlstate != SqlState::SYNTAX_ERROR {
+        e.position = None;
+    }
+    e
+}
+
 /// `Statement::Comment`.
 pub fn bind_comment(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
+    bind_comment_inner(b, stmt).map_err(drop_comment_position)
+}
+
+fn bind_comment_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
     let (object_type, object_name, comment, if_exists) = match stmt {
         Statement::Comment { object_type, object_name, comment, if_exists } => {
             (object_type, object_name, comment, *if_exists)
@@ -620,32 +637,43 @@ pub fn bind_comment_routine(
         Some(s) if !s.is_empty() => Some(s.to_string()),
         _ => None,
     };
-    Ok(match comment_routine(b, name, args, kind, false)? {
+    let resolved = comment_routine(b, name, args, kind, false).map_err(drop_comment_position)?;
+    Ok(match resolved {
         Resolved::Addr(addr) => BoundStatement::Comment { addr, text },
         Resolved::Skip(n) => BoundStatement::Noop { tag: "COMMENT".to_string(), notices: vec![n] },
     })
 }
 
+/// A `RoleSpec` of DROP OWNED / REASSIGN OWNED: unquoted `CURRENT_USER` / `CURRENT_ROLE` are the current
+/// user, `SESSION_USER` the session user (PG `get_rolespec_oid`); anything else is a role name.
+fn owned_role_oid(b: &mut Binder, id: &Ident) -> Result<Oid> {
+    if id.quote_style.is_none() {
+        match id.value.to_ascii_lowercase().as_str() {
+            "current_user" | "current_role" => return Ok(b.env.current_user()),
+            "session_user" => return Ok(b.env.session_user()),
+            _ => {}
+        }
+    }
+    let name = b.ident(id);
+    b.env.role_oid(&name)
+}
+
 /// `ExtraStatement::DropOwned` / `ReassignOwned`.
 pub fn bind_owned(b: &mut Binder, stmt: &ExtraStatement) -> Result<BoundStatement> {
-    let env = b.env;
     match stmt {
         ExtraStatement::DropOwned { roles, cascade } => {
             let mut oids = Vec::with_capacity(roles.len());
             for role in roles {
-                let name = b.ident(role);
-                oids.push(env.role_oid(&name)?);
+                oids.push(owned_role_oid(b, role)?);
             }
             Ok(BoundStatement::DropOwned { roles: oids, cascade: *cascade })
         }
         ExtraStatement::ReassignOwned { old_roles, new_role } => {
             let mut oids = Vec::with_capacity(old_roles.len());
             for role in old_roles {
-                let name = b.ident(role);
-                oids.push(env.role_oid(&name)?);
+                oids.push(owned_role_oid(b, role)?);
             }
-            let new_name = b.ident(new_role);
-            let new_owner = env.role_oid(&new_name)?;
+            let new_owner = owned_role_oid(b, new_role)?;
             Ok(BoundStatement::ReassignOwned { old_roles: oids, new_owner })
         }
         _ => Err(PgError::internal("ddl_drop::bind_owned: not a DROP OWNED / REASSIGN OWNED statement")),

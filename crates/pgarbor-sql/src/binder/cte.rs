@@ -480,6 +480,7 @@ fn analyze_one(b: &mut Binder, with: &With, top_level: bool, names: &[String], i
         SetExpr::Insert(st) | SetExpr::Update(st) | SetExpr::Delete(st) => {
             analyze_dml(b, cte, top_level, recursive_with, i, &name, def_pos, materialized, st)
         }
+        SetExpr::Merge(_) => Err(crate::diag::unsupported_construct("MERGE", def_pos)),
         _ => analyze_query(b, cte, recursive_with, i, &name, def_pos, materialized),
     }
 }

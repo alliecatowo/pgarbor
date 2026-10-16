@@ -851,6 +851,105 @@ fn plpgsql_duplicate_declaration(text: &str) -> Option<(usize, String)> {
     None
 }
 
+/// Char index and error of the first `OPEN name` of the body on a cursor declared at top level with an explicit
+/// query whose arguments do not match its declaration: PG pl_gram.y `read_cursor_args` reports "has arguments",
+/// "has no arguments", "not enough arguments" and "too many arguments" (42601) while the OPEN parses. The index
+/// is that of the token PG's cursor sits on (the token after the name, the `(`, the closing `)` or the surplus
+/// `,`). Only unquoted names are handled.
+fn plpgsql_cursor_args(text: &str) -> Option<(usize, PgError)> {
+    let toks = plpgsql_tokens(text);
+    if !toks.first().is_some_and(|(_, t)| tok_is_word(t, "declare")) {
+        return None;
+    }
+    let begin = toks.iter().position(|(_, t)| tok_is_word(t, "begin"))?;
+    // (name, declared argument count) of each cursor declaration.
+    let mut cursors: Vec<(&str, usize)> = Vec::new();
+    let mut depth = 0i32;
+    let mut item_start = 1;
+    for k in 1..begin {
+        match &toks[k].1 {
+            PlTok::Other('(') => depth += 1,
+            PlTok::Other(')') => depth -= 1,
+            PlTok::Other(';') if depth == 0 => {
+                let item = &toks[item_start..k];
+                item_start = k + 1;
+                let Some((_, PlTok::Word(name))) = item.first() else { continue };
+                let Some(c) = item.iter().take(4).position(|(_, t)| tok_is_word(t, "cursor")) else { continue };
+                if c == 0 {
+                    continue;
+                }
+                let mut nargs = 0;
+                if matches!(item.get(c + 1), Some((_, PlTok::Other('(')))) {
+                    let mut d = 0i32;
+                    nargs = 1;
+                    for (_, t) in &item[c + 1..] {
+                        match t {
+                            PlTok::Other('(') => d += 1,
+                            PlTok::Other(')') => {
+                                d -= 1;
+                                if d == 0 {
+                                    break;
+                                }
+                            }
+                            PlTok::Other(',') if d == 1 => nargs += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                cursors.push((name.as_str(), nargs));
+            }
+            _ => {}
+        }
+    }
+    if cursors.is_empty() {
+        return None;
+    }
+    let syntax = |msg: String| PgError::new(SqlState::SYNTAX_ERROR, msg);
+    for k in begin + 1..toks.len() {
+        if !tok_is_word(&toks[k].1, "open") || !plpgsql_stmt_start(&toks, k) {
+            continue;
+        }
+        let Some((_, PlTok::Word(name))) = toks.get(k + 1) else { continue };
+        let Some(&(_, nargs)) = cursors.iter().find(|(n, _)| *n == name.as_str()) else { continue };
+        let Some((next_at, next)) = toks.get(k + 2) else { continue };
+        let is_paren = matches!(next, PlTok::Other('('));
+        if nargs == 0 {
+            if is_paren {
+                return Some((*next_at, syntax(format!("cursor \"{name}\" has no arguments"))));
+            }
+            continue;
+        }
+        if !is_paren {
+            return Some((*next_at, syntax(format!("cursor \"{name}\" has arguments"))));
+        }
+        let mut d = 0i32;
+        let mut commas = 0usize;
+        for (at, t) in &toks[k + 2..] {
+            match t {
+                PlTok::Other('(') => d += 1,
+                PlTok::Other(')') => {
+                    d -= 1;
+                    if d == 0 {
+                        if commas + 1 < nargs {
+                            return Some((*at, syntax(format!("not enough arguments for cursor \"{name}\""))));
+                        }
+                        break;
+                    }
+                }
+                PlTok::Other(',') if d == 1 => {
+                    commas += 1;
+                    if commas == nargs {
+                        return Some((*at, syntax(format!("too many arguments for cursor \"{name}\""))));
+                    }
+                }
+                PlTok::Other(';') => break,
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 /// Whether the token at `k` starts a statement: it follows `;`, `BEGIN`, `THEN`, `ELSE` or `LOOP`.
 fn plpgsql_stmt_start(toks: &[(usize, PlTok)], k: usize) -> bool {
     match k.checked_sub(1).map(|p| &toks[p].1) {
@@ -1129,6 +1228,10 @@ fn check_plpgsql_compile(
         (Some(s), Some(n)) => Some(if n.0 < s.0 { n } else { s }),
         (s, n) => s.or(n),
     };
+    let syntax = match (syntax, plpgsql_cursor_args(text)) {
+        (Some(s), Some(c)) => Some(if c.0 < s.0 { c } else { s }),
+        (s, c) => s.or(c),
+    };
     let before_syntax = |idx: usize| syntax.as_ref().map_or(true, |(s, _)| idx < *s);
     let constant = plpgsql_constant_assignment(text)
         .filter(|(idx, _)| before_fetch(*idx) && before_undeclared(*idx) && before_syntax(*idx));
@@ -1269,6 +1372,20 @@ fn bind_body_statements(b: &mut Binder<'_>, stmts: &[RawStatement]) -> Result<Bo
                 let ctx = QueryCtx { column_aliases: Vec::new(), top_level: true, keep_unknown_outputs: false };
                 let bound = bind_query(b, q, &ctx)?;
                 tail = BodyTail::Query(bound.output.iter().map(|c| c.ty.oid).collect());
+            } else if matches!(&**stmt, Statement::Call(_)) {
+                // PG `init_execution_state`: a nested CALL of a procedure with OUT/INOUT arguments is
+                // rejected while the SQL body is validated.
+                if let BoundStatement::Call(call) = bind_call(b, stmt)? {
+                    let has_out = b.env.snapshot().function(call.procedure).is_some_and(|f| {
+                        f.args.iter().any(|a| matches!(a.mode, ArgMode::Out | ArgMode::InOut | ArgMode::Table))
+                    });
+                    if has_out {
+                        return Err(PgError::new(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            "calling procedures with output arguments is not supported in SQL functions",
+                        ));
+                    }
+                }
             }
         }
     }
@@ -1334,6 +1451,58 @@ fn sql_return_body(b: &mut Binder<'_>, fname: &str, specs: &[ParamSpec<'_>], e: 
     r
 }
 
+/// `COST`, `ROWS` and `[NOT] LEAKPROOF` of a CREATE FUNCTION, carried by the parser as marker `SET`
+/// parameters (`parser::FN_ATTR_COST` and friends).
+#[derive(Default)]
+struct FnAttrs {
+    cost: Option<f32>,
+    rows: Option<f32>,
+    leakproof: Option<bool>,
+}
+
+/// Split the attribute markers off `items`: returns the genuine `SET` parameters and the attributes.
+/// A repeated attribute is 42601 `conflicting or redundant options`.
+fn take_attr_markers(items: &[FunctionDefinitionSetParam]) -> Result<(Vec<FunctionDefinitionSetParam>, FnAttrs)> {
+    let mut rest = Vec::with_capacity(items.len());
+    let mut attrs = FnAttrs::default();
+    for item in items {
+        let marker = match item.name.0.as_slice() {
+            [ObjectNamePart::Identifier(id)] => Some(id.value.as_str()),
+            _ => None,
+        };
+        let number = match &item.value {
+            FunctionSetValue::Values(vals) => match vals.as_slice() {
+                [Expr::Value(vs)] => match &vs.value {
+                    Value::Number(n, _) => n.parse::<f64>().ok(),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+        let conflict = || PgError::new(SqlState::SYNTAX_ERROR, "conflicting or redundant options");
+        match (marker, number) {
+            (Some(crate::parser::FN_ATTR_COST), Some(n)) => {
+                if attrs.cost.replace(n as f32).is_some() {
+                    return Err(conflict());
+                }
+            }
+            (Some(crate::parser::FN_ATTR_ROWS), Some(n)) => {
+                if attrs.rows.replace(n as f32).is_some() {
+                    return Err(conflict());
+                }
+            }
+            (Some(crate::parser::FN_ATTR_LEAKPROOF), Some(n)) => {
+                if attrs.leakproof.replace(n != 0.0).is_some() {
+                    return Err(conflict());
+                }
+            }
+            _ => rest.push(item.clone()),
+        }
+    }
+    Ok((rest, attrs))
+}
+
 /// `SET name = value, ...` -> `name=value` (`proconfig`).
 fn set_config(b: &mut Binder<'_>, items: &[FunctionDefinitionSetParam]) -> Result<Vec<String>> {
     let mut out = Vec::with_capacity(items.len());
@@ -1346,6 +1515,13 @@ fn set_config(b: &mut Binder<'_>, items: &[FunctionDefinitionSetParam]) -> Resul
             }
         }
         let name = segs.join(".");
+        // PG `GUC_NO_RESET` parameters (guc.c set_config_option, GUC_ACTION_SAVE): a function cannot SET them.
+        if matches!(name.to_ascii_lowercase().as_str(), "transaction_isolation" | "transaction_read_only" | "transaction_deferrable") {
+            return Err(PgError::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("parameter \"{}\" cannot be set locally in functions", name.to_ascii_lowercase()),
+            ));
+        }
         let value = match &item.value {
             FunctionSetValue::Values(vals) => set_values_text(vals)?,
             FunctionSetValue::Default => return Err(unsupported("SET ... = DEFAULT in CREATE FUNCTION")),
@@ -1530,8 +1706,25 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
 
     // Attributes (compute_function_attributes). A procedure takes none of the volatility, null-input or
     // parallel attributes (PG `compute_common_attribute`).
-    if is_procedure && (cf.behavior.is_some() || cf.called_on_null.is_some() || cf.parallel.is_some()) {
+    let (set_params, attrs) = take_attr_markers(&cf.set_params)?;
+    if is_procedure
+        && (cf.behavior.is_some()
+            || cf.called_on_null.is_some()
+            || cf.parallel.is_some()
+            || attrs.cost.is_some()
+            || attrs.rows.is_some()
+            || attrs.leakproof.is_some())
+    {
         return Err(invalid_fn_def("invalid attribute in procedure definition"));
+    }
+    if attrs.cost.is_some_and(|c| c <= 0.0) {
+        return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "COST must be positive"));
+    }
+    if attrs.rows.is_some_and(|r| r <= 0.0) {
+        return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "ROWS must be positive"));
+    }
+    if attrs.leakproof == Some(true) {
+        return Err(PgError::unimplemented("SQL-37", "CREATE FUNCTION ... LEAKPROOF"));
     }
     let volatility = match cf.behavior {
         None | Some(FunctionBehavior::Volatile) => FuncVolatility::Volatile,
@@ -1549,8 +1742,20 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
     };
     // SECURITY INVOKER is the default (security_definer = false).
     let security_definer = matches!(cf.security, Some(FunctionSecurity::Definer));
-    let config = set_config(b, &cf.set_params)?;
-    let rows = if retset { 1000.0f32 } else { 0.0f32 };
+    let config = set_config(b, &set_params)?;
+    // PG ProcedureCreate inputs (functioncmds.c `CreateFunction`): ROWS needs a set-returning function.
+    if attrs.rows.is_some() && !retset {
+        return Err(PgError::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "ROWS is not applicable when function does not return a set",
+        ));
+    }
+    let rows = match attrs.rows {
+        Some(r) => r,
+        None if retset => 1000.0f32,
+        None => 0.0f32,
+    };
+    let cost = attrs.cost.unwrap_or(100.0f32);
 
     // Parameter defaults and the catalog argument list.
     let mut args: Vec<FuncArg> = Vec::with_capacity(specs.len());
@@ -1610,7 +1815,7 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
         security_definer,
         leakproof: false,
         parallel,
-        cost: 100.0,
+        cost,
         rows,
         body,
         sql_body,
@@ -2053,6 +2258,17 @@ mod tests {
         ] {
             assert_eq!(plpgsql_duplicate_declaration(ok), None, "{ok}");
         }
+    }
+
+    #[test]
+    fn plpgsql_cursor_args_are_checked() {
+        let msg = |t: &str| plpgsql_cursor_args(t).map(|(_, e)| e.message);
+        let decl = "DECLARE c CURSOR (g int, h int) FOR SELECT 1; d CURSOR FOR SELECT 2; BEGIN ";
+        assert_eq!(msg(&format!("{decl}OPEN c; END")), Some("cursor \"c\" has arguments".to_string()));
+        assert_eq!(msg(&format!("{decl}OPEN c(1); END")), Some("not enough arguments for cursor \"c\"".to_string()));
+        assert_eq!(msg(&format!("{decl}OPEN c(1, 2, 3); END")), Some("too many arguments for cursor \"c\"".to_string()));
+        assert_eq!(msg(&format!("{decl}OPEN d(1); END")), Some("cursor \"d\" has no arguments".to_string()));
+        assert_eq!(msg(&format!("{decl}OPEN c(1, 2); OPEN d; END")), None);
     }
 
     #[test]

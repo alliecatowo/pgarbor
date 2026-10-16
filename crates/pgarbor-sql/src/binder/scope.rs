@@ -135,6 +135,9 @@ pub struct QueryScope {
     pub aggs_allowed_here: bool,
     /// Lateral-visibility generation counter used by `from`/`join` while processing a FROM list.
     pub from_depth: u32,
+    /// Expansions of VIRTUAL generated columns, with the stored column they stand for (result
+    /// metadata `table_oid`/`column_attnum`, see `target::origin_of`).
+    pub virtual_origins: Vec<(BoundExpr, crate::ir::ColumnOrigin)>,
 }
 
 impl QueryScope {
@@ -153,6 +156,7 @@ impl QueryScope {
             has_sublinks: false,
             aggs_allowed_here: false,
             from_depth: 0,
+            virtual_origins: Vec::new(),
         }
     }
 }
@@ -188,6 +192,9 @@ pub fn add_namespace_for_range(b: &mut Binder, rt_index: u32, rel_visible: bool,
     if let Some(rel_oid) = expandable_relation(b, rt_index)? {
         for (slot, expr) in virtual_generation_exprs(b, rel_oid, rt_index)? {
             if let Some(col) = item.columns.get_mut(slot) {
+                if let Ok(attnum) = attnum_of(slot) {
+                    b.scope_mut()?.virtual_origins.push((expr.clone(), crate::ir::ColumnOrigin { table: rel_oid, attnum }));
+                }
                 col.expr = expr;
             }
         }
@@ -654,8 +661,13 @@ fn qualified_column(
 }
 
 /// Type of a whole-row reference: the relation's rowtype, or `record` for other range kinds.
-fn whole_row_type(b: &Binder, entry: &RangeEntry) -> Result<TypeId> {
+fn whole_row_type(b: &Binder, entry: &RangeEntry, pos: Option<u32>) -> Result<TypeId> {
     match &entry.kind {
+        // The synthetic relation of a table expression scope (CHECK / DEFAULT / generation
+        // expressions, `stored::table_expr_scope`) has no rowtype in the catalog.
+        RangeKind::Relation { oid: 0, .. } => {
+            Err(crate::diag::unsupported_construct("a whole-row reference in a table constraint expression", pos))
+        }
         RangeKind::Relation { oid, .. } => {
             let rel = b
                 .env
@@ -669,7 +681,7 @@ fn whole_row_type(b: &Binder, entry: &RangeEntry) -> Result<TypeId> {
 }
 
 /// Whole-row reference `t` (attnum 0) to a relation item visible by name.
-fn whole_row(b: &mut Binder, name: &str, pos: Option<u32>) -> Result<Option<ResolvedColumn>> {
+pub fn whole_row(b: &mut Binder, name: &str, pos: Option<u32>) -> Result<Option<ResolvedColumn>> {
     let Some((level, ii)) = find_rel_item(b, None, name, pos)? else {
         return Ok(None);
     };
@@ -689,7 +701,7 @@ fn whole_row(b: &mut Binder, name: &str, pos: Option<u32>) -> Result<Option<Reso
             }
         };
         let entry = entry_at(scope, rt).ok_or_else(|| PgError::internal("binder: range table index out of range"))?;
-        let ty = whole_row_type(b, entry)?;
+        let ty = whole_row_type(b, entry, pos)?;
         (rt, item.alias.clone().unwrap_or_default(), ty)
     };
     let expr = BoundExpr::column(0, rt, 0, ty);

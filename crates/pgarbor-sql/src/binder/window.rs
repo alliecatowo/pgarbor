@@ -117,7 +117,11 @@ fn spec_pos(b: &Binder, site: SpecSite) -> SpecPos {
     let Ok(tokens) = Tokenizer::new(&dialect, b.src.text()).tokenize_with_location() else {
         return SpecPos::default();
     };
-    let toks: Vec<(&Token, Option<u32>)> = tokens.iter().map(|t| (&t.token, b.src.pos_of_span(t.span))).collect();
+    let toks: Vec<(&Token, Option<u32>)> = tokens
+        .iter()
+        .filter(|t| !matches!(t.token, Token::Whitespace(_)))
+        .map(|t| (&t.token, b.src.pos_of_span(t.span)))
+        .collect();
     let Some(open) = spec_open_index(&toks, site) else {
         return SpecPos::default();
     };
@@ -159,6 +163,53 @@ fn spec_pos(b: &Binder, site: SpecSite) -> SpecPos {
         }
     }
     out
+}
+
+/// The `EXCLUDE` clause of the specification at `site` (removed from the token stream before
+/// sqlparser runs, see `parser::strip_frame_exclusion`; read back from the query text here).
+fn frame_exclusion(b: &Binder, site: SpecSite) -> FrameExclusion {
+    if !b.src.text().to_ascii_lowercase().contains("exclude") {
+        return FrameExclusion::NoOthers;
+    }
+    let dialect = PostgreSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, b.src.text()).tokenize_with_location() else {
+        return FrameExclusion::NoOthers;
+    };
+    let toks: Vec<(&Token, Option<u32>)> = tokens
+        .iter()
+        .filter(|t| !matches!(t.token, Token::Whitespace(_)))
+        .map(|t| (&t.token, b.src.pos_of_span(t.span)))
+        .collect();
+    let Some(open) = spec_open_index(&toks, site) else {
+        return FrameExclusion::NoOthers;
+    };
+    let sig: Vec<&Token> = toks[open..].iter().map(|(t, _)| *t).filter(|t| !matches!(t, Token::Whitespace(_))).collect();
+    let mut depth = 0i32;
+    for k in 0..sig.len() {
+        match sig[k] {
+            Token::LParen => depth += 1,
+            Token::RParen => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Token::Word(_) if depth == 1 && is_word(Some(sig[k]), "EXCLUDE") => {
+                let w = |n: usize| sig.get(k + n).copied();
+                return if is_word(w(1), "CURRENT") {
+                    FrameExclusion::CurrentRow
+                } else if is_word(w(1), "GROUP") {
+                    FrameExclusion::Group
+                } else if is_word(w(1), "TIES") {
+                    FrameExclusion::Ties
+                } else {
+                    FrameExclusion::NoOthers
+                };
+            }
+            _ => {}
+        }
+    }
+    FrameExclusion::NoOthers
 }
 
 /// Specification-level error (42P20 unless given), placed at the specification's `(`.
@@ -403,6 +454,8 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, site: S
         }
     };
 
+    let exclusion = if frame_is_default { FrameExclusion::NoOthers } else { frame_exclusion(b, site) };
+
     Ok(WindowDef {
         name,
         partition_by,
@@ -410,8 +463,7 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, site: S
         units,
         start,
         end,
-        // sqlparser 0.63 has no EXCLUDE field in `WindowFrame`; the default is used.
-        exclusion: FrameExclusion::NoOthers,
+        exclusion,
         frame_is_default,
     })
 }

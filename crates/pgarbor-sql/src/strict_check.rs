@@ -45,7 +45,54 @@ pub fn check(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
             _ => String::new(),
         }
     };
+    // gram.y `PREPARE name [(types)] AS PreparableStmt`: any other statement keyword is a syntax error at it.
+    if word(0) == "PREPARE" && word(1) != "TRANSACTION" {
+        let mut depth = 0usize;
+        for i in 1..sig.len().saturating_sub(1) {
+            match sig[i].token {
+                Token::LParen => depth += 1,
+                Token::RParen => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            if depth == 0 && i >= 2 && word(i) == "AS" {
+                let next = word(i + 1);
+                if !next.is_empty()
+                    && !matches!(next.as_str(), "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "VALUES" | "WITH" | "TABLE")
+                {
+                    return Err(at_token(sig[i + 1], src));
+                }
+                break;
+            }
+        }
+    }
+    // copy.c `defGetCopyHeaderChoice`: HEADER takes a Boolean (parse_bool spellings) or `match`.
+    if word(0) == "COPY" {
+        for i in 1..sig.len().saturating_sub(1) {
+            if word(i) != "HEADER" || !matches!(sig[i - 1].token, Token::LParen | Token::Comma) {
+                continue;
+            }
+            let value = match &sig[i + 1].token {
+                Token::Word(w) => w.value.to_ascii_lowercase(),
+                Token::SingleQuotedString(v) => v.to_ascii_lowercase(),
+                Token::Number(n, _) => n.clone(),
+                _ => continue,
+            };
+            let is_bool = !value.is_empty()
+                && ["true", "false", "yes", "no", "on", "off"].iter().any(|w| w.starts_with(value.as_str()) && value != "o")
+                || value == "1"
+                || value == "0";
+            if !is_bool && value != "match" {
+                return Err(pgarbor_common::PgError::syntax("header requires a Boolean value or \"match\"", None));
+            }
+        }
+    }
     // PostgreSQL gram.y does not have the SQL-standard window null-treatment clause.
+    for i in 0..sig.len().saturating_sub(1) {
+        // `SELECT select`, `SELECT where`, ...: a reserved word that cannot begin a target list.
+        if word(i) == "SELECT" && matches!(word(i + 1).as_str(), "SELECT" | "WHERE" | "GROUP" | "HAVING" | "THEN" | "WHEN" | "ELSE") {
+            return Err(at_token(sig[i + 1], src));
+        }
+    }
     for i in 1..sig.len().saturating_sub(1) {
         if matches!(sig[i - 1].token, Token::RParen)
             && matches!(word(i).as_str(), "IGNORE" | "RESPECT") && word(i + 1) == "NULLS" {
@@ -131,6 +178,16 @@ pub fn check(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
                 }
             }
         }
+        "CREATE" if word(1) == "SCHEMA" => {
+            // `CREATE SCHEMA [IF NOT EXISTS] ColId ...` or `... AUTHORIZATION RoleSpec ...`: a name that is
+            // a reserved word (e.g. CURRENT_ROLE, only valid as a role_specification) is a syntax error.
+            let start = if word(2) == "IF" && word(3) == "NOT" && word(4) == "EXISTS" { 5 } else { 2 };
+            let at_eof = matches!(sig.get(start).map(|t| &t.token), None | Some(Token::EOF));
+            if !at_eof && word(start) != "AUTHORIZATION" {
+                colid(&sig, start, src)?;
+            }
+        }
+        "COPY" => copy_clauses(&sig, src)?,
         "ALTER" if word(1) == "SCHEMA" => {
             let end = colid(&sig, 2, src)?;
             let next = word(end);
@@ -267,6 +324,119 @@ fn colid(sig: &[&TokenWithSpan], i: usize, src: &SourceMap) -> Result<usize> {
     Ok(i + 1)
 }
 
+/// Option names `ProcessCopyOptions` (copy.c) accepts in PostgreSQL 18.
+const COPY_OPTION_NAMES: &[&str] = &[
+    "format", "freeze", "delimiter", "null", "default", "header", "quote", "escape", "force_quote",
+    "force_not_null", "force_null", "on_error", "reject_limit", "encoding", "log_verbosity",
+];
+
+/// `COPY` grammar checks that `sqlparser` cannot make: `COPY (query)` only has a TO form (gram.y
+/// `COPY '(' PreparableStmt ')' TO ...`), `WHERE` is rejected by the grammar action for COPY TO, and
+/// `ProcessCopyOptions` rejects an unknown `WITH (...)` option name at that name's position.
+fn copy_clauses(sig: &[&TokenWithSpan], src: &SourceMap) -> Result<()> {
+    let kw = |i: usize, s: &str| {
+        matches!(sig.get(i).map(|t| &t.token), Some(Token::Word(w)) if w.quote_style.is_none() && w.value.eq_ignore_ascii_case(s))
+    };
+    let is = |i: usize, f: fn(&Token) -> bool| sig.get(i).is_some_and(|t| f(&t.token));
+    let close_of = |open: usize| -> Option<usize> {
+        let mut depth = 0usize;
+        for (j, t) in sig.iter().enumerate().skip(open) {
+            match t.token {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+    let mut i = 1;
+    if is(1, |t| matches!(t, Token::LParen)) {
+        let Some(close) = close_of(1) else { return Ok(()) };
+        if !kw(close + 1, "TO") {
+            return match sig.get(close + 1) {
+                Some(t) => Err(at_token(t, src)),
+                None => Ok(()),
+            };
+        }
+        i = close + 1;
+    } else {
+        // Table form: skip the optional column list, then find the direction keyword.
+        let mut depth = 0usize;
+        let mut found = None;
+        for (j, t) in sig.iter().enumerate().skip(1) {
+            match t.token {
+                Token::LParen => depth += 1,
+                Token::RParen => depth = depth.saturating_sub(1),
+                _ if depth == 0 && (kw(j, "FROM") || kw(j, "TO")) => {
+                    found = Some(j);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        match found {
+            Some(j) => i = j,
+            None => return Ok(()),
+        }
+    }
+    let is_to = kw(i, "TO");
+    let mut k = i + 1;
+    k += if kw(k, "PROGRAM") { 2 } else { 1 };
+    if kw(k, "WITH") {
+        k += 1;
+    }
+    if is_to {
+        let mut depth = 0usize;
+        for (j, t) in sig.iter().enumerate().skip(k) {
+            match t.token {
+                Token::LParen => depth += 1,
+                Token::RParen => depth = depth.saturating_sub(1),
+                _ if depth == 0 && kw(j, "WHERE") => {
+                    return Err(diag::syntax("WHERE clause not allowed with COPY TO", src.char_pos(t.span.start)));
+                }
+                _ => {}
+            }
+        }
+    }
+    if is(k, |t| matches!(t, Token::LParen)) {
+        let Some(close) = close_of(k) else { return Ok(()) };
+        let mut p = k + 1;
+        while p < close {
+            if let Token::Word(w) = &sig[p].token {
+                let known = if w.quote_style.is_some() {
+                    COPY_OPTION_NAMES.contains(&w.value.as_str())
+                } else {
+                    COPY_OPTION_NAMES.contains(&w.value.to_ascii_lowercase().as_str())
+                };
+                if !known {
+                    return Err(diag::syntax(
+                        format!("option \"{}\" not recognized", w.value),
+                        src.char_pos(sig[p].span.start),
+                    ));
+                }
+            }
+            // Skip the value up to the next top-level comma.
+            let mut depth = 0usize;
+            while p < close {
+                match sig[p].token {
+                    Token::LParen => depth += 1,
+                    Token::RParen => depth = depth.saturating_sub(1),
+                    Token::Comma if depth == 0 => break,
+                    _ => {}
+                }
+                p += 1;
+            }
+            p += 1;
+        }
+    }
+    Ok(())
+}
+
 fn at_token(t: &TokenWithSpan, src: &SourceMap) -> pgarbor_common::PgError {
     token_problem(t, src)
 }
@@ -280,6 +450,39 @@ mod tests {
         let e = parse(sql).expect_err(sql);
         assert_eq!(e.sqlstate.code(), "42601", "{sql}");
         (e.message.clone(), e.position)
+    }
+
+    #[test]
+    fn unquoted_select_as_target_is_syntax_error() {
+        assert_eq!(reject("SELECT select FROM t"), ("syntax error at or near \"select\"".into(), Some(8)));
+        assert!(parse("SELECT \"select\" FROM t").is_ok());
+    }
+
+    #[test]
+    fn copy_header_requires_boolean_or_match() {
+        let (msg, pos) = reject("COPY t FROM STDIN WITH (header wrong_choice)");
+        assert_eq!((msg.as_str(), pos), ("header requires a Boolean value or \"match\"", None));
+        assert!(parse("COPY t FROM STDIN WITH (format csv, header on)").is_ok());
+    }
+
+    #[test]
+    fn copy_grammar_errors_match_postgres() {
+        assert_eq!(reject("COPY (SELECT 1 AS a) FROM STDIN"), ("syntax error at or near \"FROM\"".into(), Some(22)));
+        assert_eq!(
+            reject("COPY t TO STDOUT WHERE a > 0"),
+            ("WHERE clause not allowed with COPY TO".into(), Some(18))
+        );
+        assert_eq!(
+            reject("COPY t FROM STDIN WITH (nosuch true)"),
+            ("option \"nosuch\" not recognized".into(), Some(25))
+        );
+        assert!(parse("COPY t FROM STDIN WITH (format csv, header true)").is_ok());
+    }
+
+    #[test]
+    fn prepare_rejects_non_preparable_statement() {
+        assert_eq!(reject("PREPARE p(text) AS NOTIFY $1"), ("syntax error at or near \"NOTIFY\"".into(), Some(20)));
+        assert!(parse("PREPARE p AS SELECT 1").is_ok());
     }
 
     #[test]
@@ -333,6 +536,14 @@ mod tests {
     fn alter_schema_if_exists_is_syntax_error() {
         assert_eq!(reject("ALTER SCHEMA IF EXISTS s RENAME TO t"), ("syntax error at or near \"EXISTS\"".into(), Some(17)));
         assert!(parse("ALTER SCHEMA s RENAME TO t").is_ok());
+    }
+
+    #[test]
+    fn create_schema_name_must_be_colid() {
+        assert_eq!(reject("CREATE SCHEMA CURRENT_ROLE"), ("syntax error at or near \"CURRENT_ROLE\"".into(), Some(15)));
+        assert!(parse("CREATE SCHEMA s").is_ok());
+        assert!(parse("CREATE SCHEMA IF NOT EXISTS s").is_ok());
+        assert!(parse("CREATE SCHEMA AUTHORIZATION CURRENT_ROLE").is_ok());
     }
 
     #[test]

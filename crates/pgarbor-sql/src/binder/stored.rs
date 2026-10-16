@@ -201,12 +201,54 @@ pub fn bind_ddl_expr(
     columns_ref: &mut Vec<i16>,
     column_names: &dyn Fn(i16) -> Option<String>,
 ) -> Result<(BoundExpr, StoredExpr)> {
-    let bound = bind_expr(b, e, ec)?;
+    // ALTER TABLE and CREATE DOMAIN cook defaults with a parse state that has no source text
+    // (`AddRelationNewConstraints(..., NULL)`, `cookDefault`), so errors raised while binding or
+    // coercing a DEFAULT carry no cursor position.
+    let strip_pos = ec.clause == crate::diag::ExprClause::ColumnDefault;
+    bind_ddl_expr_impl(b, e, ec, target, table, columns_ref, column_names, strip_pos)
+}
+
+/// [`bind_ddl_expr`] for CREATE TABLE column clauses: `DefineRelation` passes the query string to
+/// `AddRelationNewConstraints`, so DEFAULT errors keep their cursor position.
+pub fn bind_ddl_expr_with_source(
+    b: &mut Binder,
+    e: &sqlparser::ast::Expr,
+    ec: ExprCtx,
+    target: Option<TypeId>,
+    table: Option<Oid>,
+    columns_ref: &mut Vec<i16>,
+    column_names: &dyn Fn(i16) -> Option<String>,
+) -> Result<(BoundExpr, StoredExpr)> {
+    bind_ddl_expr_impl(b, e, ec, target, table, columns_ref, column_names, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bind_ddl_expr_impl(
+    b: &mut Binder,
+    e: &sqlparser::ast::Expr,
+    ec: ExprCtx,
+    target: Option<TypeId>,
+    table: Option<Oid>,
+    columns_ref: &mut Vec<i16>,
+    column_names: &dyn Fn(i16) -> Option<String>,
+    strip_pos: bool,
+) -> Result<(BoundExpr, StoredExpr)> {
+    let bound = bind_expr(b, e, ec).map_err(|mut err| {
+        if strip_pos {
+            err.position = None;
+        }
+        err
+    })?;
     let bound = match target {
         Some(t) => {
             let arg = BoundArg::new(bound, b.pos(e));
             // NOTE: the DDL caller does not pass the column name; see the report on this lease.
-            coerce_assignment(b, &arg, "", t)?
+            coerce_assignment(b, &arg, "", t).map_err(|mut err| {
+                if strip_pos {
+                    err.position = None;
+                }
+                err
+            })?
         }
         None => bound,
     };
