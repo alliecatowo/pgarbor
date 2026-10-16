@@ -1,0 +1,4109 @@
+diff --git a/crates/pgarbor/tests/sql_cluster_semantics.rs b/crates/pgarbor/tests/sql_cluster_semantics.rs
+new file mode 100644
+index 00000000..5e0f1780
+--- /dev/null
++++ b/crates/pgarbor/tests/sql_cluster_semantics.rs
+@@ -0,0 +1,189 @@
++//! Regression coverage for semantic fixes found by embedded differential review 02.
++use pgarbor::{Database, SessionOptions, StatementResult};
++use pgarbor_types::Datum;
++
++#[test]
++fn view_dependency_survives_expansion() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE t(x int); CREATE VIEW v1 AS SELECT x FROM t; CREATE VIEW v2 AS SELECT x FROM v1").expect("setup");
++    let e = s.simple_query("DROP VIEW v1").expect_err("dependent view");
++    assert_eq!(e.sqlstate.code(), "2BP01");
++    s.simple_query("DROP VIEW v1 CASCADE").expect("cascade");
++    assert_eq!(s.simple_query("SELECT * FROM v2").expect_err("gone").sqlstate.code(), "42P01");
++}
++
++#[test]
++fn system_columns_cannot_be_index_keys_expressions_or_predicates() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE t(x int)").expect("setup");
++    for sql in ["CREATE INDEX ON t(tableoid)", "CREATE INDEX ON t((tableoid::oid))", "CREATE INDEX ON t(x) INCLUDE (xmin)", "CREATE INDEX ON t(x) WHERE tableoid > 0"] {
++        let e = s.simple_query(sql).expect_err(sql);
++        assert_eq!(e.sqlstate.code(), "0A000");
++        assert_eq!(e.message, "index creation on system columns is not supported");
++    }
++}
++
++#[test]
++fn alter_add_volatile_default_uses_column_type() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE SEQUENCE seq; CREATE TABLE t(x int); INSERT INTO t VALUES (1),(2); ALTER TABLE t ADD COLUMN n int DEFAULT nextval('seq')").expect("rewrite");
++    let out = s.simple_query("SELECT n FROM t ORDER BY x").expect("read");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Int4(1)], vec![Datum::Int4(2)]]),
++        other => panic!("{other:?}"),
++    }
++}
++
++#[test]
++fn oid_binary_relabels_change_the_datum_variant() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    let out = s.simple_query("SELECT 42::oid, 42::oid::int, (-1)::oid::int").expect("casts");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Oid(42), Datum::Int4(42), Datum::Int4(-1)]]),
++        other => panic!("{other:?}"),
++    }
++}
++
++#[test]
++fn pg_notify_null_channel_reports_parameter_error() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    let e = s.simple_query("SELECT pg_notify(NULL, NULL)").expect_err("empty channel");
++    assert_eq!(e.sqlstate.code(), "22023");
++    assert_eq!(e.message, "channel name cannot be empty");
++}
++
++#[test]
++fn mixed_integer_distinct_and_scalar_limit() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    let out = s.simple_query("SELECT 5::bigint IS DISTINCT FROM 5::integer, NULL::bigint IS DISTINCT FROM 5, NULL::bigint IS NOT DISTINCT FROM NULL::integer").expect("distinct");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Bool(false), Datum::Bool(true), Datum::Bool(true)]]),
++        other => panic!("{other:?}"),
++    }
++    let out = s.simple_query("SELECT x FROM (VALUES (1),(2),(3)) v(x) ORDER BY x LIMIT (SELECT 1) OFFSET (SELECT 1)").expect("limit");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Int4(2)]]),
++        other => panic!("{other:?}"),
++    }
++}
++
++#[test]
++fn lateral_subquery_preserves_local_and_outer_columns() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE a(x int); CREATE TABLE b(y int); INSERT INTO a VALUES (1),(2); INSERT INTO b VALUES (1),(3)").expect("setup");
++    let e = s.simple_query("SELECT * FROM a, (SELECT * FROM b WHERE y = a.x) q").expect_err("LATERAL required");
++    assert_eq!(e.sqlstate.code(), "42P01");
++    let out = s.simple_query("SELECT a.x, q.y FROM a LEFT JOIN LATERAL (SELECT * FROM b WHERE y = a.x) q ON true ORDER BY a.x").expect("lateral");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Int4(1), Datum::Int4(1)],vec![Datum::Int4(2), Datum::Null]]),
++        other => panic!("{other:?}"),
++    }
++}
++
++#[test]
++fn domain_constraint_validation_rejects_array_containers() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE DOMAIN pos AS int; CREATE DOMAIN pos2 AS pos; CREATE TABLE t(a pos2[])").expect("setup");
++    for sql in ["ALTER DOMAIN pos SET NOT NULL", "ALTER DOMAIN pos ADD CHECK (VALUE > 0)"] {
++        let e = s.simple_query(sql).expect_err("container");
++        assert_eq!(e.sqlstate.code(), "0A000");
++        assert_eq!(e.message, "cannot alter type \"pos2\" because column \"t.a\" uses it");
++    }
++    s.simple_query("ALTER DOMAIN pos SET DEFAULT 1; DROP TABLE t; ALTER DOMAIN pos SET NOT NULL").expect("after drop");
++}
++
++#[test]
++fn utility_and_materialized_view_completion_tags() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    for (sql, tag) in [
++        ("START TRANSACTION", "START TRANSACTION"), ("ROLLBACK", "ROLLBACK"),
++        ("RESET ROLE", "RESET"), ("RESET SESSION AUTHORIZATION", "RESET"),
++        ("CREATE MATERIALIZED VIEW m AS SELECT 1 AS n", "SELECT 1"),
++        ("CREATE MATERIALIZED VIEW empty AS SELECT 1 AS n WHERE false", "SELECT 0"),
++        ("CREATE MATERIALIZED VIEW IF NOT EXISTS m AS SELECT 2 AS n", "CREATE MATERIALIZED VIEW"),
++    ] {
++        assert_eq!(s.simple_query(sql).expect(sql)[0].result.tag(), tag, "{sql}");
++    }
++}
++
++#[test]
++fn correlated_catalog_default_expression() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE nd (a int, b text DEFAULT NULL, c text DEFAULT '')").expect("setup");
++    let out = s.simple_query("SELECT a.attname, (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) IS NULL FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'nd'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum").expect("describe");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(rows.len(), 3),
++        other => panic!("{other:?}"),
++    }
++}
++
++#[test]
++fn nested_set_expressions_advance_together_and_pad_with_nulls() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    let out = s.simple_query("SELECT generate_series(1,3)+10, generate_series(1,2)*2").expect("sets");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![
++            vec![Datum::Int4(11),Datum::Int4(2)],vec![Datum::Int4(12),Datum::Int4(4)],vec![Datum::Int4(13),Datum::Null],
++        ]),
++        other => panic!("{other:?}"),
++    }
++    let out = s.simple_query("SELECT generate_series(1,3)+generate_series(1,2)").expect("two sets in one expression");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Int4(2)],vec![Datum::Int4(4)],vec![Datum::Null]]),
++        other => panic!("{other:?}"),
++    }
++}
++
++#[test]
++fn unsupported_builtins_and_outer_aggregates_preserve_leased_errors() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    for sql in ["GRANT EXECUTE ON FUNCTION abs(int) TO PUBLIC", "SELECT (SELECT count(t.x)) FROM (VALUES (1)) t(x)"] {
++        let e = s.simple_query(sql).expect_err(sql);
++        assert_eq!(e.sqlstate.code(), "0A000", "{sql}");
++        assert!(e.detail.as_deref().unwrap_or("").starts_with("pgarbor-unimplemented:"));
++    }
++}
++
++#[test]
++fn single_field_composite_functions_and_old_record_output() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TYPE char2 AS (a char(2))").expect("type");
++    let out = s.simple_query("SELECT * FROM jsonb_populate_record(NULL::char2, '{\"a\":\"aa\"}') q").expect("populate");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Text("aa".into())]]),
++        other => panic!("{other:?}"),
++    }
++    s.simple_query("CREATE TABLE fullname(first text,last text); CREATE TABLE people(fn fullname); INSERT INTO people VALUES ('(Joe,Blow)')").expect("setup composite dependency");
++    assert_eq!(s.simple_query("ALTER TABLE fullname ADD suffix text DEFAULT ''").expect_err("non-NULL default changes dependent tuples").sqlstate.code(), "0A000");
++    s.simple_query("ALTER TABLE fullname ADD suffix text DEFAULT NULL").expect("metadata change");
++    let out = s.simple_query("SELECT fn::text FROM people").expect("old record");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Text("(Joe,Blow,)".into())]]),
++        other => panic!("{other:?}"),
++    }
++}
++
++#[test]
++fn newly_added_composite_fields_read_as_null_in_old_tuples() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE rt(a int); CREATE TABLE t(v rt); INSERT INTO t VALUES ('(1)'); ALTER TABLE rt ADD b int DEFAULT NULL").expect("setup");
++    let out = s.simple_query("SELECT (v).a, (v).b FROM t").expect("field access");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Int4(1),Datum::Null]]),
++        other => panic!("{other:?}"),
++    }
++}
+diff --git a/STATUS.md b/STATUS.md
+index 97d6123c..bd6fa6e2 100644
+--- a/STATUS.md
++++ b/STATUS.md
+@@ -1,29 +1,36 @@
+-# PGArbor project state — 2026-10-15, verified on a socket-capable machine
++# PGArbor project state — 2026-10-15
+ 
+-PGArbor is a running pre-alpha SQL engine, not a PostgreSQL-compatible release. Codex's
+-work (see [runs/review/codex-final-01.md](runs/review/codex-final-01.md)) and the
+-`feat/bindings-wasm` and `fix/seq-role-parser` branches are merged into main.
++PGArbor is a running pre-alpha SQL engine. It is not a PostgreSQL-compatible
++release. The committed CTE scope repair is preserved; final review 02 changes
++remain in the working tree because the sandbox mounts `.git` read-only.
+ 
+-Verified on this machine after the merges:
++Verified on the final working tree:
+ 
+ | Layer | Result |
+ |---|---|
+-| `cargo build --workspace --all-targets` | PASS (compiler warnings remain) |
+-| `cargo test --workspace --no-fail-fast` | 2,431 passed, 0 failed, 272 ignored |
+-| `cargo test -p pgarbor-ffi` | PASS |
+-| Harness pytest (`-o addopts=""`) | 1,090 passed, 14 skipped, 0 failed |
+-| `harness/smoke/wire_smoke.py` (live server) | 21 ok, 1 intended duplicate-key error |
+-| wasm: `demo/build.sh` + `node demo/test-node.mjs` | PASS |
+-| Python binding tests (`bindings/python`) | 2 passed |
++| `cargo build --workspace --all-targets` | PASS; warnings remain |
++| `cargo test --workspace --no-fail-fast` | 2,476 passed, 0 failed, 272 ignored |
++| Harness pytest (`-o addopts=""`) | 1,090 passed, 0 failed, 14 skipped |
++| Full embedded corpus | 2,154 / 5,837 PASS (36.90%), versus 1,992 / 5,837 (34.13%) in 01 |
+ 
+-Not re-verified here: the embedded differential corpus figure below was measured by Codex
+-(1,992 of 5,837 selected cases PASS, 34.13%; 2,320 MISMATCH, 1,163 UNSUPPORTED, 102
+-internal XX000, 58 unexpected acceptance, 152 blocked; per-family rates in
+-[runs/review/codex-differential-by-family.csv](runs/review/codex-differential-by-family.csv)).
+-It compares against existing PG18 recordings, not a live oracle. Live psql, app/ORM and
+-upstream native suites have not been run since the repairs; ORM results in
+-runs/review/orm-fixtures-01.md predate them. Raw corpus dumps under runs/review/embedded-*
+-are intentionally uncommitted.
++The embedded campaign has 2,251 MISMATCH, 1,194 UNSUPPORTED,
++0 CRASH, 36 UNEXPECTED_ACCEPTANCE, 10 HARNESS_ERROR,
++152 BLOCKED and 40 quarantined cases. Final process timeouts: 0.
++No original PASS case regressed. Separate inspection of complete transcripts and
++bridge errors found zero XX-class errors. Cases and recorded expectations were
++not edited; comparison used existing PG18 recordings, not a fresh live oracle.
+ 
+-Known unfinished: SSI, ordered wire COPY, CONTEXT, IANA timezones, additional types,
+-complete native-runner parity. Open work is in Taskwarrior (`task project:pgarbor list`).
++The named slot-resolution, ALTER USING and VARIADIC internal-error clusters are
++repaired or fail closed for specific unsupported features. Added regressions cover
++outer-join whole rows/tableoid, functional dependencies, recursive CTE laziness
++and cache invalidation, LATERAL, GUCs, composites and completion tags. Semantic
++unexpected acceptances remain; SSI, function-body validation/execution, catalog
++breadth, timezone/type support and native/wire COPY parity are unfinished.
++
++Details, limits and executed commands: [runs/review/codex-final-02.md](runs/review/codex-final-02.md).
++All 400 per-family comparisons: [runs/review/codex-differential-by-family-02.csv](runs/review/codex-differential-by-family-02.csv).
++Owner commit groups: [runs/review/patches-02/manifest.json](runs/review/patches-02/manifest.json).
++
++Earlier owner checks of wire smoke, WASM and bindings remain in review 01 and
++its preceding STATUS history. They were not repeated as part of this campaign.
++Taskwarrior is unavailable here (database/WAL error 14); no tasks were changed.
+diff --git a/runs/review/codex-final-02.md b/runs/review/codex-final-02.md
+new file mode 100644
+index 00000000..2ecad0cb
+--- /dev/null
++++ b/runs/review/codex-final-02.md
+@@ -0,0 +1,213 @@
++# PGArbor final review 02
++
++2026-10-15 (America/Los_Angeles). Final working tree based on `727c2dc5` and the
++actual base SHA in [patches-02/manifest.json](patches-02/manifest.json).
++PGArbor remains a pre-alpha engine. This review repairs the named internal-error
++clusters; it does not establish PostgreSQL compatibility or finish all semantic gaps.
++
++## Verified result
++
++**2,154 / 5,837 selected cases PASS (36.90%), versus 1,992 / 5,837
++(34.13%) in final-01: +162 cases, +2.78 percentage points.**
++No previously passing case regressed. CRASH classifications fell from 102 to
++0. A separate scan of every complete transcript and bridge error found
++**zero XX-class errors**, including zero XX000. Confirmed process failures and final
++process timeouts: 0 and 0. Unexpected acceptances remain
++**36**, down from 58; these are unfinished work, not waived failures.
++
++| Verification | Result |
++|---|---|
++| `cargo build --workspace --all-targets` | PASS; compiler warnings remain |
++| `cargo test --workspace --no-fail-fast` | 2,476 passed, 0 failed, 272 ignored |
++| Harness pytest (`-o addopts=""`) | 1,090 passed, 0 failed, 14 skipped |
++| Final embedded corpus | All 5,837 selected cases accounted for; 400 families |
++| Original CRASH/UNEXPECTED_ACCEPTANCE selection | 83 PASS, 16 UNSUPPORTED, 25 MISMATCH, 34 UNEXPECTED_ACCEPTANCE, 2 HARNESS_ERROR |
++| Case SQL and recorded expectations | No changes |
++
++Rust counts exclude filtered child-process helper summaries to avoid double counting.
++Per-target evidence is [codex-test-layers-02.json](codex-test-layers-02.json).
++Logs: `codex-build-02.log`, `codex-tests-02.log`, `codex-pytest-02.{log,xml}`,
++`codex-regressions-02.log`, `codex-targetlist-tests-02.log`,
++`codex-semantic-tests-02.log`, `codex-guc-tests-02.log`, `codex-parser-tests-02.log`.
++The final workspace test includes every retained regression target. Ignored/skipped
++tests remain untested. No fresh wire/app/ORM/native-suite compatibility claim is made.
++
++## Review of inherited edits
++
++Every inherited changed file has a decision in
++[codex-change-audit-02.json](codex-change-audit-02.json). The early audit snapshot is
++`patches-02/inherited.patch`; it contains rejected code and must not be applied.
++
++- Reverted `pgarbor-types/src/datetime/tz.rs`: the inherited deletion of timezone
++  aliases lacked pinned-oracle evidence available here. Removed its matching
++  unverified rejection assertions from the session regression.
++- Reverted `pgarbor/src/portal.rs`: converting every NULL void datum into an empty
++  value would erase SQL NULL semantics.
++- Repaired the build: ProjectSet unit constructors still used the old type;
++  a test in the committed CTE repair still called removed `scope_key` machinery.
++  Removed the untracked print-only `zz_dbg.rs` target.
++- Replaced global tableoid constants with identity slots below joins. Whole-row
++  reconstruction preserves outer-join NULL extension, all-NULL real rows, and
++  dropped attribute positions. Unsupported row-locking combinations fail closed.
++- Simplified aggregate/window expressions consistently before collecting slots;
++  carried functionally dependent columns through ordinary and grouping-set
++  aggregation. Upper projections reuse already-computed subqueries.
++- Kept and extended VARIADIC handling, including explicit arrays, NULL arrays,
++  stored defaults and view expressions. Kept the constant-folding guard.
++- Lowered ALTER TYPE USING columns to executable row slots and assignment-coerced
++  rebound volatile defaults to the column type.
++- The inherited recursive batching patch hung on its cycle test. Reworked it to
++  produce one row per pull and increment the executor epoch when the work table
++  changes. Regressions assert the graph's 16 rows and sequence side effects proving
++  LIMIT does not evaluate unused seed rows. The committed scope fix is preserved.
++- Fixed nested LATERAL ownership using recorded query parentage; local and outer
++  range indexes are no longer confused. Non-LATERAL references are rejected.
++- Retained validated GUC storage, CHECKPOINT privilege checks, view dependencies,
++  builtin-function ACL fail-closed behavior, schema REINDEX expansion, routine
++  parameter deparsing and pg_notify NULL-channel behavior. Strengthened index
++  system-column rejection to run before deparsing. GUC validation is a required
++  adapter method, rather than the inherited unconditional-success default.
++- Fixed mixed-integer DISTINCT comparisons, scalar LIMIT and JOIN-condition
++  subqueries, OID Datum relabels, composite COMMENT existence, rowtype-default dependencies, and domain-array
++  validation. Outer-level aggregates, multi-column hypothetical aggregates and
++  unavailable anonymous record descriptors retain specific leased unsupported
++  errors; they are not falsely reported as implemented.
++- Expanded single-field composite table-function results correctly and rendered/accessed
++  missing trailing attributes of older stored composite text values as NULL.
++  These remove two real XX000 bridge failures found by inspecting HARNESS_ERROR.
++
++Contract changes are recorded in amendments `pgarbor-exec-08`, `pgarbor-exec-09`,
++`pgarbor-plan-04`, and `pgarbor-catalog-08`. No frozen contract document was edited.
++The engine dependency direction stays synchronous and acyclic.
++
++## Original clusters, case-level outcomes
++
++These are whole-case outcomes: eliminating one internal error does not make a
++case PASS if another step still differs. PostgreSQL's own 0A000 errors can also
++produce the harness's UNSUPPORTED classification even when that particular
++rejection matches PostgreSQL.
++
++| Original cluster | Cases in 01 | Outcomes in 02 |
++|---|---:|---|
++| Missing subplan variable | 28 | 1 HARNESS_ERROR, 6 MISMATCH, 17 PASS, 4 UNSUPPORTED |
++| VARIADIC argument metadata | 16 | 16 PASS |
++| Committed CTE scope repair | 13 | 1 MISMATCH, 12 PASS |
++| Non-executable Column / ALTER USING | 8 | 2 MISMATCH, 6 PASS |
++| Missing aggregate target | 7 | 7 PASS |
++| All syntax-error unexpected acceptances | 23 | 13 PASS, 10 UNEXPECTED_ACCEPTANCE |
++
++The separate affected-case rerun is `embedded-clusters-02/results.jsonl` (160
++cases, fresh databases/processes). Its command is in `rerun_clusters_02.py` and its
++outcome totals agree with selecting those IDs from the final full campaign.
++
++## Full differential accounting
++
++| Outcome | final-01 | final-02 | Change |
++|---|---:|---:|---:|
++| PASS | 1,992 | 2,154 | +162 |
++| MISMATCH | 2,320 | 2,251 | -69 |
++| UNSUPPORTED | 1,163 | 1,194 | +31 |
++| CRASH | 102 | 0 | -102 |
++| UNEXPECTED_ACCEPTANCE | 58 | 36 | -22 |
++| HARNESS_ERROR | 10 | 10 | +0 |
++| BLOCKED | 152 | 152 | +0 |
++| INVALID_CASE | 40 | 40 | +0 |
++| HANG | 0 | 0 | +0 |
++
++Selected denominator: 5,837. Existing valid references: 5,767.
++Complete engine executions: 5,635; bridge failures do not count as
++complete executions. PASS / executed: 38.23%.
++The 152 blocked and 40 quarantined cases remain in the selected denominator.
++
++Command (exit 1 means non-PASS cases were found, not a runner launch failure):
++
++```sh
++cd harness
++UV_CACHE_DIR=/tmp/pgarbor-uv uv run --offline --no-sync python -m pgarbor_harness.runner.embedded \
++  --binary ../target/debug/examples/embedded_case \
++  --out ../runs/review/embedded-final-02 --jobs 4 --timeout 60
++```
++
++Final elapsed runner time: 51.77 seconds.
++Binary SHA-256: `468e2c63077d8e4222f20b5620d5a635ed87d85020168eddd6367753b73e022d`.
++Raw results and transcripts are in `embedded-final-02/`; summary is
++`embedded-final-02/summary.json`. The final raw run needs no timeout merges.
++Earlier diagnostic runs remain separately named `embedded-audit-02`,
++`embedded-prevalidation-02`, and `embedded-before-output-fixes-02`.
++The two timeouts in an earlier run completed on 90-second rechecks: btree
++PASS at 20,870 ms; planner-statistics MISMATCH at 20,554 ms. These earlier
++rechecks are not counted again in the final campaign.
++
++Comparison uses existing recorded PG18 references and the unchanged embedded
++runner/comparator. No oracle rerecord was performed. The live oracle connection
++at 127.0.0.1:54318 was refused; Podman configuration access failed in the sandbox.
++Source checks used the local PostgreSQL 18 tree. Existing normalization/provenance
++limitations from final-01 remain. The embedded transport proves SQL API behavior,
++not PostgreSQL wire compatibility.
++
++## Per-family comparison
++
++All **400** families, selected denominators, PASS counts, rates and deltas are in
++[codex-differential-by-family-02.csv](codex-differential-by-family-02.csv).
++[codex-differential-summary-02.json](codex-differential-summary-02.json) contains
++outcome transitions, remaining cluster counts and the no-regression check.
++The largest PASS-count gains are:
++
++| Family | final-01 PASS / selected | final-02 PASS / selected | PASS gain |
++|---|---:|---:|---:|
++| cmd-drop-materialized-view | 1/15 (6.67%) | 11/15 (73.33%) | +10 |
++| functional-deps | 5/15 (33.33%) | 14/15 (93.33%) | +9 |
++| cmd-alter-materialized-view | 0/18 (0.00%) | 7/18 (38.89%) | +7 |
++| cmd-create-materialized-view | 0/16 (0.00%) | 7/16 (43.75%) | +7 |
++| doc-queries-with | 3/19 (15.79%) | 10/19 (52.63%) | +7 |
++| matview | 1/15 (6.67%) | 8/15 (53.33%) | +7 |
++| text | 5/12 (41.67%) | 12/12 (100.00%) | +7 |
++| cmd-set-session-auth | 1/13 (7.69%) | 7/13 (53.85%) | +6 |
++| cmd-set-role | 0/13 (0.00%) | 5/13 (38.46%) | +5 |
++| cmd-create-role | 7/16 (43.75%) | 11/16 (68.75%) | +4 |
++| cmd-refresh-materialized-view | 0/12 (0.00%) | 4/12 (33.33%) | +4 |
++| cmd-start-transaction | 0/14 (0.00%) | 4/14 (28.57%) | +4 |
++
++## Continued mismatch work and remaining limits
++
++After repairing the named clusters, I ranked first divergences by count. The
++largest result-count bucket mostly stops in setup at unsupported features; it
++is not evidence that result framing is wrong. In the first audit, 679 such cases
++had a leased 0A000 setup failure, and 185 had a 42601 setup failure. Those setup
++features require implementation or specific parser support, not comparator changes.
++
++The command-tag bucket had 129 cases in that audit, including 34 RESET/SET and
++15 START TRANSACTION/BEGIN first divergences. Fixed those spellings and populated
++materialized-view SELECT counts. The final command-tag first-divergence bucket
++contains 17 cases.
++No unsupported functionality was made to succeed solely to improve a count.
++
++Largest remaining first-divergence buckets are 890 result_count, 458 syntax error at or near "?", 122 txn_status, 103 type "?" does not exist, 60 row_multiset, 54 value, 41 column "?" does not exist, 35 column_type.
++Detailed signatures and case IDs remain in the raw results. These are outstanding:
++
++1. **36 unexpected acceptances:** SQL/PLpgSQL body validation,
++   collation conflicts, SSI, locks/privileges, dependencies, domain arrays,
++   sequence boundaries and other semantics remain incomplete. This work does
++   not claim those clusters are finished. Two acceptance cases are newly exposed
++   behind earlier divergences; all original PASS cases still pass.
++2. **2,251 mismatches and 1,194 unsupported cases:** setup feature
++   breadth, error parity, transaction states and catalog/type metadata dominate.
++   Current code still does not implement SSI or user-defined function execution.
++3. **10 bridge failures:** inspect `bridge_error` in results.jsonl. Anonymous
++   composite descriptors, unsupported timezone rendering and enum output remain
++   incomplete. None contains an XX-class error in this final campaign.
++4. No new oracle recordings, native upstream runs, ORM campaign, or live wire
++   campaign was performed. Binary composite evolution beyond the tested text
++   output path is not newly verified.
++
++## Owner handoff
++
++`.git` is read-only under this session's sandbox policy. Changes remain in the
++working tree; no commit or index write was attempted. Logical commits, complete
++messages with Co-Authored-By trailers, file lists and recovery patches are in
++[patches-02/manifest.json](patches-02/manifest.json). The manifest excludes raw
++corpus dumps and the rejected inherited snapshot from proposed commits.
++
++Taskwarrior again failed to open its database/WAL with error 14. No task UUIDs
++could be read and no tasks were modified. Remaining case/signature evidence is
++kept in the report and machine-readable summaries for owner triage.
+diff --git a/runs/review/codex-change-audit-02.json b/runs/review/codex-change-audit-02.json
+new file mode 100644
+index 00000000..faeaa8ca
+--- /dev/null
++++ b/runs/review/codex-change-audit-02.json
+@@ -0,0 +1,186 @@
++{
++  "snapshot": "patches-02/inherited.patch is an early audit backup; do not apply it",
++  "files": [
++    {
++      "file": "crates/pgarbor-catalog/src/ddl/grant.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/context.rs",
++      "decision": "repaired",
++      "reason": "The inherited validation default accepted everything. Validation is now required from every adapter, under amendment exec-08."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/ddl_alter.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/ddl_followup.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/eval_call.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/node_cte.rs",
++      "decision": "rewritten",
++      "reason": "Inherited batching hung on its cycle test. Reworked to pull individual rows and invalidate work-table caches; cycle, LIMIT and side-effect regressions pass."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/node_func.rs",
++      "decision": "repaired",
++      "reason": "Fixed stale test constructors; added nested-SRF regression coverage and correct one-field composite expansion."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/runtime.rs",
++      "decision": "repaired",
++      "reason": "Retained the explicit recursive stream state under amendment exec-09."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/session_fns.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/tabledesc.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-exec/src/utility.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-plan/src/agg.rs",
++      "decision": "extended",
++      "reason": "Functional dependencies are carried as extra keys, including all validated grouping sets."
++    },
++    {
++      "file": "crates/pgarbor-plan/src/build.rs",
++      "decision": "rewritten",
++      "reason": "Replaced global tableoid constants with slots below joins, preserving outer-join NULLs; simplified aggregate/window source expressions consistently."
++    },
++    {
++      "file": "crates/pgarbor-plan/src/setrefs.rs",
++      "decision": "repaired",
++      "reason": "Whole rows retain dropped attribute positions and distinguish absent rows from all-NULL rows."
++    },
++    {
++      "file": "crates/pgarbor-plan/src/simplify.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/binder/ddl_function.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/binder/ddl_index.rs",
++      "decision": "repaired",
++      "reason": "Reject bound system references before stored-expression deparsing; the inherited refs list only collected positive attributes."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/binder/ddl_view.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/binder/expr_func.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/binder/from.rs",
++      "decision": "repaired",
++      "reason": "Retained direct-view dependencies and corrected lateral visibility checks."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/binder/utility.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/deparse/query.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/lib.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/parser.rs",
++      "decision": "extended",
++      "reason": "VARIADIC adaptation also covers stored expressions and CREATE TABLE/VIEW expressions; preserves routine signatures."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/strict_check.rs",
++      "decision": "extended",
++      "reason": "Confirmed ColId keyword classes against local PG18 kwlist.h; expanded grammar-boundary tests."
++    },
++    {
++      "file": "crates/pgarbor-sql/src/syntax_error.rs",
++      "decision": "retained",
++      "reason": "Reviewed against the crate contract, local PG18 source or existing recordings; final workspace and harness checks pass."
++    },
++    {
++      "file": "crates/pgarbor-types/src/cast/apply.rs",
++      "decision": "extended",
++      "reason": "Retained OID relabel variants; missing anonymous record descriptors now return leased unsupported errors."
++    },
++    {
++      "file": "crates/pgarbor-types/src/datetime/tz.rs",
++      "decision": "reverted",
++      "reason": "Removed the unverified timezone-alias deletion; no live pinned oracle was available. The prior implementation is restored."
++    },
++    {
++      "file": "crates/pgarbor/src/guc.rs",
++      "decision": "repaired",
++      "reason": "Validation is side-effect-free; quoted text-search configuration identifiers retain case."
++    },
++    {
++      "file": "crates/pgarbor/src/portal.rs",
++      "decision": "reverted",
++      "reason": "The blanket NULL-to-empty conversion for void loses SQL NULL semantics. The prior implementation is restored."
++    },
++    {
++      "file": "crates/pgarbor/tests/cte_scope_contract.rs",
++      "decision": "strengthened",
++      "reason": "Assert exact cycle count and demand-driven sequence effects, not just nonempty output."
++    },
++    {
++      "file": "crates/pgarbor/tests/sql_session_contract.rs",
++      "decision": "repaired",
++      "reason": "Removed unverified timezone rejection assertions; validate stored GUCs and quoted configuration identifiers."
++    },
++    {
++      "file": "crates/pgarbor/tests/sql_planner_targetlist.rs",
++      "decision": "retained and extended",
++      "reason": "Inherited untracked regression target; final workspace tests pass."
++    },
++    {
++      "file": "crates/pgarbor/tests/sql_variadic_any_contract.rs",
++      "decision": "retained and extended",
++      "reason": "Inherited untracked regression target; final workspace tests pass."
++    },
++    {
++      "file": "crates/pgarbor/tests/sql_variadic_contract.rs",
++      "decision": "retained and extended",
++      "reason": "Inherited untracked regression target; final workspace tests pass."
++    },
++    {
++      "file": "crates/pgarbor/tests/zz_dbg.rs",
++      "decision": "removed",
++      "reason": "Untracked temporary print-only diagnostic without assertions; replaced with semantic regressions."
++    }
++  ],
++  "verification": "codex-build-02.log, codex-tests-02.log, codex-pytest-02.xml, embedded-final-02/results.jsonl"
++}
+diff --git a/runs/review/codex-differential-by-family-02.csv b/runs/review/codex-differential-by-family-02.csv
+new file mode 100644
+index 00000000..9e15812e
+--- /dev/null
++++ b/runs/review/codex-differential-by-family-02.csv
+@@ -0,0 +1,401 @@
++family,selected_01,pass_01,pass_rate_01_pct,selected_02,pass_02,pass_rate_02_pct,pass_delta,rate_delta_pp
++advisory-lock,14,1,7.1429,14,1,7.1429,0,0.0000
++aggregates,13,9,69.2308,13,11,84.6154,2,15.3846
++alter-generic,16,3,18.7500,16,3,18.7500,0,0.0000
++alter-operator,14,0,0.0000,14,0,0.0000,0,0.0000
++alter-table,18,10,55.5556,18,12,66.6667,2,11.1111
++arrays,13,5,38.4615,13,5,38.4615,0,0.0000
++bit,15,0,0.0000,15,0,0.0000,0,0.0000
++boolean,17,16,94.1176,17,16,94.1176,0,0.0000
++brin,19,1,5.2632,19,1,5.2632,0,0.0000
++btree-index,16,14,87.5000,16,14,87.5000,0,0.0000
++case,13,11,84.6154,13,11,84.6154,0,0.0000
++char,12,11,91.6667,12,11,91.6667,0,0.0000
++cmd-abort,12,11,91.6667,12,11,91.6667,0,0.0000
++cmd-alter-aggregate,11,0,0.0000,11,0,0.0000,0,0.0000
++cmd-alter-collation,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-alter-conversion,15,0,0.0000,15,0,0.0000,0,0.0000
++cmd-alter-database,20,0,0.0000,20,0,0.0000,0,0.0000
++cmd-alter-default-privileges,18,0,0.0000,18,0,0.0000,0,0.0000
++cmd-alter-domain,16,2,12.5000,16,3,18.7500,1,6.2500
++cmd-alter-event-trigger,16,0,0.0000,16,0,0.0000,0,0.0000
++cmd-alter-extension,18,0,0.0000,18,0,0.0000,0,0.0000
++cmd-alter-function,14,1,7.1429,14,1,7.1429,0,0.0000
++cmd-alter-index,12,1,8.3333,12,1,8.3333,0,0.0000
++cmd-alter-language,15,0,0.0000,15,0,0.0000,0,0.0000
++cmd-alter-large-object,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-alter-materialized-view,18,0,0.0000,18,7,38.8889,7,38.8889
++cmd-alter-opclass,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-alter-operator,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-alter-opfamily,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-alter-policy,12,0,0.0000,12,0,0.0000,0,0.0000
++cmd-alter-procedure,12,0,0.0000,12,0,0.0000,0,0.0000
++cmd-alter-role,15,5,33.3333,15,5,33.3333,0,0.0000
++cmd-alter-routine,12,0,0.0000,12,0,0.0000,0,0.0000
++cmd-alter-rule,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-alter-schema,13,8,61.5385,13,11,84.6154,3,23.0769
++cmd-alter-sequence,20,15,75.0000,20,16,80.0000,1,5.0000
++cmd-alter-statistics,16,0,0.0000,16,0,0.0000,0,0.0000
++cmd-alter-table,18,3,16.6667,18,6,33.3333,3,16.6667
++cmd-alter-trigger,17,0,0.0000,17,0,0.0000,0,0.0000
++cmd-alter-tsconfig,15,0,0.0000,15,0,0.0000,0,0.0000
++cmd-alter-tsdictionary,16,0,0.0000,16,0,0.0000,0,0.0000
++cmd-alter-type,16,3,18.7500,16,3,18.7500,0,0.0000
++cmd-alter-view,19,0,0.0000,19,0,0.0000,0,0.0000
++cmd-analyze,19,2,10.5263,19,2,10.5263,0,0.0000
++cmd-begin,15,8,53.3333,15,9,60.0000,1,6.6667
++cmd-call,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-checkpoint,15,10,66.6667,15,11,73.3333,1,6.6667
++cmd-close,17,1,5.8824,17,1,5.8824,0,0.0000
++cmd-cluster,18,2,11.1111,18,2,11.1111,0,0.0000
++cmd-comment,13,1,7.6923,13,1,7.6923,0,0.0000
++cmd-commit,14,9,64.2857,14,9,64.2857,0,0.0000
++cmd-copy,15,0,0.0000,15,0,0.0000,0,0.0000
++cmd-create-access-method,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-create-aggregate,20,0,0.0000,20,0,0.0000,0,0.0000
++cmd-create-cast,11,1,9.0909,11,1,9.0909,0,0.0000
++cmd-create-collation,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-create-conversion,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-create-domain,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-create-event-trigger,16,0,0.0000,16,0,0.0000,0,0.0000
++cmd-create-extension,19,0,0.0000,19,0,0.0000,0,0.0000
++cmd-create-function,18,0,0.0000,18,0,0.0000,0,0.0000
++cmd-create-index,17,10,58.8235,17,10,58.8235,0,0.0000
++cmd-create-language,15,0,0.0000,15,0,0.0000,0,0.0000
++cmd-create-materialized-view,16,0,0.0000,16,7,43.7500,7,43.7500
++cmd-create-opclass,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-create-operator,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-create-opfamily,12,0,0.0000,12,0,0.0000,0,0.0000
++cmd-create-policy,16,0,0.0000,16,0,0.0000,0,0.0000
++cmd-create-procedure,15,0,0.0000,15,0,0.0000,0,0.0000
++cmd-create-role,16,7,43.7500,16,11,68.7500,4,25.0000
++cmd-create-rule,11,0,0.0000,11,0,0.0000,0,0.0000
++cmd-create-schema,11,2,18.1818,11,2,18.1818,0,0.0000
++cmd-create-sequence,11,3,27.2727,11,3,27.2727,0,0.0000
++cmd-create-statistics,17,0,0.0000,17,0,0.0000,0,0.0000
++cmd-create-table,13,6,46.1538,13,6,46.1538,0,0.0000
++cmd-create-table-as,16,7,43.7500,16,7,43.7500,0,0.0000
++cmd-create-transform,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-create-trigger,17,0,0.0000,17,0,0.0000,0,0.0000
++cmd-create-tsconfig,11,0,0.0000,11,0,0.0000,0,0.0000
++cmd-create-tsdictionary,18,0,0.0000,18,0,0.0000,0,0.0000
++cmd-create-type,16,4,25.0000,16,4,25.0000,0,0.0000
++cmd-create-view,15,2,13.3333,15,2,13.3333,0,0.0000
++cmd-deallocate,18,15,83.3333,18,15,83.3333,0,0.0000
++cmd-declare,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-delete,18,8,44.4444,18,8,44.4444,0,0.0000
++cmd-discard,16,10,62.5000,16,10,62.5000,0,0.0000
++cmd-do,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-drop-aggregate,16,0,0.0000,16,0,0.0000,0,0.0000
++cmd-drop-cast,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-drop-collation,13,0,0.0000,13,0,0.0000,0,0.0000
++cmd-drop-domain,16,8,50.0000,16,9,56.2500,1,6.2500
++cmd-drop-function,14,5,35.7143,14,5,35.7143,0,0.0000
++cmd-drop-index,14,7,50.0000,14,7,50.0000,0,0.0000
++cmd-drop-materialized-view,15,1,6.6667,15,11,73.3333,10,66.6667
++cmd-drop-operator,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-drop-owned,16,4,25.0000,16,4,25.0000,0,0.0000
++cmd-drop-policy,11,0,0.0000,11,0,0.0000,0,0.0000
++cmd-drop-procedure,18,0,0.0000,18,0,0.0000,0,0.0000
++cmd-drop-role,13,8,61.5385,13,9,69.2308,1,7.6923
++cmd-drop-routine,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-drop-rule,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-drop-schema,14,9,64.2857,14,9,64.2857,0,0.0000
++cmd-drop-sequence,19,12,63.1579,19,12,63.1579,0,0.0000
++cmd-drop-statistics,15,0,0.0000,15,0,0.0000,0,0.0000
++cmd-drop-table,17,13,76.4706,17,13,76.4706,0,0.0000
++cmd-drop-trigger,16,0,0.0000,16,0,0.0000,0,0.0000
++cmd-drop-type,18,12,66.6667,18,13,72.2222,1,5.5556
++cmd-drop-view,18,10,55.5556,18,13,72.2222,3,16.6667
++cmd-end,13,10,76.9231,13,10,76.9231,0,0.0000
++cmd-execute,16,14,87.5000,16,15,93.7500,1,6.2500
++cmd-explain,18,4,22.2222,18,4,22.2222,0,0.0000
++cmd-fetch,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-grant,15,1,6.6667,15,1,6.6667,0,0.0000
++cmd-insert,14,5,35.7143,14,5,35.7143,0,0.0000
++cmd-listen,14,11,78.5714,14,13,92.8571,2,14.2857
++cmd-lock,11,6,54.5455,11,6,54.5455,0,0.0000
++cmd-merge,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-move,14,0,0.0000,14,0,0.0000,0,0.0000
++cmd-notify,14,2,14.2857,14,3,21.4286,1,7.1429
++cmd-prepare,19,13,68.4211,19,13,68.4211,0,0.0000
++cmd-reassign-owned,16,6,37.5000,16,6,37.5000,0,0.0000
++cmd-refresh-materialized-view,12,0,0.0000,12,4,33.3333,4,33.3333
++cmd-reindex,17,3,17.6471,17,4,23.5294,1,5.8824
++cmd-release-savepoint,14,14,100.0000,14,14,100.0000,0,0.0000
++cmd-reset,15,12,80.0000,15,13,86.6667,1,6.6667
++cmd-revoke,18,0,0.0000,18,3,16.6667,3,16.6667
++cmd-rollback,15,11,73.3333,15,12,80.0000,1,6.6667
++cmd-rollback-to,13,11,84.6154,13,11,84.6154,0,0.0000
++cmd-savepoint,16,13,81.2500,16,13,81.2500,0,0.0000
++cmd-security-label,10,0,0.0000,10,0,0.0000,0,0.0000
++cmd-select,17,8,47.0588,17,9,52.9412,1,5.8824
++cmd-select-into,18,0,0.0000,18,0,0.0000,0,0.0000
++cmd-set,17,8,47.0588,17,8,47.0588,0,0.0000
++cmd-set-constraints,17,0,0.0000,17,0,0.0000,0,0.0000
++cmd-set-role,13,0,0.0000,13,5,38.4615,5,38.4615
++cmd-set-session-auth,13,1,7.6923,13,7,53.8462,6,46.1538
++cmd-set-transaction,15,4,26.6667,15,4,26.6667,0,0.0000
++cmd-show,12,6,50.0000,12,6,50.0000,0,0.0000
++cmd-start-transaction,14,0,0.0000,14,4,28.5714,4,28.5714
++cmd-truncate,16,10,62.5000,16,10,62.5000,0,0.0000
++cmd-unlisten,14,10,71.4286,14,12,85.7143,2,14.2857
++cmd-update,14,3,21.4286,14,3,21.4286,0,0.0000
++cmd-vacuum,19,0,0.0000,19,0,0.0000,0,0.0000
++cmd-values,13,10,76.9231,13,10,76.9231,0,0.0000
++collate,12,1,8.3333,12,1,8.3333,0,0.0000
++comments,14,13,92.8571,14,13,92.8571,0,0.0000
++constraints,10,5,50.0000,10,6,60.0000,1,10.0000
++conversion,13,0,0.0000,13,0,0.0000,0,0.0000
++copy,13,6,46.1538,13,6,46.1538,0,0.0000
++copy2,11,6,54.5455,11,6,54.5455,0,0.0000
++copydml,11,6,54.5455,11,6,54.5455,0,0.0000
++copyselect,14,11,78.5714,14,11,78.5714,0,0.0000
++create-aggregate,16,0,0.0000,16,0,0.0000,0,0.0000
++create-cast,12,0,0.0000,12,0,0.0000,0,0.0000
++create-function-sql,20,2,10.0000,20,2,10.0000,0,0.0000
++create-index,13,8,61.5385,13,8,61.5385,0,0.0000
++create-misc,12,3,25.0000,12,3,25.0000,0,0.0000
++create-operator,15,0,0.0000,15,0,0.0000,0,0.0000
++create-procedure,16,1,6.2500,16,1,6.2500,0,0.0000
++create-role,14,7,50.0000,14,9,64.2857,2,14.2857
++create-schema,11,2,18.1818,11,2,18.1818,0,0.0000
++create-table,11,6,54.5455,11,6,54.5455,0,0.0000
++create-table-like,13,0,0.0000,13,0,0.0000,0,0.0000
++create-type,14,3,21.4286,14,3,21.4286,0,0.0000
++create-view,12,2,16.6667,12,2,16.6667,0,0.0000
++date,17,16,94.1176,17,16,94.1176,0,0.0000
++delete,19,15,78.9474,19,15,78.9474,0,0.0000
++dependency,14,11,78.5714,14,11,78.5714,0,0.0000
++doc-applevel-consistency,15,7,46.6667,15,7,46.6667,0,0.0000
++doc-datatype-binary,15,12,80.0000,15,12,80.0000,0,0.0000
++doc-datatype-bit,11,1,9.0909,11,1,9.0909,0,0.0000
++doc-datatype-boolean,12,10,83.3333,12,10,83.3333,0,0.0000
++doc-datatype-character,14,11,78.5714,14,11,78.5714,0,0.0000
++doc-datatype-datetime,18,9,50.0000,18,10,55.5556,1,5.5556
++doc-datatype-enum,15,11,73.3333,15,12,80.0000,1,6.6667
++doc-datatype-geometric,19,0,0.0000,19,0,0.0000,0,0.0000
++doc-datatype-json,16,4,25.0000,16,4,25.0000,0,0.0000
++doc-datatype-money,15,1,6.6667,15,1,6.6667,0,0.0000
++doc-datatype-net-types,15,0,0.0000,15,0,0.0000,0,0.0000
++doc-datatype-numeric,15,13,86.6667,15,13,86.6667,0,0.0000
++doc-datatype-oid,17,11,64.7059,17,11,64.7059,0,0.0000
++doc-datatype-pg-lsn,10,2,20.0000,10,2,20.0000,0,0.0000
++doc-datatype-pseudo,16,1,6.2500,16,1,6.2500,0,0.0000
++doc-datatype-textsearch,13,0,0.0000,13,0,0.0000,0,0.0000
++doc-datatype-uuid,10,7,70.0000,10,7,70.0000,0,0.0000
++doc-datatype-xml,11,0,0.0000,11,0,0.0000,0,0.0000
++doc-ddl-alter,11,7,63.6364,11,10,90.9091,3,27.2727
++doc-ddl-basics,12,10,83.3333,12,10,83.3333,0,0.0000
++doc-ddl-constraints,16,10,62.5000,16,10,62.5000,0,0.0000
++doc-ddl-default,14,10,71.4286,14,10,71.4286,0,0.0000
++doc-ddl-depend,14,7,50.0000,14,7,50.0000,0,0.0000
++doc-ddl-generated-columns,15,3,20.0000,15,3,20.0000,0,0.0000
++doc-ddl-identity-columns,15,5,33.3333,15,5,33.3333,0,0.0000
++doc-ddl-inherit,19,0,0.0000,19,0,0.0000,0,0.0000
++doc-ddl-others,9,3,33.3333,9,3,33.3333,0,0.0000
++doc-ddl-partitioning,18,0,0.0000,18,0,0.0000,0,0.0000
++doc-ddl-priv,17,2,11.7647,17,4,23.5294,2,11.7647
++doc-ddl-rowsecurity,17,0,0.0000,17,0,0.0000,0,0.0000
++doc-ddl-schemas,16,6,37.5000,16,6,37.5000,0,0.0000
++doc-ddl-system-columns,16,1,6.2500,16,3,18.7500,2,12.5000
++doc-dml-delete,15,14,93.3333,15,14,93.3333,0,0.0000
++doc-dml-insert,14,13,92.8571,14,13,92.8571,0,0.0000
++doc-dml-returning,18,9,50.0000,18,9,50.0000,0,0.0000
++doc-dml-update,12,12,100.0000,12,12,100.0000,0,0.0000
++doc-domains,11,1,9.0909,11,1,9.0909,0,0.0000
++doc-explicit-locking,20,3,15.0000,20,3,15.0000,0,0.0000
++doc-functions-admin,16,2,12.5000,16,2,12.5000,0,0.0000
++doc-functions-aggregate,15,7,46.6667,15,8,53.3333,1,6.6667
++doc-functions-array,14,5,35.7143,14,5,35.7143,0,0.0000
++doc-functions-binarystring,16,12,75.0000,16,12,75.0000,0,0.0000
++doc-functions-bitstring,10,0,0.0000,10,0,0.0000,0,0.0000
++doc-functions-comparison,16,6,37.5000,16,6,37.5000,0,0.0000
++doc-functions-comparisons,13,6,46.1538,13,6,46.1538,0,0.0000
++doc-functions-conditional,9,6,66.6667,9,6,66.6667,0,0.0000
++doc-functions-datetime,13,8,61.5385,13,8,61.5385,0,0.0000
++doc-functions-enum,14,13,92.8571,14,13,92.8571,0,0.0000
++doc-functions-formatting,17,16,94.1176,17,16,94.1176,0,0.0000
++doc-functions-geometry,15,0,0.0000,15,0,0.0000,0,0.0000
++doc-functions-info,17,7,41.1765,17,8,47.0588,1,5.8824
++doc-functions-json,18,5,27.7778,18,7,38.8889,2,11.1111
++doc-functions-logical,11,11,100.0000,11,11,100.0000,0,0.0000
++doc-functions-matching,18,15,83.3333,18,15,83.3333,0,0.0000
++doc-functions-math,18,16,88.8889,18,16,88.8889,0,0.0000
++doc-functions-merge-support,15,0,0.0000,15,0,0.0000,0,0.0000
++doc-functions-net,9,0,0.0000,9,0,0.0000,0,0.0000
++doc-functions-range,14,0,0.0000,14,0,0.0000,0,0.0000
++doc-functions-sequence,11,5,45.4545,11,8,72.7273,3,27.2727
++doc-functions-srf,10,7,70.0000,10,7,70.0000,0,0.0000
++doc-functions-statistics,13,1,7.6923,13,1,7.6923,0,0.0000
++doc-functions-string,19,13,68.4211,19,16,84.2105,3,15.7895
++doc-functions-subquery,10,5,50.0000,10,5,50.0000,0,0.0000
++doc-functions-textsearch,10,0,0.0000,10,0,0.0000,0,0.0000
++doc-functions-trigger,11,0,0.0000,11,0,0.0000,0,0.0000
++doc-functions-uuid,11,9,81.8182,11,10,90.9091,1,9.0909
++doc-functions-window,10,7,70.0000,10,8,80.0000,1,10.0000
++doc-functions-xml,15,0,0.0000,15,0,0.0000,0,0.0000
++doc-indexes-collations,10,0,0.0000,10,0,0.0000,0,0.0000
++doc-indexes-expressional,10,6,60.0000,10,7,70.0000,1,10.0000
++doc-indexes-index-only-scans,14,8,57.1429,14,8,57.1429,0,0.0000
++doc-indexes-multicolumn,13,9,69.2308,13,9,69.2308,0,0.0000
++doc-indexes-opclass,16,7,43.7500,16,7,43.7500,0,0.0000
++doc-indexes-ordering,13,11,84.6154,13,11,84.6154,0,0.0000
++doc-indexes-partial,14,9,64.2857,14,9,64.2857,0,0.0000
++doc-indexes-unique,11,9,81.8182,11,9,81.8182,0,0.0000
++doc-plpgsql-control-structures,19,0,0.0000,19,0,0.0000,0,0.0000
++doc-plpgsql-cursors,20,0,0.0000,20,0,0.0000,0,0.0000
++doc-plpgsql-declarations,17,0,0.0000,17,0,0.0000,0,0.0000
++doc-plpgsql-errors-and-messages,12,0,0.0000,12,0,0.0000,0,0.0000
++doc-plpgsql-expressions,9,0,0.0000,9,0,0.0000,0,0.0000
++doc-plpgsql-implementation,11,0,0.0000,11,0,0.0000,0,0.0000
++doc-plpgsql-statements,14,0,0.0000,14,0,0.0000,0,0.0000
++doc-plpgsql-structure,14,0,0.0000,14,0,0.0000,0,0.0000
++doc-plpgsql-transactions,12,0,0.0000,12,0,0.0000,0,0.0000
++doc-plpgsql-trigger,11,0,0.0000,11,0,0.0000,0,0.0000
++doc-queries-limit,13,11,84.6154,13,11,84.6154,0,0.0000
++doc-queries-order,10,9,90.0000,10,9,90.0000,0,0.0000
++doc-queries-select-lists,14,14,100.0000,14,14,100.0000,0,0.0000
++doc-queries-table-expressions,17,8,47.0588,17,8,47.0588,0,0.0000
++doc-queries-union,16,13,81.2500,16,13,81.2500,0,0.0000
++doc-queries-values,14,12,85.7143,14,12,85.7143,0,0.0000
++doc-queries-with,19,3,15.7895,19,10,52.6316,7,36.8421
++doc-rangetypes,11,0,0.0000,11,0,0.0000,0,0.0000
++doc-rowtypes,17,4,23.5294,17,4,23.5294,0,0.0000
++doc-sql-expressions,20,2,10.0000,20,3,15.0000,1,5.0000
++doc-sql-syntax-calling-funcs,11,3,27.2727,11,3,27.2727,0,0.0000
++doc-sql-syntax-lexical,15,2,13.3333,15,3,20.0000,1,6.6667
++doc-textsearch-configuration,17,1,5.8824,17,1,5.8824,0,0.0000
++doc-textsearch-controls,18,0,0.0000,18,0,0.0000,0,0.0000
++doc-textsearch-debugging,16,0,0.0000,16,0,0.0000,0,0.0000
++doc-textsearch-dictionaries,11,0,0.0000,11,0,0.0000,0,0.0000
++doc-textsearch-features,14,0,0.0000,14,0,0.0000,0,0.0000
++doc-textsearch-indexes,15,0,0.0000,15,0,0.0000,0,0.0000
++doc-transaction-iso,16,6,37.5000,16,6,37.5000,0,0.0000
++doc-trigger-datachanges,12,0,0.0000,12,0,0.0000,0,0.0000
++doc-trigger-definition,16,0,0.0000,16,0,0.0000,0,0.0000
++doc-typeconv-func,17,4,23.5294,17,4,23.5294,0,0.0000
++doc-typeconv-oper,13,9,69.2308,13,9,69.2308,0,0.0000
++doc-typeconv-query,19,16,84.2105,19,16,84.2105,0,0.0000
++doc-typeconv-select,15,6,40.0000,15,6,40.0000,0,0.0000
++doc-typeconv-union-case,15,9,60.0000,15,9,60.0000,0,0.0000
++domain,14,0,0.0000,14,0,0.0000,0,0.0000
++driver-startup,13,9,69.2308,13,9,69.2308,0,0.0000
++drop-if-exists,16,13,81.2500,16,13,81.2500,0,0.0000
++enum,16,11,68.7500,16,11,68.7500,0,0.0000
++errors,13,8,61.5385,13,8,61.5385,0,0.0000
++explain,14,6,42.8571,14,6,42.8571,0,0.0000
++expressions,12,10,83.3333,12,10,83.3333,0,0.0000
++fast-default,15,10,66.6667,15,10,66.6667,0,0.0000
++float4,14,14,100.0000,14,14,100.0000,0,0.0000
++float8,16,15,93.7500,16,15,93.7500,0,0.0000
++foreign-key,14,10,71.4286,14,10,71.4286,0,0.0000
++functional-deps,15,5,33.3333,15,14,93.3333,9,60.0000
++generated-stored,14,6,42.8571,14,7,50.0000,1,7.1429
++generated-virtual,20,0,0.0000,20,0,0.0000,0,0.0000
++geometry,11,0,0.0000,11,0,0.0000,0,0.0000
++gin,17,1,5.8824,17,1,5.8824,0,0.0000
++gist,14,0,0.0000,14,0,0.0000,0,0.0000
++groupingsets,15,8,53.3333,15,10,66.6667,2,13.3333
++guc,19,10,52.6316,19,10,52.6316,0,0.0000
++hash-func,16,3,18.7500,16,3,18.7500,0,0.0000
++hash-index,16,0,0.0000,16,0,0.0000,0,0.0000
++horology,16,13,81.2500,16,13,81.2500,0,0.0000
++identity,19,6,31.5789,19,6,31.5789,0,0.0000
++incremental-sort,14,12,85.7143,14,13,92.8571,1,7.1429
++indexing,17,5,29.4118,17,5,29.4118,0,0.0000
++inet,17,0,0.0000,17,0,0.0000,0,0.0000
++inherit,13,0,0.0000,13,0,0.0000,0,0.0000
++insert,13,5,38.4615,13,5,38.4615,0,0.0000
++insert-conflict,15,9,60.0000,15,9,60.0000,0,0.0000
++int2,17,17,100.0000,17,17,100.0000,0,0.0000
++int4,13,13,100.0000,13,13,100.0000,0,0.0000
++int8,16,15,93.7500,16,16,100.0000,1,6.2500
++interval,11,11,100.0000,11,11,100.0000,0,0.0000
++join,15,12,80.0000,15,12,80.0000,0,0.0000
++json,13,5,38.4615,13,6,46.1538,1,7.6923
++jsonb,18,10,55.5556,18,14,77.7778,4,22.2222
++jsonb-jsonpath,14,0,0.0000,14,0,0.0000,0,0.0000
++largeobject,15,0,0.0000,15,0,0.0000,0,0.0000
++limit,14,10,71.4286,14,10,71.4286,0,0.0000
++lock,13,6,46.1538,13,6,46.1538,0,0.0000
++macaddr,12,0,0.0000,12,0,0.0000,0,0.0000
++matview,15,1,6.6667,15,8,53.3333,7,46.6667
++md5,11,9,81.8182,11,10,90.9091,1,9.0909
++merge,15,1,6.6667,15,1,6.6667,0,0.0000
++misc-functions,12,4,33.3333,12,8,66.6667,4,33.3333
++money,19,6,31.5789,19,6,31.5789,0,0.0000
++mvcc,12,9,75.0000,12,9,75.0000,0,0.0000
++name,14,13,92.8571,14,13,92.8571,0,0.0000
++namespace,13,4,30.7692,13,4,30.7692,0,0.0000
++numeric,14,13,92.8571,14,13,92.8571,0,0.0000
++numeric-big,19,18,94.7368,19,18,94.7368,0,0.0000
++numerology,16,9,56.2500,16,9,56.2500,0,0.0000
++oid,12,8,66.6667,12,8,66.6667,0,0.0000
++orm-drizzle,16,6,37.5000,16,6,37.5000,0,0.0000
++orm-node-pg,14,2,14.2857,14,2,14.2857,0,0.0000
++orm-prisma,12,10,83.3333,12,10,83.3333,0,0.0000
++orm-sqlx,15,5,33.3333,15,5,33.3333,0,0.0000
++partition-aggregate,13,0,0.0000,13,0,0.0000,0,0.0000
++partition-info,14,3,21.4286,14,3,21.4286,0,0.0000
++partition-join,15,0,0.0000,15,0,0.0000,0,0.0000
++partition-prune,13,0,0.0000,13,0,0.0000,0,0.0000
++plpgsql,16,0,0.0000,16,0,0.0000,0,0.0000
++point,14,0,0.0000,14,0,0.0000,0,0.0000
++polymorphism,16,0,0.0000,16,0,0.0000,0,0.0000
++portals,15,0,0.0000,15,0,0.0000,0,0.0000
++prepare,15,11,73.3333,15,11,73.3333,0,0.0000
++privileges,17,3,17.6471,17,4,23.5294,1,5.8824
++psql-describe,14,10,71.4286,14,10,71.4286,0,0.0000
++random,13,11,84.6154,13,12,92.3077,1,7.6923
++rangefuncs,17,2,11.7647,17,2,11.7647,0,0.0000
++rangetypes,14,0,0.0000,14,0,0.0000,0,0.0000
++regex,18,17,94.4444,18,17,94.4444,0,0.0000
++regproc,15,12,80.0000,15,12,80.0000,0,0.0000
++returning,15,3,20.0000,15,3,20.0000,0,0.0000
++rowsecurity,14,0,0.0000,14,0,0.0000,0,0.0000
++rowtypes,15,4,26.6667,15,4,26.6667,0,0.0000
++rules,11,0,0.0000,11,0,0.0000,0,0.0000
++select,14,10,71.4286,14,10,71.4286,0,0.0000
++select-distinct,17,17,100.0000,17,17,100.0000,0,0.0000
++select-distinct-on,14,13,92.8571,14,13,92.8571,0,0.0000
++select-having,13,12,92.3077,13,12,92.3077,0,0.0000
++select-implicit,17,15,88.2353,17,15,88.2353,0,0.0000
++select-into,17,1,5.8824,17,1,5.8824,0,0.0000
++sequence,14,7,50.0000,14,9,64.2857,2,14.2857
++slice-catalog-introspection,13,5,38.4615,13,7,53.8462,2,15.3846
++slice-ddl,17,15,88.2353,17,15,88.2353,0,0.0000
++slice-dml,11,9,81.8182,11,9,81.8182,0,0.0000
++slice-extended,14,0,0.0000,14,0,0.0000,0,0.0000
++slice-txn,14,9,64.2857,14,9,64.2857,0,0.0000
++slice-types-io,11,6,54.5455,11,6,54.5455,0,0.0000
++smoke,1,1,100.0000,1,1,100.0000,0,0.0000
++spgist,14,0,0.0000,14,0,0.0000,0,0.0000
++sqljson,15,0,0.0000,15,0,0.0000,0,0.0000
++sqljson-jsontable,18,0,0.0000,18,0,0.0000,0,0.0000
++sqljson-queryfuncs,15,0,0.0000,15,0,0.0000,0,0.0000
++strings,15,8,53.3333,15,9,60.0000,1,6.6667
++subselect,15,9,60.0000,15,9,60.0000,0,0.0000
++tablesample,18,0,0.0000,18,0,0.0000,0,0.0000
++temp,16,0,0.0000,16,0,0.0000,0,0.0000
++text,12,5,41.6667,12,12,100.0000,7,58.3333
++time,17,11,64.7059,17,11,64.7059,0,0.0000
++timestamp,16,14,87.5000,16,14,87.5000,0,0.0000
++timestamptz,15,11,73.3333,15,11,73.3333,0,0.0000
++timetz,16,11,68.7500,16,11,68.7500,0,0.0000
++transactions,15,11,73.3333,15,11,73.3333,0,0.0000
++triggers,18,0,0.0000,18,0,0.0000,0,0.0000
++truncate,16,9,56.2500,16,9,56.2500,0,0.0000
++tsearch,18,0,0.0000,18,0,0.0000,0,0.0000
++tstypes,13,0,0.0000,13,0,0.0000,0,0.0000
++txid,15,3,20.0000,15,3,20.0000,0,0.0000
++txn,1,0,0.0000,1,0,0.0000,0,0.0000
++unicode,11,0,0.0000,11,0,0.0000,0,0.0000
++union,15,11,73.3333,15,11,73.3333,0,0.0000
++updatable-views,20,0,0.0000,20,0,0.0000,0,0.0000
++update,15,9,60.0000,15,9,60.0000,0,0.0000
++uuid,17,15,88.2353,17,15,88.2353,0,0.0000
++varchar,15,13,86.6667,15,13,86.6667,0,0.0000
++window,14,7,50.0000,14,7,50.0000,0,0.0000
++with,16,7,43.7500,16,10,62.5000,3,18.7500
++xml,16,0,0.0000,16,0,0.0000,0,0.0000
+diff --git a/runs/review/codex-differential-summary-02.json b/runs/review/codex-differential-summary-02.json
+new file mode 100644
+index 00000000..56c558b4
+--- /dev/null
++++ b/runs/review/codex-differential-summary-02.json
+@@ -0,0 +1,2477 @@
++{
++  "baseline_counts": {
++    "PASS": 1992,
++    "BLOCKED": 152,
++    "MISMATCH": 2320,
++    "HARNESS_ERROR": 10,
++    "CRASH": 102,
++    "UNSUPPORTED": 1163,
++    "INVALID_CASE": 40,
++    "UNEXPECTED_ACCEPTANCE": 58
++  },
++  "final_counts": {
++    "PASS": 2154,
++    "BLOCKED": 152,
++    "MISMATCH": 2251,
++    "HARNESS_ERROR": 10,
++    "UNSUPPORTED": 1194,
++    "INVALID_CASE": 40,
++    "UNEXPECTED_ACCEPTANCE": 36
++  },
++  "selected": 5837,
++  "reference_valid": 5767,
++  "executed": 5635,
++  "pass_rate_selected_pct": 36.90251841699503,
++  "pass_rate_executed_pct": 38.225377107364686,
++  "priority_160_counts": {
++    "PASS": 83,
++    "UNSUPPORTED": 16,
++    "MISMATCH": 25,
++    "UNEXPECTED_ACCEPTANCE": 34,
++    "HARNESS_ERROR": 2
++  },
++  "transitions": [
++    {
++      "from": "BLOCKED",
++      "to": "BLOCKED",
++      "count": 152
++    },
++    {
++      "from": "CRASH",
++      "to": "HARNESS_ERROR",
++      "count": 2
++    },
++    {
++      "from": "CRASH",
++      "to": "MISMATCH",
++      "count": 23
++    },
++    {
++      "from": "CRASH",
++      "to": "PASS",
++      "count": 64
++    },
++    {
++      "from": "CRASH",
++      "to": "UNSUPPORTED",
++      "count": 13
++    },
++    {
++      "from": "HARNESS_ERROR",
++      "to": "HARNESS_ERROR",
++      "count": 8
++    },
++    {
++      "from": "HARNESS_ERROR",
++      "to": "PASS",
++      "count": 1
++    },
++    {
++      "from": "HARNESS_ERROR",
++      "to": "UNSUPPORTED",
++      "count": 1
++    },
++    {
++      "from": "INVALID_CASE",
++      "to": "INVALID_CASE",
++      "count": 40
++    },
++    {
++      "from": "MISMATCH",
++      "to": "MISMATCH",
++      "count": 2226
++    },
++    {
++      "from": "MISMATCH",
++      "to": "PASS",
++      "count": 78
++    },
++    {
++      "from": "MISMATCH",
++      "to": "UNEXPECTED_ACCEPTANCE",
++      "count": 2
++    },
++    {
++      "from": "MISMATCH",
++      "to": "UNSUPPORTED",
++      "count": 14
++    },
++    {
++      "from": "PASS",
++      "to": "PASS",
++      "count": 1992
++    },
++    {
++      "from": "UNEXPECTED_ACCEPTANCE",
++      "to": "MISMATCH",
++      "count": 2
++    },
++    {
++      "from": "UNEXPECTED_ACCEPTANCE",
++      "to": "PASS",
++      "count": 19
++    },
++    {
++      "from": "UNEXPECTED_ACCEPTANCE",
++      "to": "UNEXPECTED_ACCEPTANCE",
++      "count": 34
++    },
++    {
++      "from": "UNEXPECTED_ACCEPTANCE",
++      "to": "UNSUPPORTED",
++      "count": 3
++    },
++    {
++      "from": "UNSUPPORTED",
++      "to": "UNSUPPORTED",
++      "count": 1163
++    }
++  ],
++  "previous_pass_regressions": [],
++  "clusters": {
++    "MISMATCH": [
++      [
++        "result_count",
++        890
++      ],
++      [
++        "syntax error at or near \"?\"",
++        458
++      ],
++      [
++        "txn_status",
++        122
++      ],
++      [
++        "type \"?\" does not exist",
++        103
++      ],
++      [
++        "row_multiset",
++        60
++      ],
++      [
++        "value",
++        54
++      ],
++      [
++        "column \"?\" does not exist",
++        41
++      ],
++      [
++        "column_type",
++        35
++      ],
++      [
++        "column_origin",
++        32
++      ],
++      [
++        "relation \"?\" does not exist",
++        23
++      ],
++      [
++        "SELECT ... INTO is not allowed here",
++        23
++      ],
++      [
++        "notice",
++        20
++      ],
++      [
++        "permission denied for column \"?\" of relation \"?\"",
++        20
++      ],
++      [
++        "command_tag",
++        17
++      ],
++      [
++        "missing FROM-clause entry for table \"?\"",
++        16
++      ],
++      [
++        "role \"?\" does not exist",
++        12
++      ],
++      [
++        "invalid input syntax for type json",
++        12
++      ],
++      [
++        "syntax error",
++        11
++      ],
++      [
++        "column reference \"?\" is ambiguous",
++        10
++      ],
++      [
++        "cannot determine type of empty array",
++        10
++      ],
++      [
++        "unrecognized configuration parameter \"?\"",
++        9
++      ],
++      [
++        "cannot open relation \"?\"",
++        8
++      ],
++      [
++        "row_count",
++        8
++      ],
++      [
++        "password is not hashed",
++        7
++      ],
++      [
++        "column \"?\" is of type integer but expression is of type text",
++        7
++      ],
++      [
++        "null value in column \"?\" of relation \"?\" violates not-null constraint",
++        6
++      ],
++      [
++        "a column definition list is required for functions returning \"?\"",
++        6
++      ],
++      [
++        "syntax error at end of input",
++        6
++      ],
++      [
++        "UNION types text and integer cannot be matched",
++        5
++      ],
++      [
++        "invalid value for parameter \"?\": \"?\"",
++        5
++      ],
++      [
++        "subquery must return only one column",
++        5
++      ],
++      [
++        "\"?\" is not a sequence",
++        4
++      ],
++      [
++        "schema \"?\" does not exist",
++        4
++      ],
++      [
++        "invalid input syntax for type integer: \"?\"",
++        4
++      ],
++      [
++        "cannot cast type unknown to text",
++        4
++      ],
++      [
++        "UNION types integer and text cannot be matched",
++        4
++      ],
++      [
++        "ON CONFLICT DO UPDATE requires inference specification or constraint name",
++        3
++      ],
++      [
++        "unterminated quoted string at or near \"?\"",
++        3
++      ],
++      [
++        "function xmlparse(document => unknown) does not exist",
++        3
++      ],
++      [
++        "function json_arrayagg(integer) does not exist",
++        3
++      ],
++      [
++        "duplicate key value violates unique constraint \"?\"",
++        3
++      ],
++      [
++        "function int4(unknown) is not unique",
++        3
++      ],
++      [
++        "function json_exists(jsonb, unknown) does not exist",
++        3
++      ],
++      [
++        "CASE types integer and integer[] cannot be matched",
++        2
++      ],
++      [
++        "functions in index expression must be marked IMMUTABLE",
++        2
++      ],
++      [
++        "CREATE VIEW specifies more column names than columns",
++        2
++      ],
++      [
++        "conflicting or redundant options",
++        2
++      ],
++      [
++        "column \"?\" of relation \"?\" does not exist",
++        2
++      ],
++      [
++        "INSERT has more expressions than target columns",
++        2
++      ],
++      [
++        "prepared statement \"?\" already exists",
++        2
++      ],
++      [
++        "WITH TIES cannot be specified without ORDER BY clause",
++        2
++      ],
++      [
++        "\"?\" is not a table",
++        2
++      ],
++      [
++        "VALUES types integer and boolean cannot be matched",
++        2
++      ],
++      [
++        "collations are not supported by type integer",
++        2
++      ],
++      [
++        "collation \"?\" for encoding \"?\" does not exist",
++        2
++      ],
++      [
++        "INSERT has more target columns than expressions",
++        2
++      ],
++      [
++        "length for type varchar must be at least N",
++        2
++      ],
++      [
++        "NUMERIC precision N must be between N and N",
++        2
++      ],
++      [
++        "update or delete on table \"?\" violates foreign key constraint \"?\" on table \"?\"",
++        2
++      ],
++      [
++        "multiple primary keys for table \"?\" are not allowed",
++        2
++      ],
++      [
++        "no schema has been selected to create in",
++        2
++      ],
++      [
++        "arguments to GROUPING must be grouping expressions of the associated query level",
++        2
++      ],
++      [
++        "operator does not exist: text = integer",
++        2
++      ],
++      [
++        "function merge_action() does not exist",
++        2
++      ],
++      [
++        "operator does not exist: numrange + numrange",
++        2
++      ],
++      [
++        "invalid reference to FROM-clause entry for table \"?\"",
++        2
++      ],
++      [
++        "invalid input syntax for type timestamp without time zone: \"?\"",
++        2
++      ],
++      [
++        "division by zero",
++        2
++      ],
++      [
++        "must be member of role \"?\"",
++        1
++      ],
++      [
++        "value for domain zipcode violates check constraint \"?\"",
++        1
++      ],
++      [
++        "value for domain digits violates check constraint \"?\"",
++        1
++      ],
++      [
++        "value for domain pct violates check constraint \"?\"",
++        1
++      ],
++      [
++        "domain zipcode does not allow null values",
++        1
++      ],
++      [
++        "function own1(integer,integer) does not exist",
++        1
++      ],
++      [
++        "function f(integer,integer) does not exist",
++        1
++      ],
++      [
++        "invalid input syntax for type timestamp with time zone: \"?\"",
++        1
++      ],
++      [
++        "ALTER action SET UNLOGGED cannot be performed on relation \"?\"",
++        1
++      ],
++      [
++        "\"?\" is not an enum",
++        1
++      ],
++      [
++        "ALTER action ALTER COLUMN SET DEFAULT cannot be performed on relation \"?\"",
++        1
++      ],
++      [
++        "index \"?\" for table \"?\" does not exist",
++        1
++      ],
++      [
++        "must be owner of table cmd_owned_t",
++        1
++      ],
++      [
++        "START value (N) cannot be less than MINVALUE (N)",
++        1
++      ],
++      [
++        "unrecognized parameter \"?\"",
++        1
++      ],
++      [
++        "prepared statement \"?\" does not exist",
++        1
++      ],
++      [
++        "cannot drop type code_t because other objects depend on it",
++        1
++      ],
++      [
++        "box is not a domain",
++        1
++      ],
++      [
++        "index \"?\" does not exist",
++        1
++      ],
++      [
++        "sequence \"?\" does not exist",
++        1
++      ],
++      [
++        "table \"?\" does not exist",
++        1
++      ],
++      [
++        "cannot drop composite type fc because other objects depend on it",
++        1
++      ],
++      [
++        "view \"?\" does not exist",
++        1
++      ],
++      [
++        "costs requires a Boolean value",
++        1
++      ],
++      [
++        "\"?\" is not a table or materialized view",
++        1
++      ],
++      [
++        "permission denied for schema rvh_sch",
++        1
++      ],
++      [
++        "function values(integer) does not exist",
++        1
++      ],
++      [
++        "new row for relation \"?\" violates check constraint \"?\"",
++        1
++      ],
++      [
++        "column name \"?\" specified more than once",
++        1
++      ],
++      [
++        "length for type bit must be at least N",
++        1
++      ],
++      [
++        "column_typmod",
++        1
++      ],
++      [
++        "invalid internal value for enum: \"?\"",
++        1
++      ],
++      [
++        "operator does not exist: \"?\" @> \"?\"",
++        1
++      ],
++      [
++        "unsupported Unicode escape sequence",
++        1
++      ],
++      [
++        "precision for type float must be at least N bit",
++        1
++      ],
++      [
++        "operator does not exist: xid8 + integer",
++        1
++      ],
++      [
++        "operator does not exist: pg_lsn + pg_lsn",
++        1
++      ],
++      [
++        "function rlo(int4range) does not exist",
++        1
++      ],
++      [
++        "cannot cast type integer to uuid",
++        1
++      ],
++      [
++        "cannot drop table t because other objects depend on it",
++        1
++      ],
++      [
++        "both default and generation expression specified for column \"?\" of table \"?\"",
++        1
++      ],
++      [
++        "both default and identity specified for column \"?\" of table \"?\"",
++        1
++      ],
++      [
++        "invalid privilege type TEMPORARY for relation",
++        1
++      ],
++      [
++        "permission denied for schema public",
++        1
++      ],
++      [
++        "function max(\"?\") does not exist",
++        1
++      ],
++      [
++        "function range_agg(int4range) does not exist",
++        1
++      ],
++      [
++        "column_name",
++        1
++      ],
++      [
++        "operator does not exist: boolean < integer",
++        1
++      ],
++      [
++        "operator does not exist: \"?\" = \"?\"",
++        1
++      ],
++      [
++        "op ANY/ALL (array) requires array on right side",
++        1
++      ],
++      [
++        "unequal number of entries in row expressions",
++        1
++      ],
++      [
++        "operator does not exist: text < integer",
++        1
++      ],
++      [
++        "GREATEST types integer and text cannot be matched",
++        1
++      ],
++      [
++        "could not determine polymorphic type because input has type unknown",
++        1
++      ],
++      [
++        "function json_array(integer, boolean, \"?\") does not exist",
++        1
++      ],
++      [
++        "function lower(numrange) does not exist",
++        1
++      ],
++      [
++        "operator does not exist: int4range @> int4range",
++        1
++      ],
++      [
++        "function lower(int4range) does not exist",
++        1
++      ],
++      [
++        "operator does not exist: int8range << int8range",
++        1
++      ],
++      [
++        "operator does not exist: int4range + int4range",
++        1
++      ],
++      [
++        "subquery has too many columns",
++        1
++      ],
++      [
++        "frame starting from following row cannot have preceding rows",
++        1
++      ],
++      [
++        "function xmlconcat(unknown, unknown) does not exist",
++        1
++      ],
++      [
++        "operator class \"?\" does not accept data type integer",
++        1
++      ],
++      [
++        "operator class \"?\" does not exist for access method \"?\"",
++        1
++      ],
++      [
++        "functions in index predicate must be marked IMMUTABLE",
++        1
++      ],
++      [
++        "column \"?\" must appear in the GROUP BY clause or be used in an aggregate function",
++        1
++      ],
++      [
++        "could not identify an ordering operator for type json",
++        1
++      ],
++      [
++        "recursive reference to query \"?\" must not appear within its non-recursive term",
++        1
++      ],
++      [
++        "function string_agg(text) does not exist",
++        1
++      ],
++      [
++        "function float8(unknown) is not unique",
++        1
++      ],
++      [
++        "RANGE with offset PRECEDING/FOLLOWING requires exactly one ORDER BY column",
++        1
++      ],
++      [
++        "argument name \"?\" used more than once",
++        1
++      ],
++      [
++        "function substr(integer, integer) does not exist",
++        1
++      ],
++      [
++        "function vnv(integer, integer) is not unique",
++        1
++      ],
++      [
++        "operator does not exist: integer <@ unknown",
++        1
++      ],
++      [
++        "INTERSECT types text and integer cannot be matched",
++        1
++      ],
++      [
++        "UNION types integer and boolean cannot be matched",
++        1
++      ],
++      [
++        "EXCEPT types integer and text cannot be matched",
++        1
++      ],
++      [
++        "operator does not exist: text + integer",
++        1
++      ],
++      [
++        "cannot use column reference in DEFAULT expression",
++        1
++      ],
++      [
++        "generation expression is not immutable",
++        1
++      ],
++      [
++        "cannot use generated column \"?\" in column generation expression",
++        1
++      ],
++      [
++        "operator does not exist: int4range = int4range",
++        1
++      ],
++      [
++        "timestamp out of range",
++        1
++      ],
++      [
++        "conflicting NULL/NOT NULL declarations for column \"?\" of table \"?\"",
++        1
++      ],
++      [
++        "multiple identity specifications for column \"?\" of table \"?\"",
++        1
++      ],
++      [
++        "data type \"?\" has no default operator class for access method \"?\"",
++        1
++      ],
++      [
++        "column \"?\" specified in USING clause does not exist in left table",
++        1
++      ],
++      [
++        "function array_to_json(_record, boolean) does not exist",
++        1
++      ],
++      [
++        "cannot change materialized view \"?\"",
++        1
++      ],
++      [
++        "function polyf(int4range, integer, smallint) does not exist",
++        1
++      ],
++      [
++        "function range_to_mr(int4range) does not exist",
++        1
++      ],
++      [
++        "function mr_lower(int4multirange) does not exist",
++        1
++      ],
++      [
++        "function formarray(integer, integer, integer, integer, integer) does not exist",
++        1
++      ],
++      [
++        "function myleast(integer, integer, integer, integer) does not exist",
++        1
++      ],
++      [
++        "role \"?\" cannot be dropped because some objects depend on it",
++        1
++      ],
++      [
++        "function unnest(integer[], text[], numeric[]) does not exist",
++        1
++      ],
++      [
++        "column z.ord does not exist",
++        1
++      ],
++      [
++        "function range_add_bounds(int4range) does not exist",
++        1
++      ],
++      [
++        "function isempty(int4range) does not exist",
++        1
++      ],
++      [
++        "column \"?\" not found in data type record",
++        1
++      ],
++      [
++        "operator does not exist: integer < text",
++        1
++      ],
++      [
++        "MAXVALUE (N) is out of range for sequence data type smallint",
++        1
++      ],
++      [
++        "INCREMENT must not be zero",
++        1
++      ],
++      [
++        "function json_value(jsonb, unknown) does not exist",
++        1
++      ],
++      [
++        "function json_array(unknown, integer, boolean, integer[], unknown, \"?\", jsonb) does not exist",
++        1
++      ],
++      [
++        "function json_objectagg(k => integer) does not exist",
++        1
++      ],
++      [
++        "function json_scalar(unknown) does not exist",
++        1
++      ],
++      [
++        "function json_serialize(unknown) does not exist",
++        1
++      ],
++      [
++        "table name \"?\" specified more than once",
++        1
++      ],
++      [
++        "invalid input syntax for type time without time zone: \"?\"",
++        1
++      ],
++      [
++        "UNION types numeric and text cannot be matched",
++        1
++      ],
++      [
++        "UNION types integer and date cannot be matched",
++        1
++      ],
++      [
++        "UNION types boolean and text cannot be matched",
++        1
++      ],
++      [
++        "aggregate function calls cannot be nested",
++        1
++      ],
++      [
++        "window functions are not allowed in SELECT list",
++        1
++      ],
++      [
++        "function xmlparse(content => unknown) does not exist",
++        1
++      ],
++      [
++        "syntax error at or near \"?\"y\"?\"",
++        1
++      ]
++    ],
++    "CRASH": [],
++    "UNEXPECTED_ACCEPTANCE": [
++      [
++        "could not determine which collation to use for string comparison",
++        2
++      ],
++      [
++        "could not serialize access due to read/write dependencies among transactions",
++        2
++      ],
++      [
++        "syntax error at or near \"?\"",
++        2
++      ],
++      [
++        "there is no previously clustered index for table \"?\"",
++        1
++      ],
++      [
++        "column \"?\" does not exist",
++        1
++      ],
++      [
++        "cannot drop sequence vseq because other objects depend on it",
++        1
++      ],
++      [
++        "materialized view \"?\" has not been populated",
++        1
++      ],
++      [
++        "could not obtain lock on row in relation \"?\"",
++        1
++      ],
++      [
++        "collation mismatch between explicit collations \"?\" and \"?\"",
++        1
++      ],
++      [
++        "return type mismatch in function declared to return integer",
++        1
++      ],
++      [
++        "invalid value for parameter \"?\": \"?\"",
++        1
++      ],
++      [
++        "constant of the type regrole cannot be used here",
++        1
++      ],
++      [
++        "SQL functions cannot have arguments of type internal",
++        1
++      ],
++      [
++        "index row requires N bytes, maximum size is N",
++        1
++      ],
++      [
++        "cursor \"?\" has arguments",
++        1
++      ],
++      [
++        "FETCH statement cannot return multiple rows",
++        1
++      ],
++      [
++        "variable \"?\" is declared CONSTANT",
++        1
++      ],
++      [
++        "variable \"?\" must have a default value, since it's declared NOT NULL",
++        1
++      ],
++      [
++        "\"?\" is not a known variable",
++        1
++      ],
++      [
++        "syntax error at end of input",
++        1
++      ],
++      [
++        "end label \"?\" differs from block's label \"?\"",
++        1
++      ],
++      [
++        "end label \"?\" specified for unlabeled block",
++        1
++      ],
++      [
++        "unterminated /* comment at or near \"?\"",
++        1
++      ],
++      [
++        "value for domain posint violates check constraint \"?\"",
++        1
++      ],
++      [
++        "value too long for type character varying(N)",
++        1
++      ],
++      [
++        "update or delete on table \"?\" violates foreign key constraint \"?\" on table \"?\"",
++        1
++      ],
++      [
++        "cannot drop constraint articles_pkey on table articles because other objects depend on it",
++        1
++      ],
++      [
++        "cannot drop column b of table g10 because other objects depend on it",
++        1
++      ],
++      [
++        "SKIP LOCKED and WITH TIES options cannot be used together",
++        1
++      ],
++      [
++        "cannot lock rows in materialized view \"?\"",
++        1
++      ],
++      [
++        "trailing junk after numeric literal at or near \"?\"",
++        1
++      ],
++      [
++        "cannot determine result data type",
++        1
++      ],
++      [
++        "permission denied for table pv_fu_t",
++        1
++      ]
++    ],
++    "UNSUPPORTED": [
++      [
++        "CREATE TEXT SEARCH is not supported by PGArbor yet",
++        57
++      ],
++      [
++        "DO blocks (utility::exec_do) is not supported by PGArbor yet",
++        50
++      ],
++      [
++        "text search configuration lookup is not supported by PGArbor yet",
++        50
++      ],
++      [
++        "index method \"?\" is not supported by PGArbor yet",
++        39
++      ],
++      [
++        "MERGE is not supported by PGArbor yet",
++        38
++      ],
++      [
++        "CREATE AGGREGATE is not supported by PGArbor yet",
++        26
++      ],
++      [
++        "record coercion from an anonymous record value is not supported by PGArbor yet",
++        24
++      ],
++      [
++        "INHERITS is not supported by PGArbor yet",
++        22
++      ],
++      [
++        "time zone \"?\" is not supported by PGArbor yet",
++        22
++      ],
++      [
++        "CREATE COLLATION is not supported by PGArbor yet",
++        21
++      ],
++      [
++        "type point is not supported by PGArbor yet",
++        21
++      ],
++      [
++        "temporary tables is not supported by PGArbor yet",
++        21
++      ],
++      [
++        "CREATE CONVERSION is not supported by PGArbor yet",
++        20
++      ],
++      [
++        "type jsonpath is not supported by PGArbor yet",
++        20
++      ],
++      [
++        "CREATE OPERATOR FAMILY is not supported by PGArbor yet",
++        17
++      ],
++      [
++        "CREATE OPERATOR is not supported by PGArbor yet",
++        15
++      ],
++      [
++        "type macaddr is not supported by PGArbor yet",
++        15
++      ],
++      [
++        "CREATE EXTENSION is not supported by PGArbor yet",
++        14
++      ],
++      [
++        "CREATE TYPE without AS ENUM or AS (...) (range, base and shell types) is not supported by PGArbor yet",
++        14
++      ],
++      [
++        "system column \"?\" is not supported by PGArbor yet",
++        14
++      ],
++      [
++        "CREATE STATISTICS is not supported by PGArbor yet",
++        13
++      ],
++      [
++        "type cidr is not supported by PGArbor yet",
++        13
++      ],
++      [
++        "type xml is not supported by PGArbor yet",
++        13
++      ],
++      [
++        "TABLESAMPLE is not supported by PGArbor yet",
++        13
++      ],
++      [
++        "deferred constraint enforcement is not supported by PGArbor yet",
++        12
++      ],
++      [
++        "INSERT into a view is not supported by PGArbor yet",
++        12
++      ],
++      [
++        "type int4range is not supported by PGArbor yet",
++        12
++      ],
++      [
++        "DECLARE (cursors) is not supported by PGArbor yet",
++        10
++      ],
++      [
++        "COPY FROM STDIN / TO STDOUT requires a COPY channel in this session",
++        10
++      ],
++      [
++        "internal language functions is not supported by PGArbor yet",
++        10
++      ],
++      [
++        "CREATE CAST is not supported by PGArbor yet",
++        10
++      ],
++      [
++        "type inet is not supported by PGArbor yet",
++        10
++      ],
++      [
++        "JSON_TABLE is not supported by PGArbor yet",
++        10
++      ],
++      [
++        "CREATE LANGUAGE is not supported by PGArbor yet",
++        9
++      ],
++      [
++        "function lo_create is not supported by PGArbor yet",
++        9
++      ],
++      [
++        "ALTER LANGUAGE is not supported by PGArbor yet",
++        8
++      ],
++      [
++        "CREATE RULE is not supported by PGArbor yet",
++        8
++      ],
++      [
++        "function biteq is not supported by PGArbor yet",
++        8
++      ],
++      [
++        "type txid_snapshot is not supported by PGArbor yet",
++        8
++      ],
++      [
++        "CREATE EVENT TRIGGER is not supported by PGArbor yet",
++        7
++      ],
++      [
++        "CREATE ACCESS METHOD is not supported by PGArbor yet",
++        6
++      ],
++      [
++        "CREATE POLICY is not supported by PGArbor yet",
++        6
++      ],
++      [
++        "PARTITION BY is not supported by PGArbor yet",
++        6
++      ],
++      [
++        "UPDATE on a view is not supported by PGArbor yet",
++        6
++      ],
++      [
++        "SECURITY LABEL is not supported by PGArbor yet",
++        6
++      ],
++      [
++        "function convert is not supported by PGArbor yet",
++        6
++      ],
++      [
++        "ALTER MATERIALIZED VIEW is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "CREATE TABLE ... LIKE is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "function money is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "function cash_pl is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "type macaddr8 is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "row security policy enforcement is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "calling user-defined function concat_lower_or_upper is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "calling user-defined function polyf is not supported by PGArbor yet",
++        5
++      ],
++      [
++        "type bit is not supported by PGArbor yet",
++        4
++      ],
++      [
++        "ALTER DEFAULT PRIVILEGES is not supported by PGArbor yet",
++        4
++      ],
++      [
++        "ALTER MATERIALIZED VIEW ... SET is not supported by PGArbor yet",
++        4
++      ],
++      [
++        "CREATE OPERATOR CLASS is not supported by PGArbor yet",
++        4
++      ],
++      [
++        "exclusion constraints are not supported by PGArbor yet",
++        4
++      ],
++      [
++        "DROP CAST is not supported by PGArbor yet",
++        4
++      ],
++      [
++        "REINDEX with options is not supported by PGArbor yet",
++        4
++      ],
++      [
++        "function lo_from_bytea is not supported by PGArbor yet",
++        4
++      ],
++      [
++        "ALTER DATABASE SET TABLESPACE is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "cannot use subquery in CHECK constraints",
++        3
++      ],
++      [
++        "type box is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "function convert_from is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "type path is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "type polygon is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "function numeric is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "IS [NOT] JSON is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "function ts_parse is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "function cash_mul_flt8 is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "calling user-defined function rngfunct is not supported by PGArbor yet",
++        3
++      ],
++      [
++        "calling user-defined function h is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "bit string literal is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function brin_summarize_new_values is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "PRIMARY KEY USING INDEX is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function f is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "CLOSE (cursors) is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "CLUSTER with options is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "cannot use subquery in DEFAULT expressions",
++        2
++      ],
++      [
++        "TEMPORARY sequences is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "ON COMMIT is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function getfoo is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "DROP OPERATOR is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "DROP RULE is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "EXPLAIN option SERIALIZE is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "EXPLAIN option GENERIC_PLAN is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function get_product_names is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "relation sizes are not available in this session",
++        2
++      ],
++      [
++        "calling user-defined function conv_check is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "type circle is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "type line is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function cash_div_flt8 is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function cash_div_int4 is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function cash_eq is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function pg_lsn_eq is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function fa is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function ident is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function recs is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function ts_match_vq is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "type nummultirange is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "type int4multirange is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function point is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function numrange is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "function convert_to is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "type varbit is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function rngfunc is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "type numrange is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "IS [NOT] NORMALIZED is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "DELETE from a view is not supported by PGArbor yet",
++        2
++      ],
++      [
++        "calling user-defined function f3 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER AGGREGATE is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER COLLATION is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER CONVERSION is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER DOMAIN ... ADD constraint other than CHECK is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER FUNCTION ... SET ... FROM CURRENT is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function srf is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER FUNCTION ... DEPENDS ON EXTENSION is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function op_out4 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function square_root is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function sq is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function chk is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER OPERATOR is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "ALTER ROLE ... SET ... FROM CURRENT is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "CLUSTER VERBOSE is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "GRANT/REVOKE on built-in functions is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function txt is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function d2 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function ch2 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function foo is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function increment is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function rv is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function sf is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function spc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function setf is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function add is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function strict_f is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function va is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function make_temp is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "storage parameter \"?\" is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "system relation pg_catalog.pg_ts_dict: text search is unsupported is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "temporary views is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "DROP COLLATION is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function bf is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dfa is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function rc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function tx is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function is_positive is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fget is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "FETCH (cursors) is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_notification_queue_usage is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function probe_sp is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function distributors is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "SET CONSTRAINTS ... DEFERRED is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function sr_sd_fn is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function sa_sd_switch is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "SET TRANSACTION SNAPSHOT is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function cmd_set_show is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function double_append is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function functest_c_1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function functest_f_2 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function functest_a_1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function functest1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function create_and_insert is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function functest_f_1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fdiv is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function functest_srf0 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function voidtest1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function cp_testfunc1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "CREATE DATABASE is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function get_rows is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "now/today/tomorrow/yesterday datetime input without a transaction timestamp is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dep_pos is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "type lseg is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "jsonb subscripting is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function cash_div_cash is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function cash_mul_int4 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_lsn_pli is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_lsn_lt is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_lsn_mii is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_lsn_mi is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function cc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function enum_label is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function nna is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function vf is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "index key encoding of anonymous record type is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function next_code is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function is_warm is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function get_color_note is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "cannot use subquery in generated column expressions",
++        1
++      ],
++      [
++        "calling user-defined function add2 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dp_f1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function abs is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function aclexplode is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_last_wal_replay_lsn is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_filenode_relation is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "hypothetical-set aggregate over input whose WITHIN GROUP sort direction cannot be determined is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function length is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function makeaclitem is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function masklen is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "type daterange is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "type pg_mcv_list is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_mcv_list_items is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function casefold is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function to_tsquery is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function tsvector_update_trigger is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function xmltext is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function xml_is_well_formed is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function table_to_xml is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "cannot use subquery in index expressions",
++        1
++      ],
++      [
++        "calling user-defined function norm_key is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "system relation pg_catalog.pg_amop: operator class membership is not materialized is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "cannot use subquery in index predicates",
++        1
++      ],
++      [
++        "calling user-defined function simple_case is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function frag is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function div_by_name is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function merge_db is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function int_loops is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function last_before_exit is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_sum_arr is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function outer_ctx is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dup_diag is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function sign_text is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function continue_sum is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function first_pair is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function get_all_foo is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function nums_above is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function get_available_flightid is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function good_pair is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function log_if_positive is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function countdown is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function bound_by_notation is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function bound_var_declared_before is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function close_twice is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fetch_twice_grp2 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function for_bound_args_exit is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function for_over_open_bound is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function move_variants is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function no_scroll_forward_ok is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function names_in is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function drain_group is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function open_then_change_var is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function open_twice_named is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function scroll_absolute_prior is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function scroll_for_update is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function rename_group1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function col_c is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function decl_init is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function blk_defaults is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function bad_default is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function p_named is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pt_scalar is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function add_three_values is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fq is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function rec_unassigned is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function rt_fields is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_notify is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function assign_numeric_to_int is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function last_id is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function compare_ints is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function my_table_nonempty is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function assign_many is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function assign_two_cols is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function count_named is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function assign_no_rows is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function conf_err is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function lbl is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fnfound is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function logfunc1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pcf is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dyn_tbl is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function conf_var is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function stamp_user is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function util_var is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function bad_style is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_assign is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_upd_one is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_div_handler is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_exec_null is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_count_above is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_loop_found is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_diag_update is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_perform is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function get_userid is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_update_quoted is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_first is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_strict is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function f_find is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function afterblock is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fsub is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function somefunc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fcmt is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fquote is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fempty is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fparam is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fcaseid is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function ffound is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "alias on a parenthesized join is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "type tsrange is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function price is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "aggregate evaluated by an enclosing query level is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function has_ctl is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function ts_debug is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function ts_token_type is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function tsquery_phrase is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function amb is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dflt is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dom is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function ex is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function g is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function kat is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function variadic_example is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "DROP TRIGGER is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function float8send is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fs_report_guc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_set_local is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "assignment to a field or subscript of a column in INSERT is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "FULL JOIN is only supported with merge-joinable or hash-joinable join conditions",
++        1
++      ],
++      [
++        "function lo_unlink is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function pg_read_file is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "system relation pg_catalog.pg_timezone_names: timezone name table not wired (pgarbor-types timezone data) is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function cash_words is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function cash_div_int2 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function cash_mul_int2 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function fn is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function numeric_inc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_assert is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_case is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_safe_div is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_write_then_fail is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_put is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_fwd is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_odd_sum_until is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_grade is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_fail is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_check_positive is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_squares is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_probe is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_strict_one is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_strict is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pl_count_cols is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function dfunc is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function sum3 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function pv_fx is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function add_ints is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function getrngfunc5 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function getrngfunc1 is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function rngfunc_sql is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function int4range is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "cannot alter type \"?\" because column \"?\" uses it",
++        1
++      ],
++      [
++        "coercion to anonymous record without a tuple descriptor is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function make_table is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "calling user-defined function sillysrf is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "LIKE ... ESCAPE with a non-literal escape character is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function txid_snapshot_xmin is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function unicode_assigned is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function is_normalized is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function normalize is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function xmlcomment is not supported by PGArbor yet",
++        1
++      ],
++      [
++        "function xml_is_well_formed_document is not supported by PGArbor yet",
++        1
++      ]
++    ]
++  },
++  "binary_sha256": "468e2c63077d8e4222f20b5620d5a635ed87d85020168eddd6367753b73e022d",
++  "xx_errors_in_complete_transcripts": {},
++  "xx_errors_in_bridge_failures": {},
++  "process_failure_cases": [],
++  "timeout_cases": []
++}
+diff --git a/runs/review/codex-test-layers-02.json b/runs/review/codex-test-layers-02.json
+new file mode 100644
+index 00000000..215fc070
+--- /dev/null
++++ b/runs/review/codex-test-layers-02.json
+@@ -0,0 +1,394 @@
++{
++  "totals": {
++    "passed": 2476,
++    "failed": 0,
++    "ignored": 272
++  },
++  "targets": [
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor-6e50724be4dc2e13)",
++      "passed": 82,
++      "failed": 0,
++      "ignored": 54
++    },
++    {
++      "target": "Running tests/cte_scope_contract.rs (target/debug/deps/cte_scope_contract-033dda95c300012b)",
++      "passed": 7,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_branch_contract.rs (target/debug/deps/sql_branch_contract-752fe479c8bbce24)",
++      "passed": 4,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_cluster_semantics.rs (target/debug/deps/sql_cluster_semantics-9bb577d9b1783144)",
++      "passed": 14,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_compaction.rs (target/debug/deps/sql_compaction-60445c46994d14f5)",
++      "passed": 2,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_concurrency_contract.rs (target/debug/deps/sql_concurrency_contract-5806f13f6e32730d)",
++      "passed": 3,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_detach_export_handles.rs (target/debug/deps/sql_detach_export_handles-16713c1330fe310f)",
++      "passed": 3,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_fault_recovery.rs (target/debug/deps/sql_fault_recovery-8e86809617a9dba2)",
++      "passed": 4,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_file_durability.rs (target/debug/deps/sql_file_durability-6ae7c15166d377fe)",
++      "passed": 5,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_planner_targetlist.rs (target/debug/deps/sql_planner_targetlist-4ed4bb298208a2b4)",
++      "passed": 8,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_session_contract.rs (target/debug/deps/sql_session_contract-3aecb2b32873e356)",
++      "passed": 11,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_variadic_any_contract.rs (target/debug/deps/sql_variadic_any_contract-94d6f9a65064fbd6)",
++      "passed": 5,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_variadic_contract.rs (target/debug/deps/sql_variadic_contract-d5aaaaf7542e534b)",
++      "passed": 5,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_branches-3cdd5f3729316121)",
++      "passed": 100,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/br-10.rs (target/debug/deps/br_10-28dc65e13272a793)",
++      "passed": 7,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/br-11.rs (target/debug/deps/br_11-06199c324f627529)",
++      "passed": 8,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/publication_ownership.rs (target/debug/deps/publication_ownership-f3606286bc6e4bb6)",
++      "passed": 4,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_catalog-a0d54a9619553d8b)",
++      "passed": 374,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_cli-420fb09c1d393b8d)",
++      "passed": 57,
++      "failed": 0,
++      "ignored": 2
++    },
++    {
++      "target": "Running unittests src/main.rs (target/debug/deps/pgarbor-1ef52313dc16d045)",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/branch_process_e2e.rs (target/debug/deps/branch_process_e2e-8427f1684f4261c5)",
++      "passed": 5,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/cli_10.rs (target/debug/deps/cli_10-f99316880dbe8b04)",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 3
++    },
++    {
++      "target": "Running tests/cli_22.rs (target/debug/deps/cli_22-2314298489cb1280)",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 2
++    },
++    {
++      "target": "Running tests/cli_28.rs (target/debug/deps/cli_28-253a976cf1f6dcfc)",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 4
++    },
++    {
++      "target": "Running tests/process_lifecycle.rs (target/debug/deps/process_lifecycle-80b74dbb99419fac)",
++      "passed": 5,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sql_roundtrip.rs (target/debug/deps/sql_roundtrip-66fa17f7b2d08588)",
++      "passed": 7,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_common-9590c2a696fb225a)",
++      "passed": 3,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_core-d52378af3b184981)",
++      "passed": 101,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/core-07.rs (target/debug/deps/core_07-375c29cfab66fe9d)",
++      "passed": 12,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/core-09.rs (target/debug/deps/core_09-c365039dfca45dcf)",
++      "passed": 16,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_exec-37c806358928dc6f)",
++      "passed": 236,
++      "failed": 0,
++      "ignored": 75
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_fault-6900e86b6d6bf35d)",
++      "passed": 46,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/flt-08.rs (target/debug/deps/flt_08-e849a6ebcb0daa98)",
++      "passed": 7,
++      "failed": 0,
++      "ignored": 1
++    },
++    {
++      "target": "Running tests/flt-09.rs (target/debug/deps/flt_09-2e596589628bee6b)",
++      "passed": 10,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/flt-10.rs (target/debug/deps/flt_10-9a728b3acd9d4f56)",
++      "passed": 5,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_ffi-57565403e246c3f8)",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/c_smoke.rs (target/debug/deps/c_smoke-5361684bcb137e36)",
++      "passed": 1,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_plan-7dc7cdb9e37542de)",
++      "passed": 129,
++      "failed": 0,
++      "ignored": 17
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_sql-c88d92eb00126bf4)",
++      "passed": 347,
++      "failed": 0,
++      "ignored": 64
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_storage-1c8407ce45b34ab7)",
++      "passed": 167,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/export_publication.rs (target/debug/deps/export_publication-4972aeb10c819f28)",
++      "passed": 6,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/hostile_headers.rs (target/debug/deps/hostile_headers-3ef4f6187641a130)",
++      "passed": 5,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/recovery_identity.rs (target/debug/deps/recovery_identity-6e28981c0260d9d7)",
++      "passed": 2,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/sto-20.rs (target/debug/deps/sto_20-5ed62b707821e18b)",
++      "passed": 7,
++      "failed": 0,
++      "ignored": 4
++    },
++    {
++      "target": "Running tests/sto-21.rs (target/debug/deps/sto_21-884bd7d2b5669c39)",
++      "passed": 9,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_types-c6a4fa5157266cec)",
++      "passed": 588,
++      "failed": 0,
++      "ignored": 16
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_wasm-67bef96c968aeb67)",
++      "passed": 1,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running unittests src/lib.rs (target/debug/deps/pgarbor_wire-67aefa156032a150)",
++      "passed": 58,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Running tests/wir_19.rs (target/debug/deps/wir_19-e9b5af36396eb864)",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 10
++    },
++    {
++      "target": "Doc-tests pgarbor",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 2
++    },
++    {
++      "target": "Doc-tests pgarbor_branches",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 1
++    },
++    {
++      "target": "Doc-tests pgarbor_catalog",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 2
++    },
++    {
++      "target": "Doc-tests pgarbor_cli",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Doc-tests pgarbor_common",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Doc-tests pgarbor_core",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 1
++    },
++    {
++      "target": "Doc-tests pgarbor_exec",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 1
++    },
++    {
++      "target": "Doc-tests pgarbor_fault",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 1
++    },
++    {
++      "target": "Doc-tests pgarbor_ffi",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Doc-tests pgarbor_plan",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Doc-tests pgarbor_sql",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Doc-tests pgarbor_storage",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 3
++    },
++    {
++      "target": "Doc-tests pgarbor_types",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 6
++    },
++    {
++      "target": "Doc-tests pgarbor_wasm",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 0
++    },
++    {
++      "target": "Doc-tests pgarbor_wire",
++      "passed": 0,
++      "failed": 0,
++      "ignored": 3
++    }
++  ],
++  "method": "Only summaries with zero filtered tests are counted; subprocess helper runs with filters are excluded."
++}
+diff --git a/runs/review/analyze_embedded_02.py b/runs/review/analyze_embedded_02.py
+new file mode 100644
+index 00000000..7ecb439b
+--- /dev/null
++++ b/runs/review/analyze_embedded_02.py
+@@ -0,0 +1,62 @@
++"""Summarize full campaigns without changing raw results, cases, references, or policy."""
++import csv, hashlib, json
++from collections import Counter, defaultdict
++from pathlib import Path
++root=Path(__file__).resolve().parents[2]
++review=root/'runs/review'
++old=[json.loads(l) for l in (review/'embedded-final-01/results-verified.jsonl').read_text().splitlines()]
++new=[json.loads(l) for l in (review/'embedded-final-02/results.jsonl').read_text().splitlines()]
++assert len(new)==5837 and len({r['case_id'] for r in new})==5837
++assert {r['case_id'] for r in old}=={r['case_id'] for r in new}
++by_old={r['case_id']:r for r in old}
++by_family=defaultdict(lambda: [Counter(),Counter()])
++for i,rows in enumerate([old,new]):
++ for r in rows:
++  by_family[r['family']][i].update({'selected':1,r['outcome']:1})
++fields=['family','selected_01','pass_01','pass_rate_01_pct','selected_02','pass_02','pass_rate_02_pct','pass_delta','rate_delta_pp']
++with (review/'codex-differential-by-family-02.csv').open('w') as f:
++ w=csv.writer(f);w.writerow(fields)
++ for family,(a,b) in sorted(by_family.items()):
++  pa=100*a['PASS']/a['selected'];pb=100*b['PASS']/b['selected']
++  w.writerow([family,a['selected'],a['PASS'],f'{pa:.4f}',b['selected'],b['PASS'],f'{pb:.4f}',b['PASS']-a['PASS'],f'{pb-pa:.4f}'])
++transitions=Counter((by_old[r['case_id']]['outcome'],r['outcome']) for r in new)
++regressions=[r['case_id'] for r in new if by_old[r['case_id']]['outcome']=='PASS' and r['outcome']!='PASS']
++clusters={}
++for outcome in ['MISMATCH','CRASH','UNEXPECTED_ACCEPTANCE','UNSUPPORTED']:
++ c=Counter()
++ for r in new:
++  if r['outcome']!=outcome:continue
++  sig=r.get('signature') or {};key=sig.get('message_template') or sig.get('diff_kind') or r['reason']
++  c[key]+=1
++ clusters[outcome]=c.most_common()
++old_priority={r['case_id'] for r in old if r['outcome'] in ('CRASH','UNEXPECTED_ACCEPTANCE')}
++metrics={
++ 'baseline_counts':dict(Counter(r['outcome'] for r in old)),
++ 'final_counts':dict(Counter(r['outcome'] for r in new)),
++ 'selected':len(new),'reference_valid':sum(r['reference_valid'] for r in new),
++ 'executed':sum(r['executed'] for r in new),
++ 'pass_rate_selected_pct':100*sum(r['outcome']=='PASS' for r in new)/len(new),
++ 'pass_rate_executed_pct':100*sum(r['outcome']=='PASS' for r in new)/sum(r['executed'] for r in new),
++ 'priority_160_counts':dict(Counter(r['outcome'] for r in new if r['case_id'] in old_priority)),
++ 'transitions':[{'from':a,'to':b,'count':n} for (a,b),n in sorted(transitions.items())],
++ 'previous_pass_regressions':regressions,'clusters':clusters,
++ 'binary_sha256':json.load((review/'embedded-final-02/summary.json').open())['binary_sha256'],
++}
++# The outcome classifier alone does not cover bridge errors. Count both explicitly.
++internal=Counter(); bridge_internal=Counter()
++for record in new:
++ path=review/'embedded-final-02/transcripts'/(record['case_id']+'.json')
++ if path.exists():
++  transcript=json.load(path.open())
++  for step in transcript['setup']+transcript['steps']:
++   for result in step.get('results',[]):
++    error=result.get('error') or {}
++    if error.get('sqlstate','').startswith('XX'):internal[error['sqlstate']]+=1
++ error=record.get('bridge_error')
++ if isinstance(error,dict) and error.get('sqlstate','').startswith('XX'):bridge_internal[error['sqlstate']]+=1
++metrics['xx_errors_in_complete_transcripts']=dict(internal)
++metrics['xx_errors_in_bridge_failures']=dict(bridge_internal)
++metrics['process_failure_cases']=[r['case_id'] for r in new if r.get('reason','').startswith('embedded_exit:')]
++metrics['timeout_cases']=[r['case_id'] for r in new if r['outcome']=='HANG']
++(review/'codex-differential-summary-02.json').write_text(json.dumps(metrics,indent=2)+'\n')
++print(json.dumps({k:v for k,v in metrics.items() if k not in ('transitions','clusters')},indent=2))
+diff --git a/runs/review/rerun_clusters_02.py b/runs/review/rerun_clusters_02.py
+new file mode 100644
+index 00000000..1753b510
+--- /dev/null
++++ b/runs/review/rerun_clusters_02.py
+@@ -0,0 +1,17 @@
++"""Recheck the 01 CRASH/UNEXPECTED_ACCEPTANCE cases using the unchanged embedded runner."""
++import json
++from collections import Counter
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++from pgarbor_harness.cases.loader import load_corpus
++from pgarbor_harness.runner.embedded import run_case
++root=Path(__file__).resolve().parents[2]
++old=[json.loads(l) for l in (root/'runs/review/embedded-final-01/results-verified.jsonl').read_text().splitlines()]
++ids={r['case_id'] for r in old if r['outcome'] in ('CRASH','UNEXPECTED_ACCEPTANCE')}
++out=root/'runs/review/embedded-clusters-02'
++for name in ('transcripts','errors'): (out/name).mkdir(parents=True,exist_ok=True)
++cases=[c for c in load_corpus(root/'tests/cases',root).cases if c.id in ids]
++with ThreadPoolExecutor(max_workers=4) as pool:
++ results=list(pool.map(lambda c: run_case(c,root/'target/debug/examples/embedded_case',root,out,20),cases))
++(out/'results.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in results))
++print(Counter(r['outcome'] for r in results))
+diff --git a/runs/review/prepare_patches_02.py b/runs/review/prepare_patches_02.py
+new file mode 100644
+index 00000000..1c358544
+--- /dev/null
++++ b/runs/review/prepare_patches_02.py
+@@ -0,0 +1,53 @@
++"""Write reviewable logical patches; never writes the Git index."""
++from pathlib import Path
++import hashlib,json,subprocess
++root=Path(__file__).resolve().parents[2]
++out=root/'runs/review/patches-02';out.mkdir(exist_ok=True)
++def files(crate,names): return [f'crates/{crate}/src/{n}.rs' for n in names.split()]
++groups=[
++ ('fix(sql): enforce PostgreSQL grammar and bind variadic builtin calls',
++  files('pgarbor-sql','lib parser strict_check syntax_error binder/expr_func')+files('pgarbor-exec','eval_call')+files('pgarbor-plan','simplify')+['crates/pgarbor/tests/sql_variadic_any_contract.rs','crates/pgarbor/tests/sql_variadic_contract.rs']),
++ ('fix(plan): preserve aggregate and join slots across query boundaries',
++  files('pgarbor-plan','agg build context cte join planner setrefs sort_limit')+files('pgarbor-sql','binder/expr_agg deparse/query')+['crates/pgarbor/tests/sql_planner_targetlist.rs','contracts/amendments/pgarbor-plan-04-query-level-parentage.md']),
++ ('fix(exec): lower ALTER USING expressions and rebind typed defaults',
++  files('pgarbor-exec','ddl_followup tabledesc')),
++ ('fix(exec): stream recursive CTEs and invalidate changed working tables',
++  files('pgarbor-exec','node_cte runtime')+['crates/pgarbor/tests/cte_scope_contract.rs','contracts/amendments/pgarbor-exec-09-recursive-cte-streaming.md']),
++ ('fix(exec): evaluate scalar expressions containing set-returning calls',
++  files('pgarbor-exec','node_func')),
++ ('fix(catalog): retain dependencies and reject invalid utility settings',
++  files('pgarbor-catalog','ddl/comment ddl/grant ddl/typedef ddl/alter_table')+files('pgarbor-sql','binder/ddl_function binder/ddl_index binder/ddl_view binder/from binder/utility')+
++  files('pgarbor-exec','context ddl_alter exec_session session_fns utility')+files('pgarbor','guc')+
++  ['crates/pgarbor/tests/sql_session_contract.rs','contracts/amendments/pgarbor-catalog-08-domain-container-validation.md','contracts/amendments/pgarbor-exec-08-guc-validation.md']),
++ ('fix(types): preserve OID representations and reject missing record descriptors',
++  files('pgarbor-types','cast/apply agg/ordered_set record')+files('pgarbor-exec','eval eval_cast')),
++ ('fix(api): report PostgreSQL session and materialized-view completion tags',
++  files('pgarbor','run_stmt')+files('pgarbor-exec','ddl_objects')),
++ ('test: record embedded review 02 and semantic regression coverage',
++  ['crates/pgarbor/tests/sql_cluster_semantics.rs','STATUS.md','runs/review/codex-final-02.md','runs/review/codex-change-audit-02.json','runs/review/codex-differential-by-family-02.csv','runs/review/codex-differential-summary-02.json','runs/review/codex-test-layers-02.json','runs/review/analyze_embedded_02.py','runs/review/rerun_clusters_02.py','runs/review/prepare_patches_02.py']),
++]
++commits=[]
++seen=set()
++for i,(message,paths) in enumerate(groups,1):
++ patch=b''
++ for name in paths:
++  assert name not in seen,name
++  seen.add(name)
++  if not (root/name).exists(): raise SystemExit('Missing deliverable: '+name)
++  tracked=subprocess.run(['git','-c','core.fsmonitor=false','ls-files','--error-unmatch','--',name],cwd=root,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
++  args=['git','-c','core.fsmonitor=false','diff','--no-ext-diff','--no-textconv','--src-prefix=a/','--dst-prefix=b/']
++  args+=['HEAD','--',name] if tracked else ['--no-index','--','/dev/null',name]
++  result=subprocess.run(args,cwd=root,capture_output=True)
++  assert result.returncode in (0,1),result.stderr
++  patch+=result.stdout
++ patch_name=f'{i:02d}.patch'
++ (out/patch_name).write_bytes(patch)
++ commits.append({'message':message+'\n\nCo-Authored-By: OpenAI Codex <noreply@openai.com>','files':paths,'patch':patch_name,'sha256':hashlib.sha256(patch).hexdigest()})
++changed=subprocess.check_output(['git','-c','core.fsmonitor=false','diff','HEAD','--name-only','--','crates','contracts','STATUS.md'],cwd=root,text=True).splitlines()
++assert set(changed)<=seen,set(changed)-seen
++manifest={'base':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
++ 'git_read_only':True,'instructions':'The working tree already contains these changes: stage each listed file group and commit in order, using the complete message including its final Co-Authored-By trailer. Patches are recovery/review artifacts relative to the listed base; do not apply them over the modified working tree. The shared regression target is in the final group. No commits or index writes were attempted.',
++ 'inherited_snapshot':'inherited.patch (audit backup only; includes rejected changes; do not apply)',
++ 'commits':commits}
++(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
++print('Wrote',len(commits),'logical patch groups covering',len(seen),'files')

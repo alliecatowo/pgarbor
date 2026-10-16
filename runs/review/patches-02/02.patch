@@ -1,0 +1,568 @@
+diff --git a/crates/pgarbor-plan/src/agg.rs b/crates/pgarbor-plan/src/agg.rs
+index d7e16f2f..d0715bde 100644
+--- a/crates/pgarbor-plan/src/agg.rs
++++ b/crates/pgarbor-plan/src/agg.rs
+@@ -89,6 +89,36 @@ pub fn build_aggregate(st: &mut PlannerState, input: LogicalPlan, sel: &BoundSel
+     }
+     let aggrefs = collect_aggrefs(&exprs)?;
+ 
++    // Columns referenced outside aggregates that are not grouping expressions were accepted by the
++    // binder because they are functionally dependent on the grouping columns (primary key). PG
++    // carries them through the Agg node; here they become extra grouping keys, which yields the
++    // same value (one distinct value per group). Binder validation requires the determining
++    // primary key in every grouping set, so dependent columns belong to every set as well.
++    let mut grouping_sets = sel.group_by.sets.clone();
++    {
++        let mut extra: Vec<BoundExpr> = Vec::new();
++        for e in &exprs {
++            let root: &BoundExpr = e;
++            root.walk(&mut |n: &BoundExpr| {
++                if matches!(n.kind, ExprKind::Aggref(_)) || group_exprs.contains(n) {
++                    return false;
++                }
++                if let ExprKind::Column(c) = &n.kind {
++                    if c.levels_up == 0 && !extra.contains(n) {
++                        extra.push(n.clone());
++                    }
++                }
++                true
++            });
++        }
++        if let Some(sets) = &mut grouping_sets {
++            for set in sets {
++                set.extend(group_exprs.len()..group_exprs.len() + extra.len());
++            }
++        }
++        group_exprs.extend(extra);
++    }
++
+     // HAVING: split into conjuncts and move the aggregate-free ones below the aggregate.
+     let plain_group = sel.group_by.sets.is_none();
+     let having_conjuncts: Vec<BoundExpr> = match &sel.having {
+@@ -140,7 +170,7 @@ pub fn build_aggregate(st: &mut PlannerState, input: LogicalPlan, sel: &BoundSel
+     let agg = LogicalAggregate {
+         input,
+         group_exprs,
+-        grouping_sets: sel.group_by.sets.clone(),
++        grouping_sets,
+         aggrefs,
+         having,
+     };
+diff --git a/crates/pgarbor-plan/src/build.rs b/crates/pgarbor-plan/src/build.rs
+index b2276552..373bcb47 100644
+--- a/crates/pgarbor-plan/src/build.rs
++++ b/crates/pgarbor-plan/src/build.rs
+@@ -97,21 +97,105 @@ pub fn build_query(st: &mut PlannerState, q: &BoundQuery) -> Result<LogicalPlan>
+ pub fn build_select(st: &mut PlannerState, sel: &BoundSelect, q: &BoundQuery) -> Result<LogicalPlan> {
+     let with_rowid = rowid_range_indexes(sel, q);
+     let mut plan = build_from_clause(st, sel, &with_rowid)?;
++    add_table_identity(&mut plan, sel)?;
+     if let Some(where_expr) = &sel.where_ {
+         let quals = simplify::simplify_quals(st, simplify::split_conjuncts(where_expr.clone()))?;
+         if !quals.is_empty() {
+             plan = pushdown::push_down_quals(st, plan, quals)?;
+         }
+     }
+-    if sel.has_aggs || sel.having.is_some() || !sel.group_by.exprs.is_empty() || sel.group_by.sets.is_some() {
+-        plan = agg::build_aggregate(st, plan, sel)?;
+-    }
+-    if !sel.windows.is_empty() {
+-        plan = window::build_windows(st, plan, sel)?;
++    let grouped = sel.has_aggs || sel.having.is_some() || !sel.group_by.exprs.is_empty() || sel.group_by.sets.is_some();
++    if grouped || !sel.windows.is_empty() {
++        // Aggregate and window calls are collected from the target list and matched structurally
++        // against the final projection, so both must see the same (simplified) expressions.
++        let simplified = simplify_select_exprs(st, sel)?;
++        let sel = &simplified;
++        if grouped {
++            plan = agg::build_aggregate(st, plan, sel)?;
++        }
++        if !sel.windows.is_empty() {
++            plan = window::build_windows(st, plan, sel)?;
++        }
++        return project_targets(st, plan, sel);
+     }
+     project_targets(st, plan, sel)
+ }
+ 
++/// Every expression slot of `sel` that `resolve_tableoid` rewrites.
++fn select_exprs(sel: &BoundSelect) -> Vec<&BoundExpr> {
++    fn from_quals<'a>(item: &'a FromItem, out: &mut Vec<&'a BoundExpr>) {
++        if let FromItem::Join(j) = item {
++            if let Some(on) = &j.quals {
++                out.push(on);
++            }
++            from_quals(&j.left, out);
++            from_quals(&j.right, out);
++        }
++    }
++    let mut out: Vec<&BoundExpr> = sel.target_list.iter().map(|t| &t.expr).collect();
++    out.extend(sel.where_.iter());
++    out.extend(sel.having.iter());
++    for w in &sel.windows {
++        out.extend(w.partition_by.iter());
++        out.extend(w.order_by.iter().map(|k| &k.expr));
++    }
++    for item in &sel.from {
++        from_quals(item, &mut out);
++    }
++    out
++}
++
++/// Carry table identity through joins as a real slot, so outer joins null-extend it too.
++/// Whole-row references use the same slot to distinguish an absent tuple from an all-NULL tuple.
++fn add_table_identity(plan: &mut LogicalPlan, sel: &BoundSelect) -> Result<()> {
++    match &mut plan.node {
++        LogicalNode::Scan(scan) => {
++            if !matches!(scan.source, ScanSource::Table { is_virtual: false, .. }) {
++                return Ok(());
++            }
++            let rt = scan.rt_index;
++            let needed = select_exprs(sel).into_iter().any(|e| e.any(&mut |n| {
++                matches!(&n.kind, ExprKind::Column(c) if c.levels_up == 0 && c.rt_index == rt && matches!(c.attnum, 0 | -6))
++            }));
++            if needed {
++                if scan.with_rowid {
++                    return Err(PgError::unimplemented("PLN-01", "whole-row/tableoid references with row locking"));
++                }
++                plan.vars.push(BoundExpr::column(0, rt, -6, TypeId::OID));
++                plan.out.push(OutCol { name: "tableoid".into(), ty: TypeId::OID });
++            }
++        }
++        LogicalNode::Join(j) => {
++            add_table_identity(&mut j.left, sel)?;
++            add_table_identity(&mut j.right, sel)?;
++            plan.vars = j.left.vars.iter().chain(&j.right.vars).cloned().collect();
++            plan.out = j.left.out.iter().chain(&j.right.out).cloned().collect();
++        }
++        _ => {}
++    }
++    Ok(())
++}
++
++/// Copy of `sel` whose target list, HAVING and window expressions are constant-folded.
++fn simplify_select_exprs(st: &mut PlannerState, sel: &BoundSelect) -> Result<BoundSelect> {
++    let mut out = sel.clone();
++    for t in out.target_list.iter_mut() {
++        t.expr = simplify::simplify_expr(st, t.expr.clone())?;
++    }
++    if let Some(h) = out.having.take() {
++        out.having = Some(simplify::simplify_expr(st, h)?);
++    }
++    for w in out.windows.iter_mut() {
++        for e in w.partition_by.iter_mut() {
++            *e = simplify::simplify_expr(st, e.clone())?;
++        }
++        for k in w.order_by.iter_mut() {
++            k.expr = simplify::simplify_expr(st, k.expr.clone())?;
++        }
++    }
++    Ok(out)
++}
++
+ /// Leaf scan for range entry `rt_index` (1-based) of `sel.range_table`.
+ pub fn build_range_scan(st: &mut PlannerState, entries: &[RangeEntry], rt_index: u32, with_rowid: bool) -> Result<LogicalScan> {
+     let entry = entry_at(entries, rt_index)?;
+diff --git a/crates/pgarbor-plan/src/context.rs b/crates/pgarbor-plan/src/context.rs
+index 0b8a0c07..48c51a36 100644
+--- a/crates/pgarbor-plan/src/context.rs
++++ b/crates/pgarbor-plan/src/context.rs
+@@ -89,6 +89,8 @@ pub struct PlannerState<'a> {
+     /// Range table names of EVERY query level seen so far, indexed by level id (never popped):
+     /// (alias, column names by attnum-1). Registered by `build::build_query` via [`PlannerState::enter_level`].
+     pub range_names: Vec<Vec<(String, Vec<String>)>>,
++    /// Parent query level for resolving correlated references across derived-table boundaries.
++    pub level_parents: Vec<Option<u32>>,
+     /// Level ids of the query blocks currently being built (innermost last).
+     pub level_stack: Vec<u32>,
+     /// Level id stamped on nodes created by [`PlannerState::new_node`]; `planner::plan_logical` sets it to
+@@ -110,6 +112,7 @@ impl<'a> PlannerState<'a> {
+             dep_types: Vec::new(),
+             dep_functions: Vec::new(),
+             range_names: Vec::new(),
++            level_parents: Vec::new(),
+             level_stack: Vec::new(),
+             cur_level: 0,
+             scratch: HashMap::new(),
+@@ -120,6 +123,7 @@ impl<'a> PlannerState<'a> {
+     pub fn enter_level(&mut self, names: Vec<(String, Vec<String>)>) -> u32 {
+         let id = self.range_names.len() as u32;
+         self.range_names.push(names);
++        self.level_parents.push(self.level_stack.last().copied());
+         self.level_cte_scopes.push(self.cte_scopes.clone());
+         self.level_stack.push(id);
+         id
+diff --git a/crates/pgarbor-plan/src/cte.rs b/crates/pgarbor-plan/src/cte.rs
+index e683dd7c..7aa05ce7 100644
+--- a/crates/pgarbor-plan/src/cte.rs
++++ b/crates/pgarbor-plan/src/cte.rs
+@@ -483,10 +483,10 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn scope_keys_are_bounded() {
+-        assert!(scope_key(0).is_ok());
+-        assert!(scope_key(31).is_ok());
+-        assert!(scope_key(32).is_err());
++    fn rank_handles_more_than_thirty_two_scopes() {
++        // CTE scope snapshots replaced the old fixed 32-key scratch map.
++        let decisions = vec![Decision::Materialize; 64];
++        assert_eq!(rank_before(&decisions, 64).expect("rank"), 64);
+     }
+ 
+     #[test]
+diff --git a/crates/pgarbor-plan/src/join.rs b/crates/pgarbor-plan/src/join.rs
+index 63e319f1..b515687f 100644
+--- a/crates/pgarbor-plan/src/join.rs
++++ b/crates/pgarbor-plan/src/join.rs
+@@ -175,6 +175,9 @@ pub fn extract_equi_keys(st: &PlannerState, quals: &[BoundExpr], left_rels: &[u3
+ 
+ /// Physical plan of a logical join (module docs step 1-5).
+ pub fn plan_join(st: &mut PlannerState, j: &LogicalJoin) -> Result<PlanNode> {
++    let mut lowered = j.clone();
++    lowered.quals = crate::subplan::process_sublinks_in(st, lowered.quals)?;
++    let j = &lowered;
+     if j.lateral {
+         return plan_lateral_join(st, j);
+     }
+@@ -668,11 +671,7 @@ fn plan_lateral_join(st: &mut PlannerState, j: &LogicalJoin) -> Result<PlanNode>
+     let left = planner::plan_logical(st, &j.left)?;
+     let mut right = planner::plan_logical(st, &j.right)?;
+     let mut params: Vec<(ColumnRef, TypeId)> = Vec::new();
+-    {
+-        let left_rels: &[u32] = &j.left.rels;
+-        let mut rewrite = |x: BoundExpr| -> Result<BoundExpr> { Ok(lateral_rewrite(x, left_rels, &mut params)) };
+-        map_exprs_in_node(&mut right, &mut rewrite)?;
+-    }
++    rewrite_lateral_tree(&mut right, j.right.level, &st.level_parents, &j.left.rels, &mut params)?;
+     let param_exprs: Vec<BoundExpr> = params
+         .iter()
+         .map(|(c, ty)| BoundExpr::new(ExprKind::Column(*c), *ty))
+@@ -684,6 +683,32 @@ fn plan_lateral_join(st: &mut PlannerState, j: &LogicalJoin) -> Result<PlanNode>
+     Ok(node)
+ }
+ 
++/// A derived table starts a query level: its local Column(0, ...) variables must remain local.
++/// Only references to the owning FROM level are parameters of this nested loop.
++fn rewrite_lateral_tree(node: &mut PlanNode, owner: u32, parents: &[Option<u32>], rels: &[u32], params: &mut Vec<(ColumnRef, TypeId)>) -> Result<()> {
++    let level = node.level;
++    {
++        let mut rewrite = |x: BoundExpr| -> Result<BoundExpr> {
++            match &x.kind {
++                ExprKind::Column(c) if column_owner(level, c.levels_up, parents) == Some(owner) && rels.contains(&c.rt_index) => {
++                    let local = BoundExpr::new(ExprKind::Column(ColumnRef { levels_up: 0, ..*c }), x.ty);
++                    Ok(lateral_rewrite(local, rels, params))
++                }
++                _ => Ok(x),
++            }
++        };
++        for v in &mut node.vars { map_in_place(v, &mut rewrite)?; }
++        map_kind_exprs(&mut node.kind, &mut rewrite)?;
++    }
++    for c in node.children_mut() { rewrite_lateral_tree(c, owner, parents, rels, params)?; }
++    Ok(())
++}
++
++fn column_owner(mut level: u32, levels_up: u32, parents: &[Option<u32>]) -> Option<u32> {
++    for _ in 0..levels_up { level = parents.get(level as usize).copied().flatten()?; }
++    Some(level)
++}
++
+ /// Rewrite one outer column reference of a LATERAL right side into `OuterRef`, registering it as a
+ /// parameter (deduplicated by column).
+ fn lateral_rewrite(x: BoundExpr, left_rels: &[u32], params: &mut Vec<(ColumnRef, TypeId)>) -> BoundExpr {
+diff --git a/crates/pgarbor-plan/src/planner.rs b/crates/pgarbor-plan/src/planner.rs
+index c020bcab..ecd92d72 100644
+--- a/crates/pgarbor-plan/src/planner.rs
++++ b/crates/pgarbor-plan/src/planner.rs
+@@ -135,7 +135,13 @@ pub fn plan_project(st: &mut PlannerState, p: &LogicalProject) -> Result<PlanNod
+     let child = plan_logical(st, &p.input)?;
+     let mut simplified = Vec::with_capacity(p.exprs.len());
+     for e in &p.exprs {
+-        simplified.push(simplify::simplify_expr(st, e.clone())?);
++        // Junk-column removal and other upper projections reuse computed expressions. In
++        // particular, do not plan a second SubLink above a projection that consumed its inputs.
++        if let Some(slot) = child.vars.iter().position(|v| v == e) {
++            simplified.push(BoundExpr::input_ref(slot as u32, e.ty));
++        } else {
++            simplified.push(simplify::simplify_expr(st, e.clone())?);
++        }
+     }
+     let exprs = subplan::process_sublinks_in(st, simplified)?;
+     // Output names are fixed by the caller (`set_names`); the types are the expression types.
+@@ -288,8 +294,19 @@ fn plan_scan(st: &mut PlannerState, lp: &LogicalPlan, scan: &LogicalScan) -> Res
+             let mut node = index::choose_scan(st, &scan_with_quals, None, false)?;
+             // The scan's layout is the table row (bind-time `Column`s of the range entry) plus the
+             // trailing rowid slot when requested. The planner owns this layout (setrefs matches it).
+-            node.vars = lp.vars.clone();
+-            node.out = lp.out.clone();
++            let identity = lp.vars.last().is_some_and(|e| matches!(&e.kind, ExprKind::Column(c) if c.attnum == -6));
++            let width = lp.vars.len() - usize::from(identity);
++            node.vars = lp.vars[..width].to_vec();
++            node.out = lp.out[..width].to_vec();
++            if identity {
++                let mut exprs = node.vars.clone();
++                exprs.push(BoundExpr::constant(pgarbor_types::Datum::Oid(table.oid), TypeId::OID));
++                let est = node.est;
++                let mut projected = st.new_node(NodeKind::Project(Box::new(ProjectNode { input: node, exprs })), lp.out.clone());
++                projected.vars = lp.vars.clone();
++                projected.est = est;
++                node = projected;
++            }
+             if scan.with_rowid {
+                 node.vars.push(BoundExpr::column(0, scan.rt_index, CTID_ATTNUM, TypeId::INT8));
+                 node.out.push(OutCol { name: "ctid".to_string(), ty: TypeId::INT8 });
+diff --git a/crates/pgarbor-plan/src/setrefs.rs b/crates/pgarbor-plan/src/setrefs.rs
+index cae7326d..210601c9 100644
+--- a/crates/pgarbor-plan/src/setrefs.rs
++++ b/crates/pgarbor-plan/src/setrefs.rs
+@@ -51,7 +51,7 @@
+ //! Postconditions asserted in debug builds: no `Column`/`SubLink`/`Aggref`/`WindowFunc` anywhere in
+ //! `Plan` (use `BoundExpr::any`); `Grouping` only with `mask_slot: Some`.
+ use pgarbor_common::{Oid, PgError, Result, SqlState};
+-use pgarbor_sql::ir::{BoundExpr, ColumnRef, ExprKind, FrameBound, GroupingExpr, RowExpr};
++use pgarbor_sql::ir::{BoundExpr, CaseArm, CaseExpr, ColumnRef, ExprKind, FrameBound, GroupingExpr, NullTest, RowExpr};
+ use pgarbor_types::{Datum, TypeId};
+ 
+ use crate::plan::{
+@@ -140,7 +140,9 @@ impl ScanInfo {
+         let mut names = Vec::with_capacity(self.cols.len());
+         for (i, col) in self.cols.iter().enumerate() {
+             if col.ty.oid == 0 {
+-                // dropped column: TypeId::of(0) by the TableRef convention
++                // Composite Datum fields keep physical attribute positions, including dropped slots.
++                args.push(BoundExpr::null(TypeId::TEXT));
++                names.push(col.name.clone());
+                 continue;
+             }
+             args.push(BoundExpr::input_ref(i as u32, col.ty));
+@@ -313,9 +315,56 @@ fn resolve_column(c: ColumnRef, ty: TypeId, ctx: &Ctx<'_>) -> Result<BoundExpr>
+             }
+         }
+     }
++    if c.levels_up == 0 && c.attnum == 0 {
++        if let Some(row) = whole_row_from_sides(c, ty, ctx) {
++            return Ok(row);
++        }
++    }
+     Err(PgError::internal("variable not found in subplan target list"))
+ }
+ 
++/// Whole-row reference above the scan: `ROW(col1, ..)` over the slots of the row source that
++/// produce `Column{rt_index, 1..n}` (PG expands whole-row vars into a `RowExpr` of the base vars
++/// during planning). Dropped columns (type oid 0) are skipped. `None` if no column of the
++/// range entry is present.
++fn whole_row_from_sides(c: ColumnRef, ty: TypeId, ctx: &Ctx<'_>) -> Option<BoundExpr> {
++    let mut cols: Vec<(i16, u32, TypeId)> = Vec::new();
++    let mut identity = None;
++    for side in &ctx.sides {
++        for (i, v) in side.vars.iter().enumerate() {
++            if let ExprKind::Column(vc) = &v.kind {
++                if vc.levels_up == 0 && vc.rt_index == c.rt_index && vc.attnum == -6 {
++                    identity = Some(BoundExpr::input_ref(side.offset + i as u32, v.ty));
++                }
++                if vc.levels_up == 0 && vc.rt_index == c.rt_index && vc.attnum > 0 {
++                    cols.push((vc.attnum, side.offset + i as u32, v.ty));
++                }
++            }
++        }
++    }
++    if cols.is_empty() && identity.is_none() {
++        return None;
++    }
++    cols.sort_by_key(|(attnum, _, _)| *attnum);
++    cols.dedup_by_key(|(attnum, _, _)| *attnum);
++    let args: Vec<BoundExpr> = cols.iter().map(|(_, slot, cty)| {
++        if cty.oid == 0 { BoundExpr::null(TypeId::TEXT) } else { BoundExpr::input_ref(*slot, *cty) }
++    }).collect();
++    let names: Vec<String> = (1..=args.len()).map(|i| format!("f{i}")).collect();
++    let row = BoundExpr::new(ExprKind::Row(Box::new(RowExpr { args, names })), ty);
++    Some(match identity {
++        Some(arg) => BoundExpr::new(ExprKind::Case(Box::new(CaseExpr {
++            arg: None,
++            arms: vec![CaseArm {
++                cond: BoundExpr::new(ExprKind::NullTest(Box::new(NullTest { arg, is_null: true, row_semantics: false })), TypeId::BOOL),
++                result: BoundExpr::null(ty),
++            }],
++            default: Some(Box::new(row)),
++        })), ty),
++        None => row,
++    })
++}
++
+ fn system_column_name(attnum: i16) -> &'static str {
+     match attnum {
+         -1 => "ctid",
+diff --git a/crates/pgarbor-plan/src/sort_limit.rs b/crates/pgarbor-plan/src/sort_limit.rs
+index 52f1b0cb..f05b0355 100644
+--- a/crates/pgarbor-plan/src/sort_limit.rs
++++ b/crates/pgarbor-plan/src/sort_limit.rs
+@@ -164,8 +164,8 @@ pub fn plan_limit(st: &mut PlannerState, l: &LogicalLimit) -> Result<PlanNode> {
+     let est = child.est;
+     let kind = NodeKind::Limit(Box::new(LimitNode {
+         input: child,
+-        count: l.count.clone(),
+-        offset: l.offset.clone(),
++        count: l.count.clone().map(|e| crate::subplan::process_sublinks(st, e)).transpose()?,
++        offset: l.offset.clone().map(|e| crate::subplan::process_sublinks(st, e)).transpose()?,
+         with_ties: l.with_ties,
+         ties_keys: l.ties_keys.clone(),
+     }));
+diff --git a/crates/pgarbor-sql/src/binder/expr_agg.rs b/crates/pgarbor-sql/src/binder/expr_agg.rs
+index 9ed442ae..3bf250be 100644
+--- a/crates/pgarbor-sql/src/binder/expr_agg.rs
++++ b/crates/pgarbor-sql/src/binder/expr_agg.rs
+@@ -248,6 +248,9 @@ pub fn bind_aggregate(b: &mut Binder, f: &Function, resolved: &ResolvedFunc, arg
+         });
+     }
+ 
++    if level > 0 {
++        return Err(PgError::unimplemented("SQL-13", "aggregate evaluated by an enclosing query level"));
++    }
+     let owner = b
+         .scopes
+         .len()
+diff --git a/crates/pgarbor-sql/src/deparse/query.rs b/crates/pgarbor-sql/src/deparse/query.rs
+index 2a11162a..88c125f0 100644
+--- a/crates/pgarbor-sql/src/deparse/query.rs
++++ b/crates/pgarbor-sql/src/deparse/query.rs
+@@ -199,6 +199,21 @@ impl ColumnNamer for ScopeNamer<'_> {
+             return self.outer?.column(&up);
+         }
+         let idx = (col.rt_index as usize).checked_sub(1)?;
++        if col.attnum <= 0 {
++            // PG `get_variable`: system columns by name, a whole-row reference as `alias.*`.
++            let alias = quote_identifier(self.names.get(idx)?).ok()?;
++            let sys = match col.attnum {
++                0 => return Some(format!("{alias}.*")),
++                -1 => "ctid",
++                -2 => "xmin",
++                -3 => "cmin",
++                -4 => "xmax",
++                -5 => "cmax",
++                -6 => "tableoid",
++                _ => return None,
++            };
++            return Some(if self.qualify { format!("{alias}.{sys}") } else { sys.to_string() });
++        }
+         let name = self.attname(col)?;
+         let quoted = quote_identifier(&name).ok()?;
+         if self.qualify {
+diff --git a/crates/pgarbor/tests/sql_planner_targetlist.rs b/crates/pgarbor/tests/sql_planner_targetlist.rs
+new file mode 100644
+index 00000000..77d205b7
+--- /dev/null
++++ b/crates/pgarbor/tests/sql_planner_targetlist.rs
+@@ -0,0 +1,94 @@
++//! Regression tests for planner target-list resolution (setrefs): whole-row references above a
++//! scan, simplified aggregate calls, functionally dependent GROUP BY columns, `tableoid`, and
++//! ALTER COLUMN TYPE ... USING.
++use pgarbor::{Database, Session, SessionOptions, StatementResult};
++use pgarbor_types::Datum;
++
++fn session() -> (Database, Session) {
++    let db = Database::in_memory().expect("create");
++    let s = db.session("main", SessionOptions::default()).expect("session");
++    (db, s)
++}
++
++fn rows(s: &mut Session, sql: &str) -> Vec<Vec<Datum>> {
++    let out = s.simple_query(sql).unwrap_or_else(|e| panic!("{sql}: {} {}", e.sqlstate.code(), e.message));
++    match &out.last().expect("a statement").result {
++        StatementResult::Rows { rows, .. } => rows.clone(),
++        other => panic!("expected rows: {other:?}"),
++    }
++}
++
++#[test]
++fn whole_row_above_scan_and_join() {
++    let (_db, mut s) = session();
++    s.simple_query("CREATE TABLE t(a int, b text); INSERT INTO t VALUES (1,'x'),(2,'y')").expect("setup");
++    assert_eq!(rows(&mut s, "SELECT t FROM t ORDER BY t.a").len(), 2);
++    assert_eq!(rows(&mut s, "SELECT u FROM t JOIN t u USING (a) ORDER BY a").len(), 2);
++    assert_eq!(rows(&mut s, "SELECT t, count(*) FROM t GROUP BY t").len(), 2);
++    assert_eq!(rows(&mut s, "SELECT length(t::text) FROM t ORDER BY t")[0], vec![Datum::Int4(5)]);
++}
++
++#[test]
++fn aggregates_with_constant_arguments_match_their_simplified_form() {
++    let (_db, mut s) = session();
++    assert_eq!(rows(&mut s, "SELECT regr_count(1.0::float8, 2.0::float8)"), vec![vec![Datum::Int8(1)]]);
++    assert_eq!(rows(&mut s, "SELECT var_pop(1.0::float8)"), vec![vec![Datum::Float8(0.0)]]);
++    assert_eq!(
++        rows(&mut s, "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) FROM (VALUES (1.0::float8), (3.0::float8)) v(x)"),
++        vec![vec![Datum::Float8(2.0)]]
++    );
++}
++
++#[test]
++fn group_by_primary_key_exposes_dependent_columns() {
++    let (_db, mut s) = session();
++    s.simple_query("CREATE TABLE p(id int PRIMARY KEY, b text); INSERT INTO p VALUES (1,'x'),(2,'y')").expect("setup");
++    let got = rows(&mut s, "SELECT id, b, count(*) FROM p GROUP BY id ORDER BY id");
++    assert_eq!(got.len(), 2);
++    assert_eq!(got[1][1], Datum::Text("y".into()));
++    assert_eq!(rows(&mut s, "SELECT id + 1, b FROM p GROUP BY id HAVING b <> 'x'").len(), 1);
++}
++
++#[test]
++fn tableoid_in_joins_and_views() {
++    let (_db, mut s) = session();
++    s.simple_query("CREATE TABLE p(id int PRIMARY KEY); INSERT INTO p VALUES (1); CREATE VIEW v AS SELECT tableoid::regclass AS t, id FROM p").expect("setup");
++    assert_eq!(rows(&mut s, "SELECT a.id FROM p a JOIN p b ON a.tableoid = b.tableoid").len(), 1);
++    assert_eq!(rows(&mut s, "SELECT t::text FROM v"), vec![vec![Datum::Text("p".into())]]);
++}
++
++#[test]
++fn alter_column_type_using_rewrites_rows() {
++    let (_db, mut s) = session();
++    s.simple_query("CREATE TABLE t(a int, b text); INSERT INTO t VALUES (1,'1'),(2,'2')").expect("setup");
++    s.simple_query("ALTER TABLE t ALTER b TYPE int USING b::int + a").expect("alter using");
++    assert_eq!(rows(&mut s, "SELECT b FROM t ORDER BY a"), vec![vec![Datum::Int4(2)], vec![Datum::Int4(4)]]);
++    s.simple_query("ALTER TABLE t ALTER a TYPE bigint").expect("alter implicit cast");
++    assert_eq!(rows(&mut s, "SELECT a FROM t ORDER BY a"), vec![vec![Datum::Int8(1)], vec![Datum::Int8(2)]]);
++}
++
++#[test]
++fn outer_join_null_extends_tableoid_and_whole_row() {
++    let (_db, mut s) = session();
++    s.simple_query("CREATE TABLE a(x int); CREATE TABLE b(x int); INSERT INTO a VALUES (1); INSERT INTO b VALUES (NULL)").expect("setup");
++    assert_eq!(rows(&mut s, "SELECT b.tableoid, b::text FROM a LEFT JOIN b ON false"), vec![vec![Datum::Null, Datum::Null]]);
++    assert_eq!(rows(&mut s, "SELECT b.tableoid IS NOT NULL, b::text FROM a LEFT JOIN b ON true"), vec![vec![Datum::Bool(true), Datum::Text("()".into())]]);
++    assert_eq!(rows(&mut s, "SELECT a.tableoid, a::text FROM a RIGHT JOIN b ON false"), vec![vec![Datum::Null, Datum::Null]]);
++}
++
++#[test]
++fn grouping_sets_keep_functionally_dependent_values() {
++    let (_db, mut s) = session();
++    s.simple_query("CREATE TABLE gs(a int PRIMARY KEY, b int, c int, d int); INSERT INTO gs VALUES (1,1,1,10),(2,2,2,20)").expect("setup");
++    assert_eq!(rows(&mut s, "SELECT a, d, grouping(a,b,c) FROM gs GROUP BY GROUPING SETS ((a,b),(a,c)) ORDER BY a, grouping(a,b,c)"), vec![
++        vec![Datum::Int4(1),Datum::Int4(10),Datum::Int4(1)], vec![Datum::Int4(1),Datum::Int4(10),Datum::Int4(2)],
++        vec![Datum::Int4(2),Datum::Int4(20),Datum::Int4(1)], vec![Datum::Int4(2),Datum::Int4(20),Datum::Int4(2)],
++    ]);
++}
++
++#[test]
++fn whole_row_preserves_dropped_attribute_positions() {
++    let (_db, mut s) = session();
++    s.simple_query("CREATE TABLE t(a int,b text,c int); INSERT INTO t VALUES (1,'x',2); ALTER TABLE t DROP b").expect("setup");
++    assert_eq!(rows(&mut s, "SELECT t::text FROM t"), vec![vec![Datum::Text("(1,2)".into())]]);
++}
+diff --git a/contracts/amendments/pgarbor-plan-04-query-level-parentage.md b/contracts/amendments/pgarbor-plan-04-query-level-parentage.md
+new file mode 100644
+index 00000000..dc4b1b02
+--- /dev/null
++++ b/contracts/amendments/pgarbor-plan-04-query-level-parentage.md
+@@ -0,0 +1,12 @@
++# plan-04: retain query parentage for LATERAL references
++
++Decision: ACCEPTED by central integration (2026-10-15).
++
++PlannerState records each query level's parent alongside range_names. This is
++scratch metadata only; physical row layouts, bound IR, and dependency direction
++are unchanged. LATERAL parameterization resolves a Column's levels_up through
++this ancestry instead of confusing equally numbered local and outer range
++entries. This also covers nested derived tables inside a LATERAL query.
++
++Validation: API regressions check local/outer name separation and left-join NULL
++extension; the embedded incremental-sort.rescan-lateral case covers nesting.

@@ -1,0 +1,546 @@
+diff --git a/crates/pgarbor-catalog/src/ddl/comment.rs b/crates/pgarbor-catalog/src/ddl/comment.rs
+index 006141c6..487fd806 100644
+--- a/crates/pgarbor-catalog/src/ddl/comment.rs
++++ b/crates/pgarbor-catalog/src/ddl/comment.rs
+@@ -90,7 +90,7 @@ fn role_name(snap: &CatalogSnapshot, oid: Oid) -> Result<String> {
+ fn ensure_exists(snap: &CatalogSnapshot, addr: &ObjectAddress) -> Result<()> {
+     let (found, what) = match addr.class {
+         ObjClass::Relation => (snap.class(addr.oid).is_some(), "relation"),
+-        ObjClass::Type => (snap.type_obj(addr.oid).is_some() || addr.is_pinned(), "type"),
++        ObjClass::Type => (snap.user_type(addr.oid).is_some() || addr.is_pinned(), "type"),
+         ObjClass::Namespace => {
+             (snap.namespace(addr.oid).is_some() || builtin::builtin_namespace(addr.oid).is_some(), "namespace")
+         }
+diff --git a/crates/pgarbor-catalog/src/ddl/grant.rs b/crates/pgarbor-catalog/src/ddl/grant.rs
+index 826c591a..4852c120 100644
+--- a/crates/pgarbor-catalog/src/ddl/grant.rs
++++ b/crates/pgarbor-catalog/src/ddl/grant.rs
+@@ -261,6 +261,11 @@ impl<'a> CatalogTxn<'a> {
+                 if snap.function(oid).is_some() {
+                     return Err(errors::system_catalog_permission("pg_proc"));
+                 }
++                // A built-in routine has a pg_proc row PGArbor does not persist, so its ACL cannot be
++                // changed yet. That is unsupported, not a missing object.
++                if pgarbor_types::catalog_data::builtin_proc(oid).is_some() {
++                    return Err(PgError::unimplemented("CAT-21", "GRANT/REVOKE on built-in functions"));
++                }
+                 Err(errors::cache_lookup_failed("function", oid))
+             }
+             ObjClass::Database => {
+diff --git a/crates/pgarbor-catalog/src/ddl/typedef.rs b/crates/pgarbor-catalog/src/ddl/typedef.rs
+index 66a9c477..f7dd975a 100644
+--- a/crates/pgarbor-catalog/src/ddl/typedef.rs
++++ b/crates/pgarbor-catalog/src/ddl/typedef.rs
+@@ -1147,6 +1147,14 @@ impl<'a> CatalogTxn<'a> {
+             }
+             for c in &r.columns {
+                 if !c.dropped && tys.contains(&c.type_id.oid) {
++                    // typecmds.c get_rels_with_domain: constraints cannot be validated through
++                    // an array container, even when the table currently contains no rows.
++                    if let Some(element) = self.data.types.values().find(|t| t.array_type == c.type_id.oid) {
++                        return Err(PgError::new(
++                            SqlState::FEATURE_NOT_SUPPORTED,
++                            format!("cannot alter type \"{}\" because column \"{}.{}\" uses it", element.name, r.name, c.name),
++                        ));
++                    }
+                     out.push((r.oid, c.attnum));
+                 }
+             }
+diff --git a/crates/pgarbor-catalog/src/ddl/alter_table.rs b/crates/pgarbor-catalog/src/ddl/alter_table.rs
+index 6477f6fb..5201a9b9 100644
+--- a/crates/pgarbor-catalog/src/ddl/alter_table.rs
++++ b/crates/pgarbor-catalog/src/ddl/alter_table.rs
+@@ -423,7 +423,7 @@ impl<'a> CatalogTxn<'a> {
+         {
+             self.follow_up(FollowUp::ValidateNotNull { table, attnum });
+         }
+-        if composite {
++        if composite || rewrite || column.fast_default.is_some() {
+             self.queue_composite_followups(&rel)?;
+         }
+         Ok(Some(attnum))
+diff --git a/crates/pgarbor-sql/src/binder/ddl_function.rs b/crates/pgarbor-sql/src/binder/ddl_function.rs
+index 4b7b4d74..058ae9e0 100644
+--- a/crates/pgarbor-sql/src/binder/ddl_function.rs
++++ b/crates/pgarbor-sql/src/binder/ddl_function.rs
+@@ -311,8 +311,14 @@ fn sql_return_body(b: &mut Binder<'_>, fname: &str, specs: &[ParamSpec<'_>], e:
+         .map(|p| (p.name.clone(), TypeId::of(p.type_oid)))
+         .collect();
+     table_expr_scope(b, fname, &cols)?;
+-    let no_names = |_: i16| -> Option<String> { None };
+-    let r = bind_ddl_expr(b, e, ExprCtx::check(), Some(TypeId::of(ret)), None, &mut Vec::new(), &no_names)
++    // The parameters are the scope's columns (attnum = 1-based position), so the stored text names them
++    // by their declared names (PG `deparse` of the body shows parameter names).
++    let names: Vec<String> = cols.iter().map(|(n, _)| n.clone()).collect();
++    let column_names = move |attnum: i16| -> Option<String> {
++        let idx = usize::try_from(attnum).ok()?.checked_sub(1)?;
++        names.get(idx).cloned()
++    };
++    let r = bind_ddl_expr(b, e, ExprCtx::check(), Some(TypeId::of(ret)), None, &mut Vec::new(), &column_names)
+         .map(|(_, stored)| stored);
+     b.scopes.pop();
+     r
+diff --git a/crates/pgarbor-sql/src/binder/ddl_index.rs b/crates/pgarbor-sql/src/binder/ddl_index.rs
+index d24f7e55..a7bb47cb 100644
+--- a/crates/pgarbor-sql/src/binder/ddl_index.rs
++++ b/crates/pgarbor-sql/src/binder/ddl_index.rs
+@@ -213,6 +213,9 @@ fn bind_key(b: &mut Binder, rel: &Relation, ic: &IndexColumn) -> Result<IndexKey
+         if col.is_none() && !is_system_column(&name) {
+             return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
+         }
++        if col.is_none() {
++            return Err(system_column_index_error());
++        }
+         let key_type: Option<Oid> = col.map(|c| c.type_id.oid);
+         let collation_oid = match collation {
+             Some(c) => Some(resolve_collation(b, c)?),
+@@ -238,6 +241,7 @@ fn bind_key(b: &mut Binder, rel: &Relation, ic: &IndexColumn) -> Result<IndexKey
+     let _ = collation;
+     let names = |a: i16| column_name_for_attnum(rel, a);
+     let mut refs: Vec<i16> = Vec::new();
++    reject_system_expr(b, &ic.column.expr, ExprCtx::index_expr())?;
+     let (bound, stored_expr) =
+         stored::bind_ddl_expr(b, &ic.column.expr, ExprCtx::index_expr(), None, Some(rel.oid), &mut refs, &names)?;
+     ensure_immutable(b, &ic.column.expr, &bound, "index expression")?;
+@@ -338,8 +342,11 @@ fn bind_include(b: &mut Binder, rel: &Relation, names: &[Ident]) -> Result<Vec<S
+     let mut out = Vec::with_capacity(names.len());
+     for id in names {
+         let name = b.ident(id);
+-        if rel.column_by_name(&name).is_none() && !is_system_column(&name) {
+-            return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
++        if rel.column_by_name(&name).is_none() {
++            if !is_system_column(&name) {
++                return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
++            }
++            return Err(system_column_index_error());
+         }
+         out.push(name);
+     }
+@@ -351,6 +358,7 @@ fn bind_predicate(b: &mut Binder, rel: &Relation, e: &Expr) -> Result<StoredExpr
+     let ec = ExprCtx { clause: ExprClause::IndexPredicate, ..ExprCtx::index_expr() };
+     let names = |a: i16| column_name_for_attnum(rel, a);
+     let mut refs: Vec<i16> = Vec::new();
++    reject_system_expr(b, e, ec)?;
+     let (bound, stored_expr) = stored::bind_ddl_expr(b, e, ec, None, Some(rel.oid), &mut refs, &names)?;
+     if bound.ty.oid != oids::BOOL {
+         let actual = b.type_name(bound.ty);
+@@ -461,6 +469,21 @@ fn column_name_for_attnum(rel: &Relation, a: i16) -> Option<String> {
+ }
+ 
+ /// System column names that the catalog resolves (its own 42704 applies to them).
++/// indexcmds.c `DefineIndex`: system attributes (attnum < 0) cannot be index keys, INCLUDE columns or
++/// referenced by index expressions and predicates.
++fn system_column_index_error() -> PgError {
++    PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "index creation on system columns is not supported")
++}
++
++fn reject_system_expr(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<()> {
++    // Reject before storing/deparsing; the stored-expression namer only accepts user attributes.
++    let bound = super::expr::bind_expr(b, e, ec)?;
++    if bound.any(&mut |n| matches!(&n.kind, ExprKind::Column(c) if c.levels_up == 0 && c.attnum < 0)) {
++        return Err(system_column_index_error());
++    }
++    Ok(())
++}
++
+ fn is_system_column(name: &str) -> bool {
+     matches!(name, "ctid" | "xmin" | "xmax" | "cmin" | "cmax" | "tableoid")
+ }
+diff --git a/crates/pgarbor-sql/src/binder/ddl_view.rs b/crates/pgarbor-sql/src/binder/ddl_view.rs
+index fbeba504..9fb00171 100644
+--- a/crates/pgarbor-sql/src/binder/ddl_view.rs
++++ b/crates/pgarbor-sql/src/binder/ddl_view.rs
+@@ -72,6 +72,8 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
+     let qn = b.qual(&cv.name)?;
+     check_catalog_qualifier(b, &qn)?;
+     reject_query_forms(&cv.query)?;
++    // Views referenced directly by the query are recorded in `b.deps` while it binds (see from.rs).
++    let dep_mark = b.deps.len();
+ 
+     // DefineView runs parse analysis of the query before anything else, so query errors win over
+     // name and option errors.
+@@ -125,6 +127,11 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
+     let sql = deparse_viewdef(b.env, &bq, &names, DeparseOptions::default())?;
+ 
+     let mut deps = query_dependencies(&bq)?;
++    for dep in b.deps.split_off(dep_mark) {
++        if !deps.contains(&dep) {
++            deps.push(dep);
++        }
++    }
+     for out in &bq.output {
+         if out.ty.oid >= FIRST_NORMAL_OID {
+             let dep = ObjectAddress::new(ObjClass::Type, out.ty.oid);
+diff --git a/crates/pgarbor-sql/src/binder/from.rs b/crates/pgarbor-sql/src/binder/from.rs
+index 3334b740..9743fe8d 100644
+--- a/crates/pgarbor-sql/src/binder/from.rs
++++ b/crates/pgarbor-sql/src/binder/from.rs
+@@ -309,6 +309,7 @@ fn hide_earlier_items(b: &mut Binder, hidden: bool) {
+         let base = sc.from_depth as usize;
+         for ns in sc.namespace.iter_mut().skip(base) {
+             ns.lateral_only = hidden;
++            ns.lateral_ok = !hidden;
+         }
+     }
+ }
+@@ -405,6 +406,15 @@ fn expand_view(
+     };
+     let names: Vec<String> = rel.columns.iter().filter(|c| !c.dropped).map(|c| c.name.clone()).collect();
+ 
++    // A direct reference from the statement being bound (not one made while expanding another
++    // view) is a Normal dependency on the view itself, as PG's rewriter records it. The base
++    // relations the view expands to are reached transitively through that view.
++    if b.expanding_views.is_empty() {
++        let dep = pgarbor_catalog::ObjectAddress::new(pgarbor_catalog::ObjClass::Relation, rel.oid);
++        if !b.deps.contains(&dep) {
++            b.deps.push(dep);
++        }
++    }
+     b.expanding_views.push(rel.oid);
+     let bound = select::bind_subselect(b, query, &names).map_err(stored_text_error);
+     b.expanding_views.pop();
+diff --git a/crates/pgarbor-sql/src/binder/utility.rs b/crates/pgarbor-sql/src/binder/utility.rs
+index bbb42083..5e781006 100644
+--- a/crates/pgarbor-sql/src/binder/utility.rs
++++ b/crates/pgarbor-sql/src/binder/utility.rs
+@@ -708,7 +708,11 @@ fn index_oid(b: &mut Binder, name: &ObjectName) -> Result<Oid> {
+ }
+ 
+ /// REINDEX {INDEX|TABLE|SCHEMA|DATABASE|SYSTEM}. Accepted with no physical effect.
+-fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, _concurrently: bool) -> Result<BoundStatement> {
++fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, concurrently: bool) -> Result<BoundStatement> {
++    // indexcmds.c `ExecReindex`: system catalogs cannot be rebuilt concurrently.
++    if kind == ReindexKind::System && concurrently {
++        return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "cannot reindex system catalogs concurrently"));
++    }
+     let targets: Vec<Oid> = match kind {
+         ReindexKind::Index => {
+             let name = name.ok_or_else(|| diag::syntax_error_near(";", None))?;
+@@ -729,7 +733,22 @@ fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, _c
+         ReindexKind::Schema => {
+             let name = name.ok_or_else(|| diag::syntax_error_near(";", None))?;
+             let qn = b.qual(name)?;
+-            vec![b.env.namespace_oid(&qn.name)?]
++            // The executor takes relation OIDs (an empty list means every user table), so expand the
++            // schema here to its tables and materialized views, in OID order (indexcmds.c
++            // `ReindexMultipleTables`). A schema without any such relation is a no-op.
++            let ns = b.env.namespace_oid(&qn.name)?;
++            let mut tables: Vec<Oid> = b
++                .env
++                .snapshot()
++                .user_relations()
++                .filter(|r| r.namespace == ns && matches!(r.kind, RelKind::Table | RelKind::MatView))
++                .map(|r| r.oid)
++                .collect();
++            tables.sort_unstable();
++            if tables.is_empty() {
++                return Ok(BoundStatement::Noop { tag: "REINDEX".to_string(), notices: Vec::new() });
++            }
++            tables
+         }
+         ReindexKind::Database | ReindexKind::System => {
+             if let Some(name) = name {
+diff --git a/crates/pgarbor-exec/src/context.rs b/crates/pgarbor-exec/src/context.rs
+index 6a5e8385..2e7aa43f 100644
+--- a/crates/pgarbor-exec/src/context.rs
++++ b/crates/pgarbor-exec/src/context.rs
+@@ -45,6 +45,9 @@ pub trait GucAccess {
+     /// `set_config(name, value, is_local)`: apply a SET (validation errors as for `SET`), return the
+     /// new value in SHOW form.
+     fn set(&self, name: &str, value: &str, is_local: bool) -> Result<String>;
++    /// Validation only (guc.c `ProcessGUCArray` for `ALTER ... SET`): unknown name 42704, a value the
++    /// parameter rejects 22023. Nothing is assigned. Every adapter must provide validation.
++    fn check_setting(&self, name: &str, value: &str) -> Result<()>;
+     /// All settings as `pg_settings` rows (for `pg_settings`, `SHOW ALL`, `pg_show_all_settings`).
+     fn settings(&self) -> Result<Vec<SettingRow>>;
+     /// Boolean GUC helper: `on`/`true`/`yes`/`1` (case-insensitive) = true; unknown/other = false.
+@@ -67,6 +70,12 @@ impl GucAccess for NoGuc {
+             format!("unrecognized configuration parameter \"{name}\""),
+         ))
+     }
++    fn check_setting(&self, name: &str, _value: &str) -> Result<()> {
++        Err(PgError::new(
++            pgarbor_common::SqlState::UNDEFINED_OBJECT,
++            format!("unrecognized configuration parameter \"{name}\""),
++        ))
++    }
+     fn settings(&self) -> Result<Vec<SettingRow>> {
+         Ok(Vec::new())
+     }
+diff --git a/crates/pgarbor-exec/src/ddl_alter.rs b/crates/pgarbor-exec/src/ddl_alter.rs
+index 9e56d8f5..3d85dbb9 100644
+--- a/crates/pgarbor-exec/src/ddl_alter.rs
++++ b/crates/pgarbor-exec/src/ddl_alter.rs
+@@ -159,6 +159,11 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
+         }
+         AlterAction::FunctionAttrs { func, changes } => {
+             let func = *func;
++            for item in &changes.set_config {
++                if let Some((guc, value)) = item.split_once('=') {
++                    cx.se.guc.check_setting(guc, value)?;
++                }
++            }
+             run_plain(cx, |d| d.alter_function_attrs(func, changes))?;
+         }
+         AlterAction::RenameFunction { func, new_name } => {
+@@ -183,6 +188,9 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
+         }
+         AlterAction::RoleConfig { role, guc, value } => {
+             let role = *role;
++            if let Some(v) = value {
++                cx.se.guc.check_setting(guc, v)?;
++            }
+             run_plain(cx, |d| d.set_role_config(role, guc, value.as_deref()))?;
+         }
+         AlterAction::RenameDatabase { name, new_name } => {
+@@ -193,6 +201,9 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
+             run_plain(cx, |d| d.alter_database_owner(name, new_owner))?;
+         }
+         AlterAction::DatabaseConfig { name, guc, value } => {
++            if let Some(v) = value {
++                cx.se.guc.check_setting(guc, v)?;
++            }
+             run_plain(cx, |d| d.set_database_config(name, guc, value.as_deref()))?;
+         }
+         AlterAction::DatabaseOptions { name, allow_conn, conn_limit, is_template } => {
+diff --git a/crates/pgarbor-exec/src/exec_session.rs b/crates/pgarbor-exec/src/exec_session.rs
+index 414bdfa0..05fb7f5d 100644
+--- a/crates/pgarbor-exec/src/exec_session.rs
++++ b/crates/pgarbor-exec/src/exec_session.rs
+@@ -206,6 +206,9 @@ mod tests {
+         fn set(&self, _name: &str, value: &str, _is_local: bool) -> Result<String> {
+             Ok(value.to_string())
+         }
++        fn check_setting(&self, name: &str, value: &str) -> Result<()> {
++            crate::context::GucAccess::check_setting(&NoGuc, name, value)
++        }
+         fn settings(&self) -> Result<Vec<SettingRow>> {
+             Ok(vec![SettingRow { name: "datestyle".to_string(), setting: Some("ISO, MDY".to_string()), ..Default::default() }])
+         }
+diff --git a/crates/pgarbor-exec/src/session_fns.rs b/crates/pgarbor-exec/src/session_fns.rs
+index bf5682b1..c306e20e 100644
+--- a/crates/pgarbor-exec/src/session_fns.rs
++++ b/crates/pgarbor-exec/src/session_fns.rs
+@@ -141,6 +141,14 @@ fn text_arg(args: &[Datum], i: usize) -> Result<&str> {
+     }
+ }
+ 
++/// Text argument of a non-strict function: NULL (or absent) reads as the empty string.
++fn text_or_empty(args: &[Datum], i: usize) -> Result<&str> {
++    match args.get(i) {
++        None | Some(Datum::Null) => Ok(""),
++        Some(d) => d.as_str().ok_or_else(|| bad_arg(i)),
++    }
++}
++
+ /// Optional boolean argument: absent or NULL gives `default`.
+ fn bool_or(args: &[Datum], i: usize, default: bool) -> bool {
+     args.get(i).and_then(Datum::as_bool).unwrap_or(default)
+@@ -366,8 +374,9 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
+         )
+         .with_hint("Make sure the configuration parameter \"track_commit_timestamp\" is set.")),
+         "pg_notify" => {
+-            let channel = text_arg(args, 0)?;
+-            let payload = text_arg(args, 1)?;
++            // pg_proc marks pg_notify non-strict: PG reads a NULL channel or payload as ''.
++            let channel = text_or_empty(args, 0)?;
++            let payload = text_or_empty(args, 1)?;
+             if channel.is_empty() {
+                 return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "channel name cannot be empty"));
+             }
+diff --git a/crates/pgarbor-exec/src/utility.rs b/crates/pgarbor-exec/src/utility.rs
+index a679a928..7c7616e7 100644
+--- a/crates/pgarbor-exec/src/utility.rs
++++ b/crates/pgarbor-exec/src/utility.rs
+@@ -75,11 +75,28 @@ pub fn exec_maintenance(cx: &mut ExecContext, kind: MaintenanceKind, targets: &[
+         MaintenanceKind::Vacuum => Ok(ExecResult::command("VACUUM")),
+         MaintenanceKind::Analyze => Ok(ExecResult::command("ANALYZE")),
+         MaintenanceKind::Cluster => Ok(ExecResult::command("CLUSTER")),
+-        MaintenanceKind::Checkpoint => Ok(ExecResult::command("CHECKPOINT")),
++        MaintenanceKind::Checkpoint => {
++            require_checkpoint_privilege(cx)?;
++            Ok(ExecResult::command("CHECKPOINT"))
++        }
+         MaintenanceKind::Reindex => reindex(cx, targets),
+     }
+ }
+ 
++/// `pg_checkpoint` predefined role (builtin oid 4544, catalog `builtin::objects`).
++const PG_CHECKPOINT_ROLE: Oid = 4544;
++
++/// utility.c `CHECKPOINT`: only superusers and roles with the privileges of `pg_checkpoint` may run it.
++fn require_checkpoint_privilege(cx: &ExecContext) -> Result<()> {
++    let user = cx.se.env.current_user();
++    let graph = pgarbor_catalog::acl::RoleGraph::build(cx.se.env.snapshot(), cx.se.env.database())?;
++    if graph.has_privs_of_role(user, PG_CHECKPOINT_ROLE)? {
++        return Ok(());
++    }
++    Err(PgError::new(SqlState::INSUFFICIENT_PRIVILEGE, "permission denied to execute CHECKPOINT command")
++        .with_detail("Only roles with privileges of the \"pg_checkpoint\" role may execute this command."))
++}
++
+ /// Map the SQL lock mode onto the core lock manager's mode (one-to-one).
+ fn core_lock_mode(mode: LockMode) -> CoreLockMode {
+     match mode {
+diff --git a/crates/pgarbor/src/guc.rs b/crates/pgarbor/src/guc.rs
+index ab23088d..b8c665d0 100644
+--- a/crates/pgarbor/src/guc.rs
++++ b/crates/pgarbor/src/guc.rs
+@@ -416,6 +416,15 @@ impl pgarbor_exec::GucAccess for GucTable {
+     fn settings(&self) -> Result<Vec<SettingRow>> {
+         self.setting_rows()
+     }
++    fn check_setting(&self, name: &str, value: &str) -> Result<()> {
++        let guard = self.inner.borrow();
++        let inner: &GucInner = &guard;
++        let idx = lookup(inner, name)?;
++        let def = inner.slots[idx].def;
++        let text = guc_value::join_set_values(def, &[value.to_string()])?;
++        validate_value(def, &inner.slots[idx].value, &text)?;
++        Ok(())
++    }
+ }
+ 
+ // ---------------------------------------------------------------------------------------------
+@@ -475,6 +484,60 @@ fn check_settable(inner: &GucInner, def: &GucDef, startup: bool) -> Result<()> {
+     }
+ }
+ 
++/// `default_text_search_config` hook (ts_cat.c `check_default_text_search_config`). Only the builtin
++/// `pg_catalog` configurations exist (CREATE TEXT SEARCH CONFIGURATION is unsupported), and PostgreSQL
++/// stores the canonical `pg_catalog.<name>` form. Unquoted names fold to lower case; quoted
++/// identifiers retain their case, including quoted schema names.
++fn text_search_config_value(text: &str) -> Result<String> {
++    // Sorted (binary search): the `pg_catalog` text search configurations of PostgreSQL 18.
++    const BUILTIN_CONFIGS: &[&str] = &[
++        "arabic", "armenian", "basque", "catalan", "danish", "dutch", "english", "estonian", "finnish", "french",
++        "german", "greek", "hindi", "hungarian", "indonesian", "irish", "italian", "lithuanian", "nepali",
++        "norwegian", "portuguese", "romanian", "russian", "serbian", "simple", "spanish", "swedish", "tamil",
++        "turkish", "yiddish",
++    ];
++    fn identifiers(text: &str) -> Option<Vec<String>> {
++        let mut chars = text.chars().peekable();
++        let mut out = Vec::new();
++        loop {
++            while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) { chars.next(); }
++            let mut name = String::new();
++            if chars.peek() == Some(&'"') {
++                chars.next();
++                loop {
++                    match chars.next()? {
++                        '"' if chars.peek() == Some(&'"') => { chars.next(); name.push('"'); }
++                        '"' => break,
++                        c => name.push(c),
++                    }
++                }
++            } else {
++                while chars.peek().is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$' || !c.is_ascii()) {
++                    name.push(chars.next()?.to_ascii_lowercase());
++                }
++            }
++            if name.is_empty() { return None; }
++            out.push(name);
++            while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) { chars.next(); }
++            match chars.next() {
++                None => return Some(out),
++                Some('.') if out.len() == 1 => {}
++                _ => return None,
++            }
++        }
++    }
++    if let Some(parts) = identifiers(text) {
++        let name = parts.last().map(String::as_str).unwrap_or("");
++        if (parts.len() == 1 || parts[0] == "pg_catalog") && BUILTIN_CONFIGS.binary_search(&name).is_ok() {
++            return Ok(format!("pg_catalog.{name}"));
++        }
++    }
++    Err(PgError::new(
++        SqlState::INVALID_PARAMETER_VALUE,
++        format!("invalid value for parameter \"default_text_search_config\": \"{text}\""),
++    ))
++}
++
+ /// Validate and canonicalize a value for `def` (hooks by name, else `guc_value::normalize`).
+ /// `current` is the present SHOW-form value (`DateStyle` keeps the parts not mentioned).
+ fn validate_value(def: &GucDef, current: &str, text: &str) -> Result<String> {
+@@ -488,6 +551,9 @@ fn validate_value(def: &GucDef, current: &str, text: &str) -> Result<String> {
+     if name.eq_ignore_ascii_case("client_encoding") {
+         return client_encoding_value(text);
+     }
++    if name.eq_ignore_ascii_case("default_text_search_config") {
++        return text_search_config_value(text);
++    }
+     if name.eq_ignore_ascii_case("transaction_isolation") || name.eq_ignore_ascii_case("default_transaction_isolation") {
+         return isolation_value(def, text);
+     }
+diff --git a/crates/pgarbor/tests/sql_session_contract.rs b/crates/pgarbor/tests/sql_session_contract.rs
+index a63410fa..b26ac2d1 100644
+--- a/crates/pgarbor/tests/sql_session_contract.rs
++++ b/crates/pgarbor/tests/sql_session_contract.rs
+@@ -208,3 +208,26 @@ fn unsupported_security_and_deferred_constraints_fail_closed() {
+     }
+     s.simple_query("INSERT INTO t VALUES (1)").expect("transaction recovers");
+ }
++
++#[test]
++fn stored_config_settings_and_text_search_config_are_validated() {
++    let db = Database::in_memory().expect("create");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE FUNCTION cfg1(text) RETURNS text LANGUAGE sql AS 'SELECT $1'").expect("create");
++    s.simple_query("CREATE ROLE cfg_role").expect("role");
++    assert_eq!(s.simple_query("ALTER FUNCTION cfg1(text) SET nosuchparam = 1").unwrap_err().sqlstate.code(), "42704");
++    assert_eq!(s.simple_query("ALTER FUNCTION cfg1(text) SET work_mem = 'bogus'").unwrap_err().sqlstate.code(), "22023");
++    assert_eq!(s.simple_query("ALTER ROLE cfg_role SET no_such_param = 1").unwrap_err().sqlstate.code(), "42704");
++    assert_eq!(s.simple_query("ALTER ROLE cfg_role SET maintenance_work_mem = 'abc'").unwrap_err().sqlstate.code(), "22023");
++    s.simple_query("ALTER ROLE cfg_role SET maintenance_work_mem = '64MB'").expect("valid role setting");
++    s.simple_query("ALTER FUNCTION cfg1(text) SET search_path = admin, pg_temp").expect("valid function setting");
++    assert_eq!(s.simple_query("SET default_text_search_config = 'nosuch'").unwrap_err().sqlstate.code(), "22023");
++    s.simple_query("SET default_text_search_config = 'English'").expect("builtin config");
++    s.simple_query("SET default_text_search_config = '\"pg_catalog\".\"english\"'").expect("quoted lowercase");
++    assert_eq!(s.simple_query("SET default_text_search_config = '\"English\"'").expect_err("quoted mixed case").sqlstate.code(), "22023");
++    let out = s.simple_query("SHOW default_text_search_config").expect("show");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(rows, &vec![vec![Datum::Text("pg_catalog.english".to_string())]]),
++        other => panic!("expected rows: {other:?}"),
++    }
++}
+diff --git a/contracts/amendments/pgarbor-catalog-08-domain-container-validation.md b/contracts/amendments/pgarbor-catalog-08-domain-container-validation.md
+new file mode 100644
+index 00000000..d649e0bb
+--- /dev/null
++++ b/contracts/amendments/pgarbor-catalog-08-domain-container-validation.md
+@@ -0,0 +1,13 @@
++# catalog-08: domain validation lists exclude array containers
++
++Decision: ACCEPTED by central integration (2026-10-15).
++
++`CatalogTxn::domain_columns` keeps its signature. Its validation-list behavior must
++follow PostgreSQL 18 `get_rels_with_domain`: an array of the domain or a derived
++domain blocks constraint validation with 0A000, naming the element type and
++containing column. Array values cannot be evaluated as scalar domain values.
++This supersedes the method's old comment including arrays in the returned list.
++SET DEFAULT remains allowed. No contract file is edited.
++
++Validation: an API regression exercises SET NOT NULL and ADD CHECK through an
++array of a derived domain, SET DEFAULT, and successful validation after DROP TABLE.
+diff --git a/contracts/amendments/pgarbor-exec-08-guc-validation.md b/contracts/amendments/pgarbor-exec-08-guc-validation.md
+new file mode 100644
+index 00000000..092c8569
+--- /dev/null
++++ b/contracts/amendments/pgarbor-exec-08-guc-validation.md
+@@ -0,0 +1,15 @@
++# exec-08: validation of stored GUC settings
++
++Decision: ACCEPTED by central integration (2026-10-15).
++
++The frozen `GucAccess` trait needs a side-effect-free `check_setting(name, value)`
++method. ALTER ROLE/DATABASE/FUNCTION SET must validate before storing a setting;
++calling `set` would change the current session. The production GucTable adapter
++uses its existing normalization and validation hooks without assignment. Every
++adapter must implement this method. NoGuc has no settings and rejects names with
++42704; the executor routing test adapter delegates to it. This prevents an
++unleased unsupported marker in a frozen context file and avoids unchecked
++acceptance by default. No dependency direction changes.
++
++Validation: the API session regression checks unknown names, invalid values and
++valid stored role/function settings. Existing contract files remain unchanged.

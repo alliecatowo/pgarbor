@@ -1,0 +1,679 @@
+diff --git a/crates/pgarbor-sql/src/lib.rs b/crates/pgarbor-sql/src/lib.rs
+index 25ec7848..ae3aa2c5 100644
+--- a/crates/pgarbor-sql/src/lib.rs
++++ b/crates/pgarbor-sql/src/lib.rs
+@@ -32,6 +32,7 @@ pub mod parser;
+ pub mod parser_extra;
+ pub mod rewrite;
+ pub mod source;
++pub mod strict_check;
+ pub mod syntax_error;
+ 
+ pub use binder::{bind, BindContext, BindOutput, BindSession};
+diff --git a/crates/pgarbor-sql/src/parser.rs b/crates/pgarbor-sql/src/parser.rs
+index df68aec4..806c170b 100644
+--- a/crates/pgarbor-sql/src/parser.rs
++++ b/crates/pgarbor-sql/src/parser.rs
+@@ -59,7 +59,8 @@ use pgarbor_common::{PgError, Result};
+ use sqlparser::ast::{Expr, Statement};
+ use sqlparser::dialect::PostgreSqlDialect;
+ use sqlparser::parser::Parser;
+-use sqlparser::tokenizer::{Span, Token, TokenWithSpan, Tokenizer};
++use sqlparser::keywords::Keyword;
++use sqlparser::tokenizer::{Span, Token, TokenWithSpan, Tokenizer, Word};
+ 
+ use crate::classify;
+ use crate::diag;
+@@ -67,6 +68,7 @@ use crate::extra_stmt::ExtraStatement;
+ use crate::identity_opts::{self, IdentityGroup};
+ use crate::parser_extra;
+ use crate::source::SourceMap;
++use crate::strict_check;
+ use crate::syntax_error;
+ 
+ /// Maximum expression/subquery nesting accepted by the parser (sqlparser recursion counter). PG's
+@@ -107,6 +109,14 @@ pub struct RawStatement {
+ }
+ 
+ impl RawStatement {
++    /// Completion tags for syntax distinctions intentionally shared by bound session statements.
++    pub fn session_completion_tag(&self) -> Option<&'static str> {
++        match self.as_ast()? {
++            Statement::StartTransaction { begin: false, .. } => Some("START TRANSACTION"),
++            Statement::Reset(_) => Some("RESET"),
++            _ => None,
++        }
++    }
+     /// The sqlparser statement, if this is not an extra.
+     pub fn as_ast(&self) -> Option<&Statement> {
+         match &self.parsed {
+@@ -157,6 +167,7 @@ pub fn parse(sql: &str) -> Result<Vec<RawStatement>> {
+         let parsed = if parser_extra::is_extra_statement(&toks)? {
+             Parsed::Extra(parser_extra::parse_extra(toks, &src)?)
+         } else {
++            strict_check::check(&toks, &src)?;
+             let (ast_toks, groups) = identity_opts::extract(&toks, &src)?;
+             identity_groups = groups;
+             Parsed::Ast(Box::new(parse_ast_chunk(&ast_toks, &src)?))
+@@ -219,6 +230,42 @@ fn bare_word(t: &Token) -> Option<String> {
+     }
+ }
+ 
++/// Name of the marker argument that stands for a `VARIADIC` call argument (PG `func_arg_expr`
++/// after `VARIADIC`). sqlparser 0.63 has no `VARIADIC expr` argument form, so [`mark_variadic_args`]
++/// rewrites the keyword into a synthetic named argument: a synthetic identifier containing a NUL,
++/// which PostgreSQL identifiers cannot contain. The binder recognizes it and clears it
++/// (`expr_func::variadic_call`).
++pub const VARIADIC_MARKER: &str = "\0pgarbor variadic";
++
++/// Rewrite each `VARIADIC` keyword that starts a call argument (directly after `(` or `,`) into the
++/// marker argument [`VARIADIC_MARKER`]. Only statements other than `CREATE`/`ALTER`/`DROP` are
++/// rewritten: there `VARIADIC` is an argument mode in a function signature, which sqlparser parses.
++fn mark_variadic_args(toks: &[TokenWithSpan]) -> Vec<TokenWithSpan> {
++    let head: Vec<String> = toks.iter().filter_map(|t| bare_word(&t.token)).take(4).collect();
++    let words: Vec<&str> = head.iter().map(String::as_str).collect();
++    if is_function_header(&words) || matches!(words.as_slice(), ["ALTER" | "DROP", "FUNCTION" | "PROCEDURE", ..]) {
++        return toks.to_vec();
++    }
++    let mut out = Vec::with_capacity(toks.len());
++    let mut prev: Option<&Token> = None;
++    for t in toks {
++        if matches!(t.token, Token::Whitespace(_)) {
++            out.push(t.clone());
++            continue;
++        }
++        let starts_arg = matches!(prev, Some(Token::LParen | Token::Comma));
++        if starts_arg && bare_word(&t.token).as_deref() == Some("VARIADIC") {
++            let word = Word { value: VARIADIC_MARKER.to_string(), quote_style: Some('"'), keyword: Keyword::NoKeyword };
++            out.push(TokenWithSpan::new(Token::Word(word), t.span));
++            out.push(TokenWithSpan::new(Token::RArrow, t.span));
++        } else {
++            out.push(t.clone());
++        }
++        prev = Some(&t.token);
++    }
++    out
++}
++
+ /// Is this the head of `CREATE [OR REPLACE] FUNCTION|PROCEDURE` (the first significant words)?
+ fn is_function_header(head: &[&str]) -> bool {
+     matches!(
+@@ -311,6 +358,7 @@ fn trim_range(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<(usi
+ /// Parse one chunk (tokens end with EOF) with sqlparser; the whole chunk must be one statement.
+ fn parse_ast_chunk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<Statement> {
+     let toks = signed_connection_limit(toks);
++    let toks = mark_variadic_args(&toks);
+     let toks = toks.as_slice();
+     let dialect = PostgreSqlDialect {};
+     let mut parser = Parser::new(&dialect)
+@@ -413,7 +461,9 @@ pub fn parse_one(sql: &str) -> Result<RawStatement> {
+ pub fn parse_expr_text(sql: &str) -> Result<Expr> {
+     let dialect = PostgreSqlDialect {};
+     let fail = || PgError::internal(format!("could not parse stored expression \"{sql}\""));
+-    let mut parser = Parser::new(&dialect).try_with_sql(sql).map_err(|_| fail())?;
++    let tokens = Tokenizer::new(&dialect, sql).tokenize_with_location().map_err(|_| fail())?;
++    let tokens = mark_variadic_args(&tokens);
++    let mut parser = Parser::new(&dialect).with_tokens_with_locations(tokens);
+     let expr = parser.parse_expr().map_err(|_| fail())?;
+     if !matches!(parser.peek_token().token, Token::EOF) {
+         return Err(fail());
+diff --git a/crates/pgarbor-sql/src/strict_check.rs b/crates/pgarbor-sql/src/strict_check.rs
+new file mode 100644
+index 00000000..213828c6
+--- /dev/null
++++ b/crates/pgarbor-sql/src/strict_check.rs
+@@ -0,0 +1,233 @@
++//! Token-level grammar checks for statements whose operands `sqlparser` accepts more loosely than
++//! PostgreSQL 18's `gram.y`. Each check runs before the statement goes to `sqlparser` and only
++//! rejects input that PostgreSQL's grammar rejects, at the token where bison would report the
++//! error (`syntax error at or near "tok"`, or `syntax error at end of input`). Valid input falls
++//! through unchanged, so the AST path stays the single source of truth for everything else.
++//!
++//! Productions (PostgreSQL 18 `src/backend/parser/gram.y`):
++//! * `LISTEN ColId`, `UNLISTEN {ColId | '*'}`, `NOTIFY ColId notify_payload`;
++//! * `EXECUTE name execute_param_clause` with `name: ColId` and `'(' expr_list ')'` (non-empty);
++//! * `RESET var_name` with `var_name: ColId | var_name '.' ColId`;
++//! * `ALTER SCHEMA name {RENAME TO | OWNER TO}`.
++//! `ColId` is an identifier, an unreserved keyword or a column-name keyword; reserved and
++//! type-or-function-name keywords (`kwlist.h`) must be quoted.
++use pgarbor_common::Result;
++use sqlparser::tokenizer::{Token, TokenWithSpan};
++
++use crate::diag;
++use crate::source::SourceMap;
++use crate::syntax_error::token_problem;
++
++/// Reserved and type_func_name keywords of PostgreSQL 18 (`src/include/parser/kwlist.h`), lower case.
++/// These are not valid unquoted `ColId`s.
++const NON_COLID_KEYWORDS: &[&str] = &[
++    "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "authorization",
++    "binary", "both", "case", "cast", "check", "collate", "collation", "column", "concurrently",
++    "constraint", "create", "cross", "current_catalog", "current_date", "current_role",
++    "current_schema", "current_time", "current_timestamp", "current_user", "default", "deferrable",
++    "desc", "distinct", "do", "else", "end", "except", "false", "fetch", "for", "foreign", "freeze",
++    "from", "full", "grant", "group", "having", "ilike", "in", "initially", "inner", "intersect",
++    "into", "is", "isnull", "join", "lateral", "leading", "left", "like", "limit", "localtime",
++    "localtimestamp", "natural", "not", "notnull", "null", "offset", "on", "only", "or", "order",
++    "outer", "overlaps", "placing", "primary", "references", "returning", "right", "select",
++    "session_user", "similar", "some", "symmetric", "system_user", "table", "tablesample", "then",
++    "to", "trailing", "true", "union", "unique", "user", "using", "variadic", "verbose", "when",
++    "where", "window", "with",
++];
++
++/// Run the checks for one statement chunk (`toks` ends with `Token::EOF`).
++pub fn check(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
++    let sig: Vec<&TokenWithSpan> = toks.iter().filter(|t| !matches!(t.token, Token::Whitespace(_))).collect();
++    let word = |i: usize| -> String {
++        match sig.get(i).map(|t| &t.token) {
++            Some(Token::Word(w)) if w.quote_style.is_none() => w.value.to_ascii_uppercase(),
++            _ => String::new(),
++        }
++    };
++    // PostgreSQL gram.y does not have the SQL-standard window null-treatment clause.
++    for i in 1..sig.len().saturating_sub(1) {
++        if matches!(sig[i - 1].token, Token::RParen)
++            && matches!(word(i).as_str(), "IGNORE" | "RESPECT") && word(i + 1) == "NULLS" {
++            return Err(at_token(sig[i + 1], src));
++        }
++        // Precision belongs to SECOND, not the other fields in an INTERVAL range.
++        if word(i) == "TO" && matches!(word(i + 1).as_str(), "YEAR" | "MONTH" | "DAY" | "HOUR" | "MINUTE")
++            && matches!(sig.get(i + 2).map(|t| &t.token), Some(Token::LParen))
++            && (0..i).rev().take(4).any(|j| word(j) == "INTERVAL") {
++            return Err(at_token(sig[i + 2], src));
++        }
++        if matches!(sig[i - 1].token, Token::LBracket) && matches!(sig[i].token, Token::RBracket)
++            && matches!(sig[i + 1].token, Token::SingleQuotedString(_)) {
++            return Err(at_token(sig[i], src));
++        }
++    }
++    if word(0) == "CREATE" && matches!(word(1).as_str(), "INDEX" | "UNIQUE") {
++        // At the index key-list level, operators/casts need an extra pair of parentheses.
++        if let Some(on) = (1..sig.len()).find(|&i| word(i) == "ON") {
++            if let Some(open) = (on + 1..sig.len()).find(|&i| matches!(sig[i].token, Token::LParen)) {
++                let mut depth = 0usize;
++                for t in &sig[open..] {
++                    match t.token {
++                        Token::LParen => depth += 1,
++                        Token::RParen => { depth = depth.saturating_sub(1); if depth == 0 { break; } }
++                        Token::DoubleColon | Token::StringConcat | Token::Plus | Token::Minus | Token::Mul | Token::Div
++                        | Token::Mod | Token::Eq | Token::Neq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq if depth == 1 => {
++                            return Err(at_token(t, src));
++                        }
++                        _ => {}
++                    }
++                }
++            }
++        }
++    }
++    if word(0) == "CREATE" && word(1) == "TABLE" {
++        // DEFAULT takes b_expr, which excludes a bare IN predicate (parenthesized a_expr is valid).
++        let mut depth = 0usize;
++        let mut default_depth = None;
++        for (i, t) in sig.iter().enumerate() {
++            match t.token {
++                Token::LParen => depth += 1,
++                Token::RParen => { if default_depth == Some(depth) { default_depth = None; } depth = depth.saturating_sub(1); }
++                Token::Comma if default_depth == Some(depth) => default_depth = None,
++                _ if word(i) == "DEFAULT" => default_depth = Some(depth),
++                _ if word(i) == "IN" && default_depth == Some(depth) => return Err(at_token(t, src)),
++                _ => {}
++            }
++        }
++    }
++    match word(0).as_str() {
++        "LISTEN" | "NOTIFY" => {
++            colid(&sig, 1, src)?;
++        }
++        "UNLISTEN" => {
++            if !matches!(sig.get(1).map(|t| &t.token), Some(Token::Mul)) {
++                colid(&sig, 1, src)?;
++            }
++        }
++        "EXECUTE" => {
++            let end = colid(&sig, 1, src)?;
++            if matches!(sig.get(end).map(|t| &t.token), Some(Token::Period)) {
++                return Err(at_token(sig[end], src));
++            }
++            if matches!(sig.get(end).map(|t| &t.token), Some(Token::LParen))
++                && matches!(sig.get(end + 1).map(|t| &t.token), Some(Token::RParen))
++            {
++                return Err(at_token(sig[end + 1], src));
++            }
++        }
++        "RESET" => {
++            // `RESET TIME ZONE | TRANSACTION ISOLATION LEVEL | SESSION AUTHORIZATION` and `RESET ALL`
++            // have their own rules in sqlparser; only `var_name` is checked here.
++            let special = matches!(
++                (word(1).as_str(), word(2).as_str()),
++                ("TIME", "ZONE") | ("TRANSACTION", "ISOLATION") | ("SESSION", "AUTHORIZATION")
++            );
++            if !special && word(1) != "ALL" {
++                let mut end = colid(&sig, 1, src)?;
++                while matches!(sig.get(end).map(|t| &t.token), Some(Token::Period)) {
++                    end = colid(&sig, end + 1, src)?;
++                }
++            }
++        }
++        "ALTER" if word(1) == "SCHEMA" => {
++            let end = colid(&sig, 2, src)?;
++            let next = word(end);
++            if !matches!(next.as_str(), "RENAME" | "OWNER") {
++                return Err(at_token(sig[end], src));
++            }
++        }
++        _ => {}
++    }
++    Ok(())
++}
++
++/// Check a `ColId` at `sig[i]` and any `'.' ColId` continuation after it when `dotted` is set by the
++/// caller; returns the index of the first token after the name. EOF and non-identifiers are errors.
++fn colid(sig: &[&TokenWithSpan], i: usize, src: &SourceMap) -> Result<usize> {
++    let t = match sig.get(i) {
++        Some(t) => *t,
++        None => return Err(diag::syntax_error_eof(src.end_pos())),
++    };
++    match &t.token {
++        Token::EOF => return Err(diag::syntax_error_eof(src.end_pos())),
++        Token::Word(w) if w.quote_style == Some('"') && !w.value.is_empty() => {}
++        Token::Word(w) if w.quote_style == Some('"') => return Err(at_token(t, src)),
++        Token::Word(w) if w.quote_style.is_none() => {
++            let lower = w.value.to_ascii_lowercase();
++            if NON_COLID_KEYWORDS.contains(&lower.as_str()) {
++                return Err(at_token(t, src));
++            }
++        }
++        _ => return Err(at_token(t, src)),
++    }
++    Ok(i + 1)
++}
++
++fn at_token(t: &TokenWithSpan, src: &SourceMap) -> pgarbor_common::PgError {
++    token_problem(t, src)
++}
++
++#[cfg(test)]
++mod tests {
++    use crate::parser::parse;
++
++    /// PG error text and position for input that must be rejected.
++    fn reject(sql: &str) -> (String, Option<u32>) {
++        let e = parse(sql).expect_err(sql);
++        assert_eq!(e.sqlstate.code(), "42601", "{sql}");
++        (e.message.clone(), e.position)
++    }
++
++    #[test]
++    fn reserved_keyword_channel_is_syntax_error() {
++        assert_eq!(reject("LISTEN select"), ("syntax error at or near \"select\"".into(), Some(8)));
++        assert_eq!(reject("NOTIFY select"), ("syntax error at or near \"select\"".into(), Some(8)));
++        assert_eq!(reject("UNLISTEN select"), ("syntax error at or near \"select\"".into(), Some(10)));
++        assert!(parse("LISTEN \"select\"").is_ok());
++        assert!(parse("UNLISTEN \"select\"").is_ok());
++        assert!(parse("LISTEN virtual").is_ok());
++    }
++
++    #[test]
++    fn literal_and_empty_channels_are_syntax_errors() {
++        assert_eq!(reject("LISTEN 'ch'"), ("syntax error at or near \"'ch'\"".into(), Some(8)));
++        assert_eq!(reject("UNLISTEN 'keep_me'"), ("syntax error at or near \"'keep_me'\"".into(), Some(10)));
++        assert_eq!(reject("NOTIFY \"\""), ("zero-length delimited identifier at or near \"\"\"\"".into(), Some(8)));
++        assert!(parse("UNLISTEN *").is_ok());
++    }
++
++    #[test]
++    fn execute_empty_parens_is_syntax_error_at_close_paren() {
++        assert_eq!(reject("EXECUTE p()"), ("syntax error at or near \")\"".into(), Some(11)));
++        assert!(parse("EXECUTE p").is_ok());
++        assert!(parse("EXECUTE p(1)").is_ok());
++    }
++
++    #[test]
++    fn reset_names_are_checked_as_var_name() {
++        assert_eq!(reject("RESET 'timezone'"), ("syntax error at or near \"'timezone'\"".into(), Some(7)));
++        assert_eq!(reject("RESET extra_float_digits, statement_timeout"), ("syntax error at or near \",\"".into(), Some(25)));
++        assert!(parse("RESET ALL").is_ok());
++        assert!(parse("RESET search_path").is_ok());
++    }
++
++    #[test]
++    fn postgres_expression_grammar_boundaries() {
++        reject("SELECT lag(x) IGNORE NULLS OVER () FROM t");
++        reject("SELECT lag(x) RESPECT NULLS OVER () FROM t");
++        reject("SELECT CAST('1' AS interval DAY TO MINUTE(2))");
++        reject("SELECT int4[] '{1}'");
++        reject("CREATE INDEX ON t (a || b)");
++        reject("CREATE INDEX ON t (a::text)");
++        reject("CREATE TABLE t(b bool DEFAULT 1 IN (1,2))");
++        for sql in ["SELECT lag(x) OVER () FROM t", "SELECT CAST('1' AS interval DAY TO SECOND(2))", "CREATE INDEX ON t ((a || b))", "CREATE INDEX ON t (lower(a))", "CREATE TABLE t(b bool DEFAULT (1 IN (1,2)))"] {
++            assert!(parse(sql).is_ok(), "{sql}");
++        }
++    }
++
++    #[test]
++    fn alter_schema_if_exists_is_syntax_error() {
++        assert_eq!(reject("ALTER SCHEMA IF EXISTS s RENAME TO t"), ("syntax error at or near \"EXISTS\"".into(), Some(17)));
++        assert!(parse("ALTER SCHEMA s RENAME TO t").is_ok());
++    }
++}
+diff --git a/crates/pgarbor-sql/src/syntax_error.rs b/crates/pgarbor-sql/src/syntax_error.rs
+index a8f49f29..d49c2733 100644
+--- a/crates/pgarbor-sql/src/syntax_error.rs
++++ b/crates/pgarbor-sql/src/syntax_error.rs
+@@ -111,7 +111,7 @@ fn parser_problem(msg: &str, src: &SourceMap, tokens: &[TokenWithSpan]) -> PgErr
+ }
+ 
+ /// The error for an offending token, printed the way PG prints it (source text, not `Display`).
+-fn token_problem(t: &TokenWithSpan, src: &SourceMap) -> PgError {
++pub(crate) fn token_problem(t: &TokenWithSpan, src: &SourceMap) -> PgError {
+     let pos = src.char_pos(t.span.start);
+     match &t.token {
+         Token::EOF => diag::syntax_error_eof(src.end_pos()),
+diff --git a/crates/pgarbor-sql/src/binder/expr_func.rs b/crates/pgarbor-sql/src/binder/expr_func.rs
+index da0198cf..a94ea010 100644
+--- a/crates/pgarbor-sql/src/binder/expr_func.rs
++++ b/crates/pgarbor-sql/src/binder/expr_func.rs
+@@ -249,6 +249,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+     }
+ 
+     let flags = call_flags(f, pos)?;
++    let variadic_kw = variadic_call(f, pos)?;
+     let cands = b
+         .env
+         .function_candidates(schema, &name)
+@@ -273,7 +274,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+ 
+     // Step 4: resolve.
+     let arg_oids: Vec<Oid> = args.iter().map(|a| a.ty().oid).collect();
+-    let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), false, pos) {
++    let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), variadic_kw, pos) {
+         Ok(r) => r,
+         Err(e) => {
+             if e.sqlstate == SqlState::UNDEFINED_FUNCTION && args.len() == 1 && names.iter().all(|n| n.is_none()) {
+@@ -286,6 +287,9 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+     };
+ 
+     // Step 5: kind dispatch.
++    if variadic_kw && matches!(resolved.kind, ProcKind::Aggregate | ProcKind::Window) {
++        return Err(PgError::unimplemented("SQL-12", format!("VARIADIC call of aggregate or window function {qdisp}")));
++    }
+     match resolved.kind {
+         ProcKind::Procedure => {
+             let sig = func::signature_string(b.env, &name, &arg_oids)?;
+@@ -318,7 +322,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+                 ));
+             }
+             check_srf_placement(b, resolved.retset, ec, pos)?;
+-            build_call(b, &resolved, &name, args, false, false, pos, ec)
++            build_call(b, &resolved, &name, args, variadic_kw, false, pos, ec)
+         }
+         ProcKind::Aggregate => {
+             if f.over.is_none() && !ec.aggs_ok {
+@@ -419,6 +423,33 @@ pub fn build_call(
+         coerced.push(Some(e));
+     }
+ 
++    // VARIADIC "any" (concat, format, json_build_array, num_nulls, ...): PG passes the trailing
++    // arguments through unpacked, so the call may carry more args than declared parameters. The
++    // resolver expands `arg_order` to one entry per call argument in that case (identity order, no
++    // packing, `nvariadic == 0`).
++    if nargs > nparams && resolved.nvariadic == 0 {
++        if resolved.arg_order.len() != nargs {
++            return Err(PgError::internal("binder: more call arguments than declared parameters"));
++        }
++        let mut out: Vec<BoundExpr> = Vec::with_capacity(nargs);
++        for j in 0..nargs {
++            out.push(take_arg(&mut coerced, j)?);
++        }
++        return Ok(BoundExpr::new(
++            ExprKind::FuncCall(Box::new(FuncCallExpr {
++                func: resolved.oid,
++                name: name.to_string(),
++                args: out,
++                variadic: variadic_kw,
++                retset: resolved.retset,
++                volatility: info.volatility,
++                strict: info.strict,
++                is_cast_call,
++            })),
++            resolved.ret,
++        ));
++    }
++
+     // Place the arguments into declared parameter order.
+     let mut slots: Vec<Option<BoundExpr>> = Vec::new();
+     slots.resize_with(nparams, || None);
+@@ -621,6 +652,30 @@ struct CallFlags {
+     order_by: bool,
+ }
+ 
++/// Is this argument the parser's `VARIADIC` marker (`crate::parser::VARIADIC_MARKER`)?
++fn is_variadic_marker(a: &FunctionArg) -> bool {
++    let id = match a {
++        FunctionArg::Named { name, .. } => Some(name),
++        FunctionArg::ExprNamed { name: Expr::Identifier(id), .. } => Some(id),
++        _ => None,
++    };
++    id.is_some_and(|i| i.quote_style == Some('"') && i.value == crate::parser::VARIADIC_MARKER)
++}
++
++/// Does the call use the VARIADIC keyword (`f(a, VARIADIC arr)`)? PG grammar allows it only as the
++/// last argument, so a marker anywhere else is a syntax error.
++fn variadic_call(f: &Function, pos: Option<u32>) -> Result<bool> {
++    let FunctionArguments::List(list) = &f.args else {
++        return Ok(false);
++    };
++    let marks: Vec<usize> = list.args.iter().enumerate().filter(|(_, a)| is_variadic_marker(a)).map(|(i, _)| i).collect();
++    match marks.as_slice() {
++        [] => Ok(false),
++        [i] if *i + 1 == list.args.len() => Ok(true),
++        _ => Err(diag::syntax("syntax error", pos)),
++    }
++}
++
+ fn call_flags(f: &Function, pos: Option<u32>) -> Result<CallFlags> {
+     let mut flags = CallFlags { distinct: false, order_by: false };
+     if let FunctionArguments::List(list) = &f.args {
+@@ -816,6 +871,18 @@ fn bind_call_args(b: &mut Binder, f: &Function, ec: ExprCtx, pos: Option<u32>) -
+         FunctionArguments::List(list) => {
+             let mut seen_named = false;
+             for a in &list.args {
++                if is_variadic_marker(a) {
++                    // `VARIADIC expr` (the last argument): bound as a plain positional argument; the
++                    // variadic flag itself comes from `variadic_call`.
++                    let (FunctionArg::Named { arg: FunctionArgExpr::Expr(e), .. }
++                    | FunctionArg::ExprNamed { arg: FunctionArgExpr::Expr(e), .. }) = a
++                    else {
++                        return Err(diag::syntax("syntax error", pos));
++                    };
++                    args.push(bind_arg(b, e, ec)?);
++                    names.push(None);
++                    continue;
++                }
+                 match a {
+                     FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => {
+                         if seen_named {
+diff --git a/crates/pgarbor-exec/src/eval_call.rs b/crates/pgarbor-exec/src/eval_call.rs
+index ef0bd583..b625d9bb 100644
+--- a/crates/pgarbor-exec/src/eval_call.rs
++++ b/crates/pgarbor-exec/src/eval_call.rs
+@@ -164,7 +164,36 @@ pub fn call_function(
+ /// Evaluate a `FuncCall` expression node over `row`.
+ pub fn eval_func_call(ex: &mut Executor, f: &FuncCallExpr, result_type: TypeId, row: &[Datum]) -> Result<Datum> {
+     let handle = resolve_handle(ex, f.func, &f.name)?;
+-    let (args, arg_types) = eval_args(ex, &f.args, row)?;
++    let (mut args, mut arg_types) = eval_args(ex, &f.args, row)?;
++    if f.variadic && handle.proc.variadic == pgarbor_types::oids::ANY {
++        // `f(VARIADIC arr)` on a `VARIADIC "any"` proc: PG hands the array over with funcvariadic set
++        // and the proc unpacks it. The builtins here take the elements one by one, so unpack first.
++        match args.pop().zip(arg_types.pop()) {
++            Some((Datum::Null, _)) => {
++                // PG `extract_variadic_args` returns -1 for a NULL array: these procs return NULL.
++                // `format` instead sees no variadic values.
++                let null_yields_null = matches!(
++                    handle.proc.name,
++                    "concat" | "concat_ws" | "json_build_object" | "json_build_array" | "jsonb_build_object" | "jsonb_build_array" | "num_nulls" | "num_nonnulls"
++                );
++                if null_yields_null {
++                    return Ok(Datum::Null);
++                }
++            }
++            Some((Datum::Array(arr), _)) => {
++                let elem = TypeId::of(arr.elem);
++                for item in arr.items.iter() {
++                    args.push(item.clone());
++                    arg_types.push(elem);
++                }
++            }
++            Some((other, ty)) => {
++                args.push(other);
++                arg_types.push(ty);
++            }
++            None => {}
++        }
++    }
+     invoke(ex, &handle, f.strict, &args, &arg_types, result_type)
+ }
+ 
+diff --git a/crates/pgarbor-plan/src/simplify.rs b/crates/pgarbor-plan/src/simplify.rs
+index 25ac0714..e74b5a0f 100644
+--- a/crates/pgarbor-plan/src/simplify.rs
++++ b/crates/pgarbor-plan/src/simplify.rs
+@@ -240,7 +240,9 @@ fn try_fold(ctx: &PlanContext, e: &BoundExpr) -> Result<Option<Datum>> {
+             .as_ref()
+             .and_then(|vals| vals.get((*n as usize).wrapping_sub(1)).cloned())),
+         ExprKind::FuncCall(f) => {
+-            if f.retset || f.volatility != Volatility::Immutable {
++            // `f(VARIADIC arr)` is left to the executor, which unpacks the array for VARIADIC "any"
++            // procs (`eval_call::eval_func_call`); `fold_call` does not do that.
++            if f.retset || f.variadic || f.volatility != Volatility::Immutable {
+                 return Ok(None);
+             }
+             fold_call(ctx, f.func, &f.args, e.ty)
+diff --git a/crates/pgarbor/tests/sql_variadic_any_contract.rs b/crates/pgarbor/tests/sql_variadic_any_contract.rs
+new file mode 100644
+index 00000000..5a49f455
+--- /dev/null
++++ b/crates/pgarbor/tests/sql_variadic_any_contract.rs
+@@ -0,0 +1,57 @@
++//! `VARIADIC "any"` builtins (concat, concat_ws, format, json_build_array/object, num_nulls,
++//! num_nonnulls, ...) take any number of trailing arguments, unpacked, with no array packing
++//! (PG `parse_func.c` / `FuncnameGetCandidates`). The binder must accept more call arguments than
++//! declared parameters for these functions instead of failing with an internal error.
++use pgarbor::{Database, SessionOptions, StatementResult};
++use pgarbor_types::Datum;
++
++fn one_value(sql: &str) -> Datum {
++    let db = Database::in_memory().expect("create");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    let out = s.simple_query(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
++    match &out.last().expect("statement").result {
++        StatementResult::Rows { rows, .. } => rows[0][0].clone(),
++        other => panic!("expected rows for {sql}: {other:?}"),
++    }
++}
++
++fn sqlstate(sql: &str) -> String {
++    let db = Database::in_memory().expect("create");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query(sql).unwrap_err().sqlstate.code().to_string()
++}
++
++#[test]
++fn concat_accepts_many_unpacked_arguments() {
++    assert_eq!(one_value("SELECT concat('a', 'b', 'c')"), Datum::Text("abc".into()));
++    assert_eq!(one_value("SELECT concat('a', NULL, 'c', 'd', 'e')"), Datum::Text("acde".into()));
++    assert_eq!(one_value("SELECT concat(1, 2.5, true, NULL, 'x')"), Datum::Text("12.5tx".into()));
++}
++
++#[test]
++fn concat_ws_accepts_many_unpacked_arguments() {
++    assert_eq!(one_value("SELECT concat_ws(',', 'a', NULL, 'b', 'c')"), Datum::Text("a,b,c".into()));
++    assert_eq!(one_value("SELECT concat_ws(',', 'a')"), Datum::Text("a".into()));
++}
++
++#[test]
++fn format_accepts_extra_trailing_arguments() {
++    assert_eq!(one_value("SELECT format('%s %s', 'a', 'b', 'c')"), Datum::Text("a b".into()));
++    assert_eq!(one_value("SELECT format('x')"), Datum::Text("x".into()));
++    assert_eq!(one_value("SELECT format('%1$s', 'a')"), Datum::Text("a".into()));
++}
++
++#[test]
++fn json_and_null_counting_builtins_accept_many_arguments() {
++    assert_eq!(one_value("SELECT json_build_array(1, NULL, 'x')::text"), Datum::Text("[1, null, \"x\"]".into()));
++    assert_eq!(one_value("SELECT num_nulls(1, NULL, 3, NULL)"), Datum::Int4(2));
++    assert_eq!(one_value("SELECT num_nonnulls(1, NULL, 3, NULL)"), Datum::Int4(2));
++    assert_eq!(one_value("SELECT jsonb_build_object('a', 1, 'b', 'x')::text"), Datum::Text("{\"a\": 1, \"b\": \"x\"}".into()));
++}
++
++#[test]
++fn zero_variadic_arguments_follow_pg() {
++    assert_eq!(one_value("SELECT json_build_array()::text"), Datum::Text("[]".into()));
++    assert_eq!(sqlstate("SELECT format('%s')"), "22023");
++    assert_eq!(sqlstate("SELECT concat()"), "42883");
++}
+diff --git a/crates/pgarbor/tests/sql_variadic_contract.rs b/crates/pgarbor/tests/sql_variadic_contract.rs
+new file mode 100644
+index 00000000..bb301f5c
+--- /dev/null
++++ b/crates/pgarbor/tests/sql_variadic_contract.rs
+@@ -0,0 +1,58 @@
++//! VARIADIC call contract (PG `parse_func.c` / `func_get_detail`): `f(VARIADIC arr)` on a
++//! `VARIADIC "any"` builtin unpacks the array, a NULL array gives NULL for the json/concat/num_nulls
++//! family, and VARIADIC is only accepted as the last argument.
++use pgarbor::{Database, SessionOptions, StatementResult};
++use pgarbor_types::Datum;
++
++fn one_value(sql: &str) -> Datum {
++    let db = Database::in_memory().expect("create");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    let out = s.simple_query(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
++    match &out.last().expect("statement").result {
++        StatementResult::Rows { rows, .. } => rows[0][0].clone(),
++        other => panic!("expected rows for {sql}: {other:?}"),
++    }
++}
++
++fn sqlstate(sql: &str) -> String {
++    let db = Database::in_memory().expect("create");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query(sql).unwrap_err().sqlstate.code().to_string()
++}
++
++#[test]
++fn variadic_any_positional_arguments_are_unpacked() {
++    assert_eq!(one_value("SELECT concat(1, 'a', NULL, 2)"), Datum::Text("1a2".into()));
++    assert_eq!(one_value("SELECT format('%s-%s', 'x', 2)"), Datum::Text("x-2".into()));
++}
++
++#[test]
++fn variadic_keyword_unpacks_array_elements() {
++    assert_eq!(one_value("SELECT concat(VARIADIC ARRAY['x', NULL, 'z']::text[])"), Datum::Text("xz".into()));
++    assert_eq!(one_value("SELECT format('%s, %s', VARIADIC array[1, 2])"), Datum::Text("1, 2".into()));
++    assert_eq!(one_value("SELECT num_nulls(VARIADIC '{1,2,NULL,3}'::int[])"), Datum::Int4(1));
++}
++
++#[test]
++fn variadic_null_array_yields_null_for_build_and_concat_functions() {
++    assert_eq!(one_value("SELECT concat(VARIADIC NULL::text[]) IS NULL"), Datum::Bool(true));
++    assert_eq!(one_value("SELECT jsonb_build_array(VARIADIC NULL::text[]) IS NULL"), Datum::Bool(true));
++    assert_eq!(one_value("SELECT num_nulls(VARIADIC NULL::text[]) IS NULL"), Datum::Bool(true));
++}
++
++#[test]
++fn variadic_must_be_last_argument() {
++    assert_eq!(sqlstate("SELECT concat(VARIADIC ARRAY['a'], 'b')"), "42601");
++}
++
++#[test]
++fn variadic_calls_inside_ddl_expressions() {
++    let db = Database::in_memory().expect("db");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE t(v text DEFAULT concat(VARIADIC ARRAY['a','b'])); INSERT INTO t DEFAULT VALUES; CREATE VIEW v AS SELECT concat(VARIADIC ARRAY[v,'c']) AS x FROM t").expect("DDL expressions");
++    let out = s.simple_query("SELECT x FROM v").expect("view");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(*rows, vec![vec![Datum::Text("abc".into())]]),
++        other => panic!("{other:?}"),
++    }
++}

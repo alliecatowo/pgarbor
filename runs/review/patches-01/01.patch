@@ -1,0 +1,232 @@
+diff --git c/contracts/amendments/pgarbor-sql-01-sqlparser-gaps.md w/contracts/amendments/pgarbor-sql-01-sqlparser-gaps.md
+index 5a7a7c0aad08d307dcd724b1a8c521d35bd32113..74bb7704a0a6580cbb988d5c58362dafc0b3f598 100644
+--- c/contracts/amendments/pgarbor-sql-01-sqlparser-gaps.md
++++ w/contracts/amendments/pgarbor-sql-01-sqlparser-gaps.md
+@@ -33,3 +33,9 @@ pgarbor-sql (parser_extra, classify, binder), workspace Cargo.toml (future).
+ ## Steward decision (2026-10-15)
+ 
+ Keep sqlparser pinned at 0.63.0 and the explicit extras parser/classification. Unsupported constructs remain leased 0A000; no dependency fork or grammar-fidelity claim is approved.
++
++Assembly follow-up (2026-10-15): the parser adapter now reads CREATE SEQUENCE option
++lists in arbitrary PG order, retaining duplicate options for binder rejection. It folds
++signed CONNECTION LIMIT number tokens for sqlparser's value-only role option parser,
++retaining original source locations. Binder unit fixtures use the production adapter
++rather than bypassing it with raw sqlparser. SQL case text and oracle files are unchanged.
+diff --git c/crates/pgarbor-sql/src/binder/copy.rs w/crates/pgarbor-sql/src/binder/copy.rs
+index 77af9712aa23a532d556b83e916dcf44552192a2..2d0e5e936182a7a5f7f792faef9fd67dca97fbb6 100644
+--- c/crates/pgarbor-sql/src/binder/copy.rs
++++ w/crates/pgarbor-sql/src/binder/copy.rs
+@@ -113,6 +113,13 @@ enum CopyRelation<'a> {
+ 
+ /// Bind COPY.
+ pub fn bind_copy(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
++    b.scopes.push(super::scope::QueryScope::new(super::scope::ScopeKind::TableExpr));
++    let result = bind_copy_inner(b, stmt);
++    b.scopes.pop();
++    result
++}
++
++fn bind_copy_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
+     let (source, to, target, options, legacy_options, values) = match stmt {
+         Statement::Copy { source, to, target, options, legacy_options, values } => {
+             (source, *to, target, options, legacy_options, values)
+diff --git c/crates/pgarbor-sql/src/binder/ddl_objects.rs w/crates/pgarbor-sql/src/binder/ddl_objects.rs
+index bac1a27f73d26757064b279190e2c9aaaf04bb66..06012e0a4e4283e1b21c96aab3a5ee83c13527a6 100644
+--- c/crates/pgarbor-sql/src/binder/ddl_objects.rs
++++ w/crates/pgarbor-sql/src/binder/ddl_objects.rs
+@@ -145,7 +145,7 @@ fn string_literal(e: &Expr) -> Option<String> {
+ fn signed_number(e: &Expr) -> Option<(bool, &str)> {
+     match e {
+         Expr::Value(v) => match &v.value {
+-            Value::Number(s, _) => Some((false, s.as_str())),
++            Value::Number(s, _) => Some(match s.strip_prefix('-') { Some(digits) => (true, digits), None => (false, s.strip_prefix('+').unwrap_or(s.as_str())) }),
+             _ => None,
+         },
+         Expr::UnaryOp { op: UnaryOperator::Minus, expr, .. } => signed_number(expr).map(|(neg, s)| (!neg, s)),
+@@ -767,12 +767,10 @@ mod tests {
+     use crate::source::SourceMap;
+     use pgarbor_catalog::testing;
+     use pgarbor_types::context::IoConfig;
+-    use sqlparser::dialect::PostgreSqlDialect;
+-    use sqlparser::parser::Parser;
+ 
+     fn parse_one(sql: &str) -> Statement {
+-        let mut stmts = Parser::parse_sql(&PostgreSqlDialect {}, sql).expect("test SQL parses");
+-        stmts.remove(0)
++        let raw = crate::parse_one(sql).expect("PG SQL parses through adapter");
++        raw.as_ast().expect("DDL AST").clone()
+     }
+ 
+     fn sequence_options(sql: &str) -> Vec<AstSequenceOption> {
+diff --git c/crates/pgarbor-sql/src/parser.rs w/crates/pgarbor-sql/src/parser.rs
+index 120cb1c36beb33c748350786b03a24f8cae90028..df68aec469c352e2a6b606c7d44a60c34a8f1aaf 100644
+--- c/crates/pgarbor-sql/src/parser.rs
++++ w/crates/pgarbor-sql/src/parser.rs
+@@ -310,11 +310,17 @@ fn trim_range(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<(usi
+ 
+ /// Parse one chunk (tokens end with EOF) with sqlparser; the whole chunk must be one statement.
+ fn parse_ast_chunk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<Statement> {
++    let toks = signed_connection_limit(toks);
++    let toks = toks.as_slice();
+     let dialect = PostgreSqlDialect {};
+     let mut parser = Parser::new(&dialect)
+         .with_recursion_limit(RECURSION_LIMIT)
+         .with_tokens_with_locations(toks.to_vec());
+-    let stmt = match parser.parse_statement() {
++    let head: Vec<_> = toks.iter().filter_map(|t| bare_word(&t.token)).take(3).collect();
++    let is_sequence = matches!(head.as_slice(), [a,b,..] if a == "CREATE" && b == "SEQUENCE")
++        || matches!(head.as_slice(), [a,b,c] if a == "CREATE" && matches!(b.as_str(), "TEMP" | "TEMPORARY") && c == "SEQUENCE");
++    let parsed = if is_sequence { parse_sequence_flexible(&mut parser) } else { parser.parse_statement() };
++    let stmt = match parsed {
+         Ok(s) => s,
+         Err(e) => {
+             let err = syntax_error::translate_parser_error(&e, src, toks)?;
+@@ -330,6 +336,63 @@ fn parse_ast_chunk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<Statement>
+     Ok(stmt)
+ }
+ 
++// sqlparser 0.63 fixes SeqOptList order; PG gram.y permits any order and repetitions
++// (repetitions are rejected by binding, before any catalog changes).
++fn parse_sequence_flexible(p: &mut Parser<'_>) -> std::result::Result<Statement, sqlparser::parser::ParserError> {
++    use sqlparser::keywords::Keyword as K;
++    use sqlparser::ast::SequenceOptions as O;
++    p.expect_keyword_is(K::CREATE)?;
++    let temporary = p.parse_keyword(K::TEMP) || p.parse_keyword(K::TEMPORARY);
++    p.expect_keyword_is(K::SEQUENCE)?;
++    let if_not_exists = p.parse_keywords(&[K::IF,K::NOT,K::EXISTS]);
++    let name=p.parse_object_name(false)?;
++    let mut data_type=None;let mut owned_by=None;let mut sequence_options=Vec::new();
++    loop {
++        if p.parse_keyword(K::AS) {
++            if data_type.is_some() { return Err(sqlparser::parser::ParserError::ParserError("conflicting or redundant options".into())); }
++            data_type=Some(p.parse_data_type()?);
++        } else if p.parse_keyword(K::INCREMENT) {
++            let by=p.parse_keyword(K::BY);sequence_options.push(O::IncrementBy(p.parse_number()?,by));
++        } else if p.parse_keyword(K::MINVALUE) {sequence_options.push(O::MinValue(Some(p.parse_number()?)));}
++        else if p.parse_keyword(K::MAXVALUE) {sequence_options.push(O::MaxValue(Some(p.parse_number()?)));}
++        else if p.parse_keyword(K::START) {let with=p.parse_keyword(K::WITH);sequence_options.push(O::StartWith(p.parse_number()?,with));}
++        else if p.parse_keyword(K::CACHE) {sequence_options.push(O::Cache(p.parse_number()?));}
++        else if p.parse_keyword(K::CYCLE) {sequence_options.push(O::Cycle(false));}
++        else if p.parse_keyword(K::NO) {
++            if p.parse_keyword(K::MINVALUE) {sequence_options.push(O::MinValue(None));}
++            else if p.parse_keyword(K::MAXVALUE) {sequence_options.push(O::MaxValue(None));}
++            else {p.expect_keyword_is(K::CYCLE)?;sequence_options.push(O::Cycle(true));}
++        } else if p.parse_keyword(K::OWNED) {
++            p.expect_keyword_is(K::BY)?;
++            if owned_by.is_some() {return Err(sqlparser::parser::ParserError::ParserError("conflicting or redundant options".into()));}
++            owned_by=Some(p.parse_object_name(false)?);
++        } else {break;}
++    }
++    Ok(Statement::CreateSequence {temporary,if_not_exists,name,data_type,sequence_options,owned_by})
++}
++// The role parser's numeric-value path omits unary signs. Fold only the signed
++// CONNECTION LIMIT literal; retain its original source span and every other token.
++fn signed_connection_limit(toks: &[TokenWithSpan]) -> Vec<TokenWithSpan> {
++    let mut out=Vec::with_capacity(toks.len());let mut i=0;
++    let significant: Vec<_>=toks.iter().enumerate().filter(|(_,t)|!matches!(t.token,Token::Whitespace(_))).collect();
++    while i<significant.len() {
++        let (_,t)=significant[i];
++        if i>=2 && bare_word(&significant[i-2].1.token).as_deref()==Some("CONNECTION")
++            && bare_word(&significant[i-1].1.token).as_deref()==Some("LIMIT")
++            && matches!(t.token,Token::Minus | Token::Plus) {
++            if let Some((_,next))=significant.get(i+1) {
++                if let Token::Number(n,long)=&next.token {
++                    let sign=if matches!(t.token,Token::Minus) {"-"} else {""};
++                    out.push(TokenWithSpan::new(Token::Number(format!("{sign}{n}"),*long),Span::new(t.span.start,next.span.end)));
++                    i+=2;continue;
++                }
++            }
++        }
++        out.push(t.clone());i+=1;
++    }
++    out
++}
++
+ /// Parse text that must contain exactly ONE statement (used for re-binding stored view
+ /// definitions, PREPARE inner text, EXECUTE of cached text): any other count is an internal error
+ /// (XX000 `expected one statement, found N`).
+diff --git c/crates/pgarbor/tests/sql_session_contract.rs w/crates/pgarbor/tests/sql_session_contract.rs
+index f3e55d263d12910bd170d08a88eef208b2caaef6..a63410fae75b64710792acca093447175b71fa70 100644
+--- c/crates/pgarbor/tests/sql_session_contract.rs
++++ w/crates/pgarbor/tests/sql_session_contract.rs
+@@ -180,3 +180,31 @@ fn information_schema_columns_is_served_by_its_producer() {
+         other => panic!("expected rows: {other:?}"),
+     }
+ }
++
++#[test]
++fn utility_and_transaction_control_can_be_first_on_fresh_session() {
++    for sql in ["SHOW server_version", "BEGIN", "ROLLBACK", "SET application_name = 'first'", "SHOW ALL"] {
++        let db = Database::in_memory().expect("database");
++        let mut s = db.session("main", SessionOptions::default()).expect("fresh session");
++        let out = s.simple_query_raw(sql);
++        assert!(out.error.is_none(), "first statement {sql}: {:?}", out.error);
++        assert_eq!(out.statements.len(), 1, "{sql}");
++        if sql == "BEGIN" {
++            assert_eq!(out.status, pgarbor::TxnStatus::InTransaction);
++            assert_eq!(s.simple_query("ROLLBACK").expect("rollback")[0].result.tag(), "ROLLBACK");
++        }
++    }
++}
++
++#[test]
++fn unsupported_security_and_deferred_constraints_fail_closed() {
++    let db = Database::in_memory().expect("database");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE t(id int primary key)").expect("create");
++    for sql in ["ALTER TABLE t ENABLE ROW LEVEL SECURITY", "ALTER TABLE t FORCE ROW LEVEL SECURITY", "CREATE TABLE d(id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"] {
++        let e = s.simple_query(sql).expect_err("must reject unenforced semantics");
++        assert_eq!(e.sqlstate.code(), "0A000", "{sql}: {e:?}");
++        assert!(e.is_unimplemented());
++    }
++    s.simple_query("INSERT INTO t VALUES (1)").expect("transaction recovers");
++}
+diff --git 1/crates/pgarbor/tests/sql_concurrency_contract.rs 2/crates/pgarbor/tests/sql_concurrency_contract.rs
+new file mode 100644
+index 00000000..e8bd0647
+--- /dev/null
++++ 2/crates/pgarbor/tests/sql_concurrency_contract.rs
+@@ -0,0 +1,43 @@
++use pgarbor::{Database, Datum, Session, SessionOptions, StatementResult};
++
++fn value(s: &mut Session) -> i32 {
++    let output=s.simple_query("SELECT value FROM t WHERE id=1").expect("read");
++    match &output[0].result {
++        StatementResult::Rows {rows,..} if rows.len()==1 => match rows[0][0] {Datum::Int4(v)=>v,_=>panic!("wrong type")},
++        other=>panic!("wrong rows: {other:?}"),
++    }
++}
++#[test]
++fn read_committed_refreshes_between_statements() {
++    let db=Database::in_memory().expect("database");
++    let mut a=db.session("main",SessionOptions::default()).expect("session a");
++    let mut b=db.session("main",SessionOptions::default()).expect("session b");
++    a.simple_query("CREATE TABLE t(id int primary key,value int); INSERT INTO t VALUES(1,10)").expect("setup");
++    a.simple_query("BEGIN ISOLATION LEVEL READ COMMITTED").expect("begin");
++    assert_eq!(value(&mut a),10);
++    b.simple_query("UPDATE t SET value=20 WHERE id=1").expect("concurrent commit");
++    assert_eq!(value(&mut a),20);
++    a.simple_query("ROLLBACK").expect("rollback");
++}
++#[test]
++fn repeatable_read_retains_first_statement_snapshot() {
++    let db=Database::in_memory().expect("database");
++    let mut a=db.session("main",SessionOptions::default()).expect("session a");
++    let mut b=db.session("main",SessionOptions::default()).expect("session b");
++    a.simple_query("CREATE TABLE t(id int primary key,value int); INSERT INTO t VALUES(1,10)").expect("setup");
++    a.simple_query("BEGIN ISOLATION LEVEL REPEATABLE READ").expect("begin");
++    assert_eq!(value(&mut a),10);
++    b.simple_query("UPDATE t SET value=20 WHERE id=1").expect("concurrent commit");
++    assert_eq!(value(&mut a),10);
++    a.simple_query("ROLLBACK").expect("rollback");
++    assert_eq!(value(&mut a),20);
++}
++#[test]
++fn failed_multirow_unique_statement_leaves_no_partial_rows() {
++    let db=Database::in_memory().expect("database");
++    let mut s=db.session("main",SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE t(id int primary key,value int)").expect("setup");
++    assert_eq!(s.simple_query("INSERT INTO t VALUES(1,10),(1,20)").unwrap_err().sqlstate.code(),"23505");
++    let output=s.simple_query("SELECT id FROM t").expect("recover");
++    assert!(matches!(&output[0].result,StatementResult::Rows {rows,..} if rows.is_empty()));
++}

@@ -1,0 +1,162 @@
+diff --git a/crates/pgarbor-types/src/cast/apply.rs b/crates/pgarbor-types/src/cast/apply.rs
+index 679c53b0..f1038f79 100644
+--- a/crates/pgarbor-types/src/cast/apply.rs
++++ b/crates/pgarbor-types/src/cast/apply.rs
+@@ -26,6 +26,7 @@ use crate::datum::{type_mismatch, Datum, TypeId};
+ use crate::func;
+ use crate::io;
+ use crate::names::display_name;
++use crate::registry::base_type;
+ use crate::oids;
+ use crate::typmod;
+ use pgarbor_common::{Oid, PgError, Result, SqlState};
+@@ -53,10 +54,38 @@ pub fn cast_datum(value: Datum, from: TypeId, to: TypeId, context: CastContext,
+     apply_cast(&plan, value, ctx)
+ }
+ 
++/// Binary-coercible (relabel) casts keep the bits but may change the Datum variant: `int4 -> oid`,
++/// `oid -> int4` and the `reg*` family (pg_cast castmethod 'b'). Every other relabel keeps its variant.
++fn relabel_variant(target: Oid, value: Datum) -> Datum {
++    match value {
++        Datum::Int4(v) if OID_DATUM_TYPES.contains(&target) => Datum::Oid(v as u32),
++        Datum::Oid(v) if target == oids::INT4 => Datum::Int4(v as i32),
++        other => other,
++    }
++}
++
++/// Types whose Datum variant is `Datum::Oid` (see the `datum` module table).
++const OID_DATUM_TYPES: &[Oid] = &[
++    oids::OID,
++    24,   // regproc
++    2202, // regprocedure
++    2203, // regoper
++    2204, // regoperator
++    2205, // regclass
++    2206, // regtype
++    3734, // regconfig
++    3769, // regdictionary
++    4089, // regnamespace
++    4096, // regrole
++    4191, // regcollation
++    28,   // xid
++    29,   // cid
++];
++
+ /// Run one step of `plan` on a non-NULL value.
+ fn apply_step(plan: &CastPlan, step: &CastStep, value: Datum, ctx: &FuncCtx) -> Result<Datum> {
+     match step {
+-        CastStep::Relabel => Ok(value),
++        CastStep::Relabel => Ok(relabel_variant(base_type(ctx.env, plan.to.oid), value)),
+         CastStep::DomainCheck { .. } => Ok(value),
+         CastStep::Func { proc, nargs } => apply_func(plan, *proc, *nargs, value, ctx),
+         CastStep::ViaIo { from, to } => {
+@@ -123,6 +152,10 @@ fn apply_record(plan: &CastPlan, to: TypeId, value: Datum, ctx: &FuncCtx) -> Res
+         Datum::Record(v) => v,
+         other => return Err(type_mismatch("Record", &other)),
+     };
++    if to.oid == oids::RECORD {
++        // Datum::Record does not retain a tuple descriptor for an anonymous result.
++        return Err(PgError::unimplemented("TYP-53", "coercion to anonymous record without a tuple descriptor"));
++    }
+     let to_fields = ctx.env.composite_fields(to.oid).ok_or_else(|| {
+         PgError::internal(format!("composite fields unknown for type {}", to.oid))
+     })?;
+diff --git a/crates/pgarbor-types/src/agg/ordered_set.rs b/crates/pgarbor-types/src/agg/ordered_set.rs
+index 105b27dc..aa2c191a 100644
+--- a/crates/pgarbor-types/src/agg/ordered_set.rs
++++ b/crates/pgarbor-types/src/agg/ordered_set.rs
+@@ -79,7 +79,7 @@ pub(crate) fn make(agg: &BuiltinAggregate, spec: &AggSpec, ctx: &FuncCtx) -> Res
+                 return Err(arity_error(agg, "sort-column count", 0));
+             }
+             if spec.direct_args.len() != spec.arg_types.len() {
+-                return Err(arity_error(agg, "hypothetical-row width", spec.direct_args.len()));
++                return Err(PgError::unimplemented("TYP-48", "multi-column hypothetical-set aggregate"));
+             }
+             Ok(Box::new(HypoState {
+                 kind,
+diff --git a/crates/pgarbor-types/src/record.rs b/crates/pgarbor-types/src/record.rs
+index 1ad665e5..3085fee2 100644
+--- a/crates/pgarbor-types/src/record.rs
++++ b/crates/pgarbor-types/src/record.rs
+@@ -154,7 +154,19 @@ pub fn output(ctx: &IoCtx, ty: TypeId, d: &Datum) -> Result<String> {
+             "output of anonymous composite types requires field types",
+         ));
+     }
+-    let vals = record_values(d)?;
++    let stored = record_values(d)?;
++    let mut expanded;
++    let fields = ctx.env.composite_fields(ty.oid);
++    // A metadata-only ADD ATTRIBUTE leaves older stored tuples physically shorter. PostgreSQL
++    // heap_getattr reads the missing trailing attributes as NULL; output follows the current type.
++    let vals = match fields {
++        Some(fields) if stored.len() < fields.iter().filter(|f| !f.dropped).count() => {
++            expanded = stored.to_vec();
++            expanded.resize(fields.len(), Datum::Null);
++            expanded.as_slice()
++        }
++        _ => stored,
++    };
+     let mut parts = Vec::with_capacity(vals.len());
+     for (idx, tid) in named_fields(ctx.env, ty.oid, vals.len())? {
+         parts.push(io::output_opt(ctx, tid, &vals[idx])?);
+diff --git a/crates/pgarbor-exec/src/eval.rs b/crates/pgarbor-exec/src/eval.rs
+index a1658f87..32de423a 100644
+--- a/crates/pgarbor-exec/src/eval.rs
++++ b/crates/pgarbor-exec/src/eval.rs
+@@ -52,7 +52,7 @@ use pgarbor_sql::ir::{
+     MinMaxExpr, NullIfExpr, NullTest, SqlValueOp, SubPlanRef,
+ };
+ use pgarbor_types::cast::{cast_datum, CastContext};
+-use pgarbor_types::compare::{cmp_datums, not_distinct};
++use pgarbor_types::compare::cmp_datums;
+ use pgarbor_types::logic::{and3, bool3_to_datum, datum_to_bool3, is_false, is_true, is_unknown, not3, or3, qualifies};
+ use pgarbor_types::{Datum, TypeId};
+ 
+@@ -194,7 +194,12 @@ fn eval_boolean_test(ex: &mut Executor, t: &BooleanTest, row: &[Datum]) -> Resul
+ fn eval_distinct_from(ex: &mut Executor, d: &DistinctFrom, row: &[Datum]) -> Result<Datum> {
+     let l = eval(ex, &d.left, row)?;
+     let r = eval(ex, &d.right, row)?;
+-    let same = not_distinct(&ex.se().env, d.left.ty, &l, &r)?;
++    let same = match (l.is_null(), r.is_null()) {
++        (true, true) => true,
++        (true, false) | (false, true) => false,
++        (false, false) => eval_call::call_operator(ex, &d.eq, &[l, r], &[d.left.ty, d.right.ty], TypeId::BOOL)?
++            .as_bool().ok_or_else(|| PgError::internal("DISTINCT equality did not return boolean"))?,
++    };
+     Ok(Datum::Bool(same == d.negated))
+ }
+ 
+diff --git a/crates/pgarbor-exec/src/eval_cast.rs b/crates/pgarbor-exec/src/eval_cast.rs
+index a812d977..ca84ee9e 100644
+--- a/crates/pgarbor-exec/src/eval_cast.rs
++++ b/crates/pgarbor-exec/src/eval_cast.rs
+@@ -62,7 +62,7 @@ use pgarbor_sql::{parse_expr_text, SourceMap};
+ use pgarbor_types::array::subscript::{self, Subscript};
+ use pgarbor_types::cast::{apply_cast, cast_datum, CastContext};
+ use pgarbor_types::datum::type_mismatch;
+-use pgarbor_types::{Datum, TypeId};
++use pgarbor_types::{Datum, TypeEnv, TypeId};
+ 
+ use crate::context::{EngineServices, SessionEnv};
+ use crate::eval::eval;
+@@ -134,10 +134,16 @@ pub fn eval_field_select(ex: &mut Executor, f: &FieldSelect, row: &[Datum]) -> R
+         Datum::Null => Ok(Datum::Null),
+         Datum::Record(fields) => {
+             let idx = i64::from(f.field) - 1;
+-            usize::try_from(idx)
+-                .ok()
+-                .and_then(|i| fields.into_iter().nth(i))
+-                .ok_or_else(|| PgError::internal(format!("record has no field {}", f.field)))
++            let index = usize::try_from(idx).map_err(|_| PgError::internal("invalid composite field number"))?;
++            if let Some(value) = fields.get(index) {
++                return Ok(value.clone());
++            }
++            // Metadata-only ADD ATTRIBUTE can leave stored tuples physically shorter than the
++            // current descriptor. PostgreSQL reads such trailing attributes as NULL.
++            if ex.se().env.composite_fields(f.arg.ty.oid).is_some_and(|desc| index < desc.len()) {
++                return Ok(Datum::Null);
++            }
++            Err(PgError::internal(format!("record has no field {}", f.field)))
+         }
+         other => Err(type_mismatch("record", &other)),
+     }

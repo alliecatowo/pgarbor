@@ -1,0 +1,107 @@
+diff --git c/contracts/crates/pgarbor-exec.md w/contracts/crates/pgarbor-exec.md
+index d3d414e55286667a7e2db0a64c4258184f5e4c64..eeb39098d370b97d957600604c1c1f36d23494b0 100644
+--- c/contracts/crates/pgarbor-exec.md
++++ w/contracts/crates/pgarbor-exec.md
+@@ -97,7 +97,7 @@ Unimplemented behavior is `Err(PgError::unimplemented("EXE-NN", ..))`, never a w
+ 
+ * No triggers, rules, row-level security, inheritance, partitioning, temp tables, cursors (`DECLARE`), `MERGE`.
+ * User-defined SQL/PL functions are stored by the catalog but NOT executed (0A000 in expressions, `DO`, `CALL`).
+-* Deferrable / INITIALLY DEFERRED constraints are checked at statement end, not commit (`SET CONSTRAINTS` is a no-op).
++* Deferrable / INITIALLY DEFERRED constraints are unsupported (leased 0A000; exec-03). `SET CONSTRAINTS ALL IMMEDIATE` is accepted only because supported constraints are immediate; DEFERRED is rejected.
+ * EvalPlanQual is limited to single-table UPDATE/DELETE/FOR UPDATE (module `modify`, `node_lock`).
+ * No spilling: sorts, hashes, aggregates and partitions are held in memory. `Backward` index scans collect the interval's keys.
+ * No planner row-count hints (amendment plan-01 needs a storage source).
+@@ -160,3 +160,8 @@ Frozen and implemented (not leased): `lib.rs`, `error.rs`, `result.rs`, `txn.rs`
+ ## Assembly decisions (2026-10-15)
+ 
+ Steward decisions: exec-01 NULL-distinct unique key suffix accepted; exec-02 integration invariants accepted with limits in its decision. Unsupported deferred constraints must return leased 0A000, and mixed-type join keys use nested loops.
++
++Security correction (exec-03): deferred constraints are unsupported (0A000), including
++already stored deferred metadata. Row security activation and access to relations
++with row security flags are unsupported (0A000). The earlier promise of early deferred
++checking is superseded; no policy enforcement is claimed.
+diff --git c/crates/pgarbor-exec/src/ddl_table.rs w/crates/pgarbor-exec/src/ddl_table.rs
+index 352522ffa6a5940cfa0e9b0d99550b0d3fec00f9..4f9d82f09b8194a50c43d2a673c03c510eef1428 100644
+--- c/crates/pgarbor-exec/src/ddl_table.rs
++++ w/crates/pgarbor-exec/src/ddl_table.rs
+@@ -48,6 +48,7 @@ use crate::result::ExecResult;
+ /// CREATE TABLE (module docs). The catalog queues `CreateSequenceState` for serial/identity
+ /// sequences; any created sequence without one gets it added here so its state always exists.
+ pub fn exec_create_table(cx: &mut ExecContext, spec: &CreateTableSpec) -> Result<ExecResult> {
++    for constraint in &spec.constraints { reject_deferred(constraint)?; }
+     let (created, outcome) = run_ddl(cx, |ddl| ddl.create_table(spec))?;
+     let mut follow_ups = outcome.follow_ups;
+     if let Some(created) = &created {
+@@ -214,6 +215,7 @@ fn apply_command(
+             ddl.set_column_attribute(table, column, attr)?;
+         }
+         AlterTableCmd::AddConstraint(spec) => {
++            reject_deferred(spec)?;
+             ddl.add_constraint(table, spec)?;
+         }
+         AlterTableCmd::DropConstraint { name, cascade, missing_ok } => {
+@@ -226,6 +228,9 @@ fn apply_command(
+             ddl.validate_constraint(table, name)?;
+         }
+         AlterTableCmd::AlterConstraint { name, deferrable, initially_deferred, enforced } => {
++            if *deferrable == Some(true) || *initially_deferred == Some(true) {
++                return Err(PgError::unimplemented("EXE-33", "deferred constraint enforcement"));
++            }
+             ddl.alter_constraint(table, name, *deferrable, *initially_deferred, *enforced)?;
+         }
+         AlterTableCmd::SetOptions { set, reset } => {
+@@ -240,6 +245,9 @@ fn apply_command(
+             ddl.set_replica_identity(table, setting)?;
+         }
+         AlterTableCmd::RowSecurity { enable, force } => {
++            if *enable == Some(true) || *force == Some(true) {
++                return Err(PgError::unimplemented("EXE-33", "row security policy enforcement"));
++            }
+             ddl.set_row_security(table, *enable, *force)?;
+         }
+     }
+@@ -425,3 +433,10 @@ mod tests {
+         assert_eq!(res.tag(), "ALTER TABLE");
+     }
+ }
++
++fn reject_deferred(spec: &pgarbor_catalog::ddl::spec::ConstraintSpec) -> Result<()> {
++    if spec.deferrable || spec.initially_deferred {
++        return Err(PgError::unimplemented("EXE-33", "deferred constraint enforcement"));
++    }
++    Ok(())
++}
+diff --git c/crates/pgarbor-exec/src/tabledesc.rs w/crates/pgarbor-exec/src/tabledesc.rs
+index 82374d7bd6aac32bb4212b3a98e232f6526eb022..d9fdffe1fd3663da90887c6e881ab84d24b7a759 100644
+--- c/crates/pgarbor-exec/src/tabledesc.rs
++++ w/crates/pgarbor-exec/src/tabledesc.rs
+@@ -232,6 +232,12 @@ pub fn table_desc(cx: &ExecContext, oid: Oid) -> Result<Rc<TableDesc>> {
+ pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
+     let snap = se.env.snapshot();
+     let rel = snap.relation(oid).ok_or_else(|| relation_vanished(oid))?;
++    if rel.row_security || rel.force_row_security {
++        return Err(PgError::unimplemented("EXE-01", "row security policy enforcement"));
++    }
++    if snap.constraints_of(oid).iter().any(|c| c.deferrable || c.initially_deferred) {
++        return Err(PgError::unimplemented("EXE-01", "deferred constraint enforcement"));
++    }
+     // Row storage is what DML and table-shaped DDL need; views, indexes, sequences, ... have none.
+     if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
+         return Err(relation_vanished(oid));
+diff --git 1/contracts/amendments/pgarbor-exec-03-fail-closed-security.md 2/contracts/amendments/pgarbor-exec-03-fail-closed-security.md
+new file mode 100644
+index 00000000..9010618a
+--- /dev/null
++++ 2/contracts/amendments/pgarbor-exec-03-fail-closed-security.md
+@@ -0,0 +1,11 @@
++# Refuse unenforced row security and deferred constraints
++
++Status: ACCEPTED (lead-engineer decision, 2026-10-15).
++
++The existing executor contract's promise to check deferred constraints early is rejected:
++that changes SQL semantics. CREATE/ALTER requesting deferral returns EXE-33 leased 0A000.
++Enabling/forcing row security likewise returns EXE-33 0A000 until policies are enforced.
++A previously stored relation with security flags or deferred constraints is rejected by
++EXE-01 table description, including reads, rather than exposing unfiltered rows or
++pretending early checking implements deferral. Removing/disabling flags stays allowed.
++This is a compatibility limitation, covered by SQL session acceptance tests.

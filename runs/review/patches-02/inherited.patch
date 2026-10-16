@@ -1,0 +1,2100 @@
+diff --git c/crates/pgarbor-catalog/src/ddl/grant.rs w/crates/pgarbor-catalog/src/ddl/grant.rs
+index 826c591a..4852c120 100644
+--- c/crates/pgarbor-catalog/src/ddl/grant.rs
++++ w/crates/pgarbor-catalog/src/ddl/grant.rs
+@@ -261,6 +261,11 @@ impl<'a> CatalogTxn<'a> {
+                 if snap.function(oid).is_some() {
+                     return Err(errors::system_catalog_permission("pg_proc"));
+                 }
++                // A built-in routine has a pg_proc row PGArbor does not persist, so its ACL cannot be
++                // changed yet. That is unsupported, not a missing object.
++                if pgarbor_types::catalog_data::builtin_proc(oid).is_some() {
++                    return Err(PgError::unimplemented("CAT-21", "GRANT/REVOKE on built-in functions"));
++                }
+                 Err(errors::cache_lookup_failed("function", oid))
+             }
+             ObjClass::Database => {
+diff --git c/crates/pgarbor-exec/src/context.rs w/crates/pgarbor-exec/src/context.rs
+index 6a5e8385..c5b25d54 100644
+--- c/crates/pgarbor-exec/src/context.rs
++++ w/crates/pgarbor-exec/src/context.rs
+@@ -45,6 +45,11 @@ pub trait GucAccess {
+     /// `set_config(name, value, is_local)`: apply a SET (validation errors as for `SET`), return the
+     /// new value in SHOW form.
+     fn set(&self, name: &str, value: &str, is_local: bool) -> Result<String>;
++    /// Validation only (guc.c `ProcessGUCArray` for `ALTER ... SET`): unknown name 42704, a value the
++    /// parameter rejects 22023. Nothing is assigned. The default accepts everything (no settings).
++    fn check_setting(&self, _name: &str, _value: &str) -> Result<()> {
++        Ok(())
++    }
+     /// All settings as `pg_settings` rows (for `pg_settings`, `SHOW ALL`, `pg_show_all_settings`).
+     fn settings(&self) -> Result<Vec<SettingRow>>;
+     /// Boolean GUC helper: `on`/`true`/`yes`/`1` (case-insensitive) = true; unknown/other = false.
+diff --git c/crates/pgarbor-exec/src/ddl_alter.rs w/crates/pgarbor-exec/src/ddl_alter.rs
+index 9e56d8f5..3d85dbb9 100644
+--- c/crates/pgarbor-exec/src/ddl_alter.rs
++++ w/crates/pgarbor-exec/src/ddl_alter.rs
+@@ -159,6 +159,11 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
+         }
+         AlterAction::FunctionAttrs { func, changes } => {
+             let func = *func;
++            for item in &changes.set_config {
++                if let Some((guc, value)) = item.split_once('=') {
++                    cx.se.guc.check_setting(guc, value)?;
++                }
++            }
+             run_plain(cx, |d| d.alter_function_attrs(func, changes))?;
+         }
+         AlterAction::RenameFunction { func, new_name } => {
+@@ -183,6 +188,9 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
+         }
+         AlterAction::RoleConfig { role, guc, value } => {
+             let role = *role;
++            if let Some(v) = value {
++                cx.se.guc.check_setting(guc, v)?;
++            }
+             run_plain(cx, |d| d.set_role_config(role, guc, value.as_deref()))?;
+         }
+         AlterAction::RenameDatabase { name, new_name } => {
+@@ -193,6 +201,9 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
+             run_plain(cx, |d| d.alter_database_owner(name, new_owner))?;
+         }
+         AlterAction::DatabaseConfig { name, guc, value } => {
++            if let Some(v) = value {
++                cx.se.guc.check_setting(guc, v)?;
++            }
+             run_plain(cx, |d| d.set_database_config(name, guc, value.as_deref()))?;
+         }
+         AlterAction::DatabaseOptions { name, allow_conn, conn_limit, is_template } => {
+diff --git c/crates/pgarbor-exec/src/ddl_followup.rs w/crates/pgarbor-exec/src/ddl_followup.rs
+index 7340e362..f5f4002e 100644
+--- c/crates/pgarbor-exec/src/ddl_followup.rs
++++ w/crates/pgarbor-exec/src/ddl_followup.rs
+@@ -180,8 +180,8 @@ fn run_one(ex: &mut Executor, fu: &FollowUp) -> Result<()> {
+ }
+ 
+ /// One rewrite action with its expression already bound.
+-enum RewriteStep<'e> {
+-    Using { attnum: i16, expr: &'e BoundExpr },
++enum RewriteStep {
++    Using { attnum: i16, expr: BoundExpr },
+     /// `None` = the column has no default in the new catalog: NULL.
+     Default { attnum: i16, expr: Option<BoundExpr> },
+     Generated { attnum: i16, expr: BoundExpr },
+@@ -189,10 +189,12 @@ enum RewriteStep<'e> {
+ 
+ fn rewrite_table_in(ex: &mut Executor, table: Oid, rewrites: &[ColumnRewrite]) -> Result<()> {
+     // Bind every default / generation expression of the NEW catalog once.
+-    let mut steps: Vec<RewriteStep<'_>> = Vec::with_capacity(rewrites.len());
++    let mut steps: Vec<RewriteStep> = Vec::with_capacity(rewrites.len());
+     for rw in rewrites {
+         match rw {
+             ColumnRewrite::Using { attnum, expr } => {
++                // The USING expression is bound over the table (rt_index 1): make it executable over the old row.
++                let expr = tabledesc::columns_to_input_refs(expr.clone())?;
+                 steps.push(RewriteStep::Using { attnum: *attnum, expr });
+             }
+             ColumnRewrite::FromDefault { attnum } => {
+@@ -272,7 +274,13 @@ fn column_expr(se: &SessionEnv, rel: Oid, attnum: i16) -> Result<Option<BoundExp
+         Some(d) => d.expr.sql.clone(),
+         None => return Ok(None),
+     };
+-    let bound = tabledesc::bind_stored_text(se, &sql, rel)?;
++    let (name, ty) = relation
++        .columns
++        .iter()
++        .find(|c| c.attnum == attnum)
++        .map(|c| (c.name.clone(), c.type_id))
++        .ok_or_else(|| PgError::internal(format!("attnum {attnum} of relation {rel} does not exist")))?;
++    let bound = tabledesc::bind_column_default_text(se, &sql, rel, &name, ty)?;
+     Ok(Some(tabledesc::columns_to_input_refs(bound)?))
+ }
+ 
+diff --git c/crates/pgarbor-exec/src/eval_call.rs w/crates/pgarbor-exec/src/eval_call.rs
+index ef0bd583..b625d9bb 100644
+--- c/crates/pgarbor-exec/src/eval_call.rs
++++ w/crates/pgarbor-exec/src/eval_call.rs
+@@ -164,7 +164,36 @@ pub fn call_function(
+ /// Evaluate a `FuncCall` expression node over `row`.
+ pub fn eval_func_call(ex: &mut Executor, f: &FuncCallExpr, result_type: TypeId, row: &[Datum]) -> Result<Datum> {
+     let handle = resolve_handle(ex, f.func, &f.name)?;
+-    let (args, arg_types) = eval_args(ex, &f.args, row)?;
++    let (mut args, mut arg_types) = eval_args(ex, &f.args, row)?;
++    if f.variadic && handle.proc.variadic == pgarbor_types::oids::ANY {
++        // `f(VARIADIC arr)` on a `VARIADIC "any"` proc: PG hands the array over with funcvariadic set
++        // and the proc unpacks it. The builtins here take the elements one by one, so unpack first.
++        match args.pop().zip(arg_types.pop()) {
++            Some((Datum::Null, _)) => {
++                // PG `extract_variadic_args` returns -1 for a NULL array: these procs return NULL.
++                // `format` instead sees no variadic values.
++                let null_yields_null = matches!(
++                    handle.proc.name,
++                    "concat" | "concat_ws" | "json_build_object" | "json_build_array" | "jsonb_build_object" | "jsonb_build_array" | "num_nulls" | "num_nonnulls"
++                );
++                if null_yields_null {
++                    return Ok(Datum::Null);
++                }
++            }
++            Some((Datum::Array(arr), _)) => {
++                let elem = TypeId::of(arr.elem);
++                for item in arr.items.iter() {
++                    args.push(item.clone());
++                    arg_types.push(elem);
++                }
++            }
++            Some((other, ty)) => {
++                args.push(other);
++                arg_types.push(ty);
++            }
++            None => {}
++        }
++    }
+     invoke(ex, &handle, f.strict, &args, &arg_types, result_type)
+ }
+ 
+diff --git c/crates/pgarbor-exec/src/node_cte.rs w/crates/pgarbor-exec/src/node_cte.rs
+index 0340e21c..581b0536 100644
+--- c/crates/pgarbor-exec/src/node_cte.rs
++++ w/crates/pgarbor-exec/src/node_cte.rs
+@@ -45,30 +45,31 @@ use pgarbor_types::{Datum, TypeId};
+ 
+ use crate::build::BuildCtx;
+ use crate::eval::eval_opt_qual;
+-use crate::runtime::{CteBodyRt, CteRt, CteState, Executor, Row, RowSource};
++use crate::runtime::{CteBodyRt, CteRt, CteState, Executor, RecStream, Row, RowSource};
+ use crate::sortutil::row_key_bytes;
+ 
+ /// `CteScan` operator (module docs).
+ struct CteScanOp {
+     cte_id: u32,
+     filter: Option<BoundExpr>,
+-    /// Shared buffer, taken on the first `next` after construction (CTE evaluated by then).
+-    rows: Option<Rc<Vec<Row>>>,
+     pos: usize,
+     skipped: u32,
+ }
+ 
+ impl RowSource for CteScanOp {
+     fn next(&mut self, ex: &mut Executor) -> Result<Option<Row>> {
+-        if self.rows.is_none() {
+-            ensure_cte(ex, self.cte_id)?;
+-            let idx = cte_index(ex, self.cte_id)?;
+-            self.rows = Some(Rc::clone(&ex.rt.ctes[idx].rows));
+-        }
++        let idx = cte_index(ex, self.cte_id)?;
+         loop {
+-            let row = match self.rows.as_ref().and_then(|r| r.get(self.pos)) {
+-                Some(r) => r.clone(),
+-                None => return Ok(None),
++            let row = loop {
++                if let Some(r) = ex.rt.ctes[idx].rows.get(self.pos) {
++                    break r.clone();
++                }
++                match ex.rt.ctes[idx].state {
++                    CteState::Done => return Ok(None),
++                    CteState::Streaming => advance_recursive(ex, idx)?,
++                    _ if matches!(ex.rt.ctes[idx].body, CteBodyRt::Recursive { .. }) => advance_recursive(ex, idx)?,
++                    _ => ensure_cte(ex, self.cte_id)?,
++                }
+             };
+             self.pos += 1;
+             if eval_opt_qual(ex, &self.filter, &row)? {
+@@ -164,7 +165,7 @@ fn check_width(node: &PlanNode, def: &CteDef) -> Result<()> {
+ pub fn build_cte_scan(node: &PlanNode, n: &CteScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
+     let def = def_for(b.plan, n.cte_id)?;
+     check_width(node, def)?;
+-    Ok(Box::new(CteScanOp { cte_id: n.cte_id, filter: n.filter.clone(), rows: None, pos: 0, skipped: 0 }))
++    Ok(Box::new(CteScanOp { cte_id: n.cte_id, filter: n.filter.clone(), pos: 0, skipped: 0 }))
+ }
+ 
+ pub fn build_worktable_scan(node: &PlanNode, n: &WorkTableScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
+@@ -199,6 +200,7 @@ pub fn build_cte_rt(def: &CteDef, b: &mut BuildCtx) -> Result<CteRt> {
+         state: CteState::Pending,
+         rows: Rc::new(Vec::new()),
+         worktable: Rc::new(RefCell::new(Vec::new())),
++        stream: RecStream::default(),
+     })
+ }
+ 
+@@ -213,83 +215,104 @@ fn drain_rows(ex: &mut Executor, op: &mut dyn RowSource) -> Result<Vec<Row>> {
+     Ok(out)
+ }
+ 
+-/// Duplicate elimination for `UNION` (`!union_all`) recursion: keys over all columns, NULLs equal.
+-struct Dedup {
+-    union_all: bool,
+-    types: Vec<TypeId>,
+-    slots: Vec<usize>,
+-    seen: HashSet<Vec<u8>>,
++/// `true` when `row` is new for the CTE (and remembers it). Always `true` for `UNION ALL`.
++fn admit(ex: &Executor, stream: &mut RecStream, columns: &[OutCol], union_all: bool, row: &[Datum]) -> Result<bool> {
++    if union_all {
++        return Ok(true);
++    }
++    let types: Vec<TypeId> = columns.iter().map(|c| c.ty).collect();
++    let slots: Vec<usize> = (0..columns.len()).collect();
++    let key = row_key_bytes(ex, &types, &slots, row)?;
++    Ok(stream.seen.insert(key))
+ }
+ 
+-impl Dedup {
+-    fn new(columns: &[OutCol], union_all: bool) -> Dedup {
+-        Dedup {
+-            union_all,
+-            types: columns.iter().map(|c| c.ty).collect(),
+-            slots: (0..columns.len()).collect(),
+-            seen: HashSet::new(),
++/// Run one step of a recursive CTE: the non-recursive term first, then one iteration of the
++/// recursive term per call, appending the new rows to `rows`. When the work table runs dry the CTE
++/// is `Done`. Consumers call this only when they have read every buffered row, so a `LIMIT` above
++/// an infinite recursion terminates (PG produces the rows lazily as well).
++fn advance_recursive(ex: &mut Executor, idx: usize) -> Result<()> {
++    let mut body = std::mem::replace(&mut ex.rt.ctes[idx].body, CteBodyRt::Taken);
++    let prev = ex.rt.ctes[idx].state;
++    ex.rt.ctes[idx].state = CteState::Running;
++    let result = match &mut body {
++        CteBodyRt::Recursive { non_recursive, recursive, union_all } => {
++            step_recursive(ex, idx, &mut **non_recursive, &mut **recursive, *union_all)
+         }
+-    }
+-
+-    /// `true` when `row` is new (and remembers it). Always `true` for `UNION ALL`.
+-    fn admit(&mut self, ex: &Executor, row: &[Datum]) -> Result<bool> {
+-        if self.union_all {
+-            return Ok(true);
++        _ => Err(PgError::internal("advance of a CTE that is not recursive")),
++    };
++    ex.rt.ctes[idx].body = body;
++    match result {
++        Ok(true) => {
++            ex.rt.ctes[idx].state = CteState::Done;
++            ex.rt.ctes[idx].worktable.borrow_mut().clear();
++            ex.rt.ctes[idx].stream = RecStream::default();
++            Ok(())
++        }
++        Ok(false) => {
++            ex.rt.ctes[idx].state = CteState::Streaming;
++            Ok(())
++        }
++        Err(e) => {
++            ex.rt.ctes[idx].state = prev;
++            Err(e)
+         }
+-        let key = row_key_bytes(ex, &self.types, &self.slots, row)?;
+-        Ok(self.seen.insert(key))
+     }
+ }
+ 
+-/// Iterate a recursive CTE until its working table is empty (module docs).
+-fn run_recursive(
++/// One step; returns `true` when the recursion is finished.
++fn step_recursive(
+     ex: &mut Executor,
+     idx: usize,
+     non_recursive: &mut dyn RowSource,
+     recursive: &mut dyn RowSource,
+     union_all: bool,
+-) -> Result<Vec<Row>> {
+-    let mut dedup = Dedup::new(&ex.rt.ctes[idx].columns, union_all);
+-    let worktable = Rc::clone(&ex.rt.ctes[idx].worktable);
+-    let mut result: Vec<Row> = Vec::new();
+-    let mut ticks: u32 = 0;
+-
+-    let first = drain_rows(ex, non_recursive)?;
+-    let mut working: Vec<Row> = Vec::with_capacity(first.len());
+-    for row in first {
+-        ex.tick(&mut ticks)?;
+-        if dedup.admit(ex, &row)? {
+-            result.push(row.clone());
+-            working.push(row);
+-        }
+-    }
+-
+-    while !working.is_empty() {
+-        ex.check_interrupts()?;
+-        *worktable.borrow_mut() = working;
+-        recursive.rescan(ex, &[])?;
+-        let produced = drain_rows(ex, recursive)?;
+-        let mut next_rows: Vec<Row> = Vec::with_capacity(produced.len());
+-        for row in produced {
+-            ex.tick(&mut ticks)?;
+-            if dedup.admit(ex, &row)? {
+-                result.push(row.clone());
+-                next_rows.push(row);
++) -> Result<bool> {
++    let columns = ex.rt.ctes[idx].columns.clone();
++    let mut stream = std::mem::take(&mut ex.rt.ctes[idx].stream);
++    let out = (|| -> Result<(Vec<Row>, bool)> {
++        let mut ticks: u32 = 0;
++        let mut fresh: Vec<Row> = Vec::new();
++        if !stream.started {
++            stream.started = true;
++            for row in drain_rows(ex, non_recursive)? {
++                ex.tick(&mut ticks)?;
++                if admit(ex, &mut stream, &columns, union_all, &row)? {
++                    fresh.push(row);
++                }
++            }
++        } else {
++            ex.check_interrupts()?;
++            let working = std::mem::take(&mut stream.working);
++            *ex.rt.ctes[idx].worktable.borrow_mut() = working;
++            recursive.rescan(ex, &[])?;
++            for row in drain_rows(ex, recursive)? {
++                ex.tick(&mut ticks)?;
++                if admit(ex, &mut stream, &columns, union_all, &row)? {
++                    fresh.push(row);
++                }
+             }
+         }
+-        working = next_rows;
+-    }
+-    worktable.borrow_mut().clear();
+-    Ok(result)
++        let done = fresh.is_empty();
++        Ok((fresh, done))
++    })();
++    let (fresh, done) = match out {
++        Ok(v) => v,
++        Err(e) => {
++            ex.rt.ctes[idx].stream = stream;
++            return Err(e);
++        }
++    };
++    stream.working = fresh.clone();
++    ex.rt.ctes[idx].stream = stream;
++    Rc::make_mut(&mut ex.rt.ctes[idx].rows).extend(fresh);
++    Ok(done)
+ }
+ 
+ /// Run one CTE body to completion (the body is owned by the caller while it runs).
+ fn run_body(ex: &mut Executor, idx: usize, body: &mut CteBodyRt) -> Result<Vec<Row>> {
+     match body {
+         CteBodyRt::Query(op) | CteBodyRt::Modify(op) => drain_rows(ex, &mut **op),
+-        CteBodyRt::Recursive { non_recursive, recursive, union_all } => {
+-            run_recursive(ex, idx, &mut **non_recursive, &mut **recursive, *union_all)
+-        }
++        CteBodyRt::Recursive { .. } => Err(PgError::internal("recursive CTE bodies are advanced step by step")),
+         CteBodyRt::Taken => Err(PgError::internal("CTE body is already being evaluated")),
+     }
+ }
+@@ -297,8 +320,15 @@ fn run_body(ex: &mut Executor, idx: usize, body: &mut CteBodyRt) -> Result<Vec<R
+ /// Execute CTE `id` if still pending (module docs).
+ pub fn ensure_cte(ex: &mut Executor, id: u32) -> Result<()> {
+     let idx = cte_index(ex, id)?;
++    if matches!(ex.rt.ctes[idx].body, CteBodyRt::Recursive { .. }) && ex.rt.ctes[idx].state != CteState::Running {
++        while ex.rt.ctes[idx].state != CteState::Done {
++            advance_recursive(ex, idx)?;
++        }
++        return Ok(());
++    }
+     match ex.rt.ctes[idx].state {
+         CteState::Done => return Ok(()),
++        CteState::Streaming => return Err(PgError::internal("CTE is streaming")),
+         CteState::Running => {
+             return Err(PgError::internal(format!(
+                 "CTE \"{}\" is referenced while it is being evaluated",
+@@ -413,6 +443,7 @@ mod tests {
+             state: CteState::Pending,
+             rows: Rc::new(Vec::new()),
+             worktable: wt,
++            stream: RecStream::default(),
+         }
+     }
+ 
+@@ -487,7 +518,7 @@ mod tests {
+         let q = Fixed { rows: vec![vec![Datum::Int4(1)], vec![Datum::Int4(2)]], pos: 0, calls };
+         let wt = Rc::new(RefCell::new(Vec::new()));
+         exec_ctes(vec![int_cte(0, CteBodyRt::Query(Box::new(q)), wt)], |ex| {
+-            let mut op = CteScanOp { cte_id: 0, filter: None, rows: None, pos: 0, skipped: 0 };
++            let mut op = CteScanOp { cte_id: 0, filter: None, pos: 0, skipped: 0 };
+             let first = drain_rows(ex, &mut op)?;
+             assert_eq!(first.len(), 2);
+             op.rescan(ex, &[])?;
+diff --git c/crates/pgarbor-exec/src/node_func.rs w/crates/pgarbor-exec/src/node_func.rs
+index aeb9f321..86f33443 100644
+--- c/crates/pgarbor-exec/src/node_func.rs
++++ w/crates/pgarbor-exec/src/node_func.rs
+@@ -28,7 +28,7 @@ use pgarbor_types::Datum;
+ 
+ use crate::build::BuildCtx;
+ use crate::eval::{eval, eval_opt_qual};
+-use crate::eval_srf::{expand_record, open_srf, SrfIter};
++use crate::eval_srf::{contains_srf, expand_record, open_srf, SrfIter};
+ use crate::runtime::{Executor, Row, RowSource};
+ 
+ /// `FunctionScan` operator. Owns copies of the function items and the filter (runtime docs).
+@@ -146,30 +146,99 @@ enum Slot {
+     Fixed(Datum),
+     /// Set expression: its iterator (`None` once exhausted).
+     Srf(Option<SrfIter>),
++    /// Expression with set-returning calls nested inside it (`prepare_items`): the calls advance in
++    /// lock step with the other slots, and the expression is evaluated over the input row extended
++    /// with their current values (NULL once a call is exhausted).
++    Nested { expr: BoundExpr, srfs: Vec<Option<SrfIter>>, values: Vec<Datum>, row: Row },
+ }
+ 
+-/// Evaluate every expression of `exprs` over `row`, opening the set expressions (module docs).
+-fn open_slots(ex: &mut Executor, exprs: &[BoundExpr], row: &[Datum]) -> Result<Vec<Slot>> {
+-    let mut slots: Vec<Slot> = Vec::with_capacity(exprs.len());
++/// A target-list item of `ProjectSet`, prepared once at build time.
++enum ProjItem {
++    /// No set-returning call, or a top-level one (`Slot::Fixed` / `Slot::Srf`).
++    Plain(BoundExpr),
++    /// `expr` reads each set-returning call (`calls`, in order) from slot `width + j` of the extended row.
++    Nested { expr: BoundExpr, calls: Vec<BoundExpr> },
++}
++
++/// Split each target expression into plain items and items with nested set-returning calls. Calls are
++/// replaced by `InputRef(width + j)` and are not descended into (their arguments are evaluated when the
++/// call is opened). Sub-plans are left alone: their own operator tree handles any set-returning call.
++fn prepare_items(exprs: &[BoundExpr], width: usize) -> Result<Vec<ProjItem>> {
++    let mut items = Vec::with_capacity(exprs.len());
+     for e in exprs {
+-        match &e.kind {
+-            ExprKind::FuncCall(call) if call.retset => {
+-                let it = open_srf(ex, call, e.ty, row)?;
+-                slots.push(Slot::Srf(Some(it)));
++        let top_level_srf = matches!(&e.kind, ExprKind::FuncCall(c) if c.retset);
++        if top_level_srf || !contains_srf(e)? {
++            items.push(ProjItem::Plain(e.clone()));
++            continue;
++        }
++        let mut calls: Vec<BoundExpr> = Vec::new();
++        let expr = e.clone().transform_down(&mut |node: BoundExpr| {
++            let is_srf = matches!(&node.kind, ExprKind::FuncCall(c) if c.retset);
++            if is_srf {
++                let idx = width + calls.len();
++                let ty = node.ty;
++                calls.push(node);
++                Ok((BoundExpr { kind: ExprKind::InputRef(idx as u32), ty }, false))
++            } else {
++                let stop = matches!(&node.kind, ExprKind::SubPlan(_));
++                Ok((node, !stop))
+             }
+-            _ => {
+-                let v = eval(ex, e, row)?;
+-                slots.push(Slot::Fixed(v));
++        })?;
++        items.push(ProjItem::Nested { expr, calls });
++    }
++    Ok(items)
++}
++
++/// Open the slots of one input row.
++fn open_slots(ex: &mut Executor, items: &[ProjItem], row: &[Datum]) -> Result<Vec<Slot>> {
++    let mut slots: Vec<Slot> = Vec::with_capacity(items.len());
++    for item in items {
++        match item {
++            ProjItem::Plain(e) => match &e.kind {
++                ExprKind::FuncCall(call) if call.retset => {
++                    let it = open_srf(ex, call, e.ty, row)?;
++                    slots.push(Slot::Srf(Some(it)));
++                }
++                _ => {
++                    let v = eval(ex, e, row)?;
++                    slots.push(Slot::Fixed(v));
++                }
++            },
++            ProjItem::Nested { expr, calls, .. } => {
++                let mut srfs: Vec<Option<SrfIter>> = Vec::with_capacity(calls.len());
++                for c in calls {
++                    match &c.kind {
++                        ExprKind::FuncCall(call) => srfs.push(Some(open_srf(ex, call, c.ty, row)?)),
++                        _ => return Err(pgarbor_common::PgError::internal("ProjectSet nested call is not a function")),
++                    }
++                }
++                let values = vec![Datum::Null; calls.len()];
++                slots.push(Slot::Nested { expr: expr.clone(), srfs, values, row: row.to_vec() });
+             }
+         }
+     }
+     Ok(slots)
+ }
+ 
++/// Next value of one set-returning iterator (`None` once exhausted; the iterator is then dropped).
++fn advance(it: &mut Option<SrfIter>) -> Result<Option<Datum>> {
++    let got = match it.as_mut() {
++        Some(i) => i.next(),
++        None => None,
++    };
++    match got {
++        Some(v) => Ok(Some(v?)),
++        None => {
++            *it = None;
++            Ok(None)
++        }
++    }
++}
++
+ /// `ProjectSet` operator (module docs).
+ struct ProjectSetOp {
+     input: Box<dyn RowSource>,
+-    exprs: Vec<BoundExpr>,
++    exprs: Vec<ProjItem>,
+     /// Slots of the current input row; `None` when the next input row must be fetched.
+     slots: Option<Vec<Slot>>,
+     done: bool,
+@@ -193,33 +262,46 @@ impl RowSource for ProjectSetOp {
+                     }
+                 },
+             };
+-            let any_srf = slots.iter().any(|s| matches!(s, Slot::Srf(_)));
++            let any_srf = slots.iter().any(|s| !matches!(s, Slot::Fixed(_)));
+             let mut out: Row = Vec::with_capacity(slots.len());
++            // Output positions of nested items, evaluated once every set has been advanced.
++            let mut pending: Vec<(usize, usize)> = Vec::new();
+             let mut live = false;
+-            for slot in slots.iter_mut() {
++            for (si, slot) in slots.iter_mut().enumerate() {
+                 match slot {
+                     Slot::Fixed(v) => out.push(v.clone()),
+-                    Slot::Srf(it) => {
+-                        let got = match it.as_mut() {
+-                            Some(i) => i.next(),
+-                            None => None,
+-                        };
+-                        match got {
+-                            Some(v) => {
+-                                out.push(v?);
+-                                live = true;
+-                            }
+-                            None => {
+-                                *it = None;
+-                                out.push(Datum::Null);
++                    Slot::Srf(it) => match advance(it)? {
++                        Some(v) => {
++                            out.push(v);
++                            live = true;
++                        }
++                        None => out.push(Datum::Null),
++                    },
++                    Slot::Nested { srfs, values, .. } => {
++                        for (j, it) in srfs.iter_mut().enumerate() {
++                            match advance(it)? {
++                                Some(v) => {
++                                    values[j] = v;
++                                    live = true;
++                                }
++                                None => values[j] = Datum::Null,
+                             }
+                         }
++                        pending.push((si, out.len()));
++                        out.push(Datum::Null);
+                     }
+                 }
+             }
+             // Without any SRF the input row produces exactly one output row; with SRFs, the input
+             // row is finished once every one of them is exhausted (the loop then fetches the next).
+             if live || !any_srf {
++                for (si, oi) in pending {
++                    if let Slot::Nested { expr, values, row, .. } = &slots[si] {
++                        let mut extended: Row = row.clone();
++                        extended.extend(values.iter().cloned());
++                        out[oi] = eval(ex, expr, &extended)?;
++                    }
++                }
+                 if any_srf {
+                     self.slots = Some(slots);
+                 }
+@@ -254,7 +336,8 @@ pub fn build_function_scan(node: &PlanNode, n: &FunctionScan, b: &mut BuildCtx)
+ pub fn build_project_set(node: &PlanNode, n: &ProjectSetNode, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
+     let _ = node;
+     let input = b.child(&n.input)?;
+-    Ok(Box::new(ProjectSetOp { input, exprs: n.exprs.clone(), slots: None, done: false, ticks: 0 }))
++    let exprs = prepare_items(&n.exprs, n.input.out.len())?;
++    Ok(Box::new(ProjectSetOp { input, exprs, slots: None, done: false, ticks: 0 }))
+ }
+ 
+ #[cfg(test)]
+@@ -364,7 +447,7 @@ mod tests {
+         with_ex(|ex| {
+             let mut op = ProjectSetOp {
+                 input: Box::new(OneRow { done: false }),
+-                exprs: vec![gen_series(1, 3), gen_series(1, 2)],
++                exprs: prepare_items(&[gen_series(1, 3), gen_series(1, 2)], 0).expect("items"),
+                 slots: None,
+                 done: false,
+                 ticks: 0,
+@@ -387,7 +470,7 @@ mod tests {
+         with_ex(|ex| {
+             let mut op = ProjectSetOp {
+                 input: Box::new(OneRow { done: false }),
+-                exprs: vec![int4(7), gen_series(1, 2)],
++                exprs: prepare_items(&[int4(7), gen_series(1, 2)], 0).expect("items"),
+                 slots: None,
+                 done: false,
+                 ticks: 0,
+@@ -404,7 +487,7 @@ mod tests {
+             let arr_ty = TypeId::INT4_ARRAY;
+             let mut op = ProjectSetOp {
+                 input: Box::new(OneRow { done: false }),
+-                exprs: vec![srf(UNNEST_ANYARRAY, "unnest", vec![null_of(arr_ty)], TypeId::INT4)],
++                exprs: prepare_items(&[srf(UNNEST_ANYARRAY, "unnest", vec![null_of(arr_ty)], TypeId::INT4)], 0).expect("items"),
+                 slots: None,
+                 done: false,
+                 ticks: 0,
+diff --git c/crates/pgarbor-exec/src/runtime.rs w/crates/pgarbor-exec/src/runtime.rs
+index f2990ce8..0b389e92 100644
+--- c/crates/pgarbor-exec/src/runtime.rs
++++ w/crates/pgarbor-exec/src/runtime.rs
+@@ -101,6 +101,8 @@ pub enum CteState {
+     Pending,
+     /// Currently executing (a recursive reference sees only the work table).
+     Running,
++    /// A recursive CTE between iterations: `rows` holds a prefix of the result.
++    Streaming,
+     /// `rows` is complete.
+     Done,
+ }
+@@ -142,6 +144,20 @@ pub struct CteRt {
+     /// The working table of a recursive CTE: rows produced by the previous iteration, read by
+     /// `WorkTableScan { cte_id }`.
+     pub worktable: Rc<RefCell<Vec<Row>>>,
++    /// Progress of a recursive CTE that is evaluated one iteration at a time (so that a consumer
++    /// such as `LIMIT` can stop an infinite recursion).
++    pub stream: RecStream,
++}
++
++/// Iteration state of a recursive CTE (see `node_cte`).
++#[derive(Default)]
++pub struct RecStream {
++    /// The non-recursive term has been run.
++    pub started: bool,
++    /// Rows produced by the previous iteration (the next work table).
++    pub working: Vec<Row>,
++    /// Keys of every row emitted so far (`UNION` de-duplication).
++    pub seen: std::collections::HashSet<Vec<u8>>,
+ }
+ 
+ /// Mutable per-execution state that is not part of any single operator.
+diff --git c/crates/pgarbor-exec/src/session_fns.rs w/crates/pgarbor-exec/src/session_fns.rs
+index bf5682b1..c306e20e 100644
+--- c/crates/pgarbor-exec/src/session_fns.rs
++++ w/crates/pgarbor-exec/src/session_fns.rs
+@@ -141,6 +141,14 @@ fn text_arg(args: &[Datum], i: usize) -> Result<&str> {
+     }
+ }
+ 
++/// Text argument of a non-strict function: NULL (or absent) reads as the empty string.
++fn text_or_empty(args: &[Datum], i: usize) -> Result<&str> {
++    match args.get(i) {
++        None | Some(Datum::Null) => Ok(""),
++        Some(d) => d.as_str().ok_or_else(|| bad_arg(i)),
++    }
++}
++
+ /// Optional boolean argument: absent or NULL gives `default`.
+ fn bool_or(args: &[Datum], i: usize, default: bool) -> bool {
+     args.get(i).and_then(Datum::as_bool).unwrap_or(default)
+@@ -366,8 +374,9 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
+         )
+         .with_hint("Make sure the configuration parameter \"track_commit_timestamp\" is set.")),
+         "pg_notify" => {
+-            let channel = text_arg(args, 0)?;
+-            let payload = text_arg(args, 1)?;
++            // pg_proc marks pg_notify non-strict: PG reads a NULL channel or payload as ''.
++            let channel = text_or_empty(args, 0)?;
++            let payload = text_or_empty(args, 1)?;
+             if channel.is_empty() {
+                 return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "channel name cannot be empty"));
+             }
+diff --git c/crates/pgarbor-exec/src/tabledesc.rs w/crates/pgarbor-exec/src/tabledesc.rs
+index d9fdffe1..2be6faaa 100644
+--- c/crates/pgarbor-exec/src/tabledesc.rs
++++ w/crates/pgarbor-exec/src/tabledesc.rs
+@@ -29,7 +29,8 @@ use pgarbor_catalog::model::{
+ };
+ use pgarbor_catalog::CatalogSnapshot;
+ use pgarbor_common::{Oid, PgError, Result, SqlState};
+-use pgarbor_sql::binder::context::{BindContext, BindSession, Binder, ExprCtx};
++use pgarbor_sql::binder::coerce::coerce_assignment;
++use pgarbor_sql::binder::context::{BindContext, BindSession, Binder, BoundArg, ExprCtx};
+ use pgarbor_sql::binder::stored::bind_stored_expr;
+ use pgarbor_sql::ir::{BoundExpr, ExprKind};
+ use pgarbor_sql::source::SourceMap;
+@@ -417,6 +418,29 @@ fn bound_row_expr(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr>
+ /// [`columns_to_input_refs`] to make the result executable over a table row. Bind failure of stored
+ /// text is an internal error XX000 `could not bind stored expression`.
+ pub fn bind_stored_text(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr> {
++    bind_stored_text_as(se, sql, rel_oid, None)
++}
++
++/// Like [`bind_stored_text`] for a column DEFAULT: the bound text is assignment-coerced to the
++/// column type (PG `build_column_default` / `cookDefault` store the cast; the deparsed text drops
++/// the implicit cast, so `nextval()` (bigint) for an int4 column must be recast here or the value
++/// has the wrong datum variant).
++pub fn bind_column_default_text(
++    se: &SessionEnv,
++    sql: &str,
++    rel_oid: Oid,
++    col_name: &str,
++    col_type: TypeId,
++) -> Result<BoundExpr> {
++    bind_stored_text_as(se, sql, rel_oid, Some((col_name, col_type)))
++}
++
++fn bind_stored_text_as(
++    se: &SessionEnv,
++    sql: &str,
++    rel_oid: Oid,
++    target: Option<(&str, TypeId)>,
++) -> Result<BoundExpr> {
+     let ctx = BindContext {
+         env: &se.env,
+         session: BindSession { database: se.services.database_name() },
+@@ -426,11 +450,15 @@ pub fn bind_stored_text(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<Boun
+     };
+     let src = SourceMap::new(sql);
+     let mut binder = Binder::new(&ctx, &src);
+-    match bind_stored_expr(&mut binder, sql, rel_oid, ExprCtx::check()) {
+-        Ok(expr) => Ok(expr),
++    let bound = match bind_stored_expr(&mut binder, sql, rel_oid, ExprCtx::check()) {
++        Ok(expr) => expr,
+         // Unimplemented features of a stored expression keep their 0A000 so they are not masked.
+-        Err(e) if e.sqlstate == SqlState::FEATURE_NOT_SUPPORTED => Err(e),
+-        Err(_) => Err(PgError::internal("could not bind stored expression")),
++        Err(e) if e.sqlstate == SqlState::FEATURE_NOT_SUPPORTED => return Err(e),
++        Err(_) => return Err(PgError::internal("could not bind stored expression")),
++    };
++    match target {
++        None => Ok(bound),
++        Some((name, ty)) => coerce_assignment(&mut binder, &BoundArg::new(bound, None), name, ty),
+     }
+ }
+ 
+diff --git c/crates/pgarbor-exec/src/utility.rs w/crates/pgarbor-exec/src/utility.rs
+index a679a928..7c7616e7 100644
+--- c/crates/pgarbor-exec/src/utility.rs
++++ w/crates/pgarbor-exec/src/utility.rs
+@@ -75,11 +75,28 @@ pub fn exec_maintenance(cx: &mut ExecContext, kind: MaintenanceKind, targets: &[
+         MaintenanceKind::Vacuum => Ok(ExecResult::command("VACUUM")),
+         MaintenanceKind::Analyze => Ok(ExecResult::command("ANALYZE")),
+         MaintenanceKind::Cluster => Ok(ExecResult::command("CLUSTER")),
+-        MaintenanceKind::Checkpoint => Ok(ExecResult::command("CHECKPOINT")),
++        MaintenanceKind::Checkpoint => {
++            require_checkpoint_privilege(cx)?;
++            Ok(ExecResult::command("CHECKPOINT"))
++        }
+         MaintenanceKind::Reindex => reindex(cx, targets),
+     }
+ }
+ 
++/// `pg_checkpoint` predefined role (builtin oid 4544, catalog `builtin::objects`).
++const PG_CHECKPOINT_ROLE: Oid = 4544;
++
++/// utility.c `CHECKPOINT`: only superusers and roles with the privileges of `pg_checkpoint` may run it.
++fn require_checkpoint_privilege(cx: &ExecContext) -> Result<()> {
++    let user = cx.se.env.current_user();
++    let graph = pgarbor_catalog::acl::RoleGraph::build(cx.se.env.snapshot(), cx.se.env.database())?;
++    if graph.has_privs_of_role(user, PG_CHECKPOINT_ROLE)? {
++        return Ok(());
++    }
++    Err(PgError::new(SqlState::INSUFFICIENT_PRIVILEGE, "permission denied to execute CHECKPOINT command")
++        .with_detail("Only roles with privileges of the \"pg_checkpoint\" role may execute this command."))
++}
++
+ /// Map the SQL lock mode onto the core lock manager's mode (one-to-one).
+ fn core_lock_mode(mode: LockMode) -> CoreLockMode {
+     match mode {
+diff --git c/crates/pgarbor-plan/src/agg.rs w/crates/pgarbor-plan/src/agg.rs
+index d7e16f2f..7c41a68d 100644
+--- c/crates/pgarbor-plan/src/agg.rs
++++ w/crates/pgarbor-plan/src/agg.rs
+@@ -89,6 +89,30 @@ pub fn build_aggregate(st: &mut PlannerState, input: LogicalPlan, sel: &BoundSel
+     }
+     let aggrefs = collect_aggrefs(&exprs)?;
+ 
++    // Columns referenced outside aggregates that are not grouping expressions were accepted by the
++    // binder because they are functionally dependent on the grouping columns (primary key). PG
++    // carries them through the Agg node; here they become extra grouping keys, which yields the
++    // same value (one distinct value per group). Not done for grouping sets (their masks index
++    // `group_exprs`).
++    if sel.group_by.sets.is_none() {
++        let mut extra: Vec<BoundExpr> = Vec::new();
++        for e in &exprs {
++            let root: &BoundExpr = e;
++            root.walk(&mut |n: &BoundExpr| {
++                if matches!(n.kind, ExprKind::Aggref(_)) || group_exprs.contains(n) {
++                    return false;
++                }
++                if let ExprKind::Column(c) = &n.kind {
++                    if c.levels_up == 0 && !extra.contains(n) {
++                        extra.push(n.clone());
++                    }
++                }
++                true
++            });
++        }
++        group_exprs.extend(extra);
++    }
++
+     // HAVING: split into conjuncts and move the aggregate-free ones below the aggregate.
+     let plain_group = sel.group_by.sets.is_none();
+     let having_conjuncts: Vec<BoundExpr> = match &sel.having {
+diff --git c/crates/pgarbor-plan/src/build.rs w/crates/pgarbor-plan/src/build.rs
+index b2276552..0a08c120 100644
+--- c/crates/pgarbor-plan/src/build.rs
++++ w/crates/pgarbor-plan/src/build.rs
+@@ -51,7 +51,7 @@ use pgarbor_sql::ir::{
+     BoundExpr, BoundQuery, BoundSelect, BoundValues, ExprKind, FromItem, JoinKind, QueryBody, RangeEntry, RangeKind,
+     SetOpBody,
+ };
+-use pgarbor_types::TypeId;
++use pgarbor_types::{Datum, TypeId};
+ 
+ use crate::agg;
+ use crate::context::PlannerState;
+@@ -95,6 +95,13 @@ pub fn build_query(st: &mut PlannerState, q: &BoundQuery) -> Result<LogicalPlan>
+ /// Build the part of a SELECT block below ORDER BY/LIMIT (steps 1-6). Runs inside the query level
+ /// opened by [`build_query`] (it does not enter a level itself).
+ pub fn build_select(st: &mut PlannerState, sel: &BoundSelect, q: &BoundQuery) -> Result<LogicalPlan> {
++    let resolved;
++    let sel = if uses_tableoid(sel) {
++        resolved = resolve_tableoid(sel)?;
++        &resolved
++    } else {
++        sel
++    };
+     let with_rowid = rowid_range_indexes(sel, q);
+     let mut plan = build_from_clause(st, sel, &with_rowid)?;
+     if let Some(where_expr) = &sel.where_ {
+@@ -103,15 +110,124 @@ pub fn build_select(st: &mut PlannerState, sel: &BoundSelect, q: &BoundQuery) ->
+             plan = pushdown::push_down_quals(st, plan, quals)?;
+         }
+     }
+-    if sel.has_aggs || sel.having.is_some() || !sel.group_by.exprs.is_empty() || sel.group_by.sets.is_some() {
+-        plan = agg::build_aggregate(st, plan, sel)?;
+-    }
+-    if !sel.windows.is_empty() {
+-        plan = window::build_windows(st, plan, sel)?;
++    let grouped = sel.has_aggs || sel.having.is_some() || !sel.group_by.exprs.is_empty() || sel.group_by.sets.is_some();
++    if grouped || !sel.windows.is_empty() {
++        // Aggregate and window calls are collected from the target list and matched structurally
++        // against the final projection, so both must see the same (simplified) expressions.
++        let simplified = simplify_select_exprs(st, sel)?;
++        let sel = &simplified;
++        if grouped {
++            plan = agg::build_aggregate(st, plan, sel)?;
++        }
++        if !sel.windows.is_empty() {
++            plan = window::build_windows(st, plan, sel)?;
++        }
++        return project_targets(st, plan, sel);
+     }
+     project_targets(st, plan, sel)
+ }
+ 
++/// Every expression slot of `sel` that `resolve_tableoid` rewrites.
++fn select_exprs(sel: &BoundSelect) -> Vec<&BoundExpr> {
++    fn from_quals<'a>(item: &'a FromItem, out: &mut Vec<&'a BoundExpr>) {
++        if let FromItem::Join(j) = item {
++            if let Some(on) = &j.quals {
++                out.push(on);
++            }
++            from_quals(&j.left, out);
++            from_quals(&j.right, out);
++        }
++    }
++    let mut out: Vec<&BoundExpr> = sel.target_list.iter().map(|t| &t.expr).collect();
++    out.extend(sel.where_.iter());
++    out.extend(sel.having.iter());
++    for w in &sel.windows {
++        out.extend(w.partition_by.iter());
++        out.extend(w.order_by.iter().map(|k| &k.expr));
++    }
++    for item in &sel.from {
++        from_quals(item, &mut out);
++    }
++    out
++}
++
++fn is_tableoid(e: &BoundExpr) -> bool {
++    matches!(&e.kind, ExprKind::Column(c) if c.levels_up == 0 && c.attnum == -6)
++}
++
++fn uses_tableoid(sel: &BoundSelect) -> bool {
++    select_exprs(sel).into_iter().any(|e| e.any(&mut |n| is_tableoid(n)))
++}
++
++/// Replace `tableoid` of a plain-table range entry by the table's OID constant (PG: the heap scan
++/// supplies it; here no scan slot carries it, and a table has exactly one OID).
++fn resolve_tableoid(sel: &BoundSelect) -> Result<BoundSelect> {
++    fn rewrite(e: BoundExpr, entries: &[RangeEntry]) -> Result<BoundExpr> {
++        e.transform(&mut |n: BoundExpr| match &n.kind {
++            ExprKind::Column(c) if c.levels_up == 0 && c.attnum == -6 => {
++                match entries.get((c.rt_index as usize).wrapping_sub(1)).map(|r| &r.kind) {
++                    Some(RangeKind::Relation { oid, .. }) => Ok(BoundExpr::constant(Datum::Oid(*oid), n.ty)),
++                    _ => Ok(n),
++                }
++            }
++            _ => Ok(n),
++        })
++    }
++    fn from_item(item: &mut FromItem, entries: &[RangeEntry]) -> Result<()> {
++        if let FromItem::Join(j) = item {
++            if let Some(on) = j.quals.take() {
++                j.quals = Some(rewrite(on, entries)?);
++            }
++            from_item(&mut j.left, entries)?;
++            from_item(&mut j.right, entries)?;
++        }
++        Ok(())
++    }
++    let mut out = sel.clone();
++    let entries = sel.range_table.clone();
++    for t in out.target_list.iter_mut() {
++        t.expr = rewrite(t.expr.clone(), &entries)?;
++    }
++    if let Some(w) = out.where_.take() {
++        out.where_ = Some(rewrite(w, &entries)?);
++    }
++    if let Some(h) = out.having.take() {
++        out.having = Some(rewrite(h, &entries)?);
++    }
++    for w in out.windows.iter_mut() {
++        for e in w.partition_by.iter_mut() {
++            *e = rewrite(e.clone(), &entries)?;
++        }
++        for k in w.order_by.iter_mut() {
++            k.expr = rewrite(k.expr.clone(), &entries)?;
++        }
++    }
++    for item in out.from.iter_mut() {
++        from_item(item, &entries)?;
++    }
++    Ok(out)
++}
++
++/// Copy of `sel` whose target list, HAVING and window expressions are constant-folded.
++fn simplify_select_exprs(st: &mut PlannerState, sel: &BoundSelect) -> Result<BoundSelect> {
++    let mut out = sel.clone();
++    for t in out.target_list.iter_mut() {
++        t.expr = simplify::simplify_expr(st, t.expr.clone())?;
++    }
++    if let Some(h) = out.having.take() {
++        out.having = Some(simplify::simplify_expr(st, h)?);
++    }
++    for w in out.windows.iter_mut() {
++        for e in w.partition_by.iter_mut() {
++            *e = simplify::simplify_expr(st, e.clone())?;
++        }
++        for k in w.order_by.iter_mut() {
++            k.expr = simplify::simplify_expr(st, k.expr.clone())?;
++        }
++    }
++    Ok(out)
++}
++
+ /// Leaf scan for range entry `rt_index` (1-based) of `sel.range_table`.
+ pub fn build_range_scan(st: &mut PlannerState, entries: &[RangeEntry], rt_index: u32, with_rowid: bool) -> Result<LogicalScan> {
+     let entry = entry_at(entries, rt_index)?;
+diff --git c/crates/pgarbor-plan/src/setrefs.rs w/crates/pgarbor-plan/src/setrefs.rs
+index cae7326d..25d451dc 100644
+--- c/crates/pgarbor-plan/src/setrefs.rs
++++ w/crates/pgarbor-plan/src/setrefs.rs
+@@ -313,9 +313,39 @@ fn resolve_column(c: ColumnRef, ty: TypeId, ctx: &Ctx<'_>) -> Result<BoundExpr>
+             }
+         }
+     }
++    if c.levels_up == 0 && c.attnum == 0 {
++        if let Some(row) = whole_row_from_sides(c, ty, ctx) {
++            return Ok(row);
++        }
++    }
+     Err(PgError::internal("variable not found in subplan target list"))
+ }
+ 
++/// Whole-row reference above the scan: `ROW(col1, ..)` over the slots of the row source that
++/// produce `Column{rt_index, 1..n}` (PG expands whole-row vars into a `RowExpr` of the base vars
++/// during planning). Dropped columns (type oid 0) are skipped. `None` if no column of the
++/// range entry is present.
++fn whole_row_from_sides(c: ColumnRef, ty: TypeId, ctx: &Ctx<'_>) -> Option<BoundExpr> {
++    let mut cols: Vec<(i16, u32, TypeId)> = Vec::new();
++    for side in &ctx.sides {
++        for (i, v) in side.vars.iter().enumerate() {
++            if let ExprKind::Column(vc) = &v.kind {
++                if vc.levels_up == 0 && vc.rt_index == c.rt_index && vc.attnum > 0 && v.ty.oid != 0 {
++                    cols.push((vc.attnum, side.offset + i as u32, v.ty));
++                }
++            }
++        }
++    }
++    if cols.is_empty() {
++        return None;
++    }
++    cols.sort_by_key(|(attnum, _, _)| *attnum);
++    cols.dedup_by_key(|(attnum, _, _)| *attnum);
++    let args: Vec<BoundExpr> = cols.iter().map(|(_, slot, cty)| BoundExpr::input_ref(*slot, *cty)).collect();
++    let names: Vec<String> = (1..=args.len()).map(|i| format!("f{i}")).collect();
++    Some(BoundExpr::new(ExprKind::Row(Box::new(RowExpr { args, names })), ty))
++}
++
+ fn system_column_name(attnum: i16) -> &'static str {
+     match attnum {
+         -1 => "ctid",
+diff --git c/crates/pgarbor-plan/src/simplify.rs w/crates/pgarbor-plan/src/simplify.rs
+index 25ac0714..e74b5a0f 100644
+--- c/crates/pgarbor-plan/src/simplify.rs
++++ w/crates/pgarbor-plan/src/simplify.rs
+@@ -240,7 +240,9 @@ fn try_fold(ctx: &PlanContext, e: &BoundExpr) -> Result<Option<Datum>> {
+             .as_ref()
+             .and_then(|vals| vals.get((*n as usize).wrapping_sub(1)).cloned())),
+         ExprKind::FuncCall(f) => {
+-            if f.retset || f.volatility != Volatility::Immutable {
++            // `f(VARIADIC arr)` is left to the executor, which unpacks the array for VARIADIC "any"
++            // procs (`eval_call::eval_func_call`); `fold_call` does not do that.
++            if f.retset || f.variadic || f.volatility != Volatility::Immutable {
+                 return Ok(None);
+             }
+             fold_call(ctx, f.func, &f.args, e.ty)
+diff --git c/crates/pgarbor-sql/src/binder/ddl_function.rs w/crates/pgarbor-sql/src/binder/ddl_function.rs
+index 4b7b4d74..058ae9e0 100644
+--- c/crates/pgarbor-sql/src/binder/ddl_function.rs
++++ w/crates/pgarbor-sql/src/binder/ddl_function.rs
+@@ -311,8 +311,14 @@ fn sql_return_body(b: &mut Binder<'_>, fname: &str, specs: &[ParamSpec<'_>], e:
+         .map(|p| (p.name.clone(), TypeId::of(p.type_oid)))
+         .collect();
+     table_expr_scope(b, fname, &cols)?;
+-    let no_names = |_: i16| -> Option<String> { None };
+-    let r = bind_ddl_expr(b, e, ExprCtx::check(), Some(TypeId::of(ret)), None, &mut Vec::new(), &no_names)
++    // The parameters are the scope's columns (attnum = 1-based position), so the stored text names them
++    // by their declared names (PG `deparse` of the body shows parameter names).
++    let names: Vec<String> = cols.iter().map(|(n, _)| n.clone()).collect();
++    let column_names = move |attnum: i16| -> Option<String> {
++        let idx = usize::try_from(attnum).ok()?.checked_sub(1)?;
++        names.get(idx).cloned()
++    };
++    let r = bind_ddl_expr(b, e, ExprCtx::check(), Some(TypeId::of(ret)), None, &mut Vec::new(), &column_names)
+         .map(|(_, stored)| stored);
+     b.scopes.pop();
+     r
+diff --git c/crates/pgarbor-sql/src/binder/ddl_index.rs w/crates/pgarbor-sql/src/binder/ddl_index.rs
+index d24f7e55..5767612d 100644
+--- c/crates/pgarbor-sql/src/binder/ddl_index.rs
++++ w/crates/pgarbor-sql/src/binder/ddl_index.rs
+@@ -213,6 +213,9 @@ fn bind_key(b: &mut Binder, rel: &Relation, ic: &IndexColumn) -> Result<IndexKey
+         if col.is_none() && !is_system_column(&name) {
+             return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
+         }
++        if col.is_none() {
++            return Err(system_column_index_error());
++        }
+         let key_type: Option<Oid> = col.map(|c| c.type_id.oid);
+         let collation_oid = match collation {
+             Some(c) => Some(resolve_collation(b, c)?),
+@@ -240,6 +243,7 @@ fn bind_key(b: &mut Binder, rel: &Relation, ic: &IndexColumn) -> Result<IndexKey
+     let mut refs: Vec<i16> = Vec::new();
+     let (bound, stored_expr) =
+         stored::bind_ddl_expr(b, &ic.column.expr, ExprCtx::index_expr(), None, Some(rel.oid), &mut refs, &names)?;
++    reject_system_refs(&refs)?;
+     ensure_immutable(b, &ic.column.expr, &bound, "index expression")?;
+ 
+     let func_name = match &bound.kind {
+@@ -338,8 +342,11 @@ fn bind_include(b: &mut Binder, rel: &Relation, names: &[Ident]) -> Result<Vec<S
+     let mut out = Vec::with_capacity(names.len());
+     for id in names {
+         let name = b.ident(id);
+-        if rel.column_by_name(&name).is_none() && !is_system_column(&name) {
+-            return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
++        if rel.column_by_name(&name).is_none() {
++            if !is_system_column(&name) {
++                return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
++            }
++            return Err(system_column_index_error());
+         }
+         out.push(name);
+     }
+@@ -352,6 +359,7 @@ fn bind_predicate(b: &mut Binder, rel: &Relation, e: &Expr) -> Result<StoredExpr
+     let names = |a: i16| column_name_for_attnum(rel, a);
+     let mut refs: Vec<i16> = Vec::new();
+     let (bound, stored_expr) = stored::bind_ddl_expr(b, e, ec, None, Some(rel.oid), &mut refs, &names)?;
++    reject_system_refs(&refs)?;
+     if bound.ty.oid != oids::BOOL {
+         let actual = b.type_name(bound.ty);
+         return Err(diag::not_boolean("WHERE", &actual, b.pos(e)));
+@@ -461,6 +469,19 @@ fn column_name_for_attnum(rel: &Relation, a: i16) -> Option<String> {
+ }
+ 
+ /// System column names that the catalog resolves (its own 42704 applies to them).
++/// indexcmds.c `DefineIndex`: system attributes (attnum < 0) cannot be index keys, INCLUDE columns or
++/// referenced by index expressions and predicates.
++fn system_column_index_error() -> PgError {
++    PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "index creation on system columns is not supported")
++}
++
++fn reject_system_refs(refs: &[i16]) -> Result<()> {
++    if refs.iter().any(|&a| a < 0) {
++        return Err(system_column_index_error());
++    }
++    Ok(())
++}
++
+ fn is_system_column(name: &str) -> bool {
+     matches!(name, "ctid" | "xmin" | "xmax" | "cmin" | "cmax" | "tableoid")
+ }
+diff --git c/crates/pgarbor-sql/src/binder/ddl_view.rs w/crates/pgarbor-sql/src/binder/ddl_view.rs
+index fbeba504..9fb00171 100644
+--- c/crates/pgarbor-sql/src/binder/ddl_view.rs
++++ w/crates/pgarbor-sql/src/binder/ddl_view.rs
+@@ -72,6 +72,8 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
+     let qn = b.qual(&cv.name)?;
+     check_catalog_qualifier(b, &qn)?;
+     reject_query_forms(&cv.query)?;
++    // Views referenced directly by the query are recorded in `b.deps` while it binds (see from.rs).
++    let dep_mark = b.deps.len();
+ 
+     // DefineView runs parse analysis of the query before anything else, so query errors win over
+     // name and option errors.
+@@ -125,6 +127,11 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
+     let sql = deparse_viewdef(b.env, &bq, &names, DeparseOptions::default())?;
+ 
+     let mut deps = query_dependencies(&bq)?;
++    for dep in b.deps.split_off(dep_mark) {
++        if !deps.contains(&dep) {
++            deps.push(dep);
++        }
++    }
+     for out in &bq.output {
+         if out.ty.oid >= FIRST_NORMAL_OID {
+             let dep = ObjectAddress::new(ObjClass::Type, out.ty.oid);
+diff --git c/crates/pgarbor-sql/src/binder/expr_func.rs w/crates/pgarbor-sql/src/binder/expr_func.rs
+index da0198cf..a94ea010 100644
+--- c/crates/pgarbor-sql/src/binder/expr_func.rs
++++ w/crates/pgarbor-sql/src/binder/expr_func.rs
+@@ -249,6 +249,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+     }
+ 
+     let flags = call_flags(f, pos)?;
++    let variadic_kw = variadic_call(f, pos)?;
+     let cands = b
+         .env
+         .function_candidates(schema, &name)
+@@ -273,7 +274,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+ 
+     // Step 4: resolve.
+     let arg_oids: Vec<Oid> = args.iter().map(|a| a.ty().oid).collect();
+-    let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), false, pos) {
++    let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), variadic_kw, pos) {
+         Ok(r) => r,
+         Err(e) => {
+             if e.sqlstate == SqlState::UNDEFINED_FUNCTION && args.len() == 1 && names.iter().all(|n| n.is_none()) {
+@@ -286,6 +287,9 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+     };
+ 
+     // Step 5: kind dispatch.
++    if variadic_kw && matches!(resolved.kind, ProcKind::Aggregate | ProcKind::Window) {
++        return Err(PgError::unimplemented("SQL-12", format!("VARIADIC call of aggregate or window function {qdisp}")));
++    }
+     match resolved.kind {
+         ProcKind::Procedure => {
+             let sig = func::signature_string(b.env, &name, &arg_oids)?;
+@@ -318,7 +322,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
+                 ));
+             }
+             check_srf_placement(b, resolved.retset, ec, pos)?;
+-            build_call(b, &resolved, &name, args, false, false, pos, ec)
++            build_call(b, &resolved, &name, args, variadic_kw, false, pos, ec)
+         }
+         ProcKind::Aggregate => {
+             if f.over.is_none() && !ec.aggs_ok {
+@@ -419,6 +423,33 @@ pub fn build_call(
+         coerced.push(Some(e));
+     }
+ 
++    // VARIADIC "any" (concat, format, json_build_array, num_nulls, ...): PG passes the trailing
++    // arguments through unpacked, so the call may carry more args than declared parameters. The
++    // resolver expands `arg_order` to one entry per call argument in that case (identity order, no
++    // packing, `nvariadic == 0`).
++    if nargs > nparams && resolved.nvariadic == 0 {
++        if resolved.arg_order.len() != nargs {
++            return Err(PgError::internal("binder: more call arguments than declared parameters"));
++        }
++        let mut out: Vec<BoundExpr> = Vec::with_capacity(nargs);
++        for j in 0..nargs {
++            out.push(take_arg(&mut coerced, j)?);
++        }
++        return Ok(BoundExpr::new(
++            ExprKind::FuncCall(Box::new(FuncCallExpr {
++                func: resolved.oid,
++                name: name.to_string(),
++                args: out,
++                variadic: variadic_kw,
++                retset: resolved.retset,
++                volatility: info.volatility,
++                strict: info.strict,
++                is_cast_call,
++            })),
++            resolved.ret,
++        ));
++    }
++
+     // Place the arguments into declared parameter order.
+     let mut slots: Vec<Option<BoundExpr>> = Vec::new();
+     slots.resize_with(nparams, || None);
+@@ -621,6 +652,30 @@ struct CallFlags {
+     order_by: bool,
+ }
+ 
++/// Is this argument the parser's `VARIADIC` marker (`crate::parser::VARIADIC_MARKER`)?
++fn is_variadic_marker(a: &FunctionArg) -> bool {
++    let id = match a {
++        FunctionArg::Named { name, .. } => Some(name),
++        FunctionArg::ExprNamed { name: Expr::Identifier(id), .. } => Some(id),
++        _ => None,
++    };
++    id.is_some_and(|i| i.quote_style == Some('"') && i.value == crate::parser::VARIADIC_MARKER)
++}
++
++/// Does the call use the VARIADIC keyword (`f(a, VARIADIC arr)`)? PG grammar allows it only as the
++/// last argument, so a marker anywhere else is a syntax error.
++fn variadic_call(f: &Function, pos: Option<u32>) -> Result<bool> {
++    let FunctionArguments::List(list) = &f.args else {
++        return Ok(false);
++    };
++    let marks: Vec<usize> = list.args.iter().enumerate().filter(|(_, a)| is_variadic_marker(a)).map(|(i, _)| i).collect();
++    match marks.as_slice() {
++        [] => Ok(false),
++        [i] if *i + 1 == list.args.len() => Ok(true),
++        _ => Err(diag::syntax("syntax error", pos)),
++    }
++}
++
+ fn call_flags(f: &Function, pos: Option<u32>) -> Result<CallFlags> {
+     let mut flags = CallFlags { distinct: false, order_by: false };
+     if let FunctionArguments::List(list) = &f.args {
+@@ -816,6 +871,18 @@ fn bind_call_args(b: &mut Binder, f: &Function, ec: ExprCtx, pos: Option<u32>) -
+         FunctionArguments::List(list) => {
+             let mut seen_named = false;
+             for a in &list.args {
++                if is_variadic_marker(a) {
++                    // `VARIADIC expr` (the last argument): bound as a plain positional argument; the
++                    // variadic flag itself comes from `variadic_call`.
++                    let (FunctionArg::Named { arg: FunctionArgExpr::Expr(e), .. }
++                    | FunctionArg::ExprNamed { arg: FunctionArgExpr::Expr(e), .. }) = a
++                    else {
++                        return Err(diag::syntax("syntax error", pos));
++                    };
++                    args.push(bind_arg(b, e, ec)?);
++                    names.push(None);
++                    continue;
++                }
+                 match a {
+                     FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => {
+                         if seen_named {
+diff --git c/crates/pgarbor-sql/src/binder/from.rs w/crates/pgarbor-sql/src/binder/from.rs
+index 3334b740..86e90e3e 100644
+--- c/crates/pgarbor-sql/src/binder/from.rs
++++ w/crates/pgarbor-sql/src/binder/from.rs
+@@ -405,6 +405,15 @@ fn expand_view(
+     };
+     let names: Vec<String> = rel.columns.iter().filter(|c| !c.dropped).map(|c| c.name.clone()).collect();
+ 
++    // A direct reference from the statement being bound (not one made while expanding another
++    // view) is a Normal dependency on the view itself, as PG's rewriter records it. The base
++    // relations the view expands to are reached transitively through that view.
++    if b.expanding_views.is_empty() {
++        let dep = pgarbor_catalog::ObjectAddress::new(pgarbor_catalog::ObjClass::Relation, rel.oid);
++        if !b.deps.contains(&dep) {
++            b.deps.push(dep);
++        }
++    }
+     b.expanding_views.push(rel.oid);
+     let bound = select::bind_subselect(b, query, &names).map_err(stored_text_error);
+     b.expanding_views.pop();
+diff --git c/crates/pgarbor-sql/src/binder/utility.rs w/crates/pgarbor-sql/src/binder/utility.rs
+index bbb42083..5e781006 100644
+--- c/crates/pgarbor-sql/src/binder/utility.rs
++++ w/crates/pgarbor-sql/src/binder/utility.rs
+@@ -708,7 +708,11 @@ fn index_oid(b: &mut Binder, name: &ObjectName) -> Result<Oid> {
+ }
+ 
+ /// REINDEX {INDEX|TABLE|SCHEMA|DATABASE|SYSTEM}. Accepted with no physical effect.
+-fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, _concurrently: bool) -> Result<BoundStatement> {
++fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, concurrently: bool) -> Result<BoundStatement> {
++    // indexcmds.c `ExecReindex`: system catalogs cannot be rebuilt concurrently.
++    if kind == ReindexKind::System && concurrently {
++        return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "cannot reindex system catalogs concurrently"));
++    }
+     let targets: Vec<Oid> = match kind {
+         ReindexKind::Index => {
+             let name = name.ok_or_else(|| diag::syntax_error_near(";", None))?;
+@@ -729,7 +733,22 @@ fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, _c
+         ReindexKind::Schema => {
+             let name = name.ok_or_else(|| diag::syntax_error_near(";", None))?;
+             let qn = b.qual(name)?;
+-            vec![b.env.namespace_oid(&qn.name)?]
++            // The executor takes relation OIDs (an empty list means every user table), so expand the
++            // schema here to its tables and materialized views, in OID order (indexcmds.c
++            // `ReindexMultipleTables`). A schema without any such relation is a no-op.
++            let ns = b.env.namespace_oid(&qn.name)?;
++            let mut tables: Vec<Oid> = b
++                .env
++                .snapshot()
++                .user_relations()
++                .filter(|r| r.namespace == ns && matches!(r.kind, RelKind::Table | RelKind::MatView))
++                .map(|r| r.oid)
++                .collect();
++            tables.sort_unstable();
++            if tables.is_empty() {
++                return Ok(BoundStatement::Noop { tag: "REINDEX".to_string(), notices: Vec::new() });
++            }
++            tables
+         }
+         ReindexKind::Database | ReindexKind::System => {
+             if let Some(name) = name {
+diff --git c/crates/pgarbor-sql/src/deparse/query.rs w/crates/pgarbor-sql/src/deparse/query.rs
+index 2a11162a..88c125f0 100644
+--- c/crates/pgarbor-sql/src/deparse/query.rs
++++ w/crates/pgarbor-sql/src/deparse/query.rs
+@@ -199,6 +199,21 @@ impl ColumnNamer for ScopeNamer<'_> {
+             return self.outer?.column(&up);
+         }
+         let idx = (col.rt_index as usize).checked_sub(1)?;
++        if col.attnum <= 0 {
++            // PG `get_variable`: system columns by name, a whole-row reference as `alias.*`.
++            let alias = quote_identifier(self.names.get(idx)?).ok()?;
++            let sys = match col.attnum {
++                0 => return Some(format!("{alias}.*")),
++                -1 => "ctid",
++                -2 => "xmin",
++                -3 => "cmin",
++                -4 => "xmax",
++                -5 => "cmax",
++                -6 => "tableoid",
++                _ => return None,
++            };
++            return Some(if self.qualify { format!("{alias}.{sys}") } else { sys.to_string() });
++        }
+         let name = self.attname(col)?;
+         let quoted = quote_identifier(&name).ok()?;
+         if self.qualify {
+diff --git c/crates/pgarbor-sql/src/lib.rs w/crates/pgarbor-sql/src/lib.rs
+index 25ec7848..ae3aa2c5 100644
+--- c/crates/pgarbor-sql/src/lib.rs
++++ w/crates/pgarbor-sql/src/lib.rs
+@@ -32,6 +32,7 @@ pub mod parser;
+ pub mod parser_extra;
+ pub mod rewrite;
+ pub mod source;
++pub mod strict_check;
+ pub mod syntax_error;
+ 
+ pub use binder::{bind, BindContext, BindOutput, BindSession};
+diff --git c/crates/pgarbor-sql/src/parser.rs w/crates/pgarbor-sql/src/parser.rs
+index df68aec4..a45e0524 100644
+--- c/crates/pgarbor-sql/src/parser.rs
++++ w/crates/pgarbor-sql/src/parser.rs
+@@ -59,7 +59,8 @@ use pgarbor_common::{PgError, Result};
+ use sqlparser::ast::{Expr, Statement};
+ use sqlparser::dialect::PostgreSqlDialect;
+ use sqlparser::parser::Parser;
+-use sqlparser::tokenizer::{Span, Token, TokenWithSpan, Tokenizer};
++use sqlparser::keywords::Keyword;
++use sqlparser::tokenizer::{Span, Token, TokenWithSpan, Tokenizer, Word};
+ 
+ use crate::classify;
+ use crate::diag;
+@@ -67,6 +68,7 @@ use crate::extra_stmt::ExtraStatement;
+ use crate::identity_opts::{self, IdentityGroup};
+ use crate::parser_extra;
+ use crate::source::SourceMap;
++use crate::strict_check;
+ use crate::syntax_error;
+ 
+ /// Maximum expression/subquery nesting accepted by the parser (sqlparser recursion counter). PG's
+@@ -157,6 +159,7 @@ pub fn parse(sql: &str) -> Result<Vec<RawStatement>> {
+         let parsed = if parser_extra::is_extra_statement(&toks)? {
+             Parsed::Extra(parser_extra::parse_extra(toks, &src)?)
+         } else {
++            strict_check::check(&toks, &src)?;
+             let (ast_toks, groups) = identity_opts::extract(&toks, &src)?;
+             identity_groups = groups;
+             Parsed::Ast(Box::new(parse_ast_chunk(&ast_toks, &src)?))
+@@ -219,6 +222,41 @@ fn bare_word(t: &Token) -> Option<String> {
+     }
+ }
+ 
++/// Name of the marker argument that stands for a `VARIADIC` call argument (PG `func_arg_expr`
++/// after `VARIADIC`). sqlparser 0.63 has no `VARIADIC expr` argument form, so [`mark_variadic_args`]
++/// rewrites the keyword into `"pgarbor variadic" => expr`: a quoted identifier containing a space,
++/// which an unquoted SQL word cannot spell. The binder recognizes it and clears it
++/// (`expr_func::variadic_call`).
++pub const VARIADIC_MARKER: &str = "pgarbor variadic";
++
++/// Rewrite each `VARIADIC` keyword that starts a call argument (directly after `(` or `,`) into the
++/// marker argument [`VARIADIC_MARKER`]. Only statements other than `CREATE`/`ALTER`/`DROP` are
++/// rewritten: there `VARIADIC` is an argument mode in a function signature, which sqlparser parses.
++fn mark_variadic_args(toks: &[TokenWithSpan]) -> Vec<TokenWithSpan> {
++    let first = toks.iter().find_map(|t| bare_word(&t.token));
++    if matches!(first.as_deref(), Some("CREATE" | "ALTER" | "DROP")) {
++        return toks.to_vec();
++    }
++    let mut out = Vec::with_capacity(toks.len());
++    let mut prev: Option<&Token> = None;
++    for t in toks {
++        if matches!(t.token, Token::Whitespace(_)) {
++            out.push(t.clone());
++            continue;
++        }
++        let starts_arg = matches!(prev, Some(Token::LParen | Token::Comma));
++        if starts_arg && bare_word(&t.token).as_deref() == Some("VARIADIC") {
++            let word = Word { value: VARIADIC_MARKER.to_string(), quote_style: Some('"'), keyword: Keyword::NoKeyword };
++            out.push(TokenWithSpan::new(Token::Word(word), t.span));
++            out.push(TokenWithSpan::new(Token::RArrow, t.span));
++        } else {
++            out.push(t.clone());
++        }
++        prev = Some(&t.token);
++    }
++    out
++}
++
+ /// Is this the head of `CREATE [OR REPLACE] FUNCTION|PROCEDURE` (the first significant words)?
+ fn is_function_header(head: &[&str]) -> bool {
+     matches!(
+@@ -311,6 +349,7 @@ fn trim_range(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<(usi
+ /// Parse one chunk (tokens end with EOF) with sqlparser; the whole chunk must be one statement.
+ fn parse_ast_chunk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<Statement> {
+     let toks = signed_connection_limit(toks);
++    let toks = mark_variadic_args(&toks);
+     let toks = toks.as_slice();
+     let dialect = PostgreSqlDialect {};
+     let mut parser = Parser::new(&dialect)
+diff --git c/crates/pgarbor-sql/src/strict_check.rs w/crates/pgarbor-sql/src/strict_check.rs
+new file mode 100644
+index 00000000..3a332d4b
+--- /dev/null
++++ w/crates/pgarbor-sql/src/strict_check.rs
+@@ -0,0 +1,168 @@
++//! Token-level grammar checks for statements whose operands `sqlparser` accepts more loosely than
++//! PostgreSQL 18's `gram.y`. Each check runs before the statement goes to `sqlparser` and only
++//! rejects input that PostgreSQL's grammar rejects, at the token where bison would report the
++//! error (`syntax error at or near "tok"`, or `syntax error at end of input`). Valid input falls
++//! through unchanged, so the AST path stays the single source of truth for everything else.
++//!
++//! Productions (PostgreSQL 18 `src/backend/parser/gram.y`):
++//! * `LISTEN ColId`, `UNLISTEN {ColId | '*'}`, `NOTIFY ColId notify_payload`;
++//! * `EXECUTE name execute_param_clause` with `name: ColId` and `'(' expr_list ')'` (non-empty);
++//! * `RESET var_name` with `var_name: ColId | var_name '.' ColId`;
++//! * `ALTER SCHEMA name {RENAME TO | OWNER TO}`.
++//! `ColId` is an identifier, an unreserved keyword or a column-name keyword; reserved and
++//! type-or-function-name keywords (`kwlist.h`) must be quoted.
++use pgarbor_common::Result;
++use sqlparser::tokenizer::{Token, TokenWithSpan};
++
++use crate::diag;
++use crate::source::SourceMap;
++use crate::syntax_error::token_problem;
++
++/// Reserved and type_func_name keywords of PostgreSQL 18 (`src/include/parser/kwlist.h`), lower case.
++/// These are not valid unquoted `ColId`s.
++const NON_COLID_KEYWORDS: &[&str] = &[
++    "all", "analyse", "analyze", "and", "any", "array", "as", "asc", "asymmetric", "authorization",
++    "binary", "both", "case", "cast", "check", "collate", "collation", "column", "concurrently",
++    "constraint", "create", "cross", "current_catalog", "current_date", "current_role",
++    "current_schema", "current_time", "current_timestamp", "current_user", "default", "deferrable",
++    "desc", "distinct", "do", "else", "end", "except", "false", "fetch", "for", "foreign", "freeze",
++    "from", "full", "grant", "group", "having", "ilike", "in", "initially", "inner", "intersect",
++    "into", "is", "isnull", "join", "lateral", "leading", "left", "like", "limit", "localtime",
++    "localtimestamp", "natural", "not", "notnull", "null", "offset", "on", "only", "or", "order",
++    "outer", "overlaps", "placing", "primary", "references", "returning", "right", "select",
++    "session_user", "similar", "some", "symmetric", "system_user", "table", "tablesample", "then",
++    "to", "trailing", "true", "union", "unique", "user", "using", "variadic", "verbose", "when",
++    "where", "window", "with",
++];
++
++/// Run the checks for one statement chunk (`toks` ends with `Token::EOF`).
++pub fn check(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
++    let sig: Vec<&TokenWithSpan> = toks.iter().filter(|t| !matches!(t.token, Token::Whitespace(_))).collect();
++    let word = |i: usize| -> String {
++        match sig.get(i).map(|t| &t.token) {
++            Some(Token::Word(w)) if w.quote_style.is_none() => w.value.to_ascii_uppercase(),
++            _ => String::new(),
++        }
++    };
++    match word(0).as_str() {
++        "LISTEN" | "NOTIFY" => {
++            colid(&sig, 1, src)?;
++        }
++        "UNLISTEN" => {
++            if !matches!(sig.get(1).map(|t| &t.token), Some(Token::Mul)) {
++                colid(&sig, 1, src)?;
++            }
++        }
++        "EXECUTE" => {
++            let end = colid(&sig, 1, src)?;
++            if matches!(sig.get(end).map(|t| &t.token), Some(Token::Period)) {
++                return Err(at_token(sig[end], src));
++            }
++            if matches!(sig.get(end).map(|t| &t.token), Some(Token::LParen))
++                && matches!(sig.get(end + 1).map(|t| &t.token), Some(Token::RParen))
++            {
++                return Err(at_token(sig[end + 1], src));
++            }
++        }
++        "RESET" => {
++            // `RESET TIME ZONE | TRANSACTION ISOLATION LEVEL | SESSION AUTHORIZATION` and `RESET ALL`
++            // have their own rules in sqlparser; only `var_name` is checked here.
++            let special = matches!(
++                (word(1).as_str(), word(2).as_str()),
++                ("TIME", "ZONE") | ("TRANSACTION", "ISOLATION") | ("SESSION", "AUTHORIZATION")
++            );
++            if !special && word(1) != "ALL" {
++                let mut end = colid(&sig, 1, src)?;
++                while matches!(sig.get(end).map(|t| &t.token), Some(Token::Period)) {
++                    end = colid(&sig, end + 1, src)?;
++                }
++            }
++        }
++        "ALTER" if word(1) == "SCHEMA" => {
++            let end = colid(&sig, 2, src)?;
++            let next = word(end);
++            if !matches!(next.as_str(), "RENAME" | "OWNER") {
++                return Err(at_token(sig[end], src));
++            }
++        }
++        _ => {}
++    }
++    Ok(())
++}
++
++/// Check a `ColId` at `sig[i]` and any `'.' ColId` continuation after it when `dotted` is set by the
++/// caller; returns the index of the first token after the name. EOF and non-identifiers are errors.
++fn colid(sig: &[&TokenWithSpan], i: usize, src: &SourceMap) -> Result<usize> {
++    let t = match sig.get(i) {
++        Some(t) => *t,
++        None => return Err(diag::syntax_error_eof(src.end_pos())),
++    };
++    match &t.token {
++        Token::EOF => return Err(diag::syntax_error_eof(src.end_pos())),
++        Token::Word(w) if w.quote_style == Some('"') && !w.value.is_empty() => {}
++        Token::Word(w) if w.quote_style == Some('"') => return Err(at_token(t, src)),
++        Token::Word(w) if w.quote_style.is_none() => {
++            let lower = w.value.to_ascii_lowercase();
++            if NON_COLID_KEYWORDS.contains(&lower.as_str()) {
++                return Err(at_token(t, src));
++            }
++        }
++        _ => return Err(at_token(t, src)),
++    }
++    Ok(i + 1)
++}
++
++fn at_token(t: &TokenWithSpan, src: &SourceMap) -> pgarbor_common::PgError {
++    token_problem(t, src)
++}
++
++#[cfg(test)]
++mod tests {
++    use crate::parser::parse;
++
++    /// PG error text and position for input that must be rejected.
++    fn reject(sql: &str) -> (String, Option<u32>) {
++        let e = parse(sql).expect_err(sql);
++        assert_eq!(e.sqlstate.code(), "42601", "{sql}");
++        (e.message.clone(), e.position)
++    }
++
++    #[test]
++    fn reserved_keyword_channel_is_syntax_error() {
++        assert_eq!(reject("LISTEN select"), ("syntax error at or near \"select\"".into(), Some(8)));
++        assert_eq!(reject("NOTIFY select"), ("syntax error at or near \"select\"".into(), Some(8)));
++        assert_eq!(reject("UNLISTEN select"), ("syntax error at or near \"select\"".into(), Some(10)));
++        assert!(parse("LISTEN \"select\"").is_ok());
++        assert!(parse("UNLISTEN \"select\"").is_ok());
++        assert!(parse("LISTEN virtual").is_ok());
++    }
++
++    #[test]
++    fn literal_and_empty_channels_are_syntax_errors() {
++        assert_eq!(reject("LISTEN 'ch'"), ("syntax error at or near \"'ch'\"".into(), Some(8)));
++        assert_eq!(reject("UNLISTEN 'keep_me'"), ("syntax error at or near \"'keep_me'\"".into(), Some(10)));
++        assert_eq!(reject("NOTIFY \"\""), ("zero-length delimited identifier at or near \"\"\"\"".into(), Some(8)));
++        assert!(parse("UNLISTEN *").is_ok());
++    }
++
++    #[test]
++    fn execute_empty_parens_is_syntax_error_at_close_paren() {
++        assert_eq!(reject("EXECUTE p()"), ("syntax error at or near \")\"".into(), Some(11)));
++        assert!(parse("EXECUTE p").is_ok());
++        assert!(parse("EXECUTE p(1)").is_ok());
++    }
++
++    #[test]
++    fn reset_names_are_checked_as_var_name() {
++        assert_eq!(reject("RESET 'timezone'"), ("syntax error at or near \"'timezone'\"".into(), Some(7)));
++        assert_eq!(reject("RESET extra_float_digits, statement_timeout"), ("syntax error at or near \",\"".into(), Some(25)));
++        assert!(parse("RESET ALL").is_ok());
++        assert!(parse("RESET search_path").is_ok());
++    }
++
++    #[test]
++    fn alter_schema_if_exists_is_syntax_error() {
++        assert_eq!(reject("ALTER SCHEMA IF EXISTS s RENAME TO t"), ("syntax error at or near \"EXISTS\"".into(), Some(17)));
++        assert!(parse("ALTER SCHEMA s RENAME TO t").is_ok());
++    }
++}
+diff --git c/crates/pgarbor-sql/src/syntax_error.rs w/crates/pgarbor-sql/src/syntax_error.rs
+index a8f49f29..d49c2733 100644
+--- c/crates/pgarbor-sql/src/syntax_error.rs
++++ w/crates/pgarbor-sql/src/syntax_error.rs
+@@ -111,7 +111,7 @@ fn parser_problem(msg: &str, src: &SourceMap, tokens: &[TokenWithSpan]) -> PgErr
+ }
+ 
+ /// The error for an offending token, printed the way PG prints it (source text, not `Display`).
+-fn token_problem(t: &TokenWithSpan, src: &SourceMap) -> PgError {
++pub(crate) fn token_problem(t: &TokenWithSpan, src: &SourceMap) -> PgError {
+     let pos = src.char_pos(t.span.start);
+     match &t.token {
+         Token::EOF => diag::syntax_error_eof(src.end_pos()),
+diff --git c/crates/pgarbor-types/src/cast/apply.rs w/crates/pgarbor-types/src/cast/apply.rs
+index 679c53b0..2ce98654 100644
+--- c/crates/pgarbor-types/src/cast/apply.rs
++++ w/crates/pgarbor-types/src/cast/apply.rs
+@@ -26,6 +26,7 @@ use crate::datum::{type_mismatch, Datum, TypeId};
+ use crate::func;
+ use crate::io;
+ use crate::names::display_name;
++use crate::registry::base_type;
+ use crate::oids;
+ use crate::typmod;
+ use pgarbor_common::{Oid, PgError, Result, SqlState};
+@@ -53,10 +54,38 @@ pub fn cast_datum(value: Datum, from: TypeId, to: TypeId, context: CastContext,
+     apply_cast(&plan, value, ctx)
+ }
+ 
++/// Binary-coercible (relabel) casts keep the bits but may change the Datum variant: `int4 -> oid`,
++/// `oid -> int4` and the `reg*` family (pg_cast castmethod 'b'). Every other relabel keeps its variant.
++fn relabel_variant(target: Oid, value: Datum) -> Datum {
++    match value {
++        Datum::Int4(v) if OID_DATUM_TYPES.contains(&target) => Datum::Oid(v as u32),
++        Datum::Oid(v) if target == oids::INT4 => Datum::Int4(v as i32),
++        other => other,
++    }
++}
++
++/// Types whose Datum variant is `Datum::Oid` (see the `datum` module table).
++const OID_DATUM_TYPES: &[Oid] = &[
++    oids::OID,
++    24,   // regproc
++    2202, // regprocedure
++    2203, // regoper
++    2204, // regoperator
++    2205, // regclass
++    2206, // regtype
++    3734, // regconfig
++    3769, // regdictionary
++    4089, // regnamespace
++    4096, // regrole
++    4191, // regcollation
++    28,   // xid
++    29,   // cid
++];
++
+ /// Run one step of `plan` on a non-NULL value.
+ fn apply_step(plan: &CastPlan, step: &CastStep, value: Datum, ctx: &FuncCtx) -> Result<Datum> {
+     match step {
+-        CastStep::Relabel => Ok(value),
++        CastStep::Relabel => Ok(relabel_variant(base_type(ctx.env, plan.to.oid), value)),
+         CastStep::DomainCheck { .. } => Ok(value),
+         CastStep::Func { proc, nargs } => apply_func(plan, *proc, *nargs, value, ctx),
+         CastStep::ViaIo { from, to } => {
+diff --git c/crates/pgarbor-types/src/datetime/tz.rs w/crates/pgarbor-types/src/datetime/tz.rs
+index 8a36f336..7e482ef4 100644
+--- c/crates/pgarbor-types/src/datetime/tz.rs
++++ w/crates/pgarbor-types/src/datetime/tz.rs
+@@ -43,7 +43,7 @@ pub enum ZoneSpec {
+ /// Parse a `SET TIME ZONE` / `TimeZone` GUC string (see module docs).
+ // CONTRACT
+ pub fn parse_timezone_setting(value: &str) -> Result<TimeZoneSetting> {
+-    if is_zero_offset_word(value) {
++    if is_zero_offset_word(value) && !is_rejected_as_timezone_setting(value) {
+         return Ok(TimeZoneSetting::Utc);
+     }
+     if value.len() >= 8 && value.as_bytes()[..8].eq_ignore_ascii_case(b"interval") {
+@@ -155,6 +155,14 @@ fn is_zero_offset_word(name: &str) -> bool {
+     ZERO_OFFSET_NAMES.iter().any(|w| w.eq_ignore_ascii_case(name))
+ }
+ 
++/// Zero-offset words that `SET TIME ZONE` / the TimeZone setting rejects (oracle-verified: `pg_tzset`
++/// finds no zone file for them). They still resolve in `AT TIME ZONE` as abbreviations.
++const SET_REJECTED_ZERO_NAMES: &[&str] = &["uct", "universal", "z", "zulu", "greenwich"];
++
++fn is_rejected_as_timezone_setting(name: &str) -> bool {
++    SET_REJECTED_ZERO_NAMES.iter().any(|w| w.eq_ignore_ascii_case(name))
++}
++
+ /// ASCII case-insensitive ordering; both tables are sorted by this order.
+ fn fold_cmp(a: &str, b: &str) -> Ordering {
+     a.bytes().map(|c| c.to_ascii_lowercase()).cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+@@ -544,108 +552,97 @@ const DEFAULT_ABBREVS: &[AbbrevDef] = &[
+     ("ZULU", 0, false, ""),
+ ];
+ 
+-/// IANA zone names (tzdata 2026c `Zone` and `Link` names, incl. backward links), sorted case-insensitively.
++/// IANA zone names accepted by PostgreSQL 18 `SET TIME ZONE` / `AT TIME ZONE` (oracle-verified), sorted
++/// case-insensitively. Legacy backward names that the oracle rejects (`EST`, `MST`, `HST`, `CET`, `Asia/Calcutta`,
++/// `Universal`, `Zulu`, ...) are absent: they are not zone names for the TimeZone setting.
+ const IANA_ZONES: &[&str] = &[
+-    "Africa/Abidjan", "Africa/Accra", "Africa/Addis_Ababa", "Africa/Algiers", "Africa/Asmara", "Africa/Asmera",
+-    "Africa/Bamako", "Africa/Bangui", "Africa/Banjul", "Africa/Bissau", "Africa/Blantyre", "Africa/Brazzaville",
+-    "Africa/Bujumbura", "Africa/Cairo", "Africa/Casablanca", "Africa/Ceuta", "Africa/Conakry", "Africa/Dakar",
+-    "Africa/Dar_es_Salaam", "Africa/Djibouti", "Africa/Douala", "Africa/El_Aaiun", "Africa/Freetown", "Africa/Gaborone",
+-    "Africa/Harare", "Africa/Johannesburg", "Africa/Juba", "Africa/Kampala", "Africa/Khartoum", "Africa/Kigali",
+-    "Africa/Kinshasa", "Africa/Lagos", "Africa/Libreville", "Africa/Lome", "Africa/Luanda", "Africa/Lubumbashi",
+-    "Africa/Lusaka", "Africa/Malabo", "Africa/Maputo", "Africa/Maseru", "Africa/Mbabane", "Africa/Mogadishu",
+-    "Africa/Monrovia", "Africa/Nairobi", "Africa/Ndjamena", "Africa/Niamey", "Africa/Nouakchott", "Africa/Ouagadougou",
++    "Africa/Abidjan", "Africa/Accra", "Africa/Addis_Ababa", "Africa/Algiers", "Africa/Asmara", "Africa/Bamako",
++    "Africa/Bangui", "Africa/Banjul", "Africa/Bissau", "Africa/Blantyre", "Africa/Brazzaville", "Africa/Bujumbura",
++    "Africa/Cairo", "Africa/Casablanca", "Africa/Ceuta", "Africa/Conakry", "Africa/Dakar", "Africa/Dar_es_Salaam",
++    "Africa/Djibouti", "Africa/Douala", "Africa/El_Aaiun", "Africa/Freetown", "Africa/Gaborone", "Africa/Harare",
++    "Africa/Johannesburg", "Africa/Juba", "Africa/Kampala", "Africa/Khartoum", "Africa/Kigali", "Africa/Kinshasa",
++    "Africa/Lagos", "Africa/Libreville", "Africa/Lome", "Africa/Luanda", "Africa/Lubumbashi", "Africa/Lusaka",
++    "Africa/Malabo", "Africa/Maputo", "Africa/Maseru", "Africa/Mbabane", "Africa/Mogadishu", "Africa/Monrovia",
++    "Africa/Nairobi", "Africa/Ndjamena", "Africa/Niamey", "Africa/Nouakchott", "Africa/Ouagadougou",
+     "Africa/Porto-Novo", "Africa/Sao_Tome", "Africa/Timbuktu", "Africa/Tripoli", "Africa/Tunis", "Africa/Windhoek",
+-    "America/Adak", "America/Anchorage", "America/Anguilla", "America/Antigua", "America/Araguaina", "America/Argentina/Buenos_Aires",
+-    "America/Argentina/Catamarca", "America/Argentina/ComodRivadavia", "America/Argentina/Cordoba", "America/Argentina/Jujuy", "America/Argentina/La_Rioja", "America/Argentina/Mendoza",
+-    "America/Argentina/Rio_Gallegos", "America/Argentina/Salta", "America/Argentina/San_Juan", "America/Argentina/San_Luis", "America/Argentina/Tucuman", "America/Argentina/Ushuaia",
+-    "America/Aruba", "America/Asuncion", "America/Atikokan", "America/Atka", "America/Bahia", "America/Bahia_Banderas",
+-    "America/Barbados", "America/Belem", "America/Belize", "America/Blanc-Sablon", "America/Boa_Vista", "America/Bogota",
+-    "America/Boise", "America/Buenos_Aires", "America/Cambridge_Bay", "America/Campo_Grande", "America/Cancun", "America/Caracas",
+-    "America/Catamarca", "America/Cayenne", "America/Cayman", "America/Chicago", "America/Chihuahua", "America/Ciudad_Juarez",
+-    "America/Coral_Harbour", "America/Cordoba", "America/Costa_Rica", "America/Coyhaique", "America/Creston", "America/Cuiaba",
+-    "America/Curacao", "America/Danmarkshavn", "America/Dawson", "America/Dawson_Creek", "America/Denver", "America/Detroit",
+-    "America/Dominica", "America/Edmonton", "America/Eirunepe", "America/El_Salvador", "America/Ensenada", "America/Fort_Nelson",
+-    "America/Fort_Wayne", "America/Fortaleza", "America/Glace_Bay", "America/Godthab", "America/Goose_Bay", "America/Grand_Turk",
+-    "America/Grenada", "America/Guadeloupe", "America/Guatemala", "America/Guayaquil", "America/Guyana", "America/Halifax",
+-    "America/Havana", "America/Hermosillo", "America/Indiana/Indianapolis", "America/Indiana/Knox", "America/Indiana/Marengo", "America/Indiana/Petersburg",
+-    "America/Indiana/Tell_City", "America/Indiana/Vevay", "America/Indiana/Vincennes", "America/Indiana/Winamac", "America/Indianapolis", "America/Inuvik",
+-    "America/Iqaluit", "America/Jamaica", "America/Jujuy", "America/Juneau", "America/Kentucky/Louisville", "America/Kentucky/Monticello",
+-    "America/Knox_IN", "America/Kralendijk", "America/La_Paz", "America/Lima", "America/Los_Angeles", "America/Louisville",
+-    "America/Lower_Princes", "America/Maceio", "America/Managua", "America/Manaus", "America/Marigot", "America/Martinique",
+-    "America/Matamoros", "America/Mazatlan", "America/Mendoza", "America/Menominee", "America/Merida", "America/Metlakatla",
+-    "America/Mexico_City", "America/Miquelon", "America/Moncton", "America/Monterrey", "America/Montevideo", "America/Montreal",
+-    "America/Montserrat", "America/Nassau", "America/New_York", "America/Nipigon", "America/Nome", "America/Noronha",
+-    "America/North_Dakota/Beulah", "America/North_Dakota/Center", "America/North_Dakota/New_Salem", "America/Nuuk", "America/Ojinaga", "America/Panama",
+-    "America/Pangnirtung", "America/Paramaribo", "America/Phoenix", "America/Port-au-Prince", "America/Port_of_Spain", "America/Porto_Acre",
+-    "America/Porto_Velho", "America/Puerto_Rico", "America/Punta_Arenas", "America/Rainy_River", "America/Rankin_Inlet", "America/Recife",
+-    "America/Regina", "America/Resolute", "America/Rio_Branco", "America/Rosario", "America/Santa_Isabel", "America/Santarem",
+-    "America/Santiago", "America/Santo_Domingo", "America/Sao_Paulo", "America/Scoresbysund", "America/Shiprock", "America/Sitka",
+-    "America/St_Barthelemy", "America/St_Johns", "America/St_Kitts", "America/St_Lucia", "America/St_Thomas", "America/St_Vincent",
+-    "America/Swift_Current", "America/Tegucigalpa", "America/Thule", "America/Thunder_Bay", "America/Tijuana", "America/Toronto",
+-    "America/Tortola", "America/Vancouver", "America/Virgin", "America/Whitehorse", "America/Winnipeg", "America/Yakutat",
+-    "America/Yellowknife", "Antarctica/Casey", "Antarctica/Davis", "Antarctica/DumontDUrville", "Antarctica/Macquarie", "Antarctica/Mawson",
+-    "Antarctica/McMurdo", "Antarctica/Palmer", "Antarctica/Rothera", "Antarctica/South_Pole", "Antarctica/Syowa", "Antarctica/Troll",
+-    "Antarctica/Vostok", "Arctic/Longyearbyen", "Asia/Aden", "Asia/Almaty", "Asia/Amman", "Asia/Anadyr",
+-    "Asia/Aqtau", "Asia/Aqtobe", "Asia/Ashgabat", "Asia/Ashkhabad", "Asia/Atyrau", "Asia/Baghdad",
+-    "Asia/Bahrain", "Asia/Baku", "Asia/Bangkok", "Asia/Barnaul", "Asia/Beirut", "Asia/Bishkek",
+-    "Asia/Brunei", "Asia/Calcutta", "Asia/Chita", "Asia/Choibalsan", "Asia/Chongqing", "Asia/Chungking",
+-    "Asia/Colombo", "Asia/Dacca", "Asia/Damascus", "Asia/Dhaka", "Asia/Dili", "Asia/Dubai",
+-    "Asia/Dushanbe", "Asia/Famagusta", "Asia/Gaza", "Asia/Harbin", "Asia/Hebron", "Asia/Ho_Chi_Minh",
+-    "Asia/Hong_Kong", "Asia/Hovd", "Asia/Irkutsk", "Asia/Istanbul", "Asia/Jakarta", "Asia/Jayapura",
+-    "Asia/Jerusalem", "Asia/Kabul", "Asia/Kamchatka", "Asia/Karachi", "Asia/Kashgar", "Asia/Kathmandu",
+-    "Asia/Katmandu", "Asia/Khandyga", "Asia/Kolkata", "Asia/Krasnoyarsk", "Asia/Kuala_Lumpur", "Asia/Kuching",
+-    "Asia/Kuwait", "Asia/Macao", "Asia/Macau", "Asia/Magadan", "Asia/Makassar", "Asia/Manila",
+-    "Asia/Muscat", "Asia/Nicosia", "Asia/Novokuznetsk", "Asia/Novosibirsk", "Asia/Omsk", "Asia/Oral",
+-    "Asia/Phnom_Penh", "Asia/Pontianak", "Asia/Pyongyang", "Asia/Qatar", "Asia/Qostanay", "Asia/Qyzylorda",
+-    "Asia/Rangoon", "Asia/Riyadh", "Asia/Saigon", "Asia/Sakhalin", "Asia/Samarkand", "Asia/Seoul",
+-    "Asia/Shanghai", "Asia/Singapore", "Asia/Srednekolymsk", "Asia/Taipei", "Asia/Tashkent", "Asia/Tbilisi",
+-    "Asia/Tehran", "Asia/Tel_Aviv", "Asia/Thimbu", "Asia/Thimphu", "Asia/Tokyo", "Asia/Tomsk",
+-    "Asia/Ujung_Pandang", "Asia/Ulaanbaatar", "Asia/Ulan_Bator", "Asia/Urumqi", "Asia/Ust-Nera", "Asia/Vientiane",
+-    "Asia/Vladivostok", "Asia/Yakutsk", "Asia/Yangon", "Asia/Yekaterinburg", "Asia/Yerevan", "Atlantic/Azores",
+-    "Atlantic/Bermuda", "Atlantic/Canary", "Atlantic/Cape_Verde", "Atlantic/Faeroe", "Atlantic/Faroe", "Atlantic/Jan_Mayen",
+-    "Atlantic/Madeira", "Atlantic/Reykjavik", "Atlantic/South_Georgia", "Atlantic/St_Helena", "Atlantic/Stanley", "Australia/ACT",
+-    "Australia/Adelaide", "Australia/Brisbane", "Australia/Broken_Hill", "Australia/Canberra", "Australia/Currie", "Australia/Darwin",
+-    "Australia/Eucla", "Australia/Hobart", "Australia/LHI", "Australia/Lindeman", "Australia/Lord_Howe", "Australia/Melbourne",
+-    "Australia/North", "Australia/NSW", "Australia/Perth", "Australia/Queensland", "Australia/South", "Australia/Sydney",
+-    "Australia/Tasmania", "Australia/Victoria", "Australia/West", "Australia/Yancowinna", "Brazil/Acre", "Brazil/DeNoronha",
+-    "Brazil/East", "Brazil/West", "Canada/Atlantic", "Canada/Central", "Canada/Eastern", "Canada/Mountain",
+-    "Canada/Newfoundland", "Canada/Pacific", "Canada/Saskatchewan", "Canada/Yukon", "CET", "Chile/Continental",
+-    "Chile/EasterIsland", "CST6CDT", "Cuba", "EET", "Egypt", "Eire",
+-    "EST", "EST5EDT", "Etc/GMT", "Etc/GMT+0", "Etc/GMT+1", "Etc/GMT+10",
+-    "Etc/GMT+11", "Etc/GMT+12", "Etc/GMT+2", "Etc/GMT+3", "Etc/GMT+4", "Etc/GMT+5",
+-    "Etc/GMT+6", "Etc/GMT+7", "Etc/GMT+8", "Etc/GMT+9", "Etc/GMT-0", "Etc/GMT-1",
+-    "Etc/GMT-10", "Etc/GMT-11", "Etc/GMT-12", "Etc/GMT-13", "Etc/GMT-14", "Etc/GMT-2",
+-    "Etc/GMT-3", "Etc/GMT-4", "Etc/GMT-5", "Etc/GMT-6", "Etc/GMT-7", "Etc/GMT-8",
+-    "Etc/GMT-9", "Etc/GMT0", "Etc/Greenwich", "Etc/UCT", "Etc/Universal", "Etc/UTC",
+-    "Etc/Zulu", "Europe/Amsterdam", "Europe/Andorra", "Europe/Astrakhan", "Europe/Athens", "Europe/Belfast",
+-    "Europe/Belgrade", "Europe/Berlin", "Europe/Bratislava", "Europe/Brussels", "Europe/Bucharest", "Europe/Budapest",
+-    "Europe/Busingen", "Europe/Chisinau", "Europe/Copenhagen", "Europe/Dublin", "Europe/Gibraltar", "Europe/Guernsey",
+-    "Europe/Helsinki", "Europe/Isle_of_Man", "Europe/Istanbul", "Europe/Jersey", "Europe/Kaliningrad", "Europe/Kiev",
+-    "Europe/Kirov", "Europe/Kyiv", "Europe/Lisbon", "Europe/Ljubljana", "Europe/London", "Europe/Luxembourg",
+-    "Europe/Madrid", "Europe/Malta", "Europe/Mariehamn", "Europe/Minsk", "Europe/Monaco", "Europe/Moscow",
+-    "Europe/Nicosia", "Europe/Oslo", "Europe/Paris", "Europe/Podgorica", "Europe/Prague", "Europe/Riga",
+-    "Europe/Rome", "Europe/Samara", "Europe/San_Marino", "Europe/Sarajevo", "Europe/Saratov", "Europe/Simferopol",
+-    "Europe/Skopje", "Europe/Sofia", "Europe/Stockholm", "Europe/Tallinn", "Europe/Tirane", "Europe/Tiraspol",
+-    "Europe/Ulyanovsk", "Europe/Uzhgorod", "Europe/Vaduz", "Europe/Vatican", "Europe/Vienna", "Europe/Vilnius",
+-    "Europe/Volgograd", "Europe/Warsaw", "Europe/Zagreb", "Europe/Zaporozhye", "Europe/Zurich", "Factory",
+-    "GB", "GB-Eire", "GMT", "GMT+0", "GMT-0", "GMT0",
+-    "Greenwich", "Hongkong", "HST", "Iceland", "Indian/Antananarivo", "Indian/Chagos",
++    "America/Adak", "America/Anchorage", "America/Anguilla", "America/Antigua", "America/Araguaina",
++    "America/Argentina/Buenos_Aires", "America/Argentina/Catamarca", "America/Argentina/Cordoba",
++    "America/Argentina/Jujuy", "America/Argentina/La_Rioja", "America/Argentina/Mendoza",
++    "America/Argentina/Rio_Gallegos", "America/Argentina/Salta", "America/Argentina/San_Juan",
++    "America/Argentina/San_Luis", "America/Argentina/Tucuman", "America/Argentina/Ushuaia", "America/Aruba",
++    "America/Asuncion", "America/Atikokan", "America/Atka", "America/Bahia", "America/Bahia_Banderas",
++    "America/Barbados", "America/Belem", "America/Belize", "America/Blanc-Sablon", "America/Boa_Vista",
++    "America/Bogota", "America/Boise", "America/Cambridge_Bay", "America/Campo_Grande", "America/Cancun",
++    "America/Caracas", "America/Cayenne", "America/Cayman", "America/Chicago", "America/Chihuahua",
++    "America/Ciudad_Juarez", "America/Coral_Harbour", "America/Costa_Rica", "America/Coyhaique", "America/Creston",
++    "America/Cuiaba", "America/Curacao", "America/Danmarkshavn", "America/Dawson", "America/Dawson_Creek",
++    "America/Denver", "America/Detroit", "America/Dominica", "America/Edmonton", "America/Eirunepe",
++    "America/El_Salvador", "America/Ensenada", "America/Fort_Nelson", "America/Fortaleza", "America/Glace_Bay",
++    "America/Goose_Bay", "America/Grand_Turk", "America/Grenada", "America/Guadeloupe", "America/Guatemala",
++    "America/Guayaquil", "America/Guyana", "America/Halifax", "America/Havana", "America/Hermosillo",
++    "America/Indiana/Indianapolis", "America/Indiana/Knox", "America/Indiana/Marengo", "America/Indiana/Petersburg",
++    "America/Indiana/Tell_City", "America/Indiana/Vevay", "America/Indiana/Vincennes", "America/Indiana/Winamac",
++    "America/Inuvik", "America/Iqaluit", "America/Jamaica", "America/Juneau", "America/Kentucky/Louisville",
++    "America/Kentucky/Monticello", "America/Kralendijk", "America/La_Paz", "America/Lima", "America/Los_Angeles",
++    "America/Lower_Princes", "America/Maceio", "America/Managua", "America/Manaus", "America/Marigot",
++    "America/Martinique", "America/Matamoros", "America/Mazatlan", "America/Menominee", "America/Merida",
++    "America/Metlakatla", "America/Mexico_City", "America/Miquelon", "America/Moncton", "America/Monterrey",
++    "America/Montevideo", "America/Montreal", "America/Montserrat", "America/Nassau", "America/New_York",
++    "America/Nipigon", "America/Nome", "America/Noronha", "America/North_Dakota/Beulah", "America/North_Dakota/Center",
++    "America/North_Dakota/New_Salem", "America/Nuuk", "America/Ojinaga", "America/Panama", "America/Pangnirtung",
++    "America/Paramaribo", "America/Phoenix", "America/Port-au-Prince", "America/Port_of_Spain", "America/Porto_Acre",
++    "America/Porto_Velho", "America/Puerto_Rico", "America/Punta_Arenas", "America/Rainy_River", "America/Rankin_Inlet",
++    "America/Recife", "America/Regina", "America/Resolute", "America/Rio_Branco", "America/Santa_Isabel",
++    "America/Santarem", "America/Santiago", "America/Santo_Domingo", "America/Sao_Paulo", "America/Scoresbysund",
++    "America/Shiprock", "America/Sitka", "America/St_Barthelemy", "America/St_Johns", "America/St_Kitts",
++    "America/St_Lucia", "America/St_Thomas", "America/St_Vincent", "America/Swift_Current", "America/Tegucigalpa",
++    "America/Thule", "America/Thunder_Bay", "America/Tijuana", "America/Toronto", "America/Tortola",
++    "America/Vancouver", "America/Virgin", "America/Whitehorse", "America/Winnipeg", "America/Yakutat",
++    "America/Yellowknife", "Antarctica/Casey", "Antarctica/Davis", "Antarctica/DumontDUrville", "Antarctica/Macquarie",
++    "Antarctica/Mawson", "Antarctica/McMurdo", "Antarctica/Palmer", "Antarctica/Rothera", "Antarctica/Syowa",
++    "Antarctica/Troll", "Antarctica/Vostok", "Arctic/Longyearbyen", "Asia/Aden", "Asia/Almaty", "Asia/Amman",
++    "Asia/Anadyr", "Asia/Aqtau", "Asia/Aqtobe", "Asia/Ashgabat", "Asia/Atyrau", "Asia/Baghdad", "Asia/Bahrain",
++    "Asia/Baku", "Asia/Bangkok", "Asia/Barnaul", "Asia/Beirut", "Asia/Bishkek", "Asia/Brunei", "Asia/Chita",
++    "Asia/Chongqing", "Asia/Colombo", "Asia/Damascus", "Asia/Dhaka", "Asia/Dili", "Asia/Dubai", "Asia/Dushanbe",
++    "Asia/Famagusta", "Asia/Gaza", "Asia/Harbin", "Asia/Hebron", "Asia/Ho_Chi_Minh", "Asia/Hong_Kong", "Asia/Hovd",
++    "Asia/Irkutsk", "Asia/Istanbul", "Asia/Jakarta", "Asia/Jayapura", "Asia/Jerusalem", "Asia/Kabul", "Asia/Kamchatka",
++    "Asia/Karachi", "Asia/Kashgar", "Asia/Kathmandu", "Asia/Khandyga", "Asia/Kolkata", "Asia/Krasnoyarsk",
++    "Asia/Kuala_Lumpur", "Asia/Kuching", "Asia/Kuwait", "Asia/Macau", "Asia/Magadan", "Asia/Makassar", "Asia/Manila",
++    "Asia/Muscat", "Asia/Nicosia", "Asia/Novokuznetsk", "Asia/Novosibirsk", "Asia/Omsk", "Asia/Oral", "Asia/Phnom_Penh",
++    "Asia/Pontianak", "Asia/Pyongyang", "Asia/Qatar", "Asia/Qostanay", "Asia/Qyzylorda", "Asia/Riyadh", "Asia/Sakhalin",
++    "Asia/Samarkand", "Asia/Seoul", "Asia/Shanghai", "Asia/Singapore", "Asia/Srednekolymsk", "Asia/Taipei",
++    "Asia/Tashkent", "Asia/Tbilisi", "Asia/Tehran", "Asia/Tel_Aviv", "Asia/Thimphu", "Asia/Tokyo", "Asia/Tomsk",
++    "Asia/Ulaanbaatar", "Asia/Urumqi", "Asia/Ust-Nera", "Asia/Vientiane", "Asia/Vladivostok", "Asia/Yakutsk",
++    "Asia/Yangon", "Asia/Yekaterinburg", "Asia/Yerevan", "Atlantic/Azores", "Atlantic/Bermuda", "Atlantic/Canary",
++    "Atlantic/Cape_Verde", "Atlantic/Faroe", "Atlantic/Jan_Mayen", "Atlantic/Madeira", "Atlantic/Reykjavik",
++    "Atlantic/South_Georgia", "Atlantic/St_Helena", "Atlantic/Stanley", "Australia/Adelaide", "Australia/Brisbane",
++    "Australia/Broken_Hill", "Australia/Canberra", "Australia/Currie", "Australia/Darwin", "Australia/Eucla",
++    "Australia/Hobart", "Australia/Lindeman", "Australia/Lord_Howe", "Australia/Melbourne", "Australia/Perth",
++    "Australia/Sydney", "Australia/Yancowinna", "CST6CDT", "EST5EDT", "Etc/GMT", "Etc/GMT+0", "Etc/GMT+1", "Etc/GMT+10",
++    "Etc/GMT+11", "Etc/GMT+12", "Etc/GMT+2", "Etc/GMT+3", "Etc/GMT+4", "Etc/GMT+5", "Etc/GMT+6", "Etc/GMT+7",
++    "Etc/GMT+8", "Etc/GMT+9", "Etc/GMT-0", "Etc/GMT-1", "Etc/GMT-10", "Etc/GMT-11", "Etc/GMT-12", "Etc/GMT-13",
++    "Etc/GMT-14", "Etc/GMT-2", "Etc/GMT-3", "Etc/GMT-4", "Etc/GMT-5", "Etc/GMT-6", "Etc/GMT-7", "Etc/GMT-8",
++    "Etc/GMT-9", "Etc/GMT0", "Etc/Greenwich", "Etc/UCT", "Etc/Universal", "Etc/UTC", "Etc/Zulu", "Europe/Amsterdam",
++    "Europe/Andorra", "Europe/Astrakhan", "Europe/Athens", "Europe/Belfast", "Europe/Belgrade", "Europe/Berlin",
++    "Europe/Bratislava", "Europe/Brussels", "Europe/Bucharest", "Europe/Budapest", "Europe/Busingen", "Europe/Chisinau",
++    "Europe/Copenhagen", "Europe/Dublin", "Europe/Gibraltar", "Europe/Guernsey", "Europe/Helsinki",
++    "Europe/Isle_of_Man", "Europe/Istanbul", "Europe/Jersey", "Europe/Kaliningrad", "Europe/Kirov", "Europe/Kyiv",
++    "Europe/Lisbon", "Europe/Ljubljana", "Europe/London", "Europe/Luxembourg", "Europe/Madrid", "Europe/Malta",
++    "Europe/Mariehamn", "Europe/Minsk", "Europe/Monaco", "Europe/Moscow", "Europe/Nicosia", "Europe/Oslo",
++    "Europe/Paris", "Europe/Podgorica", "Europe/Prague", "Europe/Riga", "Europe/Rome", "Europe/Samara",
++    "Europe/San_Marino", "Europe/Sarajevo", "Europe/Saratov", "Europe/Simferopol", "Europe/Skopje", "Europe/Sofia",
++    "Europe/Stockholm", "Europe/Tallinn", "Europe/Tirane", "Europe/Tiraspol", "Europe/Ulyanovsk", "Europe/Vaduz",
++    "Europe/Vatican", "Europe/Vienna", "Europe/Vilnius", "Europe/Volgograd", "Europe/Warsaw", "Europe/Zagreb",
++    "Europe/Zurich", "Factory", "GMT", "GMT+0", "GMT-0", "GMT0", "Indian/Antananarivo", "Indian/Chagos",
+     "Indian/Christmas", "Indian/Cocos", "Indian/Comoro", "Indian/Kerguelen", "Indian/Mahe", "Indian/Maldives",
+-    "Indian/Mauritius", "Indian/Mayotte", "Indian/Reunion", "Iran", "Israel", "Jamaica",
+-    "Japan", "Kwajalein", "Libya", "MET", "Mexico/BajaNorte", "Mexico/BajaSur",
+-    "Mexico/General", "MST", "MST7MDT", "Navajo", "NZ", "NZ-CHAT",
+-    "Pacific/Apia", "Pacific/Auckland", "Pacific/Bougainville", "Pacific/Chatham", "Pacific/Chuuk", "Pacific/Easter",
+-    "Pacific/Efate", "Pacific/Enderbury", "Pacific/Fakaofo", "Pacific/Fiji", "Pacific/Funafuti", "Pacific/Galapagos",
+-    "Pacific/Gambier", "Pacific/Guadalcanal", "Pacific/Guam", "Pacific/Honolulu", "Pacific/Johnston", "Pacific/Kanton",
+-    "Pacific/Kiritimati", "Pacific/Kosrae", "Pacific/Kwajalein", "Pacific/Majuro", "Pacific/Marquesas", "Pacific/Midway",
+-    "Pacific/Nauru", "Pacific/Niue", "Pacific/Norfolk", "Pacific/Noumea", "Pacific/Pago_Pago", "Pacific/Palau",
+-    "Pacific/Pitcairn", "Pacific/Pohnpei", "Pacific/Ponape", "Pacific/Port_Moresby", "Pacific/Rarotonga", "Pacific/Saipan",
+-    "Pacific/Samoa", "Pacific/Tahiti", "Pacific/Tarawa", "Pacific/Tongatapu", "Pacific/Truk", "Pacific/Wake",
+-    "Pacific/Wallis", "Pacific/Yap", "Poland", "Portugal", "PRC", "PST8PDT",
+-    "ROC", "ROK", "Singapore", "Turkey", "UCT", "Universal",
+-    "US/Alaska", "US/Aleutian", "US/Arizona", "US/Central", "US/East-Indiana", "US/Eastern",
+-    "US/Hawaii", "US/Indiana-Starke", "US/Michigan", "US/Mountain", "US/Pacific", "US/Samoa",
+-    "UTC", "W-SU", "WET", "Zulu",
++    "Indian/Mauritius", "Indian/Mayotte", "Indian/Reunion", "MST7MDT", "Pacific/Apia", "Pacific/Auckland",
++    "Pacific/Bougainville", "Pacific/Chatham", "Pacific/Chuuk", "Pacific/Easter", "Pacific/Efate", "Pacific/Fakaofo",
++    "Pacific/Fiji", "Pacific/Funafuti", "Pacific/Galapagos", "Pacific/Gambier", "Pacific/Guadalcanal", "Pacific/Guam",
++    "Pacific/Honolulu", "Pacific/Johnston", "Pacific/Kanton", "Pacific/Kiritimati", "Pacific/Kosrae",
++    "Pacific/Kwajalein", "Pacific/Majuro", "Pacific/Marquesas", "Pacific/Midway", "Pacific/Nauru", "Pacific/Niue",
++    "Pacific/Norfolk", "Pacific/Noumea", "Pacific/Pago_Pago", "Pacific/Palau", "Pacific/Pitcairn", "Pacific/Pohnpei",
++    "Pacific/Port_Moresby", "Pacific/Rarotonga", "Pacific/Saipan", "Pacific/Samoa", "Pacific/Tahiti", "Pacific/Tarawa",
++    "Pacific/Tongatapu", "Pacific/Wake", "Pacific/Wallis", "Pacific/Yap", "PST8PDT", "UTC",
+ ];
+ 
+ #[cfg(test)]
+@@ -663,11 +660,22 @@ mod tests {
+ 
+     #[test]
+     fn utc_family_settings() {
+-        for w in ["UTC", "utc", "GMT", "Etc/UTC", "Z", "zulu"] {
++        for w in ["UTC", "utc", "GMT", "Etc/UTC"] {
+             assert_eq!(parse_timezone_setting(w).expect("utc"), TimeZoneSetting::Utc);
+         }
+     }
+ 
++    /// Oracle (PG 18.6): `SET TIME ZONE` rejects these legacy names with 22023, and the backward zone
++    /// names that have no zone file (`EST`, `MST`, `HST`, `Asia/Calcutta`...) are not zones at all.
++    #[test]
++    fn legacy_backward_names_are_rejected_as_timezone_settings() {
++        for w in ["Z", "zulu", "UCT", "Universal", "Greenwich", "EST", "MST", "HST", "Asia/Calcutta", "Europe/Kiev"] {
++            assert_eq!(parse_timezone_setting(w).expect_err("rejected").sqlstate, SqlState::INVALID_PARAMETER_VALUE, "{w}");
++        }
++        assert!(parse_timezone_setting("Etc/UCT").is_ok());
++        assert!(parse_timezone_setting("Europe/Kyiv").is_ok());
++    }
++
+     #[test]
+     fn posix_numeric_and_interval_settings() {
+         assert_eq!(parse_timezone_setting("+05:30").expect("posix"), fixed("+05:30", -19800));
+diff --git c/crates/pgarbor/src/guc.rs w/crates/pgarbor/src/guc.rs
+index ab23088d..fad4d131 100644
+--- c/crates/pgarbor/src/guc.rs
++++ w/crates/pgarbor/src/guc.rs
+@@ -416,6 +416,15 @@ impl pgarbor_exec::GucAccess for GucTable {
+     fn settings(&self) -> Result<Vec<SettingRow>> {
+         self.setting_rows()
+     }
++    fn check_setting(&self, name: &str, value: &str) -> Result<()> {
++        let guard = self.inner.borrow();
++        let inner: &GucInner = &guard;
++        let idx = lookup(inner, name)?;
++        let def = inner.slots[idx].def;
++        let text = guc_value::join_set_values(def, &[value.to_string()])?;
++        validate_value(def, &inner.slots[idx].value, &text)?;
++        Ok(())
++    }
+ }
+ 
+ // ---------------------------------------------------------------------------------------------
+@@ -475,6 +484,33 @@ fn check_settable(inner: &GucInner, def: &GucDef, startup: bool) -> Result<()> {
+     }
+ }
+ 
++/// `default_text_search_config` hook (ts_cat.c `check_default_text_search_config`). Only the builtin
++/// `pg_catalog` configurations exist (CREATE TEXT SEARCH CONFIGURATION is unsupported), and PostgreSQL
++/// stores the canonical `pg_catalog.<name>` form. Names are matched case-insensitively (approximation of
++/// identifier folding; quoted mixed-case names are not distinguished).
++fn text_search_config_value(text: &str) -> Result<String> {
++    // Sorted (binary search): the `pg_catalog` text search configurations of PostgreSQL 18.
++    const BUILTIN_CONFIGS: &[&str] = &[
++        "arabic", "armenian", "basque", "catalan", "danish", "dutch", "english", "estonian", "finnish", "french",
++        "german", "greek", "hindi", "hungarian", "indonesian", "irish", "italian", "lithuanian", "nepali",
++        "norwegian", "portuguese", "romanian", "russian", "serbian", "simple", "spanish", "swedish", "tamil",
++        "turkish", "yiddish",
++    ];
++    let (schema, name) = match text.split_once('.') {
++        Some((schema, name)) => (Some(schema), name),
++        None => (None, text),
++    };
++    let lower = name.to_ascii_lowercase();
++    let schema_ok = schema.map_or(true, |s| s.eq_ignore_ascii_case("pg_catalog"));
++    if schema_ok && BUILTIN_CONFIGS.binary_search(&lower.as_str()).is_ok() {
++        return Ok(format!("pg_catalog.{lower}"));
++    }
++    Err(PgError::new(
++        SqlState::INVALID_PARAMETER_VALUE,
++        format!("invalid value for parameter \"default_text_search_config\": \"{text}\""),
++    ))
++}
++
+ /// Validate and canonicalize a value for `def` (hooks by name, else `guc_value::normalize`).
+ /// `current` is the present SHOW-form value (`DateStyle` keeps the parts not mentioned).
+ fn validate_value(def: &GucDef, current: &str, text: &str) -> Result<String> {
+@@ -488,6 +524,9 @@ fn validate_value(def: &GucDef, current: &str, text: &str) -> Result<String> {
+     if name.eq_ignore_ascii_case("client_encoding") {
+         return client_encoding_value(text);
+     }
++    if name.eq_ignore_ascii_case("default_text_search_config") {
++        return text_search_config_value(text);
++    }
+     if name.eq_ignore_ascii_case("transaction_isolation") || name.eq_ignore_ascii_case("default_transaction_isolation") {
+         return isolation_value(def, text);
+     }
+diff --git c/crates/pgarbor/src/portal.rs w/crates/pgarbor/src/portal.rs
+index df2fbdf4..f6ef3024 100644
+--- c/crates/pgarbor/src/portal.rs
++++ w/crates/pgarbor/src/portal.rs
+@@ -186,7 +186,8 @@ fn invalid_utf8(bytes: &[u8], valid_up_to: usize, error_len: Option<usize>) -> P
+ /// One datum in the given format; NULL -> `None`.
+ fn encode_datum(ctx: &IoCtx, ty: TypeId, value: &Datum, format: FormatCode) -> Result<Option<Vec<u8>>> {
+     if value.is_null() {
+-        return Ok(None);
++        // A void result is never SQL NULL (void functions such as pg_notify return an empty string).
++        return Ok(if ty.oid == pgarbor_types::oids::VOID { Some(Vec::new()) } else { None });
+     }
+     match format {
+         FormatCode::Text => Ok(Some(io::output(ctx, ty, value)?.into_bytes())),
+@@ -334,7 +335,7 @@ impl Session {
+ 
+     /// Wire encoding of one value (module docs).
+     pub fn encode_value(&self, ty: TypeId, value: &Datum, format: FormatCode) -> Result<Option<Vec<u8>>> {
+-        if value.is_null() {
++        if value.is_null() && ty.oid != pgarbor_types::oids::VOID {
+             return Ok(None);
+         }
+         let cfg = guc_derive::io_config(&self.guc)?;
+diff --git c/crates/pgarbor/tests/cte_scope_contract.rs w/crates/pgarbor/tests/cte_scope_contract.rs
+index 5b90077c..1db5320f 100644
+--- c/crates/pgarbor/tests/cte_scope_contract.rs
++++ w/crates/pgarbor/tests/cte_scope_contract.rs
+@@ -33,3 +33,22 @@ fn nested_with_inside_cte_body_and_sublink() {
+     let r = rows("WITH a AS (SELECT 1 AS x), b AS (WITH c AS (SELECT x FROM a) SELECT x FROM c UNION ALL SELECT x FROM a) SELECT (SELECT count(*) FROM b), x FROM a");
+     assert_eq!(r, vec![vec![Datum::Int8(2), Datum::Int4(1)]]);
+ }
++
++#[test]
++fn infinite_recursion_is_stopped_lazily_by_limit() {
++    let r = rows("WITH RECURSIVE t(n) AS (VALUES (1) UNION ALL SELECT n+1 FROM t) SELECT n FROM t LIMIT 10");
++    assert_eq!(r.len(), 10);
++    assert_eq!(r[9], vec![Datum::Int4(10)]);
++}
++
++#[test]
++fn manual_cycle_detection_terminates() {
++    let db = Database::in_memory().expect("create");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE TABLE graph (id int, link int, data text); INSERT INTO graph VALUES (1, 2, 'x'), (2, 3, 'y'), (3, 1, 'z'), (3, 4, 'w')").expect("setup");
++    let out = s.simple_query("WITH RECURSIVE sg(id, link, depth, is_cycle, path) AS (SELECT g.id, g.link, 0, false, ARRAY[g.id] FROM graph g UNION ALL SELECT g.id, g.link, sg.depth + 1, g.id = ANY(path), path || g.id FROM graph g, sg WHERE g.id = sg.link AND NOT is_cycle) SELECT count(*) FROM sg").expect("query");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert!(!rows.is_empty()),
++        other => panic!("{other:?}"),
++    }
++}
+diff --git c/crates/pgarbor/tests/sql_session_contract.rs w/crates/pgarbor/tests/sql_session_contract.rs
+index a63410fa..40ed0e11 100644
+--- c/crates/pgarbor/tests/sql_session_contract.rs
++++ w/crates/pgarbor/tests/sql_session_contract.rs
+@@ -208,3 +208,30 @@ fn unsupported_security_and_deferred_constraints_fail_closed() {
+     }
+     s.simple_query("INSERT INTO t VALUES (1)").expect("transaction recovers");
+ }
++
++#[test]
++fn config_settings_on_alter_and_timezone_are_validated() {
++    let db = Database::in_memory().expect("create");
++    let mut s = db.session("main", SessionOptions::default()).expect("session");
++    s.simple_query("CREATE FUNCTION cfg1(text) RETURNS text LANGUAGE sql AS 'SELECT $1'").expect("create");
++    s.simple_query("CREATE ROLE cfg_role").expect("role");
++    assert_eq!(s.simple_query("ALTER FUNCTION cfg1(text) SET nosuchparam = 1").unwrap_err().sqlstate.code(), "42704");
++    assert_eq!(s.simple_query("ALTER FUNCTION cfg1(text) SET work_mem = 'bogus'").unwrap_err().sqlstate.code(), "22023");
++    assert_eq!(s.simple_query("ALTER ROLE cfg_role SET no_such_param = 1").unwrap_err().sqlstate.code(), "42704");
++    assert_eq!(s.simple_query("ALTER ROLE cfg_role SET maintenance_work_mem = 'abc'").unwrap_err().sqlstate.code(), "22023");
++    s.simple_query("ALTER ROLE cfg_role SET maintenance_work_mem = '64MB'").expect("valid role setting");
++    s.simple_query("ALTER FUNCTION cfg1(text) SET search_path = admin, pg_temp").expect("valid function setting");
++    // Legacy backward names are not zone names for the TimeZone setting (oracle: 22023).
++    for zone in ["EST", "MST", "HST", "Asia/Calcutta", "Universal"] {
++        let sql = format!("SET TIME ZONE '{zone}'");
++        assert_eq!(s.simple_query(&sql).unwrap_err().sqlstate.code(), "22023", "{zone}");
++    }
++    s.simple_query("SET TIME ZONE 'America/New_York'").expect("canonical zone");
++    assert_eq!(s.simple_query("SET default_text_search_config = 'nosuch'").unwrap_err().sqlstate.code(), "22023");
++    s.simple_query("SET default_text_search_config = 'English'").expect("builtin config");
++    let out = s.simple_query("SHOW default_text_search_config").expect("show");
++    match &out[0].result {
++        StatementResult::Rows { rows, .. } => assert_eq!(rows, &vec![vec![Datum::Text("pg_catalog.english".to_string())]]),
++        other => panic!("expected rows: {other:?}"),
++    }
++}

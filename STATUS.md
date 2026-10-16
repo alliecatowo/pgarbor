@@ -1,8 +1,9 @@
 # PGArbor project state — 2026-10-15
 
 PGArbor is a running pre-alpha SQL engine. It is not a PostgreSQL-compatible
-release. The committed CTE scope repair is preserved; final review 02 changes
-remain in the working tree because the sandbox mounts `.git` read-only.
+release. The committed CTE scope repair is preserved. Final review 02 changes are now
+committed in nine logical groups; the earlier read-only Git restriction was
+removed for wrap-up. Case-level evidence and a compact raw archive are included.
 
 Verified on the final working tree:
 
@@ -29,8 +30,10 @@ breadth, timezone/type support and native/wire COPY parity are unfinished.
 
 Details, limits and executed commands: [runs/review/codex-final-02.md](runs/review/codex-final-02.md).
 All 400 per-family comparisons: [runs/review/codex-differential-by-family-02.csv](runs/review/codex-differential-by-family-02.csv).
-Owner commit groups: [runs/review/patches-02/manifest.json](runs/review/patches-02/manifest.json).
+Committed change groups: [runs/review/patches-02/manifest.json](runs/review/patches-02/manifest.json).
 
 Earlier owner checks of wire smoke, WASM and bindings remain in review 01 and
 its preceding STATUS history. They were not repeated as part of this campaign.
-Taskwarrior is unavailable here (database/WAL error 14); no tasks were changed.
+Taskwarrior became available during wrap-up: the 102-XX000 task is completed,
+and mismatch/acceptance tasks now carry the measured remaining counts. The
+continuation prompt is in [runs/review/claude-cloud-handoff-02.md](runs/review/claude-cloud-handoff-02.md).

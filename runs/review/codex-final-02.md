@@ -202,12 +202,22 @@ Detailed signatures and case IDs remain in the raw results. These are outstandin
 
 ## Owner handoff
 
-`.git` is read-only under this session's sandbox policy. Changes remain in the
-working tree; no commit or index write was attempted. Logical commits, complete
-messages with Co-Authored-By trailers, file lists and recovery patches are in
-[patches-02/manifest.json](patches-02/manifest.json). The manifest excludes raw
-corpus dumps and the rejected inherited snapshot from proposed commits.
+Git was read-only during implementation. During the authorized wrap-up, the
+restriction was removed and all nine groups were committed. Their actual commit
+IDs, complete messages and recovery patches are in
+[patches-02/manifest.json](patches-02/manifest.json). Patches are historical snapshots;
+do not reapply them over the committed changes.
 
-Taskwarrior again failed to open its database/WAL with error 14. No task UUIDs
-could be read and no tasks were modified. Remaining case/signature evidence is
-kept in the report and machine-readable summaries for owner triage.
+The verified final-01 and final-02 result ledgers are tracked for direct cloud
+triage. Raw transcripts and all intermediate campaigns are preserved in
+[embedded-evidence-02.tar.gz](embedded-evidence-02.tar.gz), with checksum and restore
+instructions in [embedded-evidence-02.json](embedded-evidence-02.json). The archive
+is 8,763,351 bytes; expanded local campaign directories are ignored. This changes
+packaging only, not the recorded measurements or comparator.
+
+Taskwarrior was inaccessible during implementation but became available during
+wrap-up. The observed-XX000 repair task was completed; mismatch and acceptance
+tasks were updated by UUID. Broader composite support and warning cleanup remain
+open. The Claude Cloud continuation prompt and current task snapshot are in
+[claude-cloud-handoff-02.md](claude-cloud-handoff-02.md) and
+[task-handoff-02.json](task-handoff-02.json).

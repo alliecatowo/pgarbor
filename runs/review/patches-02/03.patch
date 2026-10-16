@@ -1,0 +1,128 @@
+diff --git a/crates/pgarbor-exec/src/ddl_followup.rs b/crates/pgarbor-exec/src/ddl_followup.rs
+index 7340e362..6c2e8b9e 100644
+--- a/crates/pgarbor-exec/src/ddl_followup.rs
++++ b/crates/pgarbor-exec/src/ddl_followup.rs
+@@ -36,7 +36,7 @@ use pgarbor_catalog::FollowUp;
+ use pgarbor_common::{Oid, PgError, Result};
+ use pgarbor_core::sequence::SequenceParams;
+ use pgarbor_sql::ir::BoundExpr;
+-use pgarbor_types::Datum;
++use pgarbor_types::{Datum, TypeEnv};
+ 
+ use crate::constraints;
+ use crate::context::{ExecContext, SessionEnv};
+@@ -164,8 +164,8 @@ fn run_one(ex: &mut Executor, fu: &FollowUp) -> Result<()> {
+                 let col = td.col(*attnum).ok_or_else(|| {
+                     PgError::internal(format!("attnum {attnum} of relation {table} does not exist"))
+                 })?;
+-                let type_name = match ex.se().env.snapshot().type_obj(*type_oid) {
+-                    Some(t) => t.name.clone(),
++                let type_name = match ex.se().env.type_info(*type_oid) {
++                    Some(t) => t.name.into_owned(),
+                     None => return Err(PgError::internal(format!("cache lookup failed for type {type_oid}"))),
+                 };
+                 let qualified = format!("{}.{}", td.name, col.name);
+@@ -180,8 +180,8 @@ fn run_one(ex: &mut Executor, fu: &FollowUp) -> Result<()> {
+ }
+ 
+ /// One rewrite action with its expression already bound.
+-enum RewriteStep<'e> {
+-    Using { attnum: i16, expr: &'e BoundExpr },
++enum RewriteStep {
++    Using { attnum: i16, expr: BoundExpr },
+     /// `None` = the column has no default in the new catalog: NULL.
+     Default { attnum: i16, expr: Option<BoundExpr> },
+     Generated { attnum: i16, expr: BoundExpr },
+@@ -189,10 +189,12 @@ enum RewriteStep<'e> {
+ 
+ fn rewrite_table_in(ex: &mut Executor, table: Oid, rewrites: &[ColumnRewrite]) -> Result<()> {
+     // Bind every default / generation expression of the NEW catalog once.
+-    let mut steps: Vec<RewriteStep<'_>> = Vec::with_capacity(rewrites.len());
++    let mut steps: Vec<RewriteStep> = Vec::with_capacity(rewrites.len());
+     for rw in rewrites {
+         match rw {
+             ColumnRewrite::Using { attnum, expr } => {
++                // The USING expression is bound over the table (rt_index 1): make it executable over the old row.
++                let expr = tabledesc::columns_to_input_refs(expr.clone())?;
+                 steps.push(RewriteStep::Using { attnum: *attnum, expr });
+             }
+             ColumnRewrite::FromDefault { attnum } => {
+@@ -272,7 +274,13 @@ fn column_expr(se: &SessionEnv, rel: Oid, attnum: i16) -> Result<Option<BoundExp
+         Some(d) => d.expr.sql.clone(),
+         None => return Ok(None),
+     };
+-    let bound = tabledesc::bind_stored_text(se, &sql, rel)?;
++    let (name, ty) = relation
++        .columns
++        .iter()
++        .find(|c| c.attnum == attnum)
++        .map(|c| (c.name.clone(), c.type_id))
++        .ok_or_else(|| PgError::internal(format!("attnum {attnum} of relation {rel} does not exist")))?;
++    let bound = tabledesc::bind_column_default_text(se, &sql, rel, &name, ty)?;
+     Ok(Some(tabledesc::columns_to_input_refs(bound)?))
+ }
+ 
+diff --git a/crates/pgarbor-exec/src/tabledesc.rs b/crates/pgarbor-exec/src/tabledesc.rs
+index d9fdffe1..2be6faaa 100644
+--- a/crates/pgarbor-exec/src/tabledesc.rs
++++ b/crates/pgarbor-exec/src/tabledesc.rs
+@@ -29,7 +29,8 @@ use pgarbor_catalog::model::{
+ };
+ use pgarbor_catalog::CatalogSnapshot;
+ use pgarbor_common::{Oid, PgError, Result, SqlState};
+-use pgarbor_sql::binder::context::{BindContext, BindSession, Binder, ExprCtx};
++use pgarbor_sql::binder::coerce::coerce_assignment;
++use pgarbor_sql::binder::context::{BindContext, BindSession, Binder, BoundArg, ExprCtx};
+ use pgarbor_sql::binder::stored::bind_stored_expr;
+ use pgarbor_sql::ir::{BoundExpr, ExprKind};
+ use pgarbor_sql::source::SourceMap;
+@@ -417,6 +418,29 @@ fn bound_row_expr(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr>
+ /// [`columns_to_input_refs`] to make the result executable over a table row. Bind failure of stored
+ /// text is an internal error XX000 `could not bind stored expression`.
+ pub fn bind_stored_text(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr> {
++    bind_stored_text_as(se, sql, rel_oid, None)
++}
++
++/// Like [`bind_stored_text`] for a column DEFAULT: the bound text is assignment-coerced to the
++/// column type (PG `build_column_default` / `cookDefault` store the cast; the deparsed text drops
++/// the implicit cast, so `nextval()` (bigint) for an int4 column must be recast here or the value
++/// has the wrong datum variant).
++pub fn bind_column_default_text(
++    se: &SessionEnv,
++    sql: &str,
++    rel_oid: Oid,
++    col_name: &str,
++    col_type: TypeId,
++) -> Result<BoundExpr> {
++    bind_stored_text_as(se, sql, rel_oid, Some((col_name, col_type)))
++}
++
++fn bind_stored_text_as(
++    se: &SessionEnv,
++    sql: &str,
++    rel_oid: Oid,
++    target: Option<(&str, TypeId)>,
++) -> Result<BoundExpr> {
+     let ctx = BindContext {
+         env: &se.env,
+         session: BindSession { database: se.services.database_name() },
+@@ -426,11 +450,15 @@ pub fn bind_stored_text(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<Boun
+     };
+     let src = SourceMap::new(sql);
+     let mut binder = Binder::new(&ctx, &src);
+-    match bind_stored_expr(&mut binder, sql, rel_oid, ExprCtx::check()) {
+-        Ok(expr) => Ok(expr),
++    let bound = match bind_stored_expr(&mut binder, sql, rel_oid, ExprCtx::check()) {
++        Ok(expr) => expr,
+         // Unimplemented features of a stored expression keep their 0A000 so they are not masked.
+-        Err(e) if e.sqlstate == SqlState::FEATURE_NOT_SUPPORTED => Err(e),
+-        Err(_) => Err(PgError::internal("could not bind stored expression")),
++        Err(e) if e.sqlstate == SqlState::FEATURE_NOT_SUPPORTED => return Err(e),
++        Err(_) => return Err(PgError::internal("could not bind stored expression")),
++    };
++    match target {
++        None => Ok(bound),
++        Some((name, ty)) => coerce_assignment(&mut binder, &BoundArg::new(bound, None), name, ty),
+     }
+ }
+ 
