@@ -406,6 +406,30 @@ fn finish_join(st: &PlannerState, j: &LogicalJoin, node: PlanNode, swapped: bool
     out.extend(j.right.out.iter().cloned());
     let mut exprs = j.left.vars.clone();
     exprs.extend(j.right.vars.iter().cloned());
+    // Physical children may carry slots the logical vars do not list (a DML target's rowid): use
+    // the children's own layouts, left child first.
+    if node.vars.len() > exprs.len() && node.vars.len() == node.out.len() {
+        // Partition the physical layout into the logical left side (its vars, or the rowid slot of one of
+        // its range entries) and the rest, keeping each side's physical order.
+        let in_left = |v: &BoundExpr| {
+            j.left.vars.contains(v)
+                || matches!(&v.kind, ExprKind::Column(c) if c.levels_up == 0 && c.attnum == -1 && j.left.rels.contains(&c.rt_index))
+        };
+        let (mut lv, mut lo, mut rv, mut ro) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for (v, o) in node.vars.iter().zip(node.out.iter()) {
+            if in_left(v) {
+                lv.push(v.clone());
+                lo.push(o.clone());
+            } else {
+                rv.push(v.clone());
+                ro.push(o.clone());
+            }
+        }
+        lv.extend(rv);
+        lo.extend(ro);
+        exprs = lv;
+        out = lo;
+    }
     let est = cost::cost_node("project", node.est.rows, node.est.width, &[node.est])?;
     let ordering = node.ordering.clone();
     let mut p = st.new_node(NodeKind::Project(Box::new(ProjectNode { input: node, exprs: exprs.clone() })), out);
@@ -576,6 +600,9 @@ fn try_index_nested_loop(
         ScanSource::Table { table, is_virtual: false } => table.oid,
         _ => return Ok(IndexTry::Skipped(left)),
     };
+    if st.is_inherit_scan(j.right.level, scan.rt_index) {
+        return Ok(IndexTry::Skipped(left));
+    }
 
     // Decision: is the lookup selective enough compared with a hash join over the whole table?
     let probe_quals: Vec<BoundExpr> = keys.iter().map(|k| op_conjunct(k.op.clone(), k.right.clone(), k.left.clone())).collect();

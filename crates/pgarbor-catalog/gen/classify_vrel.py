@@ -25,6 +25,7 @@ PRODUCERS = {
     "pg_proc": ["pg_proc", "pg_aggregate", "pg_operator", "pg_cast", "pg_language"],
     "pg_roles": ["pg_authid", "pg_auth_members", "pg_database", "pg_db_role_setting", "pg_tablespace",
                  "pg_roles", "pg_shadow", "pg_group", "pg_user"],
+    "pg_ext": ["pg_amop", "pg_amproc", "pg_conversion"],
     "pg_builtin": ["pg_collation", "pg_am", "pg_opclass", "pg_opfamily", "pg_extension",
                    "pg_available_extensions", "pg_available_extension_versions"],
     "pg_views": ["pg_tables", "pg_views", "pg_matviews", "pg_indexes", "pg_sequences"],
@@ -64,7 +65,6 @@ EMPTY = {
     ("pg_catalog", "pg_largeobject_metadata"): "large objects are unsupported",
     ("pg_catalog", "pg_parameter_acl"): "GRANT ON PARAMETER is unsupported",
     ("pg_catalog", "pg_partitioned_table"): "partitioned tables are unsupported in v1 (Relation::partition_key is always None)",
-    ("pg_catalog", "pg_policy"): "row level security policies are unsupported",
     ("pg_catalog", "pg_publication"): "logical replication is unsupported",
     ("pg_catalog", "pg_publication_namespace"): "logical replication is unsupported",
     ("pg_catalog", "pg_publication_rel"): "logical replication is unsupported",
@@ -81,12 +81,10 @@ EMPTY = {
     ("pg_catalog", "pg_file_settings"): "there is no configuration file",
     ("pg_catalog", "pg_hba_file_rules"): "there is no pg_hba.conf",
     ("pg_catalog", "pg_ident_file_mappings"): "there is no pg_ident.conf",
-    ("pg_catalog", "pg_policies"): "row level security policies are unsupported",
     ("pg_catalog", "pg_prepared_xacts"): "two-phase commit is unsupported",
     ("pg_catalog", "pg_publication_tables"): "logical replication is unsupported",
     ("pg_catalog", "pg_replication_origin_status"): "replication is unsupported",
     ("pg_catalog", "pg_replication_slots"): "replication is unsupported",
-    ("pg_catalog", "pg_rules"): "CREATE RULE is unsupported (view _RETURN rules are excluded by the view definition itself)",
     ("pg_catalog", "pg_seclabels"): "security labels are unsupported",
     ("pg_catalog", "pg_stats"): "no planner statistics are collected",
     ("pg_catalog", "pg_stats_ext"): "extended statistics are unsupported",
@@ -127,9 +125,6 @@ EMPTY = {
 
 # --- relations whose data exists in PG but PGArbor cannot serve yet: scan raises 0A000 (CAT-37)
 UNSUPPORTED = {
-    ("pg_catalog", "pg_amop"): "operator class membership is not materialized",
-    ("pg_catalog", "pg_amproc"): "operator class support functions are not materialized",
-    ("pg_catalog", "pg_conversion"): "encoding conversions are not materialized",
     ("pg_catalog", "pg_init_privs"): "initial privileges of builtin objects are not materialized",
     ("pg_catalog", "pg_ts_config"): "text search is unsupported",
     ("pg_catalog", "pg_ts_config_map"): "text search is unsupported",

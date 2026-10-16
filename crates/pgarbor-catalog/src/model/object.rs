@@ -20,6 +20,8 @@ pub enum ObjKind {
     Database,
     /// pg_description row (key is a `DescriptionKey`, not an OID).
     Description,
+    /// Extensibility objects (`ExtObject`, amendment pgarbor-catalog-09).
+    Ext,
 }
 
 impl ObjKind {
@@ -37,6 +39,7 @@ impl ObjKind {
             ObjKind::RoleMembership => b'm',
             ObjKind::Database => b'd',
             ObjKind::Description => b'D',
+            ObjKind::Ext => b'x',
         }
     }
     pub fn from_byte(b: u8) -> Option<ObjKind> {
@@ -52,11 +55,12 @@ impl ObjKind {
             b'm' => ObjKind::RoleMembership,
             b'd' => ObjKind::Database,
             b'D' => ObjKind::Description,
+            b'x' => ObjKind::Ext,
             _ => return None,
         })
     }
     /// All OID-keyed kinds (everything but Description).
-    pub const OID_KINDS: [ObjKind; 10] = [
+    pub const OID_KINDS: [ObjKind; 11] = [
         ObjKind::Namespace,
         ObjKind::Relation,
         ObjKind::Index,
@@ -67,6 +71,7 @@ impl ObjKind {
         ObjKind::Role,
         ObjKind::RoleMembership,
         ObjKind::Database,
+        ObjKind::Ext,
     ];
 }
 
@@ -84,6 +89,7 @@ pub enum CatalogObject {
     Role(Role),
     RoleMembership(RoleMembership),
     Database(Database),
+    Ext(ExtObject),
 }
 
 impl CatalogObject {
@@ -99,6 +105,7 @@ impl CatalogObject {
             CatalogObject::Role(_) => ObjKind::Role,
             CatalogObject::RoleMembership(_) => ObjKind::RoleMembership,
             CatalogObject::Database(_) => ObjKind::Database,
+            CatalogObject::Ext(_) => ObjKind::Ext,
         }
     }
     pub fn oid(&self) -> Oid {
@@ -113,6 +120,7 @@ impl CatalogObject {
             CatalogObject::Role(o) => o.oid,
             CatalogObject::RoleMembership(o) => o.oid,
             CatalogObject::Database(o) => o.oid,
+            CatalogObject::Ext(o) => o.oid(),
         }
     }
 }

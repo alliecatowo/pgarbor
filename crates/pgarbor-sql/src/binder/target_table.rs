@@ -48,8 +48,8 @@
 //!   `DmlKind::Copy` only where the target is written.
 //! * UPDATE/DELETE on a view use PG-style wording (`UPDATE on a view ...`, `DELETE from a view ...`)
 //!   with the same 0A000 SQLSTATE as INSERT; the spec names only the INSERT text.
-use pgarbor_catalog::model::{Column, ConstraintKind, RelKind};
-use pgarbor_catalog::snapshot::ClassRef;
+use pgarbor_catalog::model::{Column, ConstraintKind, RelKind, TypeDef};
+use pgarbor_catalog::snapshot::{ClassRef, UserTypeRef};
 use pgarbor_catalog::Relation;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_types::catalog_data::{builtin_proc, Volatility};
@@ -119,13 +119,12 @@ pub fn open_target_table(
     match rel.kind {
         RelKind::Table | RelKind::PartitionedTable => {}
         RelKind::View => {
-            let msg = match kind {
-                DmlKind::Insert => "INSERT into a view is not supported by PGArbor yet",
-                DmlKind::Update => "UPDATE on a view is not supported by PGArbor yet",
-                DmlKind::Delete => "DELETE from a view is not supported by PGArbor yet",
-                DmlKind::Copy => "COPY into a view is not supported by PGArbor yet",
-            };
-            return Err(reject(SqlState::FEATURE_NOT_SUPPORTED, msg.to_string(), pos));
+            if kind == DmlKind::Copy {
+                return Err(with_position(PgError::unimplemented("SQL-25", "COPY into a view"), pos));
+            }
+            // Auto-updatable views (amendment pgarbor-sql-rewrite-rls-merge): the statement binds against the base
+            // table; `view_dml::rewrite_*` finishes the rewrite after the statement is bound.
+            return super::view_dml::open_view_target(b, rel, alias, kind, bind_defaults);
         }
         RelKind::MatView => {
             return Err(reject(
@@ -148,7 +147,12 @@ pub fn open_target_table(
     }
 
     let alias_name: Option<String> = alias.map(|id| b.ident(id));
-    let entry = target_range_entry(b, rel, alias_name.as_deref(), kind)?;
+    let mut entry = target_range_entry(b, rel, alias_name.as_deref(), kind)?;
+    if crate::names::is_only_marked(name) {
+        if let crate::ir::RangeKind::Relation { only, .. } = &mut entry.kind {
+            *only = true;
+        }
+    }
     let rt = add_range_entry(b, entry)?;
     add_namespace_for_range(b, rt, true, true)?;
     let target = build_target_table(b, rel, bind_defaults)?;
@@ -225,6 +229,7 @@ pub fn build_target_table(b: &mut Binder, rel: &Relation, bind_defaults: bool) -
         kind: rel.kind,
         columns,
         checks,
+        wco: Vec::new(),
     })
 }
 
@@ -255,13 +260,28 @@ fn column_default(b: &mut Binder, rel: &Relation, c: &Column) -> Result<Option<B
         let coerced = coerce_assignment(b, &BoundArg::new(call, None), &c.name, c.type_id)?;
         return Ok(Some(coerced));
     }
-    match c.default.as_ref() {
-        None => Ok(None),
-        Some(def) => {
-            let bound = bind_stored_expr(b, &def.expr.sql, rel.oid, ExprCtx::column_default())?;
-            let coerced = coerce_assignment(b, &BoundArg::new(bound, None), &c.name, c.type_id)?;
-            Ok(Some(coerced))
-        }
+    // A column without its own default takes its domain's default (PG `build_column_default` ->
+    // `get_typdefault`); the domain CHECKs then apply through the assignment coercion.
+    let stored_sql = match c.default.as_ref() {
+        Some(def) => def.expr.sql.clone(),
+        None => match domain_default_sql(b, c.type_id.oid) {
+            Some(sql) => sql,
+            None => return Ok(None),
+        },
+    };
+    let bound = bind_stored_expr(b, &stored_sql, rel.oid, ExprCtx::column_default())?;
+    let coerced = coerce_assignment(b, &BoundArg::new(bound, None), &c.name, c.type_id)?;
+    Ok(Some(coerced))
+}
+
+/// Stored default text of the domain `ty` (`None` when `ty` is not a domain or has no default).
+fn domain_default_sql(b: &Binder, ty: Oid) -> Option<String> {
+    let snap = b.env.snapshot();
+    let Some(UserTypeRef::Type(t)) = snap.user_type(ty) else { return None };
+    let obj = snap.type_obj(t)?;
+    match &obj.def {
+        TypeDef::Domain { default: Some(d), .. } => Some(d.sql.clone()),
+        _ => None,
     }
 }
 
@@ -352,6 +372,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_res, env2) = testing::run(&mut kv, &env, |t| {
             t.create_table(&spec)?;

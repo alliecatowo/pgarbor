@@ -56,6 +56,7 @@ impl<'t> TxnKv<'t> {
     /// Unlocked insert of a freshly allocated row key (module docs).
     pub fn put_fresh(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.prepare_write(key, false)?;
+        ssi_write(&*self.txn, key)?;
         self.txn.overlay.put(key, value)?;
         self.note_write();
         Ok(())
@@ -97,9 +98,24 @@ fn no_snapshot() -> pgarbor_common::PgError {
     error::internal("no snapshot: begin_statement was not called")
 }
 
+/// SSI read hook (ssi.rs): records the SIREAD range of a SERIALIZABLE transaction; no-op otherwise.
+fn ssi_read(txn: &Txn, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<()> {
+    txn.engine().ssi().on_read(txn, lower, upper)
+}
+
+/// SSI write hook (ssi.rs), called before the overlay write. Sequence state is non-transactional
+/// (sequence/store.rs) and never takes part in rw-conflicts.
+fn ssi_write(txn: &Txn, key: &[u8]) -> Result<()> {
+    if key.starts_with(&SpaceId::SEQUENCES.prefix()) {
+        return Ok(());
+    }
+    txn.engine().ssi().on_write(txn, key)
+}
+
 impl KvRead for TxnKv<'_> {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let snap = self.txn.snapshot.as_ref().ok_or_else(no_snapshot)?;
+        ssi_read(&*self.txn, Bound::Included(key), Bound::Included(key))?;
         match self.txn.overlay.get(key) {
             Some(entry) => Ok(entry.map(|v| v.to_vec())),
             None => snap.tree.get(key),
@@ -107,6 +123,7 @@ impl KvRead for TxnKv<'_> {
     }
     fn scan<'a>(&'a self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<KvIter<'a>> {
         let snap = self.txn.snapshot.as_ref().ok_or_else(no_snapshot)?;
+        ssi_read(&*self.txn, lower, upper)?;
         let base = snap.tree.scan(lower, upper)?;
         crate::overlay::merge_scan(base, &self.txn.overlay, lower, upper)
     }
@@ -115,6 +132,7 @@ impl KvRead for TxnKv<'_> {
 impl KvWrite for TxnKv<'_> {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         self.prepare_write(key, true)?;
+        ssi_write(&*self.txn, key)?;
         self.txn.overlay.put(key, value)?;
         self.note_write();
         Ok(())
@@ -122,6 +140,7 @@ impl KvWrite for TxnKv<'_> {
     fn delete(&mut self, key: &[u8]) -> Result<bool> {
         self.prepare_write(key, true)?;
         let existed = self.get(key)?.is_some();
+        ssi_write(&*self.txn, key)?;
         self.txn.overlay.delete(key)?;
         self.note_write();
         Ok(existed)

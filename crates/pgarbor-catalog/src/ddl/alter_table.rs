@@ -340,6 +340,10 @@ impl<'a> CatalogTxn<'a> {
                     col.missing_value = column.fast_default.clone();
                 }
                 plain_default = true;
+            } else if column.fast_default.is_some() {
+                // The domain's DEFAULT is the missing value of existing rows.
+                col.missing_value = column.fast_default.clone();
+                plain_default = true;
             }
         }
 
@@ -886,6 +890,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let mut oid = 0;
         let (_, env) = testing::run(kv, env, |t| {

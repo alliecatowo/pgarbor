@@ -33,6 +33,7 @@ use pgarbor_catalog::model::{FuncKind, FuncVolatility, RelKind, TypeDef};
 use pgarbor_catalog::snapshot::{ClassRef, UserTypeRef};
 use pgarbor_catalog::{errors, CatalogEnv, StoredExpr};
 use pgarbor_common::{Oid, PgError, Result, SqlState};
+use pgarbor_types::catalog_data::ProcKind;
 use pgarbor_types::{oids, Datum, TypeId};
 use sqlparser::ast::{
     AlterFunctionAction, AlterFunctionKind, AlterFunctionOperation, AlterRoleOperation, AlterSchemaOperation,
@@ -44,6 +45,7 @@ use sqlparser::ast::{ArgMode as AstArgMode, SequenceOptions as AstSequenceOption
 use sqlparser::tokenizer::Span;
 
 use super::context::{Binder, ExprCtx};
+use super::dispatch::{ALTER_ACTION_POS_KEY, ALTER_PROCEDURE_KEY, ALTER_ROUTINE_KEY};
 use super::ddl_objects::bind_sequence_options;
 use super::stored;
 use super::types::resolve_data_type;
@@ -101,6 +103,21 @@ pub fn bind_alter_schema(b: &mut Binder, stmt: &Statement) -> Result<BoundStatem
 
 /// `Statement::AlterFunction`.
 pub fn bind_alter_function(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
+    let tag = if b.scratch.contains_key(ALTER_PROCEDURE_KEY) {
+        Some("ALTER PROCEDURE")
+    } else if b.scratch.contains_key(ALTER_ROUTINE_KEY) {
+        Some("ALTER ROUTINE")
+    } else {
+        None
+    };
+    let bound = bind_alter_function_inner(b, stmt)?;
+    Ok(match (tag, bound) {
+        (Some(tag), BoundStatement::Alter(inner)) => alter(AlterAction::Routine { tag, inner }),
+        (_, other) => other,
+    })
+}
+
+fn bind_alter_function_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
     let env = b.env;
     let af = match stmt {
         Statement::AlterFunction(af) => af,
@@ -125,20 +142,43 @@ pub fn bind_alter_function(b: &mut Binder, stmt: &Statement) -> Result<BoundStat
         given = Some(types);
     }
 
+    // ALTER PROCEDURE (`alter_procedure`) takes the same grammar; PG `LookupFuncWithArgs` with
+    // OBJECT_PROCEDURE: an argument list finds any routine and then rejects a non-procedure (42809),
+    // while a bare name only considers procedures.
+    let is_procedure = b.scratch.contains_key(ALTER_PROCEDURE_KEY);
+    // ALTER ROUTINE (`OBJECT_ROUTINE`): any kind; a bare name must still be unique across kinds.
+    let is_routine = b.scratch.contains_key(ALTER_ROUTINE_KEY);
     let cands = env.function_candidates(schema, &qn.name)?;
     let func_oid: Oid = match &given {
         Some(types) => match cands.iter().find(|c| c.arg_types == *types) {
             Some(c) => c.oid,
             None => {
                 let shown: Vec<String> = types.iter().map(|t| b.type_name(TypeId::of(*t))).collect();
-                return Err(errors::function_does_not_exist(&format!("{}({})", qn.display(), shown.join(","))));
+                // PG `func_signature_string` separates argument types with ", ".
+                let sig = format!("{}({})", qn.display(), shown.join(", "));
+                return Err(if is_procedure {
+                    PgError::new(SqlState::UNDEFINED_FUNCTION, format!("procedure {sig} does not exist"))
+                } else {
+                    errors::function_does_not_exist(&sig)
+                });
             }
         },
-        None => match cands.len() {
-            0 => return Err(errors::function_does_not_exist(&qn.display())),
-            1 => cands[0].oid,
-            _ => return Err(errors::function_name_not_unique(&qn.name)),
-        },
+        None => {
+            let named: Vec<_> = cands.iter().filter(|c| !is_procedure || matches!(c.kind, ProcKind::Procedure)).collect();
+            match named.len() {
+                0 if is_procedure => return Err(errors::no_function_named("procedure", &qn.display())),
+                0 => return Err(errors::function_does_not_exist(&qn.display())),
+                1 => named[0].oid,
+                _ if is_procedure => {
+                    return Err(PgError::new(
+                        SqlState::AMBIGUOUS_FUNCTION,
+                        format!("procedure name \"{}\" is not unique", qn.name),
+                    )
+                    .with_hint("Specify the argument list to select the procedure unambiguously."))
+                }
+                _ => return Err(errors::function_name_not_unique(&qn.name)),
+            }
+        }
     };
 
     let (kind, retset, in_types) = match env.snapshot().function(func_oid) {
@@ -147,14 +187,23 @@ pub fn bind_alter_function(b: &mut Binder, stmt: &Statement) -> Result<BoundStat
     };
     let shown: Vec<String> = in_types.iter().map(|t| b.type_name(TypeId::of(*t))).collect();
     let sig = format!("{}({})", qn.display(), shown.join(","));
+    let is_proc_kind = matches!(kind, FuncKind::Procedure);
     match kind {
-        FuncKind::Procedure => return Err(errors::wrong_routine_kind(&sig, "function")),
-        FuncKind::Aggregate => {
+        FuncKind::Procedure if !is_procedure && !is_routine => {
+            return Err(errors::wrong_routine_kind(&sig, "function"))
+        }
+        FuncKind::Procedure => {}
+        FuncKind::Function | FuncKind::Window if is_procedure => {
+            return Err(errors::wrong_routine_kind(&sig, "procedure"))
+        }
+        // ALTER ROUTINE may rename, reassign or move an aggregate; its actions are still rejected.
+        FuncKind::Aggregate if !is_routine || matches!(af.operation, AlterFunctionOperation::Actions { .. }) => {
             return Err(PgError::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("\"{}\" is an aggregate function", qn.display()),
             ))
         }
+        FuncKind::Aggregate => {}
         FuncKind::Function | FuncKind::Window => {}
     }
 
@@ -172,12 +221,16 @@ pub fn bind_alter_function(b: &mut Binder, stmt: &Statement) -> Result<BoundStat
             let new_schema = env.namespace_oid(&s)?;
             Ok(alter(AlterAction::SetFunctionSchema { func: func_oid, new_schema }))
         }
-        AlterFunctionOperation::DependsOnExtension { .. } => {
-            Err(unsupported("ALTER FUNCTION ... DEPENDS ON EXTENSION"))
-        }
+        AlterFunctionOperation::DependsOnExtension { .. } => Err(unsupported(if is_procedure {
+            "ALTER PROCEDURE ... DEPENDS ON EXTENSION"
+        } else if is_routine {
+            "ALTER ROUTINE ... DEPENDS ON EXTENSION"
+        } else {
+            "ALTER FUNCTION ... DEPENDS ON EXTENSION"
+        })),
         AlterFunctionOperation::Actions { actions, restrict: _ } => {
             // RESTRICT is accepted by PostgreSQL and has no effect on ALTER FUNCTION.
-            let changes = function_changes(b, retset, actions)?;
+            let changes = function_changes(b, is_proc_kind, retset, actions)?;
             Ok(alter(AlterAction::FunctionAttrs { func: func_oid, changes }))
         }
     }
@@ -297,6 +350,22 @@ pub fn bind_alter_sequence(
     let schema = qn.schema_str();
     let oid = match env.lookup_class(schema, &qn.name)? {
         Some(ClassRef::Sequence(oid)) => oid,
+        // AlterSequence() opens the relation with sequence_open: "cannot open relation" + DETAIL.
+        Some(other) if matches!(action, AlterSequenceAction::Options(_)) => {
+            let word = match other {
+                ClassRef::Relation(rel_oid) => match env.snapshot().relation(rel_oid).map(|r| &r.kind) {
+                    Some(RelKind::Table) => "tables",
+                    Some(RelKind::PartitionedTable) => "partitioned tables",
+                    Some(RelKind::View) => "views",
+                    Some(RelKind::MatView) => "materialized views",
+                    Some(RelKind::CompositeType) => "composite types",
+                    Some(RelKind::ForeignTable) => "foreign tables",
+                    _ => "this kind of relation",
+                },
+                _ => "indexes",
+            };
+            return Err(errors::operation_not_supported_for(&format!("cannot open relation \"{}\"", qn.name), word));
+        }
         Some(_) => return Err(errors::not_a(&qn.name, "sequence")),
         None if if_exists => {
             return Ok(noop("ALTER SEQUENCE", errors::kind_does_not_exist_skipping("relation", schema, &qn.name)))
@@ -313,6 +382,7 @@ pub fn bind_alter_sequence(
             relation: oid,
             keyword: AlterRelKeyword::Sequence,
             commands: vec![AlterTableCmd::SetLogged(*logged)],
+            only: false,
         }))),
         AlterSequenceAction::RenameTo(id) => {
             let new_name = b.ident(id);
@@ -391,9 +461,176 @@ pub fn bind_alter_domain(b: &mut Binder, name: &ObjectName, action: &AlterDomain
         AlterDomainAction::SetSchema(id) => {
             let s = b.ident(id);
             let new_schema = env.namespace_oid(&s)?;
-            Ok(alter(AlterAction::SetTypeSchema { ty, new_schema }))
+            Ok(alter(AlterAction::SetDomainSchema { ty, new_schema }))
         }
     }
+}
+
+/// `ExtraStatement::AlterTypeSetSchema`: `ALTER TYPE name SET SCHEMA new` for enums, domains and
+/// composite types (PG `AlterObjectNamespace_internal`). The type is resolved first (42704), then the
+/// target schema (3F000), as `ALTER DOMAIN ... SET SCHEMA` does.
+pub fn bind_alter_type_set_schema(b: &mut Binder, name: &ObjectName, schema: &Ident) -> Result<BoundStatement> {
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let ty = env
+        .lookup_type(qn.schema_str(), &qn.name)?
+        .ok_or_else(|| errors::type_does_not_exist(&qn.display()))?;
+    classify_alter_type(env, ty, &qn.display())?;
+    let s = b.ident(schema);
+    let new_schema = env.namespace_oid(&s)?;
+    Ok(alter(AlterAction::SetTypeSchema { ty, new_schema }))
+}
+
+/// `ExtraStatement::AlterTypeOwner`: `ALTER TYPE name OWNER TO role` for enums, domains and composite
+/// types (PG `ExecAlterOwnerStmt`: the role is resolved first, then the type).
+pub fn bind_alter_type_owner(b: &mut Binder, name: &ObjectName, role: &Ident) -> Result<BoundStatement> {
+    let env = b.env;
+    let new_owner = ident_role(b, role)?;
+    let qn = bind_name(b, name)?;
+    let ty = env
+        .lookup_type(qn.schema_str(), &qn.name)?
+        .ok_or_else(|| errors::type_does_not_exist(&qn.display()))?;
+    classify_alter_type(env, ty, &qn.display())?;
+    Ok(alter(AlterAction::TypeOwner { ty, new_owner }))
+}
+
+/// `ExtraStatement::AlterTableSetSchema`: `ALTER TABLE [IF EXISTS] [ONLY] t SET SCHEMA s`. A non-table
+/// relation is 42809 `"x" is not a table`.
+pub fn bind_alter_table_set_schema(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    schema: &Ident,
+) -> Result<BoundStatement> {
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let rel_schema = qn.schema_str();
+    let rel = match env.lookup_class(rel_schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::Table | RelKind::PartitionedTable) {
+                return Err(errors::not_a(&qn.name, "table"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "table")),
+        None if if_exists => {
+            return Ok(noop("ALTER TABLE", errors::kind_does_not_exist_skipping("relation", rel_schema, &qn.name)))
+        }
+        None => return Err(errors::relation_does_not_exist(rel_schema, &qn.name)),
+    };
+    let s = b.ident(schema);
+    let new_schema = env.namespace_oid(&s)?;
+    Ok(alter(AlterAction::SetRelationSchema { rel, new_schema, keyword: AlterRelKeyword::Table }))
+}
+
+/// `ExtraStatement::AlterViewOwner`: `ALTER VIEW [IF EXISTS] v OWNER TO role`. A non-view relation is
+/// 42809 `"x" is not a view`.
+pub fn bind_alter_view_owner(b: &mut Binder, if_exists: bool, name: &ObjectName, role: &Ident) -> Result<BoundStatement> {
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let schema = qn.schema_str();
+    let rel = match env.lookup_class(schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::View) {
+                return Err(errors::not_a(&qn.name, "view"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "view")),
+        None if if_exists => {
+            return Ok(noop("ALTER VIEW", errors::kind_does_not_exist_skipping("relation", schema, &qn.name)))
+        }
+        None => return Err(errors::relation_does_not_exist(schema, &qn.name)),
+    };
+    let new_owner = ident_role(b, role)?;
+    Ok(alter(AlterAction::RelationOwner { rel, new_owner, keyword: AlterRelKeyword::View }))
+}
+
+/// `ExtraStatement::AlterViewRename`: `ALTER VIEW [IF EXISTS] v RENAME TO n` / `RENAME [COLUMN] a TO b`.
+/// A non-view relation is 42809 `"x" is not a view`.
+pub fn bind_alter_view_rename(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    action: &AlterMatViewAction,
+) -> Result<BoundStatement> {
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let schema = qn.schema_str();
+    let rel = match env.lookup_class(schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::View) {
+                return Err(errors::not_a(&qn.name, "view"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "view")),
+        None if if_exists => {
+            return Ok(noop("ALTER VIEW", errors::kind_does_not_exist_skipping("relation", schema, &qn.name)))
+        }
+        None => return Err(errors::relation_does_not_exist(schema, &qn.name)),
+    };
+    let keyword = AlterRelKeyword::View;
+    match action {
+        AlterMatViewAction::RenameTo(id) => {
+            let new_name = b.ident(id);
+            Ok(alter(AlterAction::RenameRelation { rel, new_name, keyword }))
+        }
+        AlterMatViewAction::RenameColumn { old, new } => {
+            let o = b.ident(old);
+            let n = b.ident(new);
+            Ok(BoundStatement::AlterTable(Box::new(BoundAlterTable {
+                relation: rel,
+                keyword,
+                commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+                only: false,
+            })))
+        }
+        AlterMatViewAction::SetSchema(id) => {
+            let s = b.ident(id);
+            let new_schema = env.namespace_oid(&s)?;
+            Ok(alter(AlterAction::SetRelationSchema { rel, new_schema, keyword }))
+        }
+        AlterMatViewAction::OwnerTo(_) => Err(unsupported("ALTER VIEW action")),
+    }
+}
+
+/// `ExtraStatement::AlterTypeRenameAttribute`: `ALTER TYPE t RENAME ATTRIBUTE a TO b [CASCADE]`. PG
+/// looks `t` up as a relation, so an enum or domain is 42P01; a relation that is not a composite
+/// type is 42809. CASCADE only matters for typed tables, which PGArbor does not have.
+pub fn bind_alter_type_rename_attribute(
+    b: &mut Binder,
+    name: &ObjectName,
+    old: &Ident,
+    new: &Ident,
+    cascade: bool,
+) -> Result<BoundStatement> {
+    let _ = cascade;
+    let env = b.env;
+    let qn = bind_name(b, name)?;
+    let schema = qn.schema_str();
+    let rel = match env.lookup_class(schema, &qn.name)? {
+        Some(ClassRef::Relation(oid)) => {
+            let r = env.snapshot().relation(oid).ok_or_else(|| errors::cache_lookup_failed("relation", oid))?;
+            if !matches!(r.kind, RelKind::CompositeType) {
+                return Err(errors::not_a(&qn.name, "composite type"));
+            }
+            oid
+        }
+        Some(_) => return Err(errors::not_a(&qn.name, "composite type")),
+        None => return Err(errors::relation_does_not_exist(schema, &qn.name)),
+    };
+    let o = b.ident(old);
+    let n = b.ident(new);
+    Ok(BoundStatement::AlterTable(Box::new(BoundAlterTable {
+        relation: rel,
+        keyword: AlterRelKeyword::Type,
+        commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+        only: false,
+    })))
 }
 
 /// `ExtraStatement::AlterDatabase`.
@@ -497,6 +734,7 @@ pub fn bind_alter_matview(
                 relation: rel,
                 keyword,
                 commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+                only: false,
             })))
         }
     }
@@ -568,7 +806,16 @@ fn owner_role(b: &mut Binder, owner: &Owner) -> Result<Oid> {
     }
 }
 
+/// `OWNER TO` role identifier: unquoted `CURRENT_USER` / `CURRENT_ROLE` / `SESSION_USER` are the
+/// session's roles (PG `RoleSpec`); anything else is a role name (42704 when it does not exist).
 fn ident_role(b: &mut Binder, id: &Ident) -> Result<Oid> {
+    if id.quote_style.is_none() {
+        match id.value.to_ascii_lowercase().as_str() {
+            "current_user" | "current_role" => return Ok(b.env.current_user()),
+            "session_user" => return Ok(b.env.session_user()),
+            _ => {}
+        }
+    }
     let n = b.ident(id);
     b.env.role_oid(&n)
 }
@@ -723,7 +970,8 @@ fn role_changes(b: &mut Binder, options: &[RoleOptionItem]) -> Result<RoleChange
         }
     }
     if let Some((text, pos)) = valid_until {
-        let us = timestamptz_input(b, text).map_err(|e| diag::with_position(e, pos))?;
+        let _ = pos; // PG evaluates the VALID UNTIL string without a statement position
+        let us = timestamptz_input(b, text)?;
         ch.valid_until = Some(Some(us));
     }
     Ok(ch)
@@ -874,10 +1122,30 @@ fn rel_kind_plural(kind: &RelKind) -> &'static str {
 
 /// `function_changes` for `ALTER FUNCTION ... <actions>` (PG `compute_function_attributes` with
 /// `AlterFunction`). `retset` = the function returns a set (ROWS applies only then).
-fn function_changes(b: &mut Binder, retset: bool, actions: &[AlterFunctionAction]) -> Result<FunctionChanges> {
+fn function_changes(
+    b: &mut Binder,
+    is_procedure: bool,
+    retset: bool,
+    actions: &[AlterFunctionAction],
+) -> Result<FunctionChanges> {
     let mut ch = FunctionChanges::default();
     let mut seen: Vec<&'static str> = Vec::new();
-    for a in actions {
+    let action_pos: Vec<u32> = b
+        .scratch
+        .get(ALTER_ACTION_POS_KEY)
+        .map(|t| t.split(',').filter_map(|p| p.parse().ok()).collect())
+        .unwrap_or_default();
+    for (idx, a) in actions.iter().enumerate() {
+        // PG `compute_common_attribute` for procedures: only SECURITY, SET and RESET are allowed.
+        if is_procedure
+            && !matches!(a, AlterFunctionAction::Security { .. } | AlterFunctionAction::Set(_) | AlterFunctionAction::Reset(_))
+        {
+            let mut e = PgError::new(SqlState(*b"42P13"), "invalid attribute in procedure definition");
+            if let Some(p) = action_pos.get(idx) {
+                e = e.with_position(*p);
+            }
+            return Err(e);
+        }
         match a {
             AlterFunctionAction::CalledOnNull(c) => {
                 note_option(&mut seen, "strict")?;

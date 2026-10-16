@@ -17,7 +17,8 @@
 //!    `planning_ms` for step 2, and render with `explain_fmt::render_analyze(&plan, &opts,
 //!    &ActualStats{nodes, planning_ms, execution_ms})`. Restore `collect_stats = false` afterwards.
 //! 4. Result: `ExecResult::Rows` with column `QUERY PLAN` (`ColumnDesc` name `QUERY PLAN`, text, no
-//!    table); TEXT and YAML: one row per output line; JSON: ONE row whose value is
+//!    table); TEXT: one row per output line; YAML: ONE text row holding the whole document (lines joined
+//!    with `\n`, PG `do_text_output_oneline`); JSON: ONE row whose value is
 //!    `Datum::Json(lines.join("\n"))` with column type `json`; XML: whatever the planner returns (0A000).
 //!    Tag `EXPLAIN`.
 use pgarbor_common::time::Instant;
@@ -31,6 +32,7 @@ use pgarbor_types::{Datum, TypeId};
 
 use crate::build::open_plan;
 use crate::context::ExecContext;
+use crate::ctas;
 use crate::result::ExecResult;
 
 /// Rows pulled per `PlanStream::fetch` call while running an `EXPLAIN ANALYZE` (the rows are discarded,
@@ -62,8 +64,8 @@ pub fn exec_explain(cx: &mut ExecContext, explain: &BoundExplain) -> Result<Exec
     let planning_ms = elapsed_ms(t_plan);
 
     // Step 3: render, running the plan first when ANALYZE was requested.
-    let lines: Vec<String> = if opts.analyze {
-        analyze_lines(cx, &plan, opts, planning_ms)?
+    let lines: Vec<String> = if opts.analyze && executes_query(&explain.statement) {
+        analyze_lines(cx, &explain.statement, &plan, opts, planning_ms)?
     } else {
         pgarbor_plan::explain_plan(&plan, opts)?
     };
@@ -84,30 +86,55 @@ fn ensure_plannable(stmt: &BoundStatement) -> Result<()> {
     }
 }
 
+/// Whether ANALYZE runs the statement. `CREATE TABLE AS ... WITH NO DATA` only creates the table, so it
+/// is explained without running anything.
+fn executes_query(stmt: &BoundStatement) -> bool {
+    !matches!(stmt, BoundStatement::CreateTableAs(ctas) if !ctas.with_data)
+}
+
 /// Step 3 with ANALYZE: execute the plan to completion with per-node instrumentation and render the
-/// actual statistics. The instrumentation flag is restored on every path, including errors.
-fn analyze_lines(cx: &mut ExecContext, plan: &Plan, opts: &ExplainOptions, planning_ms: f64) -> Result<Vec<String>> {
+/// actual statistics. The instrumentation flag is restored on every path, including errors. An
+/// `IF NOT EXISTS` CREATE TABLE AS that skipped its table renders no lines (PG: dummy group).
+fn analyze_lines(
+    cx: &mut ExecContext,
+    stmt: &BoundStatement,
+    plan: &Plan,
+    opts: &ExplainOptions,
+    planning_ms: f64,
+) -> Result<Vec<String>> {
     cx.se.options.collect_stats = true;
-    let run = run_instrumented(cx, plan);
+    let run = run_instrumented(cx, stmt, plan);
     cx.se.options.collect_stats = false;
-    let (nodes, execution_ms) = run?;
+    let (nodes, execution_ms) = match run? {
+        Some(done) => done,
+        None => return Ok(Vec::new()),
+    };
     let actual = ActualStats { nodes, planning_ms, execution_ms };
     render_analyze(plan, opts, &actual)
 }
 
 /// Run `plan` to completion, discarding its rows, and return the per-node actuals with the wall time of
-/// the run. The caller's transaction owns the effects (DML really writes).
-fn run_instrumented(cx: &mut ExecContext, plan: &Plan) -> Result<(Vec<NodeActual>, f64)> {
+/// the run. The caller's transaction owns the effects (DML really writes; CREATE TABLE AS fills the new
+/// table). `None` when CREATE TABLE AS skipped an existing table.
+fn run_instrumented(cx: &mut ExecContext, stmt: &BoundStatement, plan: &Plan) -> Result<Option<(Vec<NodeActual>, f64)>> {
     let t_exec = Instant::now();
-    let mut stream = open_plan(plan, cx)?;
-    while !stream.is_done() {
-        stream.fetch(cx, Some(ANALYZE_FETCH_BATCH))?;
-    }
+    let nodes = match stmt {
+        BoundStatement::CreateTableAs(ctas) => match ctas::analyze_create_table_as(cx, ctas, plan)? {
+            Some(nodes) => nodes,
+            None => return Ok(None),
+        },
+        _ => {
+            let mut stream = open_plan(plan, cx)?;
+            while !stream.is_done() {
+                stream.fetch(cx, Some(ANALYZE_FETCH_BATCH))?;
+            }
+            stream.actuals().ok_or_else(|| {
+                PgError::internal("EXPLAIN ANALYZE: operator statistics were not collected for the plan")
+            })?
+        }
+    };
     let execution_ms = elapsed_ms(t_exec);
-    let nodes = stream.actuals().ok_or_else(|| {
-        PgError::internal("EXPLAIN ANALYZE: operator statistics were not collected for the plan")
-    })?;
-    Ok((nodes, execution_ms))
+    Ok(Some((nodes, execution_ms)))
 }
 
 /// The single `QUERY PLAN` column: `json` for FORMAT JSON, `text` for every other format (PG:
@@ -120,14 +147,14 @@ fn output_column(format: ExplainFormat) -> ColumnDesc {
     ColumnDesc { name: QUERY_PLAN_COLUMN.to_string(), type_id, table_oid: 0, column_attnum: 0 }
 }
 
-/// Rows of the result: one text row per line, except JSON which is one row holding the whole document
-/// (lines re-joined with `\n`, the inverse of the split done by the renderer).
+/// Rows of the result: TEXT gives one text row per line; the delimited formats (JSON, YAML, XML) give
+/// ONE row holding the whole document (lines re-joined with `\n`, the inverse of the split done by the
+/// renderer). PG: `do_text_output_multiline` for TEXT, `do_text_output_oneline` otherwise.
 fn output_rows(format: ExplainFormat, lines: Vec<String>) -> Vec<Vec<Datum>> {
     match format {
+        ExplainFormat::Text => lines.into_iter().map(|line| vec![Datum::Text(line)]).collect(),
         ExplainFormat::Json => vec![vec![Datum::Json(lines.join("\n"))]],
-        ExplainFormat::Text | ExplainFormat::Xml | ExplainFormat::Yaml => {
-            lines.into_iter().map(|line| vec![Datum::Text(line)]).collect()
-        }
+        ExplainFormat::Xml | ExplainFormat::Yaml => vec![vec![Datum::Text(lines.join("\n"))]],
     }
 }
 
@@ -166,6 +193,15 @@ mod tests {
         assert_eq!(desc.type_id, TypeId::JSON);
         let rows = output_rows(ExplainFormat::Json, lines);
         assert_eq!(rows, vec![vec![Datum::Json("[\n  {\n]".to_string())]]);
+    }
+
+    #[test]
+    fn yaml_format_gives_one_text_row_for_the_whole_document() {
+        let lines = vec!["- Plan: ".to_string(), "    Node Type: \"Seq Scan\"".to_string()];
+        let desc = output_column(ExplainFormat::Yaml);
+        assert_eq!(desc.type_id, TypeId::TEXT);
+        let rows = output_rows(ExplainFormat::Yaml, lines);
+        assert_eq!(rows, vec![vec![Datum::Text("- Plan: \n    Node Type: \"Seq Scan\"".to_string())]]);
     }
 
     #[test]

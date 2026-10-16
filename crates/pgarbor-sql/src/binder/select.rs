@@ -37,8 +37,9 @@
 //! 1. Push `QueryScope::new(ScopeKind::Select)` onto `b.scopes`.
 //! 2. FROM: `from::bind_from_clause` (builds range table, namespace, join tree).
 //! 3. Follow PG's `transformSelectStmt` order exactly (it fixes which error wins when several apply):
-//!    FROM -> target list -> WHERE (`expr::bind_boolean(.., ExprCtx::where_(), "WHERE")`) -> HAVING
-//!    (`ExprCtx::having()`, "HAVING") -> `window::bind_window_clause` -> `group::bind_group_by` ->
+//!    FROM (`WINDOW` definitions via `window::bind_window_clause` right after it) -> target list -> WHERE
+//!    (`expr::bind_boolean(.., ExprCtx::where_(), "WHERE")`) -> HAVING
+//!    (`ExprCtx::having()`, "HAVING") -> `group::bind_group_by` ->
 //!    `group::resolve_pending_groupings` -> DISTINCT / DISTINCT ON + ORDER BY via
 //!    `order::bind_order_by` (with `order::bind_distinct_on`) -> `group::check_grouping` (the 42803
 //!    ungrouped-column check over target list, HAVING and ORDER BY expressions) -> unknown-type
@@ -56,10 +57,11 @@
 //! [`bind_query_statement`] wraps `bind_query` in `BoundStatement::Query`, and turns
 //! `SELECT ... INTO [TEMP] t` into `BoundStatement::CreateTableAs` via
 //! `ddl_table::bind_select_into` (TEMP: 0A000).
+use pgarbor_catalog::model::RelKind;
 use pgarbor_common::{PgError, Result, SqlState};
 use sqlparser::ast::{
     Distinct, Ident, LimitClause, LockClause, LockType, NonBlock, ObjectName, ObjectNamePart, OrderByExpr, OrderByKind, Query,
-    Select, SelectFlavor, SetExpr, Table, TableFactor, TableWithJoins,
+    Select, SelectFlavor, SetExpr, Spanned, Table, TableFactor, TableWithJoins,
 };
 
 use super::context::{Binder, BoundArg, ExprCtx};
@@ -68,7 +70,7 @@ use super::{coerce, cte, ddl_table, expr, from, group, order, scope, setop, targ
 use crate::diag;
 use crate::ir::{
     BoundExpr, BoundQuery, BoundSelect, BoundStatement, DistinctSpec, LockStrength, LockWait, LockingClause, OutputColumn,
-    QueryBody, SortKey, TargetEntry,
+    QueryBody, RangeEntry, RangeKind, SortKey, TargetEntry,
 };
 
 /// Options for [`bind_query`].
@@ -116,16 +118,75 @@ pub fn bind_select_block(b: &mut Binder, sel: &Select, order_by: &[OrderByExpr],
     with_scope(b, ScopeKind::Select, |b| bind_select_in_scope(b, sel, order_by, keep_unknown_outputs))
 }
 
-/// Top-level `Statement::Query`: query or `SELECT INTO`.
-pub fn bind_query_statement(b: &mut Binder, q: &Query) -> Result<BoundStatement> {
-    if let SetExpr::Select(sel) = &*q.body {
-        if let Some(into) = sel.into.as_ref() {
-            return ddl_table::bind_select_into(b, q, into);
+/// `INTO` clause of the leftmost SELECT leaf of a query body (PG `transformSelectStmt` / gram.y: the
+/// statement-level `SELECT ... INTO` of a set operation sits on its first SELECT). `None` when the
+/// leftmost leaf has no `INTO`, including parenthesized leftmost operands.
+pub(super) fn leftmost_select_into(body: &SetExpr) -> Option<&sqlparser::ast::SelectInto> {
+    let mut cur = body;
+    loop {
+        match cur {
+            SetExpr::Select(sel) => return sel.into.as_ref(),
+            SetExpr::SetOperation { left, .. } => cur = &**left,
+            _ => return None,
         }
+    }
+}
+
+/// Top-level `Statement::Query`: query or `SELECT INTO` (also `SELECT INTO ... UNION SELECT ...`).
+pub fn bind_query_statement(b: &mut Binder, q: &Query) -> Result<BoundStatement> {
+    if let SetExpr::Merge(_) = &*q.body {
+        // `WITH ... MERGE` (PG `transformMergeStmt`): WITH RECURSIVE is rejected.
+        if q.with.as_ref().is_some_and(|w| w.recursive) {
+            return Err(PgError::new(SqlState::SYNTAX_ERROR, "WITH RECURSIVE is not supported for MERGE statement"));
+        }
+    }
+    if let SetExpr::Insert(st) | SetExpr::Update(st) | SetExpr::Delete(st) | SetExpr::Merge(st) = &*q.body {
+        return bind_with_dml(b, q, st);
+    }
+    if let Some(into) = leftmost_select_into(&q.body) {
+        return ddl_table::bind_select_into(b, q, into);
     }
     let ctx = QueryCtx { column_aliases: Vec::new(), top_level: true, keep_unknown_outputs: false };
     let bq = bind_query(b, q, &ctx)?;
     Ok(BoundStatement::Query(Box::new(bq)))
+}
+
+/// `WITH ... INSERT/UPDATE/DELETE`: the WITH list is bound at the top level (PG `transformWithClause`
+/// on the DML statement), then the DML statement with the CTE frame visible; the CTEs go to the
+/// statement's `ctes`.
+fn bind_with_dml(b: &mut Binder, q: &Query, st: &sqlparser::ast::Statement) -> Result<BoundStatement> {
+    if let Err(e) = b.enter() {
+        b.leave();
+        return Err(e);
+    }
+    let cte_base = b.cte_frames.len();
+    let scope_base = b.scopes.len();
+    let result = bind_with_dml_levels(b, q, st, cte_base);
+    b.cte_frames.truncate(cte_base);
+    b.scopes.truncate(scope_base);
+    b.leave();
+    result
+}
+
+fn bind_with_dml_levels(b: &mut Binder, q: &Query, st: &sqlparser::ast::Statement, cte_base: usize) -> Result<BoundStatement> {
+    let with = q.with.as_ref().ok_or_else(|| PgError::internal("binder: data-modifying query body without WITH"))?;
+    let mut ctes = cte::bind_with(b, with, true)?;
+    let mut bound = super::dispatch::bind_inner_statement(b, st, false)?;
+    if let Some(frame) = b.cte_frames.get(cte_base) {
+        for entry in &frame.entries {
+            if let Some(c) = ctes.get_mut(entry.index as usize) {
+                c.ref_count = entry.ref_count;
+            }
+        }
+    }
+    match &mut bound {
+        BoundStatement::Insert(x) => x.ctes = ctes,
+        BoundStatement::Update(x) => x.ctes = ctes,
+        BoundStatement::Delete(x) => x.ctes = ctes,
+        BoundStatement::Merge(x) => x.ctes = ctes,
+        _ => return Err(PgError::internal("binder: WITH on a statement that is not INSERT/UPDATE/DELETE")),
+    }
+    Ok(bound)
 }
 
 /// Bind a query that is used as a sub-select source (derived table, view body, CTE body) with
@@ -150,6 +211,7 @@ fn with_scope<T>(b: &mut Binder, kind: ScopeKind, f: impl FnOnce(&mut Binder) ->
 
 fn bind_query_levels(b: &mut Binder, q: &Query, qctx: &QueryCtx, cte_base: usize) -> Result<BoundQuery> {
     reject_query_clauses(q)?;
+    reject_ties_with_skip_locked(b, q)?;
     let mut ctes = match q.with.as_ref() {
         Some(with) => cte::bind_with(b, with, qctx.top_level)?,
         None => Vec::new(),
@@ -283,6 +345,7 @@ fn bind_plain_body(b: &mut Binder, q: &Query, qctx: &QueryCtx, order_items: &[Or
             let setop_bq = setop::bind_set_operation(b, op, set_quantifier, &**left, &**right, &child)?;
             let BoundQuery { body, output, .. } = setop_bq;
             let order_by = order::bind_order_by_output(b, order_items, &output)?;
+            order::check_setop_sort_collations(b, &body, &order_by)?;
             let (limit, offset, with_ties) = bind_tail(b, q, !order_by.is_empty())?;
             let locking = bind_locking(b, &q.locks, LockSite::SetOp)?;
             Ok(BoundQuery { ctes: Vec::new(), body, output, order_by, limit, offset, limit_with_ties: with_ties, locking })
@@ -434,6 +497,48 @@ fn reject_query_clauses(q: &Query) -> Result<()> {
     Ok(())
 }
 
+/// PG gram.y `insertSelectOptions`: `WITH TIES` cannot be combined with a `SKIP LOCKED` locking clause
+/// (42601 at the `WITH` token, `limitClause->optionLoc`). The parser raises it before anything is bound.
+/// Without ORDER BY the parser reports the missing ORDER BY first, so that case is left to `bind_tail`.
+fn reject_ties_with_skip_locked(b: &Binder, q: &Query) -> Result<()> {
+    let with_ties = q.fetch.as_ref().is_some_and(|f| f.with_ties);
+    if !with_ties || !q.locks.iter().any(|l| matches!(l.nonblock, Some(NonBlock::SkipLocked))) {
+        return Ok(());
+    }
+    let items = order_by_items(q)?;
+    let anchor = match q.fetch.as_ref().and_then(|f| f.quantity.as_ref()).or_else(|| items.last().map(|i| &i.expr)) {
+        Some(e) if !items.is_empty() => e,
+        _ => return Ok(()),
+    };
+    let start = match b.src.byte_offset(anchor.span().end) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    match find_with_ties_keyword(b.src.text(), start) {
+        Some(at) => Err(diag::syntax("SKIP LOCKED and WITH TIES options cannot be used together", Some(b.src.pos_of_byte(at)))),
+        None => Ok(()),
+    }
+}
+
+/// Byte index of the first `WITH` word at or after `start` that is followed by `TIES` (a whole word,
+/// ASCII case-insensitive). Used to locate the `WITH` token that follows the ORDER BY / FETCH text.
+fn find_with_ties_keyword(text: &str, start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = start;
+    while i + 4 <= bytes.len() {
+        let whole = i == 0 || !is_word(bytes[i - 1]);
+        if whole && bytes[i..i + 4].eq_ignore_ascii_case(b"WITH") && bytes.get(i + 4).is_some_and(|c| c.is_ascii_whitespace()) {
+            let rest = text.get(i + 4..).unwrap_or("").trim_start();
+            if rest.len() >= 4 && rest.as_bytes()[..4].eq_ignore_ascii_case(b"TIES") && rest.as_bytes().get(4).map_or(true, |&c| !is_word(c)) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// SELECT-level syntax that PostgreSQL does not have (42601), or that is not supported (0A000).
 fn reject_select_extensions(sel: &Select) -> Result<()> {
     if sel.into.is_some() {
@@ -487,13 +592,14 @@ fn reject_select_extensions(sel: &Select) -> Result<()> {
 
 fn bind_select_in_scope(b: &mut Binder, sel: &Select, order_items: &[OrderByExpr], keep_unknown_outputs: bool) -> Result<SelectBlock> {
     reject_select_extensions(sel)?;
-    // Named WINDOW definitions are bound before the target list so that `OVER w` can refer to them.
+    let from_items = from::bind_from_clause(b, &sel.from)?;
+    // Named WINDOW definitions are bound after FROM (their PARTITION BY / ORDER BY reference its
+    // columns) and before the target list, so that `OVER w` can refer to them.
     if !sel.named_window.is_empty() {
         window::bind_window_clause(b, &sel.named_window)?;
     }
-    let from_items = from::bind_from_clause(b, &sel.from)?;
     b.scope_mut()?.aggs_allowed_here = true;
-    let mut target_list = target::bind_target_list(b, &sel.projection, ExprCtx::select_list())?;
+    let mut target_list = target::bind_target_list(b, &sel.projection, ExprCtx::select_list(), keep_unknown_outputs)?;
     let where_ = match sel.selection.as_ref() {
         Some(e) => Some(expr::bind_boolean(b, e, ExprCtx::where_(), "WHERE")?),
         None => None,
@@ -587,9 +693,35 @@ fn bind_locking(b: &mut Binder, locks: &[LockClause], site: LockSite<'_>) -> Res
             }
             _ => Vec::new(),
         };
+        if let LockSite::Select(s) = &site {
+            check_lockable_relations(&s.range_table, &of)?;
+        }
         out.push(LockingClause { strength, wait, of });
     }
     Ok(out)
+}
+
+/// PG `CheckValidRowMarkRel`: a relation that is row-locked must not be a materialized view or a
+/// sequence (a materialized view may still be referenced without a lock). `of` holds the 1-based
+/// range-table indexes named by `OF`; empty means every relation of the query level is locked.
+fn check_lockable_relations(range_table: &[RangeEntry], of: &[u32]) -> Result<()> {
+    for (i, entry) in range_table.iter().enumerate() {
+        if !of.is_empty() && !of.contains(&(i as u32 + 1)) {
+            continue;
+        }
+        if let RangeKind::Relation { name, rel_kind, .. } = &entry.kind {
+            let what = match rel_kind {
+                RelKind::MatView => "materialized view",
+                RelKind::Sequence => "sequence",
+                _ => continue,
+            };
+            return Err(PgError::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("cannot lock rows in {what} \"{name}\""),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// PG `CheckSelectLocking`: which SELECT features forbid `FOR UPDATE` / `FOR SHARE`.
@@ -643,5 +775,47 @@ mod tests {
         assert!(apply_output_aliases(&mut output, &[]).is_ok());
         let err = apply_output_aliases(&mut output, &["a".to_string()]).expect_err("more aliases than columns");
         assert_eq!(err.message, "WITH query has 0 columns available but 1 columns specified");
+    }
+
+    #[test]
+    fn with_ties_keyword_is_found_after_fetch() {
+        let text = "SELECT k FROM t ORDER BY k FETCH FIRST 1 ROW WITH TIES FOR UPDATE SKIP LOCKED";
+        let at = find_with_ties_keyword(text, text.find("ORDER BY").unwrap_or(0)).expect("WITH TIES present");
+        assert_eq!(&text[at..at + 4], "WITH");
+        assert_eq!(at + 1, 46);
+    }
+
+    #[test]
+    fn with_ties_keyword_skips_identifiers_that_contain_with() {
+        let text = "SELECT withdrawn FROM t ORDER BY withdrawn FETCH FIRST 1 ROW ONLY";
+        assert!(find_with_ties_keyword(text, 0).is_none());
+    }
+
+    fn rel_entry(name: &str, rel_kind: RelKind) -> RangeEntry {
+        RangeEntry {
+            kind: RangeKind::Relation {
+                oid: 16384,
+                schema: "public".to_string(),
+                name: name.to_string(),
+                rel_kind,
+                only: false,
+                pseudo: None,
+            },
+            alias: name.to_string(),
+            columns: Vec::new(),
+            lateral: false,
+            visible: true,
+            access: crate::ir::AccessNeeded::default(),
+        }
+    }
+
+    #[test]
+    fn row_lock_rejects_matview_but_allows_plain_reference() {
+        let range = vec![rel_entry("t", RelKind::Table), rel_entry("mv", RelKind::MatView)];
+        // Unrestricted FOR SHARE locks every relation of the level, including the matview.
+        assert!(check_lockable_relations(&range, &[]).is_err());
+        // OF restricted to the table leaves the matview as a plain reference.
+        assert!(check_lockable_relations(&range, &[1]).is_ok());
+        assert!(check_lockable_relations(&range, &[2]).is_err());
     }
 }

@@ -642,6 +642,11 @@ fn missing_type_word(class: ObjClass) -> &'static str {
         ObjClass::Rewrite => "rule",
         ObjClass::Trigger => "trigger",
         ObjClass::Tablespace => "tablespace",
+        ObjClass::OpClass => "operator class",
+        ObjClass::OpFamily => "operator family",
+        ObjClass::AmOp => "operator of access method",
+        ObjClass::AmProc => "function of access method",
+        ObjClass::Conversion => "conversion",
     }
 }
 
@@ -803,7 +808,12 @@ fn identify(env: &CatalogEnv, addr: &ObjectAddress) -> Result<Option<Ident>> {
         | ObjClass::AccessMethod
         | ObjClass::Extension
         | ObjClass::Trigger
-        | ObjClass::Tablespace => Ok(None),
+        | ObjClass::Tablespace
+        | ObjClass::OpClass
+        | ObjClass::OpFamily
+        | ObjClass::AmOp
+        | ObjClass::AmProc
+        | ObjClass::Conversion => Ok(None),
     }
 }
 

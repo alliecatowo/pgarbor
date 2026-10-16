@@ -48,7 +48,7 @@
 use crate::catalog_data::BuiltinProc;
 use crate::compare::{pg_hash_bytes, pg_hash_bytes_extended, pg_hash_uint32, pg_hash_uint32_extended};
 use crate::context::FuncCtx;
-use crate::datum::{type_mismatch, Datum};
+use crate::datum::{type_mismatch, Datum, TypeId};
 use crate::func::{FuncImpl, ScalarFn};
 use crate::io;
 use crate::text::io::{bpchar_trimmed, truncate_name};
@@ -182,6 +182,7 @@ pub(crate) fn lookup(proc: &BuiltinProc) -> Option<FuncImpl> {
             "ascii" => ascii,
             "chr" => chr,
             "unistr" => unistr,
+            "unicode_normalize_func" => unicode_normalize_func,
             _ => return None,
         }
     };
@@ -837,6 +838,80 @@ fn translate(a: &[Datum], _ctx: &FuncCtx) -> Result<Datum> {
     Ok(Datum::Text(out))
 }
 
+/// `normalize(s, form)` (unicode_normalize_func). Only text made of ASCII and Hangul (which
+/// normalizes algorithmically, Unicode 3.12) is handled; anything else needs the Unicode
+/// decomposition tables and returns 0A000.
+fn unicode_normalize_func(a: &[Datum], _ctx: &FuncCtx) -> Result<Datum> {
+    const S_BASE: u32 = 0xAC00;
+    const L_BASE: u32 = 0x1100;
+    const V_BASE: u32 = 0x1161;
+    const T_BASE: u32 = 0x11A7;
+    const L_COUNT: u32 = 19;
+    const V_COUNT: u32 = 21;
+    const T_COUNT: u32 = 28;
+    const N_COUNT: u32 = V_COUNT * T_COUNT;
+    const S_COUNT: u32 = L_COUNT * N_COUNT;
+    let s = text_arg(a, 0)?;
+    let form = text_arg(a, 1)?;
+    let compose = if form.eq_ignore_ascii_case("NFC") || form.eq_ignore_ascii_case("NFKC") {
+        true
+    } else if form.eq_ignore_ascii_case("NFD") || form.eq_ignore_ascii_case("NFKD") {
+        false
+    } else {
+        return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid normalization form: {form}")));
+    };
+    if s.is_ascii() {
+        return Ok(Datum::Text(s.to_string()));
+    }
+    let hangul_only = s.chars().all(|c| {
+        let u = c as u32;
+        u < 0x80 || (0x1100..=0x11FF).contains(&u) || (S_BASE..S_BASE + S_COUNT).contains(&u)
+    });
+    if !hangul_only {
+        return Err(PgError::unimplemented("TYP-14", "function normalize for non-Hangul non-ASCII text"));
+    }
+    // Full decomposition.
+    let mut dec: Vec<u32> = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        let u = c as u32;
+        if (S_BASE..S_BASE + S_COUNT).contains(&u) {
+            let si = u - S_BASE;
+            dec.push(L_BASE + si / N_COUNT);
+            dec.push(V_BASE + (si % N_COUNT) / T_COUNT);
+            if si % T_COUNT != 0 {
+                dec.push(T_BASE + si % T_COUNT);
+            }
+        } else {
+            dec.push(u);
+        }
+    }
+    let out: Vec<u32> = if compose {
+        let mut res: Vec<u32> = Vec::with_capacity(dec.len());
+        for u in dec {
+            if let Some(&last) = res.last() {
+                if (L_BASE..L_BASE + L_COUNT).contains(&last) && (V_BASE..V_BASE + V_COUNT).contains(&u) {
+                    let n = res.len();
+                    res[n - 1] = S_BASE + ((last - L_BASE) * V_COUNT + (u - V_BASE)) * T_COUNT;
+                    continue;
+                }
+                if (S_BASE..S_BASE + S_COUNT).contains(&last)
+                    && (last - S_BASE) % T_COUNT == 0
+                    && (T_BASE + 1..T_BASE + T_COUNT).contains(&u)
+                {
+                    let n = res.len();
+                    res[n - 1] = last + (u - T_BASE);
+                    continue;
+                }
+            }
+            res.push(u);
+        }
+        res
+    } else {
+        dec
+    };
+    Ok(Datum::Text(out.into_iter().filter_map(char::from_u32).collect()))
+}
+
 fn text_reverse(a: &[Datum], _ctx: &FuncCtx) -> Result<Datum> {
     Ok(Datum::Text(text_arg(a, 0)?.chars().rev().collect()))
 }
@@ -1037,17 +1112,26 @@ fn unistr(a: &[Datum], _ctx: &FuncCtx) -> Result<Datum> {
     Ok(Datum::Text(unistr_impl(text_arg(a, 0)?)?))
 }
 
+/// `$n::text` as the SQL bodies of `textanycat`/`anytextcat` do: the output function, except that
+/// boolean has its own cast (`booltext`: `true` / `false`).
+fn cast_to_text(ctx: &FuncCtx, ty: TypeId, d: &Datum) -> Result<String> {
+    if let Datum::Bool(b) = d {
+        return Ok(if *b { "true" } else { "false" }.to_string());
+    }
+    io::output(&ctx.io_ctx(), ty, d)
+}
+
 /// SQL-language `textanycat` (oid 2003): `text || anynonarray`, the right side through its output
 /// function.
 fn textanycat(a: &[Datum], ctx: &FuncCtx) -> Result<Datum> {
     let head = text_arg(a, 0)?;
-    let tail = io::output(&ctx.io_ctx(), ctx.arg_type(1), datum_arg(a, 1)?)?;
+    let tail = cast_to_text(ctx, ctx.arg_type(1), datum_arg(a, 1)?)?;
     Ok(Datum::Text(format!("{head}{tail}")))
 }
 
 /// SQL-language `anytextcat` (oid 2004): `anynonarray || text`.
 fn anytextcat(a: &[Datum], ctx: &FuncCtx) -> Result<Datum> {
-    let head = io::output(&ctx.io_ctx(), ctx.arg_type(0), datum_arg(a, 0)?)?;
+    let head = cast_to_text(ctx, ctx.arg_type(0), datum_arg(a, 0)?)?;
     let tail = text_arg(a, 1)?;
     Ok(Datum::Text(format!("{head}{tail}")))
 }
@@ -1079,6 +1163,18 @@ mod tests {
 
     fn i(v: i32) -> Datum {
         Datum::Int4(v)
+    }
+
+    #[test]
+    fn normalize_hangul_compose_and_decompose() {
+        let tt = [TypeId::TEXT, TypeId::TEXT];
+        let nfc = |s: &str| call(4350, &[t(s), t("NFC")], &tt).ok();
+        assert_eq!(nfc("\u{1100}\u{1161}"), Some(t("\u{AC00}")));
+        assert_eq!(nfc("\u{AC00}\u{11A8}"), Some(t("\u{AC01}")));
+        assert_eq!(nfc("\u{AC00}\u{11A7}"), Some(t("\u{AC00}\u{11A7}")));
+        assert_eq!(call(4350, &[t("\u{AC01}"), t("NFD")], &tt).ok(), Some(t("\u{1100}\u{1161}\u{11A8}")));
+        assert_eq!(nfc(""), Some(t("")));
+        assert!(call(4350, &[t("x"), t("bogus")], &tt).is_err());
     }
 
     #[test]

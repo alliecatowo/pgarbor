@@ -868,6 +868,14 @@ impl<'a> CatalogTxn<'a> {
                 crate::depend::SharedDepKind::Acl => format!("privileges for {desc}"),
             });
         }
+        // `SHARED_DEPENDENCY_POLICY`: roles named in a policy's TO list.
+        for r in snap.user_relations() {
+            for p in &r.policies {
+                if p.roles.contains(&role) {
+                    lines.push(format!("target of policy {} on table {}", p.name, r.name));
+                }
+            }
+        }
         for m in self.data.memberships.values() {
             if m.grantor == role && m.role != role && m.member != role {
                 lines.push(format!(

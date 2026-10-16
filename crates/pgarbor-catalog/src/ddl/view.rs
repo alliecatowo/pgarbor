@@ -79,15 +79,15 @@ fn split_option(opt: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// Validate one view option and return `(name, canonical value)`. Booleans are stored as
-/// `true`/`false` (a bare name means `true`); `check_option` as `local`/`cascaded`.
+/// Validate one view option and return `(name, value)`. Booleans keep the text as written, like PG
+/// reloptions (a bare name means `true`); `check_option` as `local`/`cascaded`.
 /// Unknown names -> 22023 `unrecognized parameter`.
 fn normalize_view_option(name: &str, value: Option<&str>) -> Result<(String, String)> {
     match name {
         "security_barrier" | "security_invoker" => {
             let raw = value.unwrap_or("true");
             match parse_pg_bool(raw) {
-                Some(b) => Ok((name.to_string(), if b { "true" } else { "false" }.to_string())),
+                Some(_) => Ok((name.to_string(), raw.to_string())),
                 None => Err(PgError::new(
                     SqlState::INVALID_PARAMETER_VALUE,
                     format!("invalid value for boolean option \"{name}\": {raw}"),
@@ -362,6 +362,8 @@ impl<'a> CatalogTxn<'a> {
             replica_identity: if spec.materialized { ReplicaIdentity::Default } else { ReplicaIdentity::Nothing },
             row_security: false,
             force_row_security: false,
+            policies: Vec::new(),
+            rules: Vec::new(),
             view: Some(ViewDef {
                 query: Self::bind_self_deps(&spec.query, oid),
                 check_option,
@@ -563,6 +565,8 @@ mod tests {
         assert_eq!(e.message, "unrecognized parameter \"fillfactor\"");
         let ok = normalize_view_option("security_invoker", None).ok();
         assert_eq!(ok, Some(("security_invoker".to_string(), "true".to_string())));
+        let off = normalize_view_option("security_barrier", Some("off")).ok();
+        assert_eq!(off, Some(("security_barrier".to_string(), "off".to_string())));
     }
 
     #[test]
@@ -645,6 +649,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_, env) = testing::run(&mut kv, &env, |t| t.create_table(&table).map(|_| ()))?;
         let e = expect_err(testing::run(&mut kv, &env, |t| {

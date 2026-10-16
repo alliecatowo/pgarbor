@@ -512,6 +512,7 @@ mod tests {
             options: vec![],
             if_not_exists: false,
             inherits: vec![],
+            extra: Default::default(),
         }
     }
 

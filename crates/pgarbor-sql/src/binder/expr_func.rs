@@ -74,15 +74,16 @@ use pgarbor_types::resolve::func::{self, FuncCall, FuncCandidate, ResolvedFunc};
 use pgarbor_types::{Datum, TypeId};
 use sqlparser::ast::{
     CeilFloorKind, DateTimeField, DuplicateTreatment, Expr, Function, FunctionArg, FunctionArgExpr,
-    FunctionArgumentClause, FunctionArguments, TrimWhereField, Value,
+    FunctionArgumentClause, FunctionArguments, ObjectName, SelectItemQualifiedWildcardKind, TrimWhereField, Value,
 };
 
 use super::context::{Binder, BoundArg, ExprCtx};
 use super::coerce;
-use super::expr::{bind_arg, bind_expr};
+use super::expr::{bind_arg, bind_expr, collate_keyword_pos};
 use super::expr_agg;
 use super::expr_misc;
 use super::expr_sublink;
+use super::{scope, target};
 use crate::diag::{self, ExprClause};
 use crate::ir::{ArrayExpr, BoundExpr, CoercionForm, ExprKind, FuncCallExpr, SqlValueOp};
 
@@ -222,6 +223,10 @@ fn split_defaults(text: &str) -> Vec<String> {
 
 /// Bind `Expr::Function` (module docs steps 1-7).
 pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<BoundExpr> {
+    // SQL/JSON constructor syntax (`JSON_OBJECT(k : v)`, `JSON_ARRAYAGG(..)`, ...) is rewritten first.
+    if let Some(e) = super::expr_json::bind_json_constructor(b, f, ec)? {
+        return Ok(e);
+    }
     let qn = b.qual(&f.name)?;
     let pos = qn.pos;
     if let Some(cat) = &qn.catalog {
@@ -237,8 +242,34 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
         }
     }
     let name: String = qn.name.clone();
+    if let Some(construct) = name.strip_prefix(crate::parser::XML_UNSUPPORTED_MARKER) {
+        let err = PgError::unimplemented("SQL-10", format!("{} (XML) expression", construct.to_ascii_uppercase()));
+        return Err(diag::with_position(err, pos));
+    }
     let schema: Option<&str> = qn.schema.as_deref();
     let qdisp: String = qn.display();
+
+    // `normalize(s, NFC)`: the grammar's unicode_normal_form keyword becomes a text constant.
+    if name == "normalize" && (qn.schema.is_none() || qn.schema.as_deref() == Some(PG_CATALOG)) {
+        if let FunctionArguments::List(list) = &f.args {
+            if let [first, FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Identifier(id)))] = list.args.as_slice() {
+                let upper = id.value.to_ascii_uppercase();
+                if id.quote_style.is_none() && matches!(upper.as_str(), "NFC" | "NFD" | "NFKC" | "NFKD") {
+                    let mut rewritten = f.clone();
+                    if let FunctionArguments::List(l) = &mut rewritten.args {
+                        l.args = vec![
+                            first.clone(),
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Value(sqlparser::ast::ValueWithSpan {
+                                value: Value::SingleQuotedString(upper),
+                                span: id.span,
+                            }))),
+                        ];
+                    }
+                    return bind_function_call(b, &rewritten, ec);
+                }
+            }
+        }
+    }
 
     // Step 2: special names (no function lookup, no OVER/FILTER/WITHIN GROUP decoration).
     let special_schema = qn.schema.is_none() || qn.schema.as_deref() == Some(PG_CATALOG);
@@ -274,17 +305,24 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
 
     // Step 4: resolve.
     let arg_oids: Vec<Oid> = args.iter().map(|a| a.ty().oid).collect();
+    // PG `func_get_detail`: a one-argument call whose name is a type, and that matches no candidate
+    // exactly, is a type coercion (`int4('12')`), tried before overload resolution.
+    if args.len() == 1 && names.iter().all(|n| n.is_none()) && !cands.iter().any(|c| c.arg_types == arg_oids) {
+        if let Some(cast) = function_style_cast(b, schema, &name, &args[0])? {
+            return Ok(cast);
+        }
+    }
     let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), variadic_kw, pos) {
         Ok(r) => r,
-        Err(e) => {
-            if e.sqlstate == SqlState::UNDEFINED_FUNCTION && args.len() == 1 && names.iter().all(|n| n.is_none()) {
-                if let Some(cast) = function_style_cast(b, schema, &name, &args[0])? {
-                    return Ok(cast);
-                }
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(misplaced_order_by(e, f)),
     };
+
+    // PG `assign_collations_walker`: the arguments of one call merge their collations, and two
+    // different explicit collations conflict (42P21). Ordered-set aggregates (WITHIN GROUP) merge
+    // their aggregated arguments differently, so only plain calls are checked here.
+    if f.within_group.is_empty() {
+        check_argument_collations(b, f, &args)?;
+    }
 
     // Step 5: kind dispatch.
     if variadic_kw && matches!(resolved.kind, ProcKind::Aggregate | ProcKind::Window) {
@@ -594,6 +632,9 @@ pub fn bind_special_syntax(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<Boun
             let mut args = vec![bind_arg(b, expr, ec)?];
             if let Some(from) = substring_from {
                 args.push(bind_arg(b, from, ec)?);
+            } else if substring_for.is_some() {
+                // gram.y `substr_list: a_expr FOR a_expr` is `substring(a, 1, b)`.
+                args.push(BoundArg::new(BoundExpr::constant(Datum::Int4(1), TypeId::INT4), pos));
             }
             if let Some(for_expr) = substring_for {
                 args.push(bind_arg(b, for_expr, ec)?);
@@ -733,6 +774,47 @@ fn plain_exprs(f: &Function, pos: Option<u32>) -> Result<Vec<Expr>> {
     Ok(out)
 }
 
+/// `t.*` as a call argument: the whole-row reference to `t` (PG `transformColumnRef`, `A_Star` after
+/// a relation name). An unknown `t` reports the PG missing-FROM-entry error.
+fn whole_row_arg(b: &mut Binder, name: &ObjectName) -> Result<BoundArg> {
+    let q = b.qual(name)?;
+    if q.schema.is_none() {
+        if let Some(row) = scope::whole_row(b, &q.name, q.pos)? {
+            return Ok(BoundArg::new(row.expr, q.pos));
+        }
+    }
+    scope::expand_star(b, Some(&q), q.pos)?;
+    Err(PgError::unimplemented("SQL-12", "schema-qualified whole-row reference as a function argument"))
+}
+
+/// `ROW(..)`: like [`plain_exprs`], but `t.*` arguments expand to the columns of `t`
+/// (PG `transformExpressionList` expands `A_Star` references for a row constructor).
+fn bind_row_call(b: &mut Binder, f: &Function, pos: Option<u32>, ec: ExprCtx) -> Result<BoundExpr> {
+    let list = match &f.args {
+        FunctionArguments::None => return expr_misc::row_from_args(b, Vec::new()),
+        FunctionArguments::Subquery(_) => return Err(diag::syntax("syntax error", pos)),
+        FunctionArguments::List(list) => list,
+    };
+    if list.duplicate_treatment.is_some() || !list.clauses.is_empty() || !f.within_group.is_empty() {
+        return Err(diag::syntax("syntax error", pos));
+    }
+    let mut out: Vec<BoundArg> = Vec::with_capacity(list.args.len());
+    for a in &list.args {
+        match a {
+            FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => out.push(bind_arg(b, e, ec)?),
+            FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(name)) => {
+                let apos = b.qual(name)?.pos;
+                let kind = SelectItemQualifiedWildcardKind::ObjectName(name.clone());
+                for (_, e) in target::bind_qualified_star(b, &kind, ec, apos)? {
+                    out.push(BoundArg::new(e, apos));
+                }
+            }
+            _ => return Err(diag::syntax("syntax error", pos)),
+        }
+    }
+    expr_misc::row_from_args(b, out)
+}
+
 /// Special names handled without function lookup (module docs step 2). `None` when `name` is an
 /// ordinary function name.
 fn bind_special_function(b: &mut Binder, name: &str, f: &Function, pos: Option<u32>, ec: ExprCtx) -> Result<Option<BoundExpr>> {
@@ -781,11 +863,17 @@ fn bind_special_function(b: &mut Binder, name: &str, f: &Function, pos: Option<u
             }
             bind_sql_value_function(b, op, None, pos)?
         }
-        "grouping" => expr_agg::bind_grouping(b, f, ec)?,
-        "row" => {
+        // `COLLATION FOR (expr)` reaches here as the call `pg_collation_for(expr)` (parser::collation_for_as_function).
+        "pg_collation_for" => {
             let exprs = plain_exprs(f, pos)?;
-            expr_misc::bind_row(b, &exprs, ec)?
+            let [arg] = exprs.as_slice() else {
+                return Err(diag::syntax("syntax error", pos));
+            };
+            expr_misc::bind_collation_for(b, arg, pos, ec)?
         }
+        "grouping" => expr_agg::bind_grouping(b, f, ec)?,
+        "merge_action" => super::merge::bind_merge_action(b, f, pos)?,
+        "row" => bind_row_call(b, f, pos, ec)?,
         "array" => match &f.args {
             FunctionArguments::Subquery(q) => expr_sublink::bind_array_subquery(b, q, ec)?,
             _ => return Ok(None),
@@ -892,6 +980,14 @@ fn bind_call_args(b: &mut Binder, f: &Function, ec: ExprCtx, pos: Option<u32>) -
                         args.push(arg);
                         names.push(None);
                     }
+                    FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(name)) => {
+                        if seen_named {
+                            return Err(diag::syntax("positional argument cannot follow named argument", pos));
+                        }
+                        let arg = whole_row_arg(b, name)?;
+                        args.push(arg);
+                        names.push(None);
+                    }
                     FunctionArg::Named { name, arg: FunctionArgExpr::Expr(e), .. } => {
                         seen_named = true;
                         let n = b.ident(name);
@@ -925,6 +1021,72 @@ fn bind_call_args(b: &mut Binder, f: &Function, ec: ExprCtx, pos: Option<u32>) -
     Ok((args, names))
 }
 
+/// Explicit collation of a call argument (PG `COLLATE_EXPLICIT` strength): the `COLLATE` clause
+/// itself. Explicit collations flowing out of other operators and functions are not tracked yet.
+fn explicit_collation(e: &BoundExpr) -> Option<Oid> {
+    match &e.kind {
+        ExprKind::Collate(c) => Some(c.collation),
+        _ => None,
+    }
+}
+
+/// PG `merge_collation_state` over the arguments of one call: two different explicit collations
+/// conflict (42P21 `collation mismatch between explicit collations "a" and "b"`), reported at the
+/// `COLLATE` clause of the second one.
+fn check_argument_collations(b: &Binder, f: &Function, args: &[BoundArg]) -> Result<()> {
+    let mut first: Option<Oid> = None;
+    for (i, arg) in args.iter().enumerate() {
+        let Some(coll) = explicit_collation(&arg.expr) else {
+            continue;
+        };
+        let Some(prev) = first else {
+            first = Some(coll);
+            continue;
+        };
+        if prev == coll {
+            continue;
+        }
+        let msg = format!(
+            "collation mismatch between explicit collations \"{}\" and \"{}\"",
+            builtin_collation_name(prev)?,
+            builtin_collation_name(coll)?
+        );
+        let pos = collate_clause_pos(b, f, i).or(arg.pos);
+        return Err(diag::with_position(PgError::new(SqlState::COLLATION_MISMATCH, msg), pos));
+    }
+    Ok(())
+}
+
+/// Name of a builtin collation OID for diagnostics.
+pub(super) fn builtin_collation_name(oid: Oid) -> Result<&'static str> {
+    pgarbor_catalog::builtin::builtin_collation(oid)
+        .map(|c| c.name)
+        .ok_or_else(|| PgError::unimplemented("SQL-43", "collation name display for this collation"))
+}
+
+/// Position of the `COLLATE` clause of call argument `index`, when that argument is written
+/// `expr COLLATE name` (arguments past the positional list, such as WITHIN GROUP keys, have none).
+fn collate_clause_pos(b: &Binder, f: &Function, index: usize) -> Option<u32> {
+    let FunctionArguments::List(list) = &f.args else {
+        return None;
+    };
+    let arg = list.args.get(index)?;
+    let e = match arg {
+        FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => e,
+        FunctionArg::Named { arg: FunctionArgExpr::Expr(e), .. } => e,
+        FunctionArg::ExprNamed { arg: FunctionArgExpr::Expr(e), .. } => e,
+        _ => return None,
+    };
+    let mut inner: &Expr = e;
+    while let Expr::Nested(x) = inner {
+        inner = &**x;
+    }
+    match inner {
+        Expr::Collate { expr, .. } => collate_keyword_pos(b.src, expr),
+        _ => None,
+    }
+}
+
 /// Overload resolution against an already listed candidate set.
 fn resolve_with(
     b: &Binder,
@@ -953,6 +1115,28 @@ fn function_style_cast(b: &mut Binder, schema: Option<&str>, name: &str, arg: &B
         return Ok(None);
     };
     coerce::try_coerce(b, arg, TypeId::of(oid), CastContext::Explicit, CoercionForm::ExplicitCall)
+}
+
+/// PG `ParseFuncOrColumn`: an undefined aggregate call with more than one ORDER BY item is a
+/// misplaced ORDER BY (`string_agg(k ORDER BY k, ',')`), reported with its own HINT.
+fn misplaced_order_by(e: PgError, f: &Function) -> PgError {
+    let FunctionArguments::List(list) = &f.args else {
+        return e;
+    };
+    let order_items: usize = list
+        .clauses
+        .iter()
+        .map(|c| match c {
+            FunctionArgumentClause::OrderBy(items) => items.len(),
+            _ => 0,
+        })
+        .sum();
+    if e.sqlstate == SqlState::UNDEFINED_FUNCTION && order_items > 1 && f.within_group.is_empty() {
+        return e.with_hint(
+            "No aggregate function matches the given name and argument types. Perhaps you misplaced ORDER BY; ORDER BY must appear after all regular arguments of the aggregate.",
+        );
+    }
+    e
 }
 
 /// PG `check_srf_call_placement` for a call that returns a set.

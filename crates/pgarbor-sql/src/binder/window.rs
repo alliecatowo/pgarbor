@@ -5,7 +5,7 @@
 //! * `bind_window_clause(b, named)` binds `WINDOW w AS (...), v AS (w ORDER BY ...)` into
 //!   `QueryScope::windows` (named entries, in definition order). Duplicate names: 42P20 `window
 //!   "w" is already defined`. References to later-defined names: 42704 `window "x" does not exist`.
-//! * `bind_window_spec(b, over)` is called for each `OVER` (`WindowType::WindowSpec(spec)` or
+//! * `bind_window_spec(b, over, call_pos)` is called for each `OVER` (`WindowType::WindowSpec(spec)` or
 //!   `NamedWindow(ident)`) and returns an index into `QueryScope::windows`, de-duplicating
 //!   structurally equal definitions (PG shares one `WindowClause` between identical OVER clauses).
 //!   `OVER w` with no changes reuses window `w`. `OVER (w ORDER BY ...)` copies `w` and adds ordering:
@@ -43,6 +43,9 @@ use sqlparser::ast::{
     WindowFrameUnits, WindowSpec, WindowType,
 };
 
+use sqlparser::dialect::PostgreSqlDialect;
+use sqlparser::tokenizer::{Token, Tokenizer};
+
 use super::coerce::{coerce_to_specific, resolve_unknown_output};
 use super::context::{Binder, BoundArg, ExprCtx};
 use super::expr::bind_expr;
@@ -52,6 +55,173 @@ use crate::ir::{BoundExpr, FrameBound, FrameExclusion, FrameUnits, SortExpr, Win
 /// Window-level error (SQLSTATE 42P20 unless given) with an optional position.
 fn werr(state: SqlState, msg: impl Into<String>, pos: Option<u32>) -> PgError {
     diag::with_position(PgError::new(state, msg), pos)
+}
+
+/// Where a window specification sits in the query text. PG reports specification errors at the
+/// specification's `(` (`WindowDef.location`, gram.y `window_specification`).
+#[derive(Clone, Copy)]
+enum SpecSite {
+    /// Inline `OVER (...)` of the window call whose name starts at this position.
+    Over(Option<u32>),
+    /// `WINDOW name AS (...)`, with the position of `name`.
+    Def(Option<u32>),
+}
+
+/// Source positions of one specification's parts.
+#[derive(Default)]
+struct SpecPos {
+    /// The opening `(`.
+    spec: Option<u32>,
+    /// First token of the start bound (the frame keyword's operand: keyword or offset expression).
+    frame_start: Option<u32>,
+    /// First token of the end bound of a `BETWEEN` frame.
+    frame_end: Option<u32>,
+}
+
+fn is_word(tok: Option<&Token>, kw: &str) -> bool {
+    matches!(tok, Some(Token::Word(w)) if w.quote_style.is_none() && w.value.eq_ignore_ascii_case(kw))
+}
+
+/// Index of the `(` that opens the specification of `site`.
+fn spec_open_index(toks: &[(&Token, Option<u32>)], site: SpecSite) -> Option<usize> {
+    match site {
+        SpecSite::Over(call) => {
+            let call = call?;
+            let from = toks.iter().position(|(_, p)| *p == Some(call))?;
+            // The call's own parentheses and FILTER come first; the first OVER outside them owns the spec.
+            let mut depth = 0i32;
+            for i in from..toks.len() {
+                match toks[i].0 {
+                    Token::LParen => depth += 1,
+                    Token::RParen => depth -= 1,
+                    Token::Word(_) if depth == 0 && is_word(Some(toks[i].0), "OVER") => {
+                        return if matches!(toks.get(i + 1).map(|t| t.0), Some(Token::LParen)) { Some(i + 1) } else { None };
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        SpecSite::Def(name) => {
+            let name = name?;
+            let name_idx = toks.iter().position(|(_, p)| *p == Some(name))?;
+            (name_idx + 1..toks.len()).find(|&i| matches!(toks[i].0, Token::LParen))
+        }
+    }
+}
+
+/// Source positions of a specification's `(` and frame bounds. The AST keeps no spans for
+/// `WindowSpec` or frame bounds, so the query text is tokenized again. Runs only to format errors.
+fn spec_pos(b: &Binder, site: SpecSite) -> SpecPos {
+    let dialect = PostgreSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, b.src.text()).tokenize_with_location() else {
+        return SpecPos::default();
+    };
+    let toks: Vec<(&Token, Option<u32>)> = tokens
+        .iter()
+        .filter(|t| !matches!(t.token, Token::Whitespace(_)))
+        .map(|t| (&t.token, b.src.pos_of_span(t.span)))
+        .collect();
+    let Some(open) = spec_open_index(&toks, site) else {
+        return SpecPos::default();
+    };
+    let mut out = SpecPos { spec: toks[open].1, ..SpecPos::default() };
+    // Frame keyword at depth 1 of the specification: the start bound follows it (after BETWEEN when
+    // present); the end bound follows the AND at depth 1.
+    let mut depth = 0i32;
+    for i in open..toks.len() {
+        match toks[i].0 {
+            Token::LParen => depth += 1,
+            Token::RParen => depth -= 1,
+            Token::Word(w) if depth == 1 && w.quote_style.is_none() && matches!(w.value.to_ascii_uppercase().as_str(), "ROWS" | "RANGE" | "GROUPS") => {
+                let mut start = i + 1;
+                if is_word(toks.get(start).map(|t| t.0), "BETWEEN") {
+                    start += 1;
+                    let mut d = 1i32;
+                    for j in start..toks.len() {
+                        match toks[j].0 {
+                            Token::LParen => d += 1,
+                            Token::RParen => d -= 1,
+                            Token::Word(_) if d == 1 && is_word(Some(toks[j].0), "AND") => {
+                                out.frame_end = toks.get(j + 1).and_then(|t| t.1);
+                                break;
+                            }
+                            _ => {}
+                        }
+                        if d == 0 {
+                            break;
+                        }
+                    }
+                }
+                out.frame_start = toks.get(start).and_then(|t| t.1);
+                return out;
+            }
+            _ => {}
+        }
+        if depth == 0 && i > open {
+            break;
+        }
+    }
+    out
+}
+
+/// The `EXCLUDE` clause of the specification at `site` (removed from the token stream before
+/// sqlparser runs, see `parser::strip_frame_exclusion`; read back from the query text here).
+fn frame_exclusion(b: &Binder, site: SpecSite) -> FrameExclusion {
+    if !b.src.text().to_ascii_lowercase().contains("exclude") {
+        return FrameExclusion::NoOthers;
+    }
+    let dialect = PostgreSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, b.src.text()).tokenize_with_location() else {
+        return FrameExclusion::NoOthers;
+    };
+    let toks: Vec<(&Token, Option<u32>)> = tokens
+        .iter()
+        .filter(|t| !matches!(t.token, Token::Whitespace(_)))
+        .map(|t| (&t.token, b.src.pos_of_span(t.span)))
+        .collect();
+    let Some(open) = spec_open_index(&toks, site) else {
+        return FrameExclusion::NoOthers;
+    };
+    let sig: Vec<&Token> = toks[open..].iter().map(|(t, _)| *t).filter(|t| !matches!(t, Token::Whitespace(_))).collect();
+    let mut depth = 0i32;
+    for k in 0..sig.len() {
+        match sig[k] {
+            Token::LParen => depth += 1,
+            Token::RParen => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Token::Word(_) if depth == 1 && is_word(Some(sig[k]), "EXCLUDE") => {
+                let w = |n: usize| sig.get(k + n).copied();
+                return if is_word(w(1), "CURRENT") {
+                    FrameExclusion::CurrentRow
+                } else if is_word(w(1), "GROUP") {
+                    FrameExclusion::Group
+                } else if is_word(w(1), "TIES") {
+                    FrameExclusion::Ties
+                } else {
+                    FrameExclusion::NoOthers
+                };
+            }
+            _ => {}
+        }
+    }
+    FrameExclusion::NoOthers
+}
+
+/// Specification-level error (42P20 unless given), placed at the specification's `(`.
+fn spec_err(b: &Binder, site: SpecSite, state: SqlState, msg: impl Into<String>) -> PgError {
+    werr(state, msg, spec_pos(b, site).spec)
+}
+
+/// Frame-shape error placed at the frame bound it concerns (gram.y reports at `@1`, `@2` or `@4`).
+fn frame_err(b: &Binder, site: SpecSite, e: PgError) -> PgError {
+    let at_start = e.message.starts_with("frame start cannot") || e.message.ends_with("cannot end with current row");
+    let p = spec_pos(b, site);
+    diag::with_position(e, if at_start { p.frame_start } else { p.frame_end })
 }
 
 /// Index of the named window `name` in the innermost scope (only definitions bound so far).
@@ -68,7 +238,8 @@ pub fn bind_window_clause(b: &mut Binder, named: &[NamedWindowDefinition]) -> Re
         let name_pos = b.pos_span(name_ident.span);
         let name = b.ident(name_ident);
         if find_named_index(b, &name)?.is_some() {
-            return Err(werr(SqlState::WINDOWING_ERROR, format!("window \"{name}\" is already defined"), name_pos));
+            let msg = format!("window \"{name}\" is already defined");
+            return Err(spec_err(b, SpecSite::Def(name_pos), SqlState::WINDOWING_ERROR, msg));
         }
         let spec = match expr {
             NamedWindowExpr::WindowSpec(spec) => spec,
@@ -77,7 +248,7 @@ pub fn bind_window_clause(b: &mut Binder, named: &[NamedWindowDefinition]) -> Re
                 return Err(diag::syntax_error_near(&ref_ident.value, b.pos_span(ref_ident.span)));
             }
         };
-        let wd = resolve_spec(b, spec, Some(name), name_pos)?;
+        let wd = resolve_spec(b, spec, Some(name), SpecSite::Def(name_pos))?;
         b.scope_mut()?.windows.push(wd);
     }
     Ok(())
@@ -87,7 +258,9 @@ pub fn bind_window_clause(b: &mut Binder, named: &[NamedWindowDefinition]) -> Re
 ///
 /// `OVER w` returns the index of the named definition. An inline `OVER (...)` is merged and
 /// de-duplicated against existing definitions (structural equality, name ignored).
-pub fn bind_window_spec(b: &mut Binder, over: &WindowType) -> Result<usize> {
+/// `call_pos` is the position of the window call (its function name), which locates the `OVER (`
+/// for error positions.
+pub fn bind_window_spec(b: &mut Binder, over: &WindowType, call_pos: Option<u32>) -> Result<usize> {
     match over {
         WindowType::NamedWindow(ident) => {
             let name = b.ident(ident);
@@ -98,11 +271,7 @@ pub fn bind_window_spec(b: &mut Binder, over: &WindowType) -> Result<usize> {
             }
         }
         WindowType::WindowSpec(spec) => {
-            let ref_pos = match &spec.window_name {
-                Some(ident) => b.pos_span(ident.span),
-                None => None,
-            };
-            let wd = resolve_spec(b, spec, None, ref_pos)?;
+            let wd = resolve_spec(b, spec, None, SpecSite::Over(call_pos))?;
             let scope = b.scope_mut()?;
             if let Some(idx) = scope.windows.iter().position(|w| same_window(w, &wd)) {
                 return Ok(idx);
@@ -181,17 +350,18 @@ fn frame_units(units: &WindowFrameUnits) -> FrameUnits {
 /// Merge one window specification (PG `transformWindowDefinitions` for a single entry).
 ///
 /// `name` is `Some` for `WINDOW name AS (...)`, `None` for an inline `OVER (...)`.
-fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, name_pos: Option<u32>) -> Result<WindowDef> {
+fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, site: SpecSite) -> Result<WindowDef> {
     let frame: Option<&WindowFrame> = spec.window_frame.as_ref();
     if let Some(f) = frame {
-        check_frame_shape(&f.start_bound, f.end_bound.as_ref())?;
+        if let Err(e) = check_frame_shape(&f.start_bound, f.end_bound.as_ref()) {
+            return Err(frame_err(b, site, e));
+        }
     }
 
     // Referenced window (`OVER (w ...)`, `WINDOW v AS (w ...)`): must be defined earlier.
-    let refwc: Option<(String, Option<u32>, WindowDef)> = match &spec.window_name {
+    let refwc: Option<(String, WindowDef)> = match &spec.window_name {
         Some(ref_ident) => {
             let ref_name = b.ident(ref_ident);
-            let ref_pos = b.pos_span(ref_ident.span);
             match find_named_index(b, &ref_name)? {
                 Some(i) => {
                     let wd = b
@@ -200,10 +370,11 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, name_po
                         .get(i)
                         .cloned()
                         .ok_or_else(|| PgError::internal("window index out of range"))?;
-                    Some((ref_name, ref_pos, wd))
+                    Some((ref_name, wd))
                 }
                 None => {
-                    return Err(werr(SqlState::UNDEFINED_OBJECT, format!("window \"{ref_name}\" does not exist"), ref_pos));
+                    let msg = format!("window \"{ref_name}\" does not exist");
+                    return Err(spec_err(b, site, SqlState::UNDEFINED_OBJECT, msg));
                 }
             }
         }
@@ -223,20 +394,14 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, name_po
     let has_own_order = !spec.order_by.is_empty();
 
     let (partition_by, order_by) = match &refwc {
-        Some((ref_name, ref_pos, rdef)) => {
+        Some((ref_name, rdef)) => {
             if has_own_partition {
-                return Err(werr(
-                    SqlState::WINDOWING_ERROR,
-                    format!("cannot override PARTITION BY clause of window \"{ref_name}\""),
-                    *ref_pos,
-                ));
+                let msg = format!("cannot override PARTITION BY clause of window \"{ref_name}\"");
+                return Err(spec_err(b, site, SqlState::WINDOWING_ERROR, msg));
             }
             if has_own_order && !rdef.order_by.is_empty() {
-                return Err(werr(
-                    SqlState::WINDOWING_ERROR,
-                    format!("cannot override ORDER BY clause of window \"{ref_name}\""),
-                    *ref_pos,
-                ));
+                let msg = format!("cannot override ORDER BY clause of window \"{ref_name}\"");
+                return Err(spec_err(b, site, SqlState::WINDOWING_ERROR, msg));
             }
             let order = if has_own_order { own_order } else { rdef.order_by.clone() };
             (rdef.partition_by.clone(), order)
@@ -244,13 +409,13 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, name_po
         None => (own_partition, own_order),
     };
 
-    if let Some((ref_name, ref_pos, rdef)) = &refwc {
+    if let Some((ref_name, rdef)) = &refwc {
         if !rdef.frame_is_default {
             let msg = format!("cannot copy window \"{ref_name}\" because it has a frame clause");
             if name.is_some() || has_own_order || frame.is_some() {
-                return Err(werr(SqlState::WINDOWING_ERROR, msg, *ref_pos));
+                return Err(spec_err(b, site, SqlState::WINDOWING_ERROR, msg));
             }
-            return Err(werr(SqlState::WINDOWING_ERROR, msg, *ref_pos).with_hint("Omit the parentheses in this OVER clause."));
+            return Err(spec_err(b, site, SqlState::WINDOWING_ERROR, msg).with_hint("Omit the parentheses in this OVER clause."));
         }
     }
 
@@ -262,15 +427,12 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, name_po
         None => false,
     };
     if has_range_offset && order_by.len() != 1 {
-        return Err(werr(
-            SqlState::WINDOWING_ERROR,
-            "RANGE with offset PRECEDING/FOLLOWING requires exactly one ORDER BY column",
-            name_pos,
-        ));
+        let msg = "RANGE with offset PRECEDING/FOLLOWING requires exactly one ORDER BY column";
+        return Err(spec_err(b, site, SqlState::WINDOWING_ERROR, msg));
     }
     let is_groups = frame.map_or(false, |f| matches!(f.units, WindowFrameUnits::Groups));
     if is_groups && order_by.is_empty() {
-        return Err(werr(SqlState::WINDOWING_ERROR, "GROUPS mode requires an ORDER BY clause", name_pos));
+        return Err(spec_err(b, site, SqlState::WINDOWING_ERROR, "GROUPS mode requires an ORDER BY clause"));
     }
 
     let (units, start, end, frame_is_default) = match frame {
@@ -292,6 +454,8 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, name_po
         }
     };
 
+    let exclusion = if frame_is_default { FrameExclusion::NoOthers } else { frame_exclusion(b, site) };
+
     Ok(WindowDef {
         name,
         partition_by,
@@ -299,8 +463,7 @@ fn resolve_spec(b: &mut Binder, spec: &WindowSpec, name: Option<String>, name_po
         units,
         start,
         end,
-        // sqlparser 0.63 has no EXCLUDE field in `WindowFrame`; the default is used.
-        exclusion: FrameExclusion::NoOthers,
+        exclusion,
         frame_is_default,
     })
 }

@@ -137,6 +137,7 @@ pub fn bind_assignments(b: &mut Binder, assignments: &[Assignment], target: &Tar
     for a in assignments {
         match &a.target {
             AssignmentTarget::ColumnName(name) => {
+                reject_indirected_target(name)?;
                 let col = resolve_set_column(b, target, target_rt, name)?;
                 claim(&mut seen, &col)?;
                 let is_default = is_default_keyword(&a.value);
@@ -170,11 +171,24 @@ pub fn bind_returning(b: &mut Binder, items: Option<&[SelectItem]>) -> Result<Ve
         None => return Ok(Vec::new()),
     };
     let srf_before = b.scope()?.has_target_srfs;
-    let entries = bind_target_list(b, items, ExprCtx::returning())?;
+    let entries = bind_target_list(b, items, ExprCtx::returning(), false).map_err(returning_old_new)?;
     if !srf_before && b.scope()?.has_target_srfs {
         return Err(diag::srf_not_allowed(ExprClause::Other("RETURNING"), None));
     }
     Ok(entries)
+}
+
+/// PG 18 RETURNING may name the OLD and NEW row versions, which this binder does not provide yet
+/// (no such range entries). Their missing-FROM-entry error becomes a leased 0A000 instead.
+fn returning_old_new(e: PgError) -> PgError {
+    let named = e.sqlstate == SqlState::UNDEFINED_TABLE
+        && (e.message == "missing FROM-clause entry for table \"old\""
+            || e.message == "missing FROM-clause entry for table \"new\"");
+    if named {
+        PgError::unimplemented("SQL-28", "RETURNING OLD and NEW row references")
+    } else {
+        e
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -195,16 +209,13 @@ fn bind_update_in_scope(b: &mut Binder, u: &Update, name: &ObjectName, alias: Op
     };
     let returning = bind_returning(b, u.returning.as_deref())?;
     let range_table = std::mem::take(&mut b.scope_mut()?.range_table);
-    Ok(BoundStatement::Update(Box::new(BoundUpdate {
-        target,
-        target_rt,
-        range_table,
-        ctes: Vec::new(),
-        from,
-        assignments,
-        where_,
-        returning,
-    })))
+    let mut upd = BoundUpdate { target, target_rt, range_table, ctes: Vec::new(), from, assignments, where_, returning };
+    if upd.target.kind == pgarbor_catalog::model::RelKind::View {
+        super::view_dml::rewrite_update(b, &mut upd)?;
+    } else {
+        apply_rls(b, upd.target.oid, upd.target_rt, &upd.range_table, super::rls::RlsCmd::Update, &mut upd.where_, Some(&mut upd.target))?;
+    }
+    Ok(BoundStatement::Update(Box::new(upd)))
 }
 
 fn bind_delete_in_scope(b: &mut Binder, d: &Delete, name: &ObjectName, alias: Option<&Ident>) -> Result<BoundStatement> {
@@ -219,15 +230,67 @@ fn bind_delete_in_scope(b: &mut Binder, d: &Delete, name: &ObjectName, alias: Op
     };
     let returning = bind_returning(b, d.returning.as_deref())?;
     let range_table = std::mem::take(&mut b.scope_mut()?.range_table);
-    Ok(BoundStatement::Delete(Box::new(BoundDelete {
-        target,
-        target_rt,
-        range_table,
-        ctes: Vec::new(),
-        using,
-        where_,
-        returning,
-    })))
+    let mut del = BoundDelete { target, target_rt, range_table, ctes: Vec::new(), using, where_, returning };
+    if del.target.kind == pgarbor_catalog::model::RelKind::View {
+        super::view_dml::rewrite_delete(b, &mut del)?;
+    } else {
+        apply_rls(b, del.target.oid, del.target_rt, &del.range_table, super::rls::RlsCmd::Delete, &mut del.where_, None)?;
+    }
+    Ok(BoundStatement::Delete(Box::new(del)))
+}
+
+/// Row-level security for an UPDATE/DELETE target (binder::rls): the policy quals go in front of the
+/// WHERE clause; UPDATE also gets its WITH CHECK options.
+fn apply_rls(
+    b: &mut Binder,
+    table: pgarbor_common::Oid,
+    target_rt: u32,
+    range_table: &[RangeEntry],
+    cmd: super::rls::RlsCmd,
+    where_: &mut Option<BoundExpr>,
+    target: Option<&mut TargetTable>,
+) -> Result<()> {
+    let env = b.env;
+    let Some(rel) = env.snapshot().relation(table) else { return Ok(()) };
+    let reads = range_table
+        .get((target_rt as usize).saturating_sub(1))
+        .is_some_and(|e| e.access.select || !e.access.select_cols.is_empty());
+    let quals = super::rls::target_quals(b, rel, cmd, reads)?;
+    if let Some(t) = target {
+        t.wco.extend(super::rls::target_wcos(b, rel, cmd, reads)?);
+    }
+    if quals.is_empty() {
+        return Ok(());
+    }
+    let shift = |e: BoundExpr| -> Result<BoundExpr> {
+        if target_rt == 1 {
+            return Ok(e);
+        }
+        e.transform(&mut |x: BoundExpr| -> Result<BoundExpr> {
+            if let ExprKind::Column(c) = &x.kind {
+                if c.levels_up == 0 && c.rt_index == 1 {
+                    return Ok(BoundExpr::column(0, target_rt, c.attnum, x.ty));
+                }
+            }
+            Ok(x)
+        })
+    };
+    let mut parts: Vec<BoundExpr> = Vec::with_capacity(quals.len() + 1);
+    for q in quals {
+        parts.push(shift(q)?);
+    }
+    if let Some(w) = where_.take() {
+        parts.push(w);
+    }
+    *where_ = Some(if parts.len() == 1 {
+        parts.remove(0)
+    } else {
+        BoundExpr::new(
+            ExprKind::Bool(Box::new(crate::ir::BoolExpr { op: crate::ir::BoolOp::And, args: parts })),
+            TypeId::BOOL,
+        )
+    });
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -260,6 +323,20 @@ impl SetCol {
     fn assign_target(&self) -> AssignTarget {
         AssignTarget { attnum: self.attnum, name: self.name.clone(), ty: self.ty }
     }
+}
+
+/// `SET a[2] = ..` / `SET c.f = ..`: the parser rewrites the indirection of a SET target into a trailing
+/// [`crate::parser::SUBSCRIPT_TARGET_MARKER`] part. Assigning into a subscript or field is not executed yet
+/// (amendment pgarbor-sql-01), so it fails here with 0A000 instead of resolving a qualified column name.
+fn reject_indirected_target(name: &ObjectName) -> Result<()> {
+    let marked = matches!(
+        name.0.last(),
+        Some(ObjectNamePart::Identifier(id)) if id.value == crate::parser::SUBSCRIPT_TARGET_MARKER
+    );
+    if marked {
+        return Err(PgError::unimplemented("SQL-14", "subscript or field assignment in UPDATE"));
+    }
+    Ok(())
 }
 
 /// Resolve one SET target name against the DML target (PG `transformUpdateTargetList`).
@@ -466,7 +543,7 @@ fn syntax_at(token: &str) -> PgError {
 
 /// The plain `name [AS alias]` target of UPDATE / DELETE; table functions, derived tables and
 /// other factors are 42601.
-fn plain_table_target(tf: &TableFactor) -> Result<(&ObjectName, Option<&Ident>)> {
+pub(super) fn plain_table_target(tf: &TableFactor) -> Result<(&ObjectName, Option<&Ident>)> {
     match tf {
         TableFactor::Table { name, alias, args: None, .. } => Ok((name, alias.as_ref().map(|a| &a.name))),
         _ => Err(syntax_at("(")),
@@ -551,6 +628,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_r, env2) = testing::run(&mut kv, &env, |t| {
             t.create_table(&spec)?;

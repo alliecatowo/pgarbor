@@ -58,18 +58,18 @@
 //! targets and `INSERT ... ON CONFLICT excluded`). [`apply_column_aliases`] applies alias lists.
 use pgarbor_catalog::model::RelKind;
 use pgarbor_catalog::{CatalogEnv, Relation};
-use pgarbor_common::{PgError, Result, SqlState};
+use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_types::catalog_data::builtin_proc;
 use pgarbor_types::{oids, TypeEnv, TypeId};
 use sqlparser::ast::{
-    Function, FunctionArg, FunctionArgExpr, FunctionArgumentList, FunctionArguments, Ident, ObjectName,
+    DataType, Expr, Function, FunctionArg, FunctionArgExpr, FunctionArgumentList, FunctionArguments, Ident, ObjectName,
     ObjectNamePart, Query, SetExpr, Statement, TableAlias, TableFactor, TableWithJoins,
 };
 
 use super::context::{Binder, ExprCtx};
 use super::{cte, expr_func, join, scope, select, types, values};
 use crate::diag;
-use crate::ir::{AccessNeeded, ExprKind, FromItem, OutputColumn, RangeColumn, RangeEntry, RangeFunction, RangeKind};
+use crate::ir::{AccessNeeded, BoundExpr, ExprKind, FromItem, OutputColumn, RangeColumn, RangeEntry, RangeFunction, RangeKind};
 use crate::names::QualName;
 use crate::parser;
 
@@ -145,6 +145,9 @@ pub fn bind_table_factor(b: &mut Binder, tf: &TableFactor, lateral_ok: bool) -> 
                 Some(fa) => {
                     if fa.settings.is_some() {
                         return Err(diag::unsupported_construct("SETTINGS in a table function", pos));
+                    }
+                    if is_marker_name(name, parser::ROWS_FROM_MARKER) {
+                        return bind_rows_from(b, fa.args.clone(), *with_ordinality, alias.as_ref());
                     }
                     bind_function_factor(b, name, fa.args.clone(), *with_ordinality, alias.as_ref())
                 }
@@ -356,6 +359,40 @@ fn bind_named_table(b: &mut Binder, name: &ObjectName, alias: Option<&TableAlias
     }
 
     let env: &CatalogEnv = b.env;
+    // `SELECT * FROM seq`: a sequence reads as a one-row relation (last_value, log_cnt, is_called).
+    if let Ok(Some(pgarbor_catalog::snapshot::ClassRef::Sequence(seq_oid))) = env.lookup_class(qn.schema.as_deref(), &qn.name) {
+        if let Some(seq) = env.snapshot().sequence(seq_oid) {
+            let schema = env
+                .snapshot()
+                .namespace(seq.namespace)
+                .map(|n| n.name.clone())
+                .ok_or_else(|| PgError::internal(format!("namespace of sequence \"{}\" not found", seq.name)))?;
+            let columns = vec![
+                RangeColumn { name: "last_value".to_string(), ty: TypeId::of(oids::INT8), dropped: false },
+                RangeColumn { name: "log_cnt".to_string(), ty: TypeId::of(oids::INT8), dropped: false },
+                RangeColumn { name: "is_called".to_string(), ty: TypeId::of(oids::BOOL), dropped: false },
+            ];
+            let mut entry = RangeEntry {
+                kind: RangeKind::Relation {
+                    oid: seq_oid,
+                    schema,
+                    name: seq.name.clone(),
+                    rel_kind: RelKind::Sequence,
+                    only: false,
+                    pseudo: None,
+                },
+                alias: alias_name.clone().unwrap_or_else(|| seq.name.clone()),
+                columns,
+                lateral: false,
+                visible: true,
+                access: select_access(),
+            };
+            if let Some(a) = alias {
+                apply_column_aliases(b, &mut entry, a)?;
+            }
+            return register_entry(b, entry);
+        }
+    }
     let rel = env.resolve_relation(qn.schema.as_deref(), &qn.name).map_err(|e| at(e, pos))?;
     // Virtual system views (oid < FIRST_NORMAL_OID) are served by their vrel producer; their stored
     // definition is for pg_get_viewdef only (vrel/mod.rs).
@@ -367,10 +404,13 @@ fn bind_named_table(b: &mut Binder, name: &ObjectName, alias: Option<&TableAlias
             .with_detail("This operation is not supported for composite types.");
         return Err(at(e, pos));
     }
-    let mut entry = relation_range_entry(b, rel, alias_name.as_deref(), false)?;
+    let only = crate::names::is_only_marked(name);
+    let mut entry = relation_range_entry(b, rel, alias_name.as_deref(), only)?;
     if let Some(a) = alias {
         apply_column_aliases(b, &mut entry, a)?;
     }
+    // Row-level security: the table reads through its SELECT policies (binder::rls).
+    let entry = super::rls::wrap_select(b, rel, entry)?;
     register_entry(b, entry)
 }
 
@@ -418,7 +458,13 @@ fn expand_view(
     b.expanding_views.push(rel.oid);
     let bound = select::bind_subselect(b, query, &names).map_err(stored_text_error);
     b.expanding_views.pop();
-    let bound = bound?;
+    let mut bound = bound?;
+    // PG reports a view as the owner of its columns: `markTargetListOrigin` takes the view relation
+    // at parse time and does not drill down into it, so the origin is the view itself, not the
+    // base column its definition reads.
+    for (i, col) in bound.output.iter_mut().enumerate() {
+        col.origin = Some(crate::ir::ColumnOrigin { table: rel.oid, attnum: i16::try_from(i + 1).unwrap_or(i16::MAX) });
+    }
 
     let columns = range_columns(&bound.output);
     let mut entry = RangeEntry {
@@ -492,6 +538,9 @@ fn bind_function_factor(
     let qn = b.qual(name)?;
     check_database(b, &qn)?;
     let table_alias: Option<String> = alias.map(|a| b.ident(&a.name));
+    if args.len() > 1 && qn.name == "unnest" {
+        return bind_multi_unnest(b, name, args, with_ordinality, table_alias, alias);
+    }
 
     let func = Function {
         name: name.clone(),
@@ -512,10 +561,7 @@ fn bind_function_factor(
 
     let any_typed = alias.map_or(false, |a| a.columns.iter().any(|c| c.data_type.is_some()));
     let all_typed = alias.map_or(false, |a| !a.columns.is_empty() && a.columns.iter().all(|c| c.data_type.is_some()));
-    let outs = match func_oid {
-        Some(oid) if oid < 16384 => builtin_proc(oid).map(|p| p.out_columns()).unwrap_or_default(),
-        _ => Vec::new(),
-    };
+    let outs = function_out_columns(b, func_oid, &call);
     let is_record = ret.oid == oids::RECORD;
     let composite = !is_record && b.env.type_info(ret.oid).map_or(false, |t| t.is_composite());
 
@@ -525,7 +571,7 @@ fn bind_function_factor(
             return Err(only_record_error());
         }
         outs.iter()
-            .map(|(n, t)| RangeColumn { name: (*n).to_string(), ty: TypeId::of(*t), dropped: false })
+            .map(|(n, t)| RangeColumn { name: n.clone(), ty: TypeId::of(*t), dropped: false })
             .collect()
     } else if is_record {
         let defs = match alias {
@@ -588,6 +634,247 @@ fn bind_function_factor(
         with_ordinality,
     };
     register_entry(b, entry)
+}
+
+/// `unnest(a, b, ...)` in FROM (PG: the arrays expand side by side, as with `ROWS FROM`): one unnest call
+/// per argument. The function scan zips them and pads the shorter ones with NULL.
+fn bind_multi_unnest(
+    b: &mut Binder,
+    name: &ObjectName,
+    args: Vec<FunctionArg>,
+    with_ordinality: bool,
+    table_alias: Option<String>,
+    alias: Option<&TableAlias>,
+) -> Result<FromItem> {
+    let mut calls: Vec<BoundExpr> = Vec::with_capacity(args.len());
+    for arg in args {
+        let func = Function {
+            name: name.clone(),
+            uses_odbc_syntax: false,
+            parameters: FunctionArguments::None,
+            args: FunctionArguments::List(FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![arg],
+                clauses: Vec::new(),
+            }),
+            within_group: Vec::new(),
+            filter: None,
+            null_treatment: None,
+            over: None,
+        };
+        calls.push(expr_func::bind_function_call(b, &func, ExprCtx::function_in_from())?);
+    }
+    let fn_count = calls.len();
+    let mut columns: Vec<RangeColumn> = calls
+        .iter()
+        .map(|c| RangeColumn { name: "unnest".to_string(), ty: c.ty.clone(), dropped: false })
+        .collect();
+    if with_ordinality {
+        columns.push(RangeColumn { name: "ordinality".to_string(), ty: TypeId::of(oids::INT8), dropped: false });
+    }
+    let mut entry = RangeEntry {
+        kind: RangeKind::Function { funcs: Vec::new(), with_ordinality },
+        alias: table_alias.unwrap_or_else(|| "unnest".to_string()),
+        columns,
+        lateral: true,
+        visible: true,
+        access: AccessNeeded::default(),
+    };
+    if let Some(a) = alias {
+        apply_column_aliases(b, &mut entry, a)?;
+    }
+    let funcs: Vec<RangeFunction> = calls
+        .into_iter()
+        .zip(entry.columns[..fn_count].iter())
+        .map(|(expr, col)| RangeFunction { expr, columns: vec![col.clone()] })
+        .collect();
+    entry.kind = RangeKind::Function { funcs, with_ordinality };
+    register_entry(b, entry)
+}
+
+/// Is `name` the single-identifier marker `marker` (`crate::parser::ROWS_FROM_MARKER` and friends)?
+fn is_marker_name(name: &ObjectName, marker: &str) -> bool {
+    name.0.len() == 1 && name.0[0].as_ident().is_some_and(|i| i.value == marker)
+}
+
+/// One member of `ROWS FROM (..)`: the call and its optional column definition list (the parser wraps a
+/// member with `AS (..)` in `crate::parser::ROWS_FROM_COLDEF_MARKER`).
+fn rows_from_member(arg: FunctionArg) -> Result<(Function, Vec<(Ident, DataType)>)> {
+    let bad = || diag::syntax_error_near("(", None);
+    let expr = match arg {
+        FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => e,
+        _ => return Err(bad()),
+    };
+    let f = match expr {
+        Expr::Function(f) => f,
+        _ => return Err(bad()),
+    };
+    if !is_marker_name(&f.name, parser::ROWS_FROM_COLDEF_MARKER) {
+        return Ok((f, Vec::new()));
+    }
+    let list = match f.args {
+        FunctionArguments::List(l) => l,
+        _ => return Err(bad()),
+    };
+    let mut it = list.args.into_iter();
+    let inner = match it.next() {
+        Some(FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Function(inner)))) => inner,
+        _ => return Err(bad()),
+    };
+    let mut defs = Vec::new();
+    for a in it {
+        match a {
+            FunctionArg::Named { name, arg: FunctionArgExpr::Expr(Expr::Cast { data_type, .. }), .. } => {
+                defs.push((name, data_type));
+            }
+            _ => return Err(bad()),
+        }
+    }
+    Ok((inner, defs))
+}
+
+/// `ROWS FROM (f(..), g(..) AS (a int, ..)) [WITH ORDINALITY] [AS t(cols)]`: one function scan with several
+/// functions that run in parallel, the shorter ones padded with NULL (PG `addRangeTableEntryForFunction`).
+/// Each member contributes its columns in order, then the optional `ordinality` column. Without an alias the
+/// range entry is named after the first function; a lone member with an alias names its scalar column
+/// after the alias (`chooseScalarFunctionAlias`).
+fn bind_rows_from(
+    b: &mut Binder,
+    args: Vec<FunctionArg>,
+    with_ordinality: bool,
+    alias: Option<&TableAlias>,
+) -> Result<FromItem> {
+    if alias.is_some_and(|a| a.columns.iter().any(|c| c.data_type.is_some())) {
+        return Err(only_record_error());
+    }
+    let table_alias: Option<String> = alias.map(|a| b.ident(&a.name));
+    let nfuncs = args.len();
+    let mut first_name: Option<String> = None;
+    let mut parts: Vec<(BoundExpr, Vec<RangeColumn>)> = Vec::with_capacity(nfuncs);
+    for arg in args {
+        let (func, defs) = rows_from_member(arg)?;
+        let qn = b.qual(&func.name)?;
+        check_database(b, &qn)?;
+        if first_name.is_none() {
+            first_name = Some(qn.name.clone());
+        }
+        let call = expr_func::bind_function_call(b, &func, ExprCtx::function_in_from())?;
+        let func_oid = match &call.kind {
+            ExprKind::FuncCall(fc) => Some(fc.func),
+            _ => None,
+        };
+        let ret = call.ty.clone();
+        let outs = function_out_columns(b, func_oid, &call);
+        let is_record = ret.oid == oids::RECORD;
+        let composite = !is_record && b.env.type_info(ret.oid).map_or(false, |t| t.is_composite());
+        let columns: Vec<RangeColumn> = if !outs.is_empty() {
+            if !defs.is_empty() {
+                return Err(only_record_error());
+            }
+            outs.iter()
+                .map(|(n, t)| RangeColumn { name: n.clone(), ty: TypeId::of(*t), dropped: false })
+                .collect()
+        } else if is_record {
+            if defs.is_empty() {
+                return Err(required_record_error());
+            }
+            let mut cols = Vec::with_capacity(defs.len());
+            for (name, dt) in &defs {
+                let col_name = b.ident(name);
+                let ty = types::resolve_data_type(b, dt, None)?.id;
+                cols.push(RangeColumn { name: col_name, ty, dropped: false });
+            }
+            cols
+        } else if composite {
+            if !defs.is_empty() {
+                return Err(only_record_error());
+            }
+            let fields = b
+                .env
+                .composite_fields(ret.oid)
+                .ok_or_else(|| PgError::internal(format!("no attributes known for composite type {}", ret.oid)))?;
+            fields
+                .iter()
+                .map(|f| RangeColumn { name: f.name.clone(), ty: f.type_id.clone(), dropped: f.dropped })
+                .collect()
+        } else {
+            if !defs.is_empty() {
+                return Err(only_record_error());
+            }
+            let col_name = match (&table_alias, nfuncs) {
+                (Some(a), 1) => a.clone(),
+                _ => qn.name.clone(),
+            };
+            vec![RangeColumn { name: col_name, ty: ret, dropped: false }]
+        };
+        parts.push((call, columns));
+    }
+    let counts: Vec<usize> = parts.iter().map(|(_, cols)| cols.len()).collect();
+    let mut columns: Vec<RangeColumn> = parts.iter().flat_map(|(_, cols)| cols.iter().cloned()).collect();
+    if with_ordinality {
+        columns.push(RangeColumn { name: "ordinality".to_string(), ty: TypeId::of(oids::INT8), dropped: false });
+    }
+    let mut entry = RangeEntry {
+        kind: RangeKind::Function { funcs: Vec::new(), with_ordinality },
+        alias: table_alias.or(first_name).unwrap_or_else(|| "rows".to_string()),
+        columns,
+        lateral: true,
+        visible: true,
+        access: AccessNeeded::default(),
+    };
+    if let Some(a) = alias {
+        apply_column_aliases(b, &mut entry, a)?;
+    }
+    let mut funcs: Vec<RangeFunction> = Vec::with_capacity(parts.len());
+    let mut at = 0usize;
+    for ((expr, _), n) in parts.into_iter().zip(counts) {
+        funcs.push(RangeFunction { expr, columns: entry.columns[at..at + n].to_vec() });
+        at += n;
+    }
+    entry.kind = RangeKind::Function { funcs, with_ordinality };
+    register_entry(b, entry)
+}
+
+/// Result columns of a function with OUT parameters (builtin `proallargtypes` or a user function's
+/// OUT / INOUT / TABLE parameters; PG `build_function_result_tupdesc_t`). Empty when the function has
+/// fewer than two output parameters (a single OUT parameter is a scalar result). Polymorphic output
+/// types are resolved from the call's actual argument types; unnamed outputs are `columnN`.
+fn function_out_columns(b: &Binder, func_oid: Option<Oid>, call: &BoundExpr) -> Vec<(String, Oid)> {
+    let Some(oid) = func_oid else { return Vec::new() };
+    if oid < 16384 {
+        return builtin_proc(oid)
+            .map(|p| p.out_columns().into_iter().map(|(n, t)| (n.to_string(), t)).collect())
+            .unwrap_or_default();
+    }
+    let Some(f) = b.env.snapshot().function(oid) else { return Vec::new() };
+    use pgarbor_catalog::model::ArgMode;
+    let outs: Vec<(usize, &pgarbor_catalog::model::FuncArg)> = f
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| matches!(a.mode, ArgMode::Out | ArgMode::InOut | ArgMode::Table))
+        .collect();
+    if outs.len() < 2 {
+        return Vec::new();
+    }
+    let declared_in: Vec<Oid> = f.in_arg_types();
+    let actual: Vec<Oid> = match &call.kind {
+        ExprKind::FuncCall(fc) => fc.args.iter().map(|a| a.ty.oid).collect(),
+        _ => Vec::new(),
+    };
+    outs.iter()
+        .enumerate()
+        .map(|(i, (_, a))| {
+            let mut ty = a.type_oid;
+            if pgarbor_types::registry::is_polymorphic(ty) && actual.len() == declared_in.len() {
+                if let Ok(t) = pgarbor_types::resolve::polymorphic::enforce_generic_type_consistency(b.env, &actual, &declared_in, ty) {
+                    ty = t.1;
+                }
+            }
+            let name = if a.name.is_empty() { format!("column{}", i + 1) } else { a.name.clone() };
+            (name, ty)
+        })
+        .collect()
 }
 
 fn only_record_error() -> PgError {

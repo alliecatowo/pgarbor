@@ -659,7 +659,10 @@ pub fn choose_scan(
     };
     let rt = scan.rt_index;
     let ncols = table.ncols as usize;
-    let names = if is_virtual {
+    let names = if is_virtual && st.ctx.env.snapshot().sequence(table.oid).is_some() {
+        // `SELECT * FROM seq` (sequence.c): last_value, log_cnt, is_called.
+        vec!["last_value".to_string(), "log_cnt".to_string(), "is_called".to_string()]
+    } else if is_virtual {
         virtual_names(table.oid, ncols)?
     } else {
         table_names(st.ctx.env, table.oid, ncols)?
@@ -850,6 +853,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let mut tbl: Option<Oid> = None;
         let (_r, mut env) = testing::run(&mut kv, &env, |t| {

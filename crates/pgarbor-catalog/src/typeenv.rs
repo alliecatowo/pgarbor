@@ -62,9 +62,9 @@ use crate::env::CatalogEnv;
 use crate::model::{Column, Relation, TypeDef, TypeObj};
 use crate::snapshot::UserTypeRef;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
-use pgarbor_types::catalog_data::{builtin_operator, builtin_proc, operators_named};
+use pgarbor_types::catalog_data::{builtin_operator, builtin_proc};
 use pgarbor_types::context::{CompositeField, EnumLabel, RegKind, TypeEnv};
-use pgarbor_types::names::{format_type, parse_type_string};
+use pgarbor_types::names::{display_name, parse_type_string};
 use pgarbor_types::registry::{self, TypeInfo};
 use pgarbor_types::text::format::quote_identifier;
 use std::borrow::Cow;
@@ -516,10 +516,12 @@ impl CatalogEnv {
             RegKind::Oper => {
                 let names = parse_names(name)?;
                 let (schema, op) = schema_and_name(&names)?;
-                if schema.is_some_and(|s| s != "pg_catalog") {
-                    return Ok(None);
-                }
-                let found: Vec<Oid> = operators_named(op).map(|o| o.oid).collect();
+                // Builtin and user operators along the path (amendment pgarbor-catalog-09).
+                let found: Vec<Oid> = match self.operator_candidates(schema, op) {
+                    Ok(c) => c.into_iter().map(|c| c.oid).collect(),
+                    Err(e) if e.sqlstate == SqlState::INVALID_SCHEMA_NAME => return Ok(None),
+                    Err(e) => return Err(e),
+                };
                 match found.len() {
                     0 => Ok(None),
                     1 => Ok(Some(found[0])),
@@ -542,10 +544,11 @@ impl CatalogEnv {
                         ids[k] = parse_type_string(self, a)?.oid;
                     }
                 }
-                if schema.is_some_and(|s| s != "pg_catalog") {
-                    return Ok(None);
+                match self.lookup_operator(schema, op, ids[0], ids[1]) {
+                    Ok(o) => Ok(o),
+                    Err(e) if e.sqlstate == SqlState::INVALID_SCHEMA_NAME => Ok(None),
+                    Err(e) => Err(e),
                 }
-                Ok(operators_named(op).find(|o| o.left == ids[0] && o.right == ids[1]).map(|o| o.oid))
             }
             RegKind::Namespace => {
                 let names = parse_names(name)?;
@@ -592,7 +595,7 @@ impl CatalogEnv {
                 if self.type_info(oid).is_none() {
                     return Ok(None);
                 }
-                Ok(Some(format_type(self, oid, -1)?))
+                Ok(Some(display_name(self, oid)))
             }
             RegKind::Proc => {
                 let Some((name, ns, _)) = self.routine_identity(oid) else {
@@ -612,12 +615,13 @@ impl CatalogEnv {
                     if i > 0 {
                         out.push(',');
                     }
-                    out.push_str(&format_type(self, *a, -1)?);
+                    out.push_str(&display_name(self, *a));
                 }
                 out.push(')');
                 Ok(Some(out))
             }
-            RegKind::Oper => Ok(builtin_operator(oid).map(|o| o.name.to_string())),
+            RegKind::Oper => Ok(self.format_oper_name(oid)),
+            RegKind::Operator if builtin_operator(oid).is_none() => Ok(self.format_operator(oid)),
             RegKind::Operator => {
                 let Some(o) = builtin_operator(oid) else {
                     return Ok(None);
@@ -625,13 +629,13 @@ impl CatalogEnv {
                 let mut out = String::from(o.name);
                 out.push('(');
                 if o.left != 0 {
-                    out.push_str(&format_type(self, o.left, -1)?);
+                    out.push_str(&display_name(self, o.left));
                 } else {
                     out.push_str("NONE");
                 }
                 out.push(',');
                 if o.right != 0 {
-                    out.push_str(&format_type(self, o.right, -1)?);
+                    out.push_str(&display_name(self, o.right));
                 } else {
                     out.push_str("NONE");
                 }
@@ -646,10 +650,7 @@ impl CatalogEnv {
                 Some(n) => Ok(Some(quote_identifier(&n)?)),
                 None => Ok(None),
             },
-            RegKind::Collation => match crate::builtin::builtin_collation(oid) {
-                Some(c) => Ok(Some(quote_identifier(c.name)?)),
-                None => Ok(None),
-            },
+            RegKind::Collation => Ok(self.format_collation(oid)),
             RegKind::Config | RegKind::Dictionary => Ok(None),
         }
     }
@@ -670,6 +671,26 @@ impl TypeEnv for CatalogEnv {
     }
     fn composite_fields(&self, type_oid: Oid) -> Option<Arc<[CompositeField]>> {
         self.composite_fields_of(type_oid).ok().flatten()
+    }
+    fn user_cast(&self, source: Oid, target: Oid) -> Option<pgarbor_types::catalog_data::BuiltinCast> {
+        use pgarbor_types::catalog_data::{BuiltinCast, CastContext, CastMethod};
+        let c = self.snapshot().user_casts().find(|c| c.source == source && c.target == target)?;
+        Some(BuiltinCast {
+            oid: c.oid,
+            source: c.source,
+            target: c.target,
+            func: c.func,
+            context: match c.context {
+                b'i' => CastContext::Implicit,
+                b'a' => CastContext::Assignment,
+                _ => CastContext::Explicit,
+            },
+            method: match c.method {
+                b'f' => CastMethod::Function,
+                b'b' => CastMethod::Binary,
+                _ => CastMethod::InOut,
+            },
+        })
     }
     fn reg_lookup(&self, kind: RegKind, name: &str) -> Result<Option<Oid>> {
         self.reg_lookup_impl(kind, name)
@@ -738,7 +759,8 @@ mod tests {
         assert_eq!(env.reg_lookup_impl(RegKind::Role, "nosuchrole")?, None);
         let op = env.reg_lookup_impl(RegKind::Operator, "+(integer,integer)")?.expect("int4pl op");
         assert_eq!(env.reg_name_impl(RegKind::Operator, op)?.as_deref(), Some("+(integer,integer)"));
-        assert_eq!(env.reg_name_impl(RegKind::Oper, op)?.as_deref(), Some("+"));
+        // regoperout: bare only when the name has exactly one candidate (`+` has many).
+        assert_eq!(env.reg_name_impl(RegKind::Oper, op)?.as_deref(), Some("pg_catalog.+"));
         Ok(())
     }
 

@@ -36,7 +36,7 @@ use pgarbor_catalog::FollowUp;
 use pgarbor_common::{Oid, PgError, Result};
 use pgarbor_core::sequence::SequenceParams;
 use pgarbor_sql::ir::BoundExpr;
-use pgarbor_types::{Datum, TypeEnv};
+use pgarbor_types::{Datum, TypeEnv, TypeId};
 
 use crate::constraints;
 use crate::context::{ExecContext, SessionEnv};
@@ -54,7 +54,9 @@ use crate::tabledesc;
 #[derive(Clone, Debug)]
 pub enum ColumnRewrite {
     /// `ALTER COLUMN TYPE ... USING expr` (expr over the OLD row, result already of the new type).
-    Using { attnum: i16, expr: BoundExpr },
+    /// `old_missing`: the column's missing-value text and OLD type before the type change, so that rows
+    /// stored before an earlier ADD COLUMN still yield their fast default to `expr`.
+    Using { attnum: i16, expr: BoundExpr, old_missing: Option<(String, TypeId)> },
     /// ADD COLUMN with a volatile DEFAULT: evaluate the column default for every existing row.
     FromDefault { attnum: i16 },
     /// STORED generated column added/changed: evaluate its generation expression.
@@ -70,6 +72,10 @@ pub fn run_followups(
     rewrite_table_oid: Option<Oid>,
     rewrites: &[ColumnRewrite],
 ) -> Result<()> {
+    // Several sub-commands of one ALTER TABLE each queue a rewrite, but `rewrites` already holds
+    // every column change: rewrite each table once (tablecmds.c phase 3), or the USING expressions
+    // would be applied again to already converted rows.
+    let mut rewritten: Vec<Oid> = Vec::new();
     for fu in follow_ups {
         match fu {
             // These two take the `ExecContext` itself, so they run outside an `Executor`.
@@ -77,6 +83,10 @@ pub fn run_followups(
                 ctas::populate_matview(&mut *cx, *relation)?;
             }
             FollowUp::RewriteTable { table } => {
+                if rewritten.contains(table) {
+                    continue;
+                }
+                rewritten.push(*table);
                 let rw: &[ColumnRewrite] = if rewrite_table_oid == Some(*table) { rewrites } else { &[] };
                 rewrite_table(&mut *cx, *table, rw)?;
             }
@@ -172,6 +182,9 @@ fn run_one(ex: &mut Executor, fu: &FollowUp) -> Result<()> {
                 return Err(cannot_alter_type_column_uses_it(&type_name, &qualified));
             }
         }
+        FollowUp::ValidatePartitionRows { table, default_update } => {
+            validate_partition_rows(ex, *table, *default_update)?;
+        }
         FollowUp::PopulateMatView { .. } | FollowUp::RewriteTable { .. } => {
             return Err(PgError::internal("follow-up must run outside an executor"));
         }
@@ -190,11 +203,15 @@ enum RewriteStep {
 fn rewrite_table_in(ex: &mut Executor, table: Oid, rewrites: &[ColumnRewrite]) -> Result<()> {
     // Bind every default / generation expression of the NEW catalog once.
     let mut steps: Vec<RewriteStep> = Vec::with_capacity(rewrites.len());
+    let mut old_missings: Vec<(i16, Datum)> = Vec::new();
     for rw in rewrites {
         match rw {
-            ColumnRewrite::Using { attnum, expr } => {
+            ColumnRewrite::Using { attnum, expr, old_missing } => {
                 // The USING expression is bound over the table (rt_index 1): make it executable over the old row.
                 let expr = tabledesc::columns_to_input_refs(expr.clone())?;
+                if let Some((text, old_ty)) = old_missing {
+                    old_missings.push((*attnum, pgarbor_types::io::input(&ex.se().io_ctx(), *old_ty, text)?));
+                }
                 steps.push(RewriteStep::Using { attnum: *attnum, expr });
             }
             ColumnRewrite::FromDefault { attnum } => {
@@ -210,7 +227,14 @@ fn rewrite_table_in(ex: &mut Executor, table: Oid, rewrites: &[ColumnRewrite]) -
         }
     }
 
-    let td = tabledesc::build_table_desc(ex.se(), table)?;
+    let mut td = tabledesc::build_table_desc(ex.se(), table)?;
+    // Short rows (stored before an ADD COLUMN) complete with the OLD type's missing value.
+    for (attnum, datum) in old_missings {
+        let slot = slot_index(attnum)?;
+        if let Some(c) = td.cols.get_mut(slot) {
+            c.missing = Some(datum);
+        }
+    }
     let mut cursor = HeapCursor::new(table);
     let mut counter: u32 = 0;
     while let Some((rowid, old)) = cursor.next(ex, &td, None)? {
@@ -377,4 +401,33 @@ mod tests {
         assert!(set_slot(&mut row, 0, Datum::Int4(1)).is_err());
         Ok(())
     }
+}
+
+/// `FollowUp::ValidatePartitionRows`: every row stored under `table` (itself or, when partitioned,
+/// its leaves) must satisfy `table`'s partition constraint as the catalog now describes it.
+fn validate_partition_rows(ex: &mut Executor, table: Oid, default_update: bool) -> Result<()> {
+    let snap = ex.se().env.snapshot().clone();
+    let ttd = tabledesc::table_desc(&*ex.cx, table)?;
+    for member in snap.inheritance_tree(table) {
+        let Some(rel) = snap.relation(member) else { continue };
+        if !rel.kind.has_storage() {
+            continue;
+        }
+        let mtd = tabledesc::table_desc(&*ex.cx, member)?;
+        let mut cursor = HeapCursor::new(member);
+        let mut counter: u32 = 0;
+        while let Some((_rowid, row)) = cursor.next(ex, &mtd, None)? {
+            ex.tick(&mut counter)?;
+            let row = crate::partition::convert_row(&mtd, &ttd, &row);
+            if !crate::partition::check_partition_constraint(ex, &ttd, &row)? {
+                let msg = if default_update {
+                    format!("updated partition constraint for default partition \"{}\" would be violated by some row", ttd.name)
+                } else {
+                    format!("partition constraint of relation \"{}\" is violated by some row", ttd.name)
+                };
+                return Err(PgError::new(pgarbor_common::SqlState::CHECK_VIOLATION, msg).with_table(&ttd.schema, &ttd.name));
+            }
+        }
+    }
+    Ok(())
 }

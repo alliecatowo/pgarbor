@@ -90,7 +90,7 @@ pub fn execute_with_channel(
             }
             Ok(ExecResult::command(tag.clone()))
         }
-        S::Query(_) | S::Insert(_) | S::Update(_) | S::Delete(_) => execute_plan(need_plan(plan, &stmt.tag())?, cx),
+        S::Query(_) | S::Insert(_) | S::Update(_) | S::Delete(_) | S::Merge(_) => execute_plan(need_plan(plan, &stmt.tag())?, cx),
         S::CreateTableAs(b) => ctas::exec_create_table_as(cx, b, plan),
         S::Truncate(t) => ddl_drop::exec_truncate(cx, t),
         S::CreateSchema { name, owner, if_not_exists } => ddl_objects::exec_create_schema(cx, name, *owner, *if_not_exists),
@@ -109,6 +109,7 @@ pub fn execute_with_channel(
         S::Drop(d) => ddl_drop::exec_drop(cx, d),
         S::DropDatabase { name, if_exists, force } => ddl_drop::exec_drop_database(cx, name, *if_exists, *force),
         S::Comment { addr, text } => ddl_objects::exec_comment(cx, addr, text.as_deref()),
+        S::Ext(e) => crate::ddl_ext::exec_ext(cx, e),
         S::Grant { specs, revoke } => ddl_objects::exec_grant(cx, specs, *revoke),
         S::GrantRole(specs) => ddl_objects::exec_grant_role(cx, specs),
         S::RevokeRole { specs, admin_option_only, cascade } => {
@@ -125,6 +126,7 @@ pub fn execute_with_channel(
         }
         S::Maintenance { kind, targets } => utility::exec_maintenance(cx, *kind, targets),
         S::Lock(l) => utility::exec_lock(cx, l),
+        S::Policy(p) => crate::ddl_rewrite::exec_policy(cx, p),
         S::Do(d) => utility::exec_do(cx, d),
         S::Call(c) => utility::exec_call(cx, c),
         S::Explain(e) => explain_exec::exec_explain(cx, e),

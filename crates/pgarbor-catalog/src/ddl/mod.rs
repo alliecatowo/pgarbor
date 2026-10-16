@@ -20,6 +20,7 @@
 //! | [`function`] | CREATE [OR REPLACE] FUNCTION/PROCEDURE, ALTER FUNCTION |
 //! | [`comment`] | COMMENT ON, generic ALTER ... OWNER TO, REASSIGN/DROP OWNED |
 //! | [`grant`] | GRANT/REVOKE privileges |
+//! | [`ext`], [`ext_operator`], [`ext_aggregate`], [`ext_run`], [`ext_spec`] | extensibility objects (amendment catalog-09): operators, aggregates, operator classes/families, casts, conversions, collations, extensions |
 //! | [`drop_stmt`] | DROP TABLE/VIEW/INDEX/SEQUENCE/TYPE/DOMAIN/SCHEMA/FUNCTION/ROLE statements |
 //!
 //! ## Rules common to every operation
@@ -42,9 +43,19 @@ pub mod comment;
 pub mod common;
 pub mod constraint;
 pub mod drop_stmt;
+pub mod ext;
+pub mod ext_aggregate;
+pub mod ext_misc;
+pub mod ext_opclass;
+pub mod ext_operator;
+pub mod ext_run;
+pub mod ext_spec;
 pub mod function;
 pub mod grant;
 pub mod index;
+pub mod inherit;
+pub mod partitioned;
+pub mod policy;
 pub mod role;
 pub mod schema;
 pub mod sequence;

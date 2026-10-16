@@ -138,6 +138,7 @@ fn plan_command(kind: PlanKind) -> &'static str {
         PlanKind::Insert => "INSERT",
         PlanKind::Update => "UPDATE",
         PlanKind::Delete => "DELETE",
+        PlanKind::Merge => "MERGE",
     }
 }
 

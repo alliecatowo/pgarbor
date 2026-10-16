@@ -60,7 +60,7 @@ use pgarbor_sql::binder::stored::table_expr_scope;
 use pgarbor_sql::ir::{ArrayExpr, BoundExpr, CastExpr, CoerceToDomain, FieldSelect, RowExpr, SubscriptExpr, SubscriptItem};
 use pgarbor_sql::{parse_expr_text, SourceMap};
 use pgarbor_types::array::subscript::{self, Subscript};
-use pgarbor_types::cast::{apply_cast, cast_datum, CastContext};
+use pgarbor_types::cast::{apply_cast, cast_datum, CastContext, CastStep};
 use pgarbor_types::datum::type_mismatch;
 use pgarbor_types::{Datum, TypeEnv, TypeId};
 
@@ -80,7 +80,38 @@ pub fn eval_cast(ex: &mut Executor, c: &CastExpr, result_type: TypeId, row: &[Da
         return Ok(Datum::Null);
     }
     let arg_types = [c.arg.ty];
-    with_func_ctx(&*ex.cx, &arg_types, result_type, |fc| apply_cast(&c.plan, value, fc))
+    let out = with_func_ctx(&*ex.cx, &arg_types, result_type, |fc| apply_cast(&c.plan, value, fc))?;
+    check_cast_domains(ex, &c.plan.steps, &out)?;
+    Ok(out)
+}
+
+/// Run the domain checks recorded in a cast plan on the cast's result: `DomainCheck` steps check the
+/// value itself, `ArrayCoerce` steps check every element (`posint[]` element checks). The type crate
+/// leaves these steps as identity, so the constraints are enforced here.
+fn check_cast_domains(ex: &mut Executor, steps: &[CastStep], value: &Datum) -> Result<()> {
+    for step in steps {
+        match step {
+            CastStep::DomainCheck { domain } => check_domain_value(ex, *domain, value)?,
+            CastStep::ArrayCoerce { elem_plan } if needs_domain_check(&elem_plan.steps) => {
+                if let Datum::Array(arr) = value {
+                    for item in &arr.items {
+                        check_cast_domains(ex, &elem_plan.steps, item)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// True when a cast plan (or an element plan) contains a `DomainCheck` step at any depth.
+fn needs_domain_check(steps: &[CastStep]) -> bool {
+    steps.iter().any(|step| match step {
+        CastStep::DomainCheck { .. } => true,
+        CastStep::ArrayCoerce { elem_plan } => needs_domain_check(&elem_plan.steps),
+        _ => false,
+    })
 }
 
 /// `CoerceToDomain`: NOT NULL and CHECK enforcement of `c.domain` (module docs). The bound constraints
@@ -88,23 +119,34 @@ pub fn eval_cast(ex: &mut Executor, c: &CastExpr, result_type: TypeId, row: &[Da
 pub fn eval_coerce_to_domain(ex: &mut Executor, c: &CoerceToDomain, result_type: TypeId, row: &[Datum]) -> Result<Datum> {
     let _ = result_type;
     let value = eval(ex, &c.arg, row)?;
-    let rt = domain_rt(ex, c.domain)?;
+    check_domain_value(ex, c.domain, &value)?;
+    Ok(value)
+}
+
+/// PG `ExecEvalConstraintNotNull` / `ExecEvalConstraintCheck` for `domain` over `value`: NOT NULL
+/// violations and CHECK results of FALSE are errors; a NULL check result passes.
+fn check_domain_value(ex: &mut Executor, domain: Oid, value: &Datum) -> Result<()> {
+    let rt = domain_rt(ex, domain)?;
     if rt.not_null && value.is_null() {
-        let name = domain_name(ex, c.domain)?;
+        let name = domain_name(ex, domain)?;
         let msg = format!("domain {name} does not allow null values");
-        return Err(PgError::new(SqlState::NOT_NULL_VIOLATION, msg).with_datatype(name));
+        let mut err = PgError::new(SqlState::NOT_NULL_VIOLATION, msg).with_datatype(name);
+        err.schema = domain_schema(ex, domain);
+        return Err(err);
     }
     for check in &rt.checks {
-        let result = eval(ex, &check.expr, std::slice::from_ref(&value))?;
+        let result = eval(ex, &check.expr, std::slice::from_ref(value))?;
         if matches!(result, Datum::Bool(false)) {
-            let name = domain_name(ex, c.domain)?;
+            let name = domain_name(ex, domain)?;
             let msg = format!("value for domain {name} violates check constraint \"{}\"", check.name);
-            return Err(PgError::new(SqlState::CHECK_VIOLATION, msg)
+            let mut err = PgError::new(SqlState::CHECK_VIOLATION, msg)
                 .with_datatype(name)
-                .with_constraint(check.name.clone()));
+                .with_constraint(check.name.clone());
+            err.schema = domain_schema(ex, domain);
+            return Err(err);
         }
     }
-    Ok(value)
+    Ok(())
 }
 
 /// `ARRAY[...]`: evaluate the elements in order and build the array with `subscript::construct`
@@ -241,6 +283,13 @@ fn domain_name(ex: &Executor, domain: Oid) -> Result<String> {
         .ok_or_else(|| PgError::internal(format!("domain type {domain} does not exist")))
 }
 
+/// Schema name of a domain for error fields (PG `errdatatype` sets `schema_name` from the type's namespace).
+fn domain_schema(ex: &Executor, domain: Oid) -> Option<String> {
+    let snap = ex.se().env.snapshot();
+    let ns = snap.type_obj(domain)?.namespace;
+    snap.namespace(ns).map(|n| n.name.clone())
+}
+
 /// Bound constraints of `domain`, from the per-execution cache or freshly bound and cached.
 fn domain_rt(ex: &mut Executor, domain: Oid) -> Result<Rc<DomainRt>> {
     if let Some(found) = ex.rt.domains.get(&domain) {
@@ -287,7 +336,11 @@ fn build_domain_rt(se: &SessionEnv, domain: Oid) -> Result<DomainRt> {
         if not_null {
             out.not_null = true;
         }
-        for con in snap.domain_constraints(dom) {
+        // PG `load_domaintype_info` applies one domain's CHECKs in constraint-name order (`dcs_cmp`,
+        // strcmp), so the first failing name is the one reported.
+        let mut cons = snap.domain_constraints(dom);
+        cons.sort_by(|a, b| a.name.cmp(&b.name));
+        for con in cons {
             if con.kind != pgarbor_catalog::ConstraintKind::Check || !con.enforced {
                 continue;
             }

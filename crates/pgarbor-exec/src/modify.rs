@@ -40,8 +40,10 @@ use pgarbor_common::{PgError, Result};
 use pgarbor_core::locks::LockMode;
 use pgarbor_core::WaitPolicy;
 use pgarbor_plan::plan::{
-    ConflictPlanAction, InsertSpec, ModifyOp, ModifyTableNode, ModifyTarget, NodeKind, PlanNode, UpdateSpec,
+    ConflictPlanAction, InsertSpec, MergePlanActionKind, MergeSpec, ModifyOp, ModifyTableNode, ModifyTarget, NodeKind,
+    PlanNode, UpdateSpec,
 };
+use pgarbor_sql::ir::MergeMatchKind;
 use pgarbor_sql::ir::BoundExpr;
 use pgarbor_types::Datum;
 
@@ -67,6 +69,7 @@ struct ModifyTableOp {
     update: Option<UpdateSpec>,
     returning: Vec<BoundExpr>,
     returning_extra_from: Option<u32>,
+    merge: Option<MergeSpec>,
     policy: EpqPolicy,
     /// The first `next` call has run the whole statement.
     started: bool,
@@ -97,11 +100,32 @@ pub fn build_modify_table(node: &PlanNode, n: &ModifyTableNode, b: &mut BuildCtx
             ("UPDATE", acl_mode::UPDATE, spec.assignments.iter().map(|(attnum, _)| *attnum).collect())
         }
         ModifyOp::Delete => ("DELETE", acl_mode::DELETE, Vec::new()),
+        ModifyOp::Merge => {
+            let spec = n.merge.as_ref().ok_or_else(|| PgError::internal("MERGE ModifyTable without a merge spec"))?;
+            for a in &spec.actions {
+                match &a.kind {
+                    MergePlanActionKind::Update(u) => {
+                        let cols: Vec<i16> = u.assignments.iter().map(|(attnum, _)| *attnum).collect();
+                        perm::require_relation_privilege(&b.cx.se, oid, acl_mode::UPDATE, &cols)?;
+                    }
+                    MergePlanActionKind::Insert { spec, .. } => {
+                        perm::require_relation_privilege(&b.cx.se, oid, acl_mode::INSERT, &spec.columns)?;
+                    }
+                    MergePlanActionKind::Delete => {
+                        perm::require_relation_privilege(&b.cx.se, oid, acl_mode::DELETE, &[])?;
+                    }
+                    MergePlanActionKind::DoNothing => {}
+                }
+            }
+            ("MERGE", 0, Vec::new())
+        }
     };
     if n.op != ModifyOp::Insert && n.rowid_slot.is_none() {
         return Err(PgError::internal("UPDATE/DELETE ModifyTable without a rowid slot"));
     }
-    perm::require_relation_privilege(&b.cx.se, oid, mode, &columns)?;
+    if mode != 0 {
+        perm::require_relation_privilege(&b.cx.se, oid, mode, &columns)?;
+    }
     if let Some(spec) = &n.insert {
         if let Some(conflict) = &spec.on_conflict {
             if let ConflictPlanAction::DoUpdate { assignments, .. } = &conflict.action {
@@ -115,6 +139,8 @@ pub fn build_modify_table(node: &PlanNode, n: &ModifyTableNode, b: &mut BuildCtx
     let policy = match n.op {
         ModifyOp::Insert => EpqPolicy::default(),
         ModifyOp::Update | ModifyOp::Delete => epq_policy(&n.input)?,
+        // The MERGE input is a join: a concurrently changed target row is a serialization failure.
+        ModifyOp::Merge => EpqPolicy { quals: None },
     };
     Ok(Box::new(ModifyTableOp {
         op: n.op,
@@ -125,6 +151,7 @@ pub fn build_modify_table(node: &PlanNode, n: &ModifyTableNode, b: &mut BuildCtx
         update: n.update.clone(),
         returning: n.returning.clone(),
         returning_extra_from: n.returning_extra_from,
+        merge: n.merge.clone(),
         policy,
         started: false,
         affected: 0,
@@ -155,10 +182,11 @@ impl ModifyTableOp {
         let extra_from = self.returning_extra_from.map(|v| v as usize);
         let mut kept: Vec<Row> = Vec::new();
         let mut count: u64 = 0;
-        let mut seen: HashSet<u64> = HashSet::new();
+        let mut seen: HashSet<(pgarbor_common::Oid, u64)> = HashSet::new();
         let mut conflict = ConflictState::default();
 
         match self.op {
+            ModifyOp::Merge => {}
             ModifyOp::Insert => {
                 let spec = self
                     .insert
@@ -171,7 +199,9 @@ impl ModifyTableOp {
                     {
                         count += 1;
                         if want_returning {
-                            kept.push(returning_input(inserted.row, input_row, extra_from));
+                            let mut r = returning_input(inserted.row, input_row, extra_from);
+                            r.push(Datum::Oid(inserted.table));
+                            kept.push(r);
                         }
                     }
                 }
@@ -183,20 +213,27 @@ impl ModifyTableOp {
                     .ok_or_else(|| PgError::internal("UPDATE ModifyTable without an update spec"))?;
                 for input_row in &input_rows {
                     ex.tick(&mut ticks)?;
-                    let rowid = match rowid_of(input_row, self.rowid_slot)? {
-                        Some(rowid) => rowid,
+                    let (member, rowid) = match crate::dml_inherit::row_identity(input_row, self.rowid_slot, oid)? {
+                        Some(id) => id,
                         None => continue,
                     };
                     // First match wins: a target row matched by several input rows is updated once.
-                    if !seen.insert(rowid) {
+                    if !seen.insert((member, rowid)) {
                         continue;
                     }
-                    if let Some(new_row) =
+                    let updated = if member == oid {
                         dml_update::update_one(ex, &td, &self.target, spec, &self.policy, input_row, rowid)?
+                            .map(|r| (oid, r))
+                    } else {
+                        crate::dml_inherit::update_member(ex, &td, &self.target, spec, input_row, member, rowid)?
+                    };
+                    if let Some((stored_in, new_row)) = updated
                     {
                         count += 1;
                         if want_returning {
-                            kept.push(returning_input(new_row, input_row, extra_from));
+                            let mut r = returning_input(new_row, input_row, extra_from);
+                            r.push(Datum::Oid(stored_in));
+                            kept.push(r);
                         }
                     }
                 }
@@ -204,21 +241,33 @@ impl ModifyTableOp {
             ModifyOp::Delete => {
                 for input_row in &input_rows {
                     ex.tick(&mut ticks)?;
-                    let rowid = match rowid_of(input_row, self.rowid_slot)? {
-                        Some(rowid) => rowid,
+                    let (member, rowid) = match crate::dml_inherit::row_identity(input_row, self.rowid_slot, oid)? {
+                        Some(id) => id,
                         None => continue,
                     };
-                    if !seen.insert(rowid) {
+                    if !seen.insert((member, rowid)) {
                         continue;
                     }
-                    if let Some(deleted) = dml_delete::delete_one(ex, &td, &self.policy, input_row, rowid)? {
+                    let deleted = if member == oid {
+                        dml_delete::delete_one(ex, &td, &self.policy, input_row, rowid)?.map(|r| (oid, r))
+                    } else {
+                        crate::dml_inherit::delete_member(ex, &td, member, rowid)?
+                    };
+                    if let Some((stored_in, deleted)) = deleted {
                         count += 1;
                         if want_returning {
-                            kept.push(returning_input(deleted, input_row, extra_from));
+                            let mut r = returning_input(deleted, input_row, extra_from);
+                            r.push(Datum::Oid(stored_in));
+                            kept.push(r);
                         }
                     }
                 }
             }
+        }
+
+        if self.op == ModifyOp::Merge {
+            let spec = self.merge.as_ref().ok_or_else(|| PgError::internal("MERGE ModifyTable without a merge spec"))?;
+            count = run_merge(ex, &td, &self.target, spec, &self.policy, self.rowid_slot, &input_rows, want_returning, &mut kept, &mut ticks)?;
         }
 
         // End-of-statement foreign-key checks run before any RETURNING row is released.
@@ -239,7 +288,15 @@ impl RowSource for ModifyTableOp {
             self.started = true;
             // A failing statement must not leave its deferred FK checks behind.
             let mark = ex.cx.stmt.pending_fk.len();
-            if let Err(e) = self.run(ex) {
+            let pushed = !self.target.wco.is_empty();
+            if pushed {
+                ex.cx.stmt.wco.push((self.target.table.oid, self.target.wco.clone()));
+            }
+            let result = self.run(ex);
+            if pushed {
+                ex.cx.stmt.wco.pop();
+            }
+            if let Err(e) = result {
                 ex.cx.stmt.pending_fk.truncate(mark);
                 return Err(e);
             }
@@ -257,6 +314,105 @@ impl RowSource for ModifyTableOp {
     fn affected_rows(&self) -> Option<u64> {
         Some(self.affected)
     }
+}
+
+/// 21000 for a MERGE that updates or deletes the same target row twice (PG `ExecMergeMatched`).
+fn merge_twice() -> PgError {
+    PgError::new(pgarbor_common::SqlState::CARDINALITY_VIOLATION, "MERGE command cannot affect row a second time")
+        .with_hint("Ensure that not more than one source row matches any one target row.")
+}
+
+/// MERGE: classify each joined input row, run the first applicable WHEN action (plan.rs `MergeSpec`).
+/// Returns the number of rows inserted/updated/deleted; RETURNING input rows go to `kept`.
+#[allow(clippy::too_many_arguments)]
+fn run_merge(
+    ex: &mut Executor,
+    td: &crate::tabledesc::TableDesc,
+    target: &ModifyTarget,
+    spec: &MergeSpec,
+    policy: &EpqPolicy,
+    rowid_slot: Option<u32>,
+    input_rows: &[Row],
+    want_returning: bool,
+    kept: &mut Vec<Row>,
+    ticks: &mut u32,
+) -> Result<u64> {
+    let ncols = td.ncols();
+    let marker = spec.source_marker_slot as usize;
+    let mut touched: HashSet<u64> = HashSet::new();
+    let mut conflict = ConflictState::default();
+    let mut count: u64 = 0;
+    let nulls = vec![Datum::Null; ncols];
+    let ret_row = |image: &[Datum], old: &[Datum], new: &[Datum], input: &[Datum], action: &str| -> Row {
+        let mut r: Row = Vec::with_capacity(3 * ncols + input.len() + 1);
+        r.extend_from_slice(image);
+        r.extend_from_slice(old);
+        r.extend_from_slice(new);
+        r.extend_from_slice(input);
+        r.push(Datum::Text(action.to_string()));
+        r
+    };
+    for input_row in input_rows {
+        ex.tick(ticks)?;
+        let rowid = rowid_of(input_row, rowid_slot)?;
+        let has_source = input_row.get(marker).is_some_and(|d| !d.is_null());
+        let kind = match (rowid.is_some(), has_source) {
+            (true, true) => MergeMatchKind::Matched,
+            (true, false) => MergeMatchKind::NotMatchedBySource,
+            (false, true) => MergeMatchKind::NotMatchedByTarget,
+            (false, false) => continue,
+        };
+        for a in spec.actions.iter().filter(|a| a.match_kind == kind) {
+            if let Some(c) = &a.condition {
+                if !eval::eval_qual(ex, c, input_row)? {
+                    continue;
+                }
+            }
+            match &a.kind {
+                MergePlanActionKind::DoNothing => {}
+                MergePlanActionKind::Update(u) => {
+                    let rowid = rowid.ok_or_else(|| PgError::internal("MERGE UPDATE without a target row"))?;
+                    if !touched.insert(rowid) {
+                        return Err(merge_twice());
+                    }
+                    let old: Vec<Datum> = spec
+                        .target_slots
+                        .iter()
+                        .map(|s| s.and_then(|s| input_row.get(s as usize).cloned()).unwrap_or(Datum::Null))
+                        .collect();
+                    if let Some(new_row) = dml_update::update_one(ex, td, target, u, policy, input_row, rowid)? {
+                        count += 1;
+                        if want_returning {
+                            kept.push(ret_row(&new_row, &old, &new_row, input_row, "UPDATE"));
+                        }
+                    }
+                }
+                MergePlanActionKind::Delete => {
+                    let rowid = rowid.ok_or_else(|| PgError::internal("MERGE DELETE without a target row"))?;
+                    if !touched.insert(rowid) {
+                        return Err(merge_twice());
+                    }
+                    if let Some(old) = dml_delete::delete_one(ex, td, policy, input_row, rowid)? {
+                        count += 1;
+                        if want_returning {
+                            kept.push(ret_row(&old, &old, &nulls, input_row, "DELETE"));
+                        }
+                    }
+                }
+                MergePlanActionKind::Insert { values, spec: ins } => {
+                    let vals = eval::eval_exprs(ex, values, input_row)?;
+                    if let Some(inserted) = dml_insert::insert_input_row(ex, td, ins, &vals, &mut conflict)? {
+                        count += 1;
+                        if want_returning {
+                            kept.push(ret_row(&inserted.row, &nulls, &inserted.row, input_row, "INSERT"));
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    Ok(count)
 }
 
 /// Target rowid of an input row: `Ok(None)` for a NULL rowid slot (no target row).

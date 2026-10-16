@@ -617,6 +617,7 @@ mod tests {
             options: vec![],
             if_not_exists: false,
             inherits: vec![],
+            extra: Default::default(),
         };
         let mut p_oid: Oid = 0;
         let (_, env) = testing::run(&mut kv, &env, |t| {
@@ -656,6 +657,7 @@ mod tests {
             options: vec![],
             if_not_exists: false,
             inherits: vec![],
+            extra: Default::default(),
         };
         let (_, env) = testing::run(&mut kv, &env, |t| t.create_table(&c).map(|_| ()))?;
         Ok((kv, env))

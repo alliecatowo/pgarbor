@@ -255,6 +255,7 @@ mod tests {
             options: vec![],
             if_not_exists: false,
             inherits: vec![],
+            extra: Default::default(),
         };
         let (res, _next) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;
         let table = match res.snapshot.class_in_namespace(ns, "t") {

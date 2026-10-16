@@ -51,25 +51,159 @@ use sqlparser::ast::Statement;
 use super::context::{BindContext, BindOutput, Binder};
 use super::{
     copy, ddl_alter, ddl_alter_other, ddl_drop, ddl_function, ddl_grant, ddl_index, ddl_objects, ddl_table,
-    ddl_view, insert, params, select, update_delete, utility, utility_session,
+    ddl_view, insert, merge, params, select, update_delete, utility, utility_session,
 };
 use crate::classify::{self, StmtClass, StmtFamily};
 use crate::diag;
 use crate::extra_stmt::ExtraStatement;
 use crate::ir::BoundStatement;
-use crate::parser::{Parsed, RawStatement};
+use crate::parser::{
+    grant_routine_text, is_alter_procedure_text, is_alter_routine_text, is_create_procedure_text, is_drop_domain_text,
+    is_drop_routine_text, Parsed, RawStatement,
+};
 
 /// Key under which [`bind_statement`] stores the statement text in `Binder::scratch` (read by PREPARE).
 const STMT_TEXT_KEY: &str = "statement text";
+
+/// `Binder::scratch` key set for `EXPLAIN` by [`bind_statement`]: the 1-based character position of the
+/// first token after the EXPLAIN option header (decimal text). sqlparser gives some inner statements
+/// (e.g. `DROP`) no span, so `utility::bind_explain` reads the position from here for its 42601.
+pub(super) const EXPLAIN_BODY_POS_KEY: &str = "explain body pos";
+
+/// `Binder::scratch` key set for `ALTER PROCEDURE` (the parser turns it into `Statement::AlterFunction`,
+/// see `parser::alter_procedure_as_function`); read by `ddl_alter_other::bind_alter_function`.
+pub(super) const ALTER_PROCEDURE_KEY: &str = "alter procedure";
+
+/// `Binder::scratch` key set with ALTER PROCEDURE: comma-separated 1-based positions of each action
+/// clause (for errors that point at one action).
+pub(super) const ALTER_ACTION_POS_KEY: &str = "alter action positions";
+
+/// Byte offsets (inside `text`) of the action clauses of `ALTER PROCEDURE name(args) action ...`:
+/// top-level words that start an alter-function action, after the argument list.
+fn alter_action_starts(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let (mut i, mut depth, mut words, mut after_args) = (0usize, 0i32, 0usize, false);
+    let mut prev = String::new();
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\'' || c == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != c {
+                i += 1;
+            }
+            i += 1;
+            if depth == 0 {
+                words += 1;
+                prev.clear();
+            }
+            continue;
+        }
+        if c == b'(' {
+            depth += 1;
+            i += 1;
+            continue;
+        }
+        if c == b')' {
+            depth -= 1;
+            if depth == 0 {
+                after_args = true;
+            }
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_alphanumeric() || c == b'_' || c == b'.' {
+            let st = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'.') {
+                i += 1;
+            }
+            if depth == 0 {
+                words += 1;
+                let w = text[st..i].to_ascii_lowercase();
+                if after_args || words > 3 {
+                    let starter = matches!(
+                        w.as_str(),
+                        "immutable" | "stable" | "volatile" | "strict" | "called" | "returns" | "not" | "external"
+                            | "parallel" | "cost" | "rows" | "support" | "set" | "reset"
+                    ) || (w == "leakproof" && prev != "not")
+                        || (w == "security" && prev != "external");
+                    if starter {
+                        out.push(st);
+                    }
+                }
+                prev = w;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `Binder::scratch` key set for `ALTER ROUTINE` (same parser rewrite as `ALTER PROCEDURE`); the name
+/// then resolves to a function, procedure or aggregate. Read by `ddl_alter_other::bind_alter_function`.
+pub(super) const ALTER_ROUTINE_KEY: &str = "alter routine";
+
+/// `Binder::scratch` key set for `CREATE [OR REPLACE] PROCEDURE` (the parser turns it into
+/// `Statement::CreateFunction`, see `parser::create_procedure_as_function`); read by
+/// `ddl_function::create_function`.
+pub(super) const CREATE_PROCEDURE_KEY: &str = "create procedure";
+
+/// `Binder::scratch` key set for a GRANT/REVOKE whose object keyword is `ROUTINE` (`"routine"`) or
+/// `ALL ROUTINES IN SCHEMA` (`"all routines"`); the parser rewrites both to the sqlparser FUNCTION forms
+/// (`parser::routine_grant_as_function`). Read by `ddl_grant::resolve_objects`.
+pub(super) const GRANT_ROUTINE_KEY: &str = "grant routine";
+
+/// `Binder::scratch` key set for `DROP ROUTINE` (the parser turns it into `Statement::DropFunction`, see
+/// `parser::drop_routine_as_function`); the name then resolves to a function or a procedure (PG
+/// `OBJECT_ROUTINE`). Read by `ddl_drop::bind_drop`.
+pub(super) const DROP_ROUTINE_KEY: &str = "drop routine";
+
+/// `Binder::scratch` key set for a multi-name `DROP DOMAIN` (the parser turns it into `Statement::Drop` with
+/// `DROP TYPE`, see `parser::drop_domain_list_as_type`). Read by `ddl_drop::bind_drop`.
+pub(super) const DROP_DOMAIN_KEY: &str = "drop domain";
 
 /// Bind one statement (module docs).
 pub fn bind_statement(stmt: &RawStatement, ctx: &BindContext) -> Result<BindOutput> {
     let mut b = Binder::new(ctx, &stmt.source);
     b.identity_groups = stmt.identity_groups.iter().cloned().collect();
+    b.fk_set_groups = stmt.fk_set_groups.clone();
+    b.view_trailer = stmt.view_trailer.clone();
+    b.overriding = stmt.overriding;
     classify::check_supported(&stmt.parsed, first_token(&stmt.text), Some(stmt.pos))?;
     if let Parsed::Ast(ast) = &stmt.parsed {
         if matches!(&**ast, Statement::Prepare { .. }) {
             b.scratch.insert(STMT_TEXT_KEY, stmt.text.clone());
+        }
+        if matches!(&**ast, Statement::Explain { .. }) {
+            if let Some(pos) = utility::explain_body_pos(&stmt.text, stmt.pos) {
+                b.scratch.insert(EXPLAIN_BODY_POS_KEY, pos.to_string());
+            }
+        }
+        if matches!(&**ast, Statement::AlterFunction(_)) && is_alter_procedure_text(&stmt.text) {
+            b.scratch.insert(ALTER_PROCEDURE_KEY, "procedure".to_string());
+            let starts: Vec<String> = alter_action_starts(&stmt.text)
+                .into_iter()
+                .map(|off| stmt.source.pos_of_byte(stmt.byte_start + off).to_string())
+                .collect();
+            b.scratch.insert(ALTER_ACTION_POS_KEY, starts.join(","));
+        }
+        if matches!(&**ast, Statement::AlterFunction(_)) && is_alter_routine_text(&stmt.text) {
+            b.scratch.insert(ALTER_ROUTINE_KEY, "routine".to_string());
+        }
+        if matches!(&**ast, Statement::DropFunction(_)) && is_drop_routine_text(&stmt.text) {
+            b.scratch.insert(DROP_ROUTINE_KEY, "routine".to_string());
+        }
+        if matches!(&**ast, Statement::Drop { .. }) && is_drop_domain_text(&stmt.text) {
+            b.scratch.insert(DROP_DOMAIN_KEY, "domain".to_string());
+        }
+        if matches!(&**ast, Statement::CreateFunction(_)) && is_create_procedure_text(&stmt.text) {
+            b.scratch.insert(CREATE_PROCEDURE_KEY, "procedure".to_string());
+        }
+        if matches!(&**ast, Statement::Grant(_) | Statement::Revoke(_)) {
+            if let Some(kind) = grant_routine_text(&stmt.text) {
+                b.scratch.insert(GRANT_ROUTINE_KEY, kind.to_string());
+            }
         }
     }
     let statement = match &stmt.parsed {
@@ -93,6 +227,10 @@ pub fn bind_inner_statement(b: &mut Binder, stmt: &Statement, top_level: bool) -
         Statement::Insert(ins) => insert::bind_insert(b, ins),
         Statement::Update(u) => update_delete::bind_update(b, u),
         Statement::Delete(d) => update_delete::bind_delete(b, d),
+        Statement::Merge(m) => merge::bind_merge(b, m),
+        Statement::CreatePolicy(p) => super::ddl_policy::bind_create_policy(b, p),
+        Statement::AlterPolicy(p) => super::ddl_policy::bind_alter_policy(b, p),
+        Statement::DropPolicy(p) => super::ddl_policy::bind_drop_policy(b, p),
         Statement::Copy { .. } => copy::bind_copy(b, stmt),
         Statement::Truncate(_) => ddl_drop::bind_truncate(b, stmt),
 
@@ -164,6 +302,7 @@ pub fn bind_inner_statement(b: &mut Binder, stmt: &Statement, top_level: bool) -
 /// Route an `ExtraStatement` (the PostgreSQL statements `sqlparser` cannot parse).
 pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<BoundStatement> {
     match stmt {
+        ExtraStatement::Ext(s) => super::ddl_ext::bind_ext(b, s),
         ExtraStatement::RefreshMaterializedView { name, concurrently, with_data } => {
             ddl_view::bind_refresh_matview(b, name, *concurrently, *with_data)
         }
@@ -172,6 +311,9 @@ pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<Bou
         }
         ExtraStatement::SetConstraints { names, deferred } => {
             utility_session::bind_set_constraints(b, names.as_deref(), *deferred)
+        }
+        ExtraStatement::TransactionModes { kind, isolation, read_only, deferrable } => {
+            utility_session::bind_transaction_modes(*kind, *isolation, *read_only, *deferrable)
         }
         ExtraStatement::Do { language, code } => ddl_function::bind_do(b, language.as_ref(), code),
         ExtraStatement::AlterSequence { if_exists, name, action } => {
@@ -187,7 +329,54 @@ pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<Bou
         ExtraStatement::AlterMaterializedView { if_exists, name, action } => {
             ddl_alter_other::bind_alter_matview(b, *if_exists, name, action)
         }
+        ExtraStatement::AlterIndex { if_exists, name, actions } => {
+            ddl_alter::bind_alter_index_options(b, *if_exists, name, actions)
+        }
+        ExtraStatement::AlterIndexAllInTablespace { from, to } => ddl_alter::bind_alter_index_all_tablespace(b, from, to),
+        ExtraStatement::AlterIndexRename { if_exists, name, new_name } => {
+            ddl_alter::bind_alter_index_rename(b, *if_exists, name, new_name)
+        }
+        ExtraStatement::AlterView { if_exists, name, actions } => {
+            ddl_alter::bind_alter_view_options(b, *if_exists, name, actions)
+        }
+        ExtraStatement::AlterViewColumnDefault { if_exists, name, column, default } => {
+            ddl_alter::bind_alter_view_column_default(b, *if_exists, name, column, default.as_ref())
+        }
+        ExtraStatement::AlterTypeSetSchema { name, schema } => {
+            ddl_alter_other::bind_alter_type_set_schema(b, name, schema)
+        }
+        ExtraStatement::AlterTableSetSchema { if_exists, name, schema } => {
+            ddl_alter_other::bind_alter_table_set_schema(b, *if_exists, name, schema)
+        }
+        ExtraStatement::GrantRole { roles, grantees, options, grantor } => {
+            ddl_grant::bind_grant_role_extra(b, roles, grantees, options, grantor.as_ref())
+        }
+        ExtraStatement::RevokeRole { option_for, roles, grantees, grantor, cascade } => {
+            ddl_grant::bind_revoke_role_extra(b, option_for.as_ref(), roles, grantees, grantor.as_ref(), *cascade)
+        }
+        ExtraStatement::AlterTableOptions { if_exists, name, actions } => {
+            ddl_alter::bind_alter_table_options(b, *if_exists, name, actions)
+        }
+        ExtraStatement::AlterTableCluster { if_exists, name, index } => {
+            ddl_alter::bind_alter_table_cluster(b, *if_exists, name, index.as_ref())
+        }
+        ExtraStatement::AlterTypeOwner { name, role } => ddl_alter_other::bind_alter_type_owner(b, name, role),
+        ExtraStatement::AlterViewOwner { if_exists, name, role } => {
+            ddl_alter_other::bind_alter_view_owner(b, *if_exists, name, role)
+        }
+        ExtraStatement::AlterViewRename { if_exists, name, action } => {
+            ddl_alter_other::bind_alter_view_rename(b, *if_exists, name, action)
+        }
+        ExtraStatement::AlterTypeRenameAttribute { name, old, new, cascade } => {
+            ddl_alter_other::bind_alter_type_rename_attribute(b, name, old, new, *cascade)
+        }
         ExtraStatement::DropOwned { .. } | ExtraStatement::ReassignOwned { .. } => ddl_drop::bind_owned(b, stmt),
+        ExtraStatement::Maintenance { vacuum, options, table, columns } => {
+            utility::bind_maintenance_options(b, *vacuum, options, table.as_ref(), columns)
+        }
+        ExtraStatement::CommentRoutine { kind, name, args, comment } => {
+            ddl_drop::bind_comment_routine(b, *kind, name, args.as_deref(), comment.as_deref())
+        }
         ExtraStatement::Unsupported { feature } => Err(diag::unsupported_construct(feature, None)),
     }
 }
@@ -240,7 +429,7 @@ mod tests {
     use sqlparser::dialect::PostgreSqlDialect;
     use sqlparser::parser::Parser;
 
-    use super::{bind_extra_statement, bind_inner_statement};
+    use super::{alter_action_starts, bind_extra_statement, bind_inner_statement};
     use crate::binder::context::{BindContext, BindSession, Binder};
     use crate::binder::bind;
     use crate::extra_stmt::ExtraStatement;
@@ -259,6 +448,9 @@ mod tests {
         RawStatement {
             parsed: Parsed::Ast(Box::new(parse_one_ast(sql))),
             identity_groups: Vec::new(),
+            fk_set_groups: Vec::new(),
+            view_trailer: None,
+            overriding: None,
             text: sql.to_string(),
             byte_start: 0,
             byte_end: sql.len(),
@@ -357,5 +549,12 @@ mod tests {
         let c = ctx(&env);
         let out = bind(&raw("SHOW search_path"), &c).expect("SHOW binds");
         assert_eq!(out.statement.tag(), "SHOW");
+    }
+
+    #[test]
+    fn alter_action_starts_finds_each_clause() {
+        let t = "ALTER PROCEDURE p(integer) SECURITY DEFINER NOT LEAKPROOF EXTERNAL SECURITY INVOKER COST 10";
+        let got: Vec<&str> = alter_action_starts(t).into_iter().map(|o| &t[o..o + 4]).collect();
+        assert_eq!(got, vec!["SECU", "NOT ", "EXTE", "COST"]);
     }
 }

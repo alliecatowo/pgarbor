@@ -73,6 +73,7 @@ pub fn exec_alter_table(cx: &mut ExecContext, alter: &BoundAlterTable) -> Result
     let mut rewrites: Vec<ColumnRewrite> = Vec::new();
     let ((), outcome) = run_ddl(cx, |ddl| {
         for cmd in &alter.commands {
+            check_inheritance(ddl, table, cmd, alter.only)?;
             apply_command(ddl, table, cmd, &mut rewrites)?;
         }
         Ok(())
@@ -81,6 +82,61 @@ pub fn exec_alter_table(cx: &mut ExecContext, alter: &BoundAlterTable) -> Result
         run_followups(cx, &outcome.follow_ups, Some(table), &rewrites)?;
     }
     Ok(ExecResult::command(alter_tag(alter.keyword)))
+}
+
+fn invalid_table_definition(msg: String) -> PgError {
+    PgError::new(pgarbor_common::SqlState::INVALID_TABLE_DEFINITION, msg)
+}
+
+/// tablecmds.c top-level (non-recursing) inheritance rules: inherited columns and constraints of a
+/// child cannot be dropped, renamed or retyped from the child; commands PG propagates to
+/// inheritance children (or partitions) are a leased 0A000 until recursion is implemented.
+fn check_inheritance(ddl: &mut CatalogTxn<'_>, table: Oid, cmd: &AlterTableCmd, only: bool) -> Result<()> {
+    let snap = ddl.snapshot()?;
+    let Some(rel) = snap.relation(table) else { return Ok(()) };
+    let inherited_col = |name: &str| rel.column_by_name(name).is_some_and(|c| c.inh_count > 0);
+    let con_of = |name: &str| snap.constraints_of(table).into_iter().find(|c| c.name == name).map(|c| c.inh_count);
+    match cmd {
+        AlterTableCmd::DropColumn { name, .. } if inherited_col(name) => {
+            return Err(invalid_table_definition(format!("cannot drop inherited column \"{name}\"")));
+        }
+        AlterTableCmd::RenameColumn { old, .. } if inherited_col(old) => {
+            return Err(invalid_table_definition(format!("cannot rename inherited column \"{old}\"")));
+        }
+        AlterTableCmd::AlterColumnType { column, .. } if inherited_col(column) => {
+            return Err(invalid_table_definition(format!("cannot alter inherited column \"{column}\"")));
+        }
+        AlterTableCmd::DropConstraint { name, .. } if con_of(name).is_some_and(|n| n > 0) => {
+            return Err(invalid_table_definition(format!(
+                "cannot drop inherited constraint \"{name}\" of relation \"{}\"",
+                rel.name
+            )));
+        }
+        AlterTableCmd::RenameConstraint { old, .. } if con_of(old).is_some_and(|n| n > 0) => {
+            return Err(invalid_table_definition(format!("cannot rename inherited constraint \"{old}\"")));
+        }
+        _ => {}
+    }
+    let recursing = matches!(
+        cmd,
+        AlterTableCmd::AddColumn { .. }
+            | AlterTableCmd::DropColumn { .. }
+            | AlterTableCmd::RenameColumn { .. }
+            | AlterTableCmd::AlterColumnType { .. }
+            | AlterTableCmd::SetNotNull { .. }
+            | AlterTableCmd::DropNotNull { .. }
+            | AlterTableCmd::AddConstraint(_)
+            | AlterTableCmd::DropConstraint { .. }
+            | AlterTableCmd::RenameConstraint { .. }
+            | AlterTableCmd::ValidateConstraint { .. }
+            | AlterTableCmd::AlterConstraint { .. }
+            | AlterTableCmd::DropExpression { .. }
+            | AlterTableCmd::SetExpression { .. }
+    );
+    if recursing && !only && !snap.inheritance_children(table).is_empty() {
+        return Err(PgError::unimplemented("EXE-33", "ALTER TABLE recursion into inheritance children or partitions"));
+    }
+    Ok(())
 }
 
 /// Command tag for an ALTER keyword (same mapping as `BoundStatement::tag`).
@@ -166,6 +222,14 @@ fn apply_command(
             new_default,
             needs_rewrite,
         } => {
+            let old_missing = if *needs_rewrite {
+                let snap = ddl.snapshot()?;
+                snap.relation(table)
+                    .and_then(|r| r.column_by_name(column))
+                    .and_then(|c| c.missing_value.clone().map(|m| (m, c.type_id)))
+            } else {
+                None
+            };
             ddl.alter_column_type(
                 table,
                 column,
@@ -180,7 +244,7 @@ fn apply_command(
                 let expr = using.clone().ok_or_else(|| {
                     PgError::internal("ALTER COLUMN TYPE needs a row rewrite but has no USING expression")
                 })?;
-                rewrites.push(ColumnRewrite::Using { attnum, expr });
+                rewrites.push(ColumnRewrite::Using { attnum, expr, old_missing });
             }
         }
         AlterTableCmd::SetDefault { column, expr } => {
@@ -245,10 +309,24 @@ fn apply_command(
             ddl.set_replica_identity(table, setting)?;
         }
         AlterTableCmd::RowSecurity { enable, force } => {
-            if *enable == Some(true) || *force == Some(true) {
-                return Err(PgError::unimplemented("EXE-33", "row security policy enforcement"));
-            }
+            // Policies are enforced by the binder (pgarbor_sql::binder::rls, amendment pgarbor-exec-merge-wco-rls).
             ddl.set_row_security(table, *enable, *force)?;
+        }
+        AlterTableCmd::ClusterOn { index } => {
+            // cluster.c `mark_index_clustered`: the chosen index gets the flag, its siblings lose it.
+            let changes: Vec<(Oid, bool)> = ddl
+                .snapshot()?
+                .indexes_of(table)
+                .into_iter()
+                .filter(|i| i.clustered != (Some(i.oid) == *index))
+                .map(|i| (i.oid, Some(i.oid) == *index))
+                .collect();
+            for (oid, flag) in changes {
+                ddl.update_index(oid, |i| {
+                    i.clustered = flag;
+                    Ok(())
+                })?;
+            }
         }
     }
     Ok(())
@@ -286,6 +364,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists,
             inherits: Vec::new(),
+            extra: Default::default(),
         }
     }
 
@@ -295,7 +374,7 @@ mod tests {
     }
 
     fn alter(table: Oid, commands: Vec<AlterTableCmd>) -> BoundAlterTable {
-        BoundAlterTable { relation: table, keyword: AlterRelKeyword::Table, commands }
+        BoundAlterTable { relation: table, keyword: AlterRelKeyword::Table, commands, only: false }
     }
 
     #[test]

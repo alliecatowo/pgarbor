@@ -21,7 +21,8 @@ use pgarbor_common::Result;
 use pgarbor_types::Datum;
 
 use crate::error::{check_violation, not_null_violation, row_description};
-use crate::eval::eval_bool3;
+use crate::eval::{eval, eval_bool3};
+use pgarbor_catalog::model::GeneratedKind;
 use crate::runtime::Executor;
 use crate::tabledesc::{CheckDesc, ColDesc, TableDesc};
 
@@ -29,7 +30,7 @@ use crate::tabledesc::{CheckDesc, ColDesc, TableDesc};
 /// the column list counts the missing slots as NULL.
 fn first_null_violation<'t>(td: &'t TableDesc, row: &[Datum]) -> Option<&'t ColDesc> {
     for (i, c) in td.cols.iter().enumerate() {
-        if c.dropped || !c.not_null {
+        if c.dropped || !c.not_null || c.generated == Some(GeneratedKind::Virtual) {
             continue;
         }
         let is_null = match row.get(i) {
@@ -52,7 +53,18 @@ fn checks_in_name_order(td: &TableDesc) -> Vec<&CheckDesc> {
 
 /// NOT NULL enforcement for the NEW row (module docs). 23502 on the first NULL in a NOT NULL column.
 pub fn check_not_null(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Result<()> {
-    let col = match first_null_violation(td, row) {
+    let mut col = first_null_violation(td, row);
+    // NOT NULL on a VIRTUAL generated column applies to its computed value; an earlier attnum wins.
+    for (slot, expr) in &td.virtual_not_null {
+        if col.map(|c| c.attnum as usize - 1 < *slot).unwrap_or(false) {
+            break;
+        }
+        if eval(ex, expr, row)?.is_null() {
+            col = td.cols.get(*slot);
+            break;
+        }
+    }
+    let col = match col {
         Some(c) => c,
         None => return Ok(()),
     };
@@ -76,10 +88,55 @@ pub fn check_constraints(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Re
     Ok(())
 }
 
-/// NOT NULL then CHECK, the order PG uses for INSERT and UPDATE (module docs).
+/// NOT NULL then CHECK, the order PG uses for INSERT and UPDATE (module docs). Row-security WITH
+/// CHECKs of the statement's target run first and view check options last (PG `ExecInsert`/`ExecUpdate`
+/// order: `WCO_RLS_*` before `ExecConstraints`, `WCO_VIEW_CHECK` after the row is stored).
 pub fn enforce(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Result<()> {
+    let wco = statement_wco(ex, td);
+    check_wco(ex, td, row, &wco, false)?;
     check_not_null(ex, td, row)?;
-    check_constraints(ex, td, row)
+    check_constraints(ex, td, row)?;
+    check_wco(ex, td, row, &wco, true)
+}
+
+fn statement_wco(ex: &Executor, td: &TableDesc) -> Vec<pgarbor_sql::ir::TargetWco> {
+    ex.cx.stmt.wco.iter().rev().find(|(oid, _)| *oid == td.oid).map(|(_, w)| w.clone()).unwrap_or_default()
+}
+
+/// Row-security WITH CHECKs of the statement's target for a proposed row: PG checks them before the
+/// speculative insertion of `INSERT ... ON CONFLICT`, so a conflicting row is still rejected.
+pub fn check_rls_wco(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Result<()> {
+    let wco = statement_wco(ex, td);
+    check_wco(ex, td, row, &wco, false)
+}
+
+/// Evaluate the WITH CHECK OPTIONs of one phase (`views`: view check options, else row security).
+fn check_wco(ex: &mut Executor, td: &TableDesc, row: &[Datum], wco: &[pgarbor_sql::ir::TargetWco], views: bool) -> Result<()> {
+    use pgarbor_sql::ir::WcoKind;
+    for w in wco {
+        let is_view = w.kind == WcoKind::ViewCheck;
+        if is_view != views {
+            continue;
+        }
+        // PG ExecWithCheckOptions: the qual must be TRUE (NULL fails).
+        if eval_bool3(ex, &w.expr, row)? == Some(true) {
+            continue;
+        }
+        if is_view {
+            let desc = row_description(&ex.cx.se.io_ctx(), &td.desc_cols(), row)?;
+            return Err(pgarbor_common::PgError::new(
+                pgarbor_common::SqlState(*b"44000"),
+                format!("new row violates check option for view \"{}\"", w.relname),
+            )
+            .with_detail(format!("Failing row contains {desc}.")));
+        }
+        let msg = match &w.polname {
+            Some(p) => format!("new row violates row-level security policy \"{p}\" for table \"{}\"", w.relname),
+            None => format!("new row violates row-level security policy for table \"{}\"", w.relname),
+        };
+        return Err(pgarbor_common::PgError::new(pgarbor_common::SqlState::INSUFFICIENT_PRIVILEGE, msg));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -117,6 +174,7 @@ mod tests {
             cols,
             indexes: Vec::new(),
             checks,
+            virtual_not_null: Vec::new(),
             fks_out: Vec::new(),
             fks_in: Vec::new(),
         }

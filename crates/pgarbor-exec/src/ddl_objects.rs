@@ -111,7 +111,10 @@ pub fn exec_create_function(cx: &mut ExecContext, f: &BoundCreateFunction) -> Re
 }
 
 pub fn exec_create_role(cx: &mut ExecContext, spec: &CreateRoleSpec) -> Result<ExecResult> {
-    ddl_command(cx, "CREATE ROLE", |ddl| ddl.create_role(spec))
+    let mut spec = spec.clone();
+    let role_name = spec.name.clone();
+    spec.password = spec.password.take().map(|p| crate::role_password::encrypt_password_for(&cx.se, &p, &role_name));
+    ddl_command(cx, "CREATE ROLE", |ddl| ddl.create_role(&spec))
 }
 
 #[allow(unused_variables)]

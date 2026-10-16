@@ -46,6 +46,10 @@ pub fn open_srf(ex: &mut Executor, call: &FuncCallExpr, result_type: TypeId, row
         arg_types.push(a.ty);
     }
 
+    if call.func >= crate::plfunc::FIRST_USER_OID {
+        let out = crate::plfunc::call_user_function(&mut *ex.cx, call.func, args, arg_types, result_type, call.retset)?;
+        return Ok(values_iter(out.into_set()));
+    }
     let handle = eval_call::resolve_handle(ex, call.func, &call.name)?;
     let proc = handle.proc;
 

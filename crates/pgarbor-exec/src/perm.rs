@@ -69,6 +69,10 @@ pub fn require_relation_privilege(se: &SessionEnv, rel: Oid, mode: u32, columns:
     if graph.is_superuser(user) {
         return Ok(());
     }
+    if snap.relation(rel).is_none() && snap.sequence(rel).is_some() {
+        // `SELECT * FROM seq`: the sequence's own ACL decides.
+        return require_sequence_privilege(se, rel, mode);
+    }
     let r = snap.relation(rel).ok_or_else(|| missing_relation(rel))?;
     let owner = r.owner;
 
@@ -88,10 +92,8 @@ pub fn require_relation_privilege(se: &SessionEnv, rel: Oid, mode: u32, columns:
             })?;
             let col_acl = effective_acl(AclObject::Column, owner, col.acl.as_ref())?;
             if privilege_mask(&graph, user, owner, &col_acl, col_mask, false)? == 0 {
-                return Err(PgError::new(
-                    SqlState::INSUFFICIENT_PRIVILEGE,
-                    format!("permission denied for column \"{}\" of relation \"{}\"", col.name, r.name),
-                ));
+                // PG `ExecCheckOneRelPerms`: a column-level miss is still reported as the table-level 42501.
+                return Err(permission_denied_for(relation_word(r.kind), &r.name));
             }
         }
         return Ok(());
@@ -120,6 +122,22 @@ pub fn require_sequence_privilege(se: &SessionEnv, seq: Oid, mode: u32) -> Resul
         return Ok(());
     }
     Err(permission_denied_for("sequence", &s.name))
+}
+
+/// Require `EXECUTE` on user function `f` (PG `pg_proc_aclcheck`): superusers pass; otherwise the
+/// function's ACL (`acldefault(Function)` = PUBLIC may execute, when `acl` is None).
+pub fn require_function_privilege(se: &SessionEnv, f: &pgarbor_catalog::model::Function) -> Result<()> {
+    let snap = se.env.snapshot();
+    let user = se.env.current_user();
+    let graph = RoleGraph::build(snap, se.env.database())?;
+    if graph.is_superuser(user) {
+        return Ok(());
+    }
+    let acl = effective_acl(AclObject::Function, f.owner, f.acl.as_ref())?;
+    if privilege_mask(&graph, user, f.owner, &acl, acl_mode::EXECUTE, false)? != 0 {
+        return Ok(());
+    }
+    Err(permission_denied_for("function", &f.name))
 }
 
 #[cfg(test)]
@@ -165,6 +183,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let mut table: Oid = 0;
         let (_, env) = testing::run(&mut kv, &env, |t| {
@@ -259,7 +278,7 @@ mod tests {
         check_rel(&alice_env, t, acl_mode::SELECT, &[1])?;
         let e = check_rel(&alice_env, t, acl_mode::SELECT, &[2]).expect_err("column b must be denied");
         assert_eq!(e.sqlstate, SqlState::INSUFFICIENT_PRIVILEGE);
-        assert_eq!(e.message, "permission denied for column \"b\" of relation \"t\"");
+        assert_eq!(e.message, "permission denied for table t");
         // Whole-table access needs the table-level privilege.
         assert!(check_rel(&alice_env, t, acl_mode::SELECT, &[]).is_err());
         Ok(())

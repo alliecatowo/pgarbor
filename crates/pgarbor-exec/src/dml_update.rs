@@ -159,6 +159,10 @@ pub fn apply_update(
     new_row: Vec<Datum>,
     modified_cols: Option<&[i16]>,
 ) -> Result<Vec<Datum>> {
+    // A partition's new row must stay inside its bound (PG `ExecUpdateAct`: before the constraints).
+    if crate::partition::is_partition(&*ex.cx, td.oid)? && !crate::partition::check_partition_constraint(ex, td, &new_row)? {
+        return Err(crate::partition::partition_constraint_error(ex, td, &new_row));
+    }
     constraints::enforce(ex, td, &new_row)?;
     rowstore::write_row(ex, td, rowid, &new_row)?;
     index_maint::update_entries(ex, td, rowid, old_row, &new_row, modified_cols)?;

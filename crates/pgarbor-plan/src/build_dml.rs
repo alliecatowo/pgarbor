@@ -57,13 +57,14 @@
 use pgarbor_catalog::model::{GeneratedKind, IdentityKind};
 use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_sql::ir::{
-    Assignment, BoundCreateTableAs, BoundDelete, BoundExpr, BoundInsert, BoundQuery, BoundStatement, BoundUpdate,
+    Assignment, BoundCreateTableAs, BoundCte, BoundDelete, BoundExpr, BoundInsert, BoundQuery, BoundStatement, BoundUpdate,
     ColumnRef, ConflictAction, ExprKind, FieldSelect, FromItem, InsertSource, Overriding, RangeEntry, TargetColumn,
     TargetEntry, TargetTable,
 };
 use pgarbor_types::{Datum, TypeId};
 
 use crate::build;
+use crate::cte;
 use crate::context::PlannerState;
 use crate::join;
 use crate::logical::{LogicalJoin, LogicalNode, LogicalPlan};
@@ -86,6 +87,7 @@ pub fn plan_dml_statement(st: &mut PlannerState, stmt: &BoundStatement) -> Resul
         BoundStatement::Insert(ins) => Ok((plan_insert(st, ins)?, PlanKind::Insert)),
         BoundStatement::Update(upd) => Ok((plan_update(st, upd)?, PlanKind::Update)),
         BoundStatement::Delete(del) => Ok((plan_delete(st, del)?, PlanKind::Delete)),
+        BoundStatement::Merge(m) => Ok((crate::build_merge::plan_merge(st, m)?, PlanKind::Merge)),
         BoundStatement::CreateTableAs(ctas) => Ok((plan_create_table_as(st, ctas)?, PlanKind::Populate)),
         _ => Err(PgError::internal("statement is not plannable")),
     }
@@ -93,17 +95,17 @@ pub fn plan_dml_statement(st: &mut PlannerState, stmt: &BoundStatement) -> Resul
 
 /// INSERT.
 pub fn plan_insert(st: &mut PlannerState, ins: &BoundInsert) -> Result<PlanNode> {
-    in_level(st, &ins.range_table, |st| plan_insert_inner(st, ins))
+    with_ctes(st, &ins.ctes, |st| in_level(st, &ins.range_table, |st| plan_insert_inner(st, ins)))
 }
 
 /// UPDATE.
 pub fn plan_update(st: &mut PlannerState, upd: &BoundUpdate) -> Result<PlanNode> {
-    in_level(st, &upd.range_table, |st| plan_update_inner(st, upd))
+    with_ctes(st, &upd.ctes, |st| in_level(st, &upd.range_table, |st| plan_update_inner(st, upd)))
 }
 
 /// DELETE.
 pub fn plan_delete(st: &mut PlannerState, del: &BoundDelete) -> Result<PlanNode> {
-    in_level(st, &del.range_table, |st| plan_delete_inner(st, del))
+    with_ctes(st, &del.ctes, |st| in_level(st, &del.range_table, |st| plan_delete_inner(st, del)))
 }
 
 /// CREATE TABLE AS source query.
@@ -139,7 +141,23 @@ fn level_names(entries: &[RangeEntry]) -> Vec<(String, Vec<String>)> {
 }
 
 /// Run `f` inside a fresh query level built from the statement's range table.
-fn in_level<'a, T>(
+/// Register the statement's top-level WITH list (if any) around planning the statement, so CTE
+/// references (`levels_up` counts WITH frames) resolve and data-modifying CTEs are planned.
+pub(crate) fn with_ctes<'a, T>(
+    st: &mut PlannerState<'a>,
+    ctes: &[BoundCte],
+    f: impl FnOnce(&mut PlannerState<'a>) -> Result<T>,
+) -> Result<T> {
+    if ctes.is_empty() {
+        return f(st);
+    }
+    cte::register_ctes(st, ctes)?;
+    let result = f(&mut *st);
+    cte::unregister_ctes(st);
+    result
+}
+
+pub(crate) fn in_level<'a, T>(
     st: &mut PlannerState<'a>,
     entries: &[RangeEntry],
     f: impl FnOnce(&mut PlannerState<'a>) -> Result<T>,
@@ -153,13 +171,13 @@ fn in_level<'a, T>(
     result
 }
 
-fn column_of(target: &TargetTable, attnum: i16) -> Result<&TargetColumn> {
+pub(crate) fn column_of(target: &TargetTable, attnum: i16) -> Result<&TargetColumn> {
     target
         .column(attnum)
         .ok_or_else(|| PgError::internal(format!("attnum {attnum} is not a column of the DML target")))
 }
 
-fn table_ref(target: &TargetTable, alias: &str) -> TableRef {
+pub(crate) fn table_ref(target: &TargetTable, alias: &str) -> TableRef {
     TableRef {
         oid: target.oid,
         schema: target.schema.clone(),
@@ -171,7 +189,7 @@ fn table_ref(target: &TargetTable, alias: &str) -> TableRef {
 }
 
 /// Alias of range-table entry `rt` (1-based), or `fallback` when the entry is missing.
-fn target_alias(entries: &[RangeEntry], rt: u32, fallback: &str) -> String {
+pub(crate) fn target_alias(entries: &[RangeEntry], rt: u32, fallback: &str) -> String {
     match (rt as usize).checked_sub(1).and_then(|i| entries.get(i)) {
         Some(e) => e.alias.clone(),
         None => fallback.to_string(),
@@ -179,7 +197,7 @@ fn target_alias(entries: &[RangeEntry], rt: u32, fallback: &str) -> String {
 }
 
 /// Record the functions and sequences an expression depends on (plan invalidation).
-fn note_expr_deps(st: &mut PlannerState, e: &BoundExpr) {
+pub(crate) fn note_expr_deps(st: &mut PlannerState, e: &BoundExpr) {
     let mut funcs: Vec<Oid> = Vec::new();
     let mut seqs: Vec<Oid> = Vec::new();
     e.walk(&mut |x: &BoundExpr| -> bool {
@@ -203,9 +221,12 @@ fn note_expr_deps(st: &mut PlannerState, e: &BoundExpr) {
     }
 }
 
+/// `tableoid` system column attnum.
+const TABLEOID_ATTNUM: i16 = -6;
+
 /// Slot of a column of the DML target row (`attnum - 1`). Whole-row and system columns are not
 /// supported in DML expressions yet.
-fn row_slot(c: &ColumnRef, ncols: u32) -> Result<u32> {
+pub(crate) fn row_slot(c: &ColumnRef, ncols: u32) -> Result<u32> {
     if c.attnum < 1 {
         return Err(PgError::unimplemented("PLN-17", "whole-row or system column reference in a DML expression"));
     }
@@ -246,6 +267,10 @@ fn dml_input_slot(c: &ColumnRef, target_rt: u32, ncols: u32, from_vars: &[BoundE
 
 /// UPDATE/DELETE RETURNING input row: `new/deleted table row (ncols) ++ FROM columns` (rowid dropped).
 fn dml_returning_slot(c: &ColumnRef, target_rt: u32, ncols: u32, from_vars: &[BoundExpr]) -> Result<u32> {
+    if c.levels_up == 0 && c.rt_index == target_rt && c.attnum == TABLEOID_ATTNUM {
+        // The executor appends the row's relation OID after the RETURNING input row.
+        return Ok(ncols + from_vars.len() as u32);
+    }
     if c.levels_up == 0 && c.rt_index == target_rt {
         return row_slot(c, ncols);
     }
@@ -268,7 +293,7 @@ fn conflict_slot(c: &ColumnRef, excluded_rt: u32, ncols: u32) -> Result<u32> {
 
 /// Rewrite every level-0 `Column` of `e` into `InputRef(map(column))`, bottom-up. Sub-plan
 /// arguments are rewritten too (they are evaluated over the same input row).
-fn remap_columns(e: BoundExpr, map: &dyn Fn(&ColumnRef) -> Result<u32>) -> Result<BoundExpr> {
+pub(crate) fn remap_columns(e: BoundExpr, map: &dyn Fn(&ColumnRef) -> Result<u32>) -> Result<BoundExpr> {
     e.transform(&mut |x: BoundExpr| -> Result<BoundExpr> {
         let slot = match &x.kind {
             ExprKind::Column(c) => Some(map(c)?),
@@ -282,7 +307,7 @@ fn remap_columns(e: BoundExpr, map: &dyn Fn(&ColumnRef) -> Result<u32>) -> Resul
 }
 
 /// `SetToDefault` must have been replaced by the time an expression reaches the plan.
-fn reject_default(e: &BoundExpr) -> Result<()> {
+pub(crate) fn reject_default(e: &BoundExpr) -> Result<()> {
     if e.any(&mut |x: &BoundExpr| matches!(x.kind, ExprKind::SetToDefault { .. })) {
         return Err(PgError::new(FEATURE_NOT_SUPPORTED, "DEFAULT is not allowed in this context"));
     }
@@ -291,7 +316,7 @@ fn reject_default(e: &BoundExpr) -> Result<()> {
 
 /// The value a column gets when the statement says DEFAULT (or supplies nothing): the column's default
 /// expression (over no input row) or NULL.
-fn default_expr(st: &mut PlannerState, target: &TargetTable, attnum: i16) -> Result<BoundExpr> {
+pub(crate) fn default_expr(st: &mut PlannerState, target: &TargetTable, attnum: i16) -> Result<BoundExpr> {
     let col = column_of(target, attnum)?;
     match &col.default {
         Some(d) => {
@@ -301,13 +326,30 @@ fn default_expr(st: &mut PlannerState, target: &TargetTable, attnum: i16) -> Res
             note_expr_deps(st, d);
             Ok(d.clone())
         }
-        None => Ok(BoundExpr::null(col.ty)),
+        None => {
+            let null = BoundExpr::null(col.ty);
+            // rewriteHandler.c `build_column_default`: a domain-typed column without a default gets
+            // `coerce_to_domain(NULL)`, so the domain's NOT NULL / CHECK constraints still apply.
+            let is_domain =
+                pgarbor_types::TypeEnv::type_info(st.ctx.env, col.ty.oid).is_some_and(|t| t.typtype == b'd');
+            if !is_domain {
+                return Ok(null);
+            }
+            Ok(BoundExpr::new(
+                ExprKind::CoerceToDomain(Box::new(pgarbor_sql::ir::CoerceToDomain {
+                    arg: null,
+                    domain: col.ty.oid,
+                    form: pgarbor_sql::ir::CoercionForm::Implicit,
+                })),
+                col.ty,
+            ))
+        }
     }
 }
 
 /// Lower one value of a DML statement for column `attnum`: DEFAULT becomes the column default, then
 /// constant folding and sub-link planning. Column references are still bind-time (remapped later).
-fn lower_value(st: &mut PlannerState, e: BoundExpr, target: &TargetTable, attnum: i16) -> Result<BoundExpr> {
+pub(crate) fn lower_value(st: &mut PlannerState, e: BoundExpr, target: &TargetTable, attnum: i16) -> Result<BoundExpr> {
     let e = if matches!(e.kind, ExprKind::SetToDefault { .. }) { default_expr(st, target, attnum)? } else { e };
     let e = simplify::simplify_expr(st, e)?;
     let e = subplan::process_sublinks(st, e)?;
@@ -329,7 +371,7 @@ fn assignment_defaults(a: &Assignment) -> Vec<(i16, bool)> {
 
 /// PG `rewriteTargetListIU` for UPDATE and ON CONFLICT DO UPDATE: identity GENERATED ALWAYS and generated
 /// columns can only be assigned DEFAULT. Checked in column order, like PG.
-fn check_update_targets(target: &TargetTable, assigns: &[Assignment]) -> Result<()> {
+pub(crate) fn check_update_targets(target: &TargetTable, assigns: &[Assignment]) -> Result<()> {
     let mut assigned: Vec<(i16, bool)> = Vec::new();
     for a in assigns {
         assigned.extend(assignment_defaults(a));
@@ -391,7 +433,7 @@ fn check_query_insert(target: &TargetTable, columns: &[i16], overriding: Option<
 
 /// Lower one assignment into `(attnum, value)` pairs (values still bind-time). A multi-column SET takes
 /// a row constructor (one value per column) or a row sub-link (one field selection per column).
-fn lower_assignment(st: &mut PlannerState, target: &TargetTable, a: &Assignment) -> Result<Vec<(i16, BoundExpr)>> {
+pub(crate) fn lower_assignment(st: &mut PlannerState, target: &TargetTable, a: &Assignment) -> Result<Vec<(i16, BoundExpr)>> {
     if let [only] = a.targets.as_slice() {
         let v = lower_value(st, a.value.clone(), target, only.attnum)?;
         return Ok(vec![(only.attnum, v)]);
@@ -425,7 +467,7 @@ fn lower_assignment(st: &mut PlannerState, target: &TargetTable, a: &Assignment)
 }
 
 /// Rewrite the stored generated columns of the target as expressions over the NEW row (`InputRef(attnum-1)`).
-fn generated_exprs(st: &mut PlannerState, target: &TargetTable) -> Result<Vec<(i16, BoundExpr)>> {
+pub(crate) fn generated_exprs(st: &mut PlannerState, target: &TargetTable) -> Result<Vec<(i16, BoundExpr)>> {
     let ncols = target.columns.len() as u32;
     let mut out = Vec::new();
     for col in target.columns.iter() {
@@ -443,7 +485,7 @@ fn generated_exprs(st: &mut PlannerState, target: &TargetTable) -> Result<Vec<(i
 }
 
 /// CHECK constraints over the NEW row (`InputRef(attnum-1)`).
-fn target_checks(target: &TargetTable) -> Result<Vec<(Oid, String, BoundExpr)>> {
+pub(crate) fn target_checks(target: &TargetTable) -> Result<Vec<(Oid, String, BoundExpr)>> {
     let ncols = target.columns.len() as u32;
     let mut out = Vec::with_capacity(target.checks.len());
     for c in target.checks.iter() {
@@ -453,9 +495,22 @@ fn target_checks(target: &TargetTable) -> Result<Vec<(Oid, String, BoundExpr)>> 
     Ok(out)
 }
 
+/// WITH CHECK OPTIONs over the NEW row (`InputRef(attnum-1)`), sub-links planned.
+pub(crate) fn target_wco(st: &mut PlannerState, target: &TargetTable) -> Result<Vec<pgarbor_sql::ir::TargetWco>> {
+    let ncols = target.columns.len() as u32;
+    let mut out = Vec::with_capacity(target.wco.len());
+    for w in target.wco.iter() {
+        let e = simplify::simplify_expr(st, w.expr.clone())?;
+        let e = subplan::process_sublinks(st, e)?;
+        let e = remap_columns(e, &|cr: &ColumnRef| target_slot(cr, 1, ncols))?;
+        out.push(pgarbor_sql::ir::TargetWco { kind: w.kind, relname: w.relname.clone(), polname: w.polname.clone(), expr: e });
+    }
+    Ok(out)
+}
+
 /// Lower a RETURNING list: simplify, plan sub-links, map columns with `map`. Returns the expressions and
 /// the RowDescription-style output slots.
-fn lower_returning(
+pub(crate) fn lower_returning(
     st: &mut PlannerState,
     entries: &[TargetEntry],
     map: &dyn Fn(&ColumnRef) -> Result<u32>,
@@ -501,6 +556,8 @@ fn dml_input(
     }
     let (from_lp, join_quals) = join::order_join_tree(st, items, Vec::new())?;
     let from_vars = from_lp.vars.clone();
+    let target_vars = target_lp.vars.clone();
+    let target_out = target_lp.out.clone();
     let mut vars = target_lp.vars.clone();
     vars.extend(from_lp.vars.iter().cloned());
     let mut out = target_lp.out.clone();
@@ -524,6 +581,25 @@ fn dml_input(
     };
     let lp = pushdown::push_down_quals(st, joined, quals)?;
     let node = planner::plan_logical(st, &lp)?;
+    // The join planner may put the FROM side first: restore `target row ++ rowid ++ FROM columns`.
+    let mut expected = target_vars;
+    expected.push(BoundExpr::column(0, target_rt, -1, TypeId::INT8));
+    expected.extend(from_vars.iter().cloned());
+    if node.vars != expected && expected.iter().all(|e| node.vars.contains(e)) {
+        let mut out = target_out;
+        out.push(OutCol { name: "ctid".to_string(), ty: TypeId::INT8 });
+        for v in &from_vars {
+            let i = node.vars.iter().position(|x| x == v).unwrap_or(0);
+            out.push(node.out.get(i).cloned().unwrap_or(OutCol { name: "?column?".to_string(), ty: v.ty }));
+        }
+        let est = node.est;
+        let ordering = node.ordering.clone();
+        let mut projected = st.new_node(NodeKind::Project(Box::new(ProjectNode { input: node, exprs: expected.clone() })), out);
+        projected.vars = expected;
+        projected.est = est;
+        projected.ordering = ordering;
+        return Ok((projected, from_vars));
+    }
     Ok((node, from_vars))
 }
 
@@ -615,19 +691,27 @@ fn plan_insert_inner(st: &mut PlannerState, ins: &BoundInsert) -> Result<PlanNod
     };
 
     // Target relation is range table entry 1 (`ncols`-slot table row for RETURNING).
-    let ret_map = |c: &ColumnRef| target_slot(c, 1, ncols);
+    // `tableoid` reads the slot the executor appends after the RETURNING input (the relation
+    // that stored the row, e.g. the leaf partition; amendment pgarbor-plan-05).
+    let ret_map = |c: &ColumnRef| {
+        if c.levels_up == 0 && c.rt_index == 1 && c.attnum == TABLEOID_ATTNUM {
+            return Ok(ncols);
+        }
+        target_slot(c, 1, ncols)
+    };
     let (returning, out) = lower_returning(st, &ins.returning, &ret_map)?;
 
     let table = table_ref(target, &target_alias(&ins.range_table, 1, &target.name));
     let node = ModifyTableNode {
         op: ModifyOp::Insert,
-        target: ModifyTarget { table, meta: target.clone(), checks: target_checks(target)? },
+        target: ModifyTarget { table, meta: target.clone(), checks: target_checks(target)?, wco: target_wco(st, target)? },
         input,
         rowid_slot: None,
         insert: Some(InsertSpec { columns: kept_attnums, defaults, generated, on_conflict }),
         update: None,
         returning,
         returning_extra_from: None,
+        merge: None,
     };
     Ok(st.new_node(NodeKind::ModifyTable(Box::new(node)), out))
 }
@@ -652,6 +736,12 @@ fn values_input(st: &mut PlannerState, ins: &BoundInsert, rows: &[Vec<BoundExpr>
     for &p in kept {
         let col = column_of(target, ins.columns[p])?;
         out.push(OutCol { name: col.name.clone(), ty: col.ty });
+    }
+    // PG: a single-row INSERT ... VALUES has no VALUES range table entry; it plans as a Result over the
+    // row's expressions (EXPLAIN shows `Result`, not `Values Scan`).
+    if out_rows.len() == 1 {
+        let exprs = out_rows.remove(0);
+        return Ok(st.new_node(NodeKind::Result(ResultNode { exprs, one_time_filter: None }), out));
     }
     Ok(st.new_node(NodeKind::ValuesScan(ValuesScan { rows: out_rows, filter: None }), out))
 }
@@ -705,13 +795,14 @@ fn plan_update_inner(st: &mut PlannerState, upd: &BoundUpdate) -> Result<PlanNod
     let table = table_ref(target, &target_alias(&upd.range_table, upd.target_rt, &target.name));
     let node = ModifyTableNode {
         op: ModifyOp::Update,
-        target: ModifyTarget { table, meta: target.clone(), checks: target_checks(target)? },
+        target: ModifyTarget { table, meta: target.clone(), checks: target_checks(target)?, wco: target_wco(st, target)? },
         input,
         rowid_slot: Some(ncols),
         insert: None,
         update: Some(UpdateSpec { assignments: assign_out, generated }),
         returning,
         returning_extra_from: Some(ncols + 1),
+        merge: None,
     };
     Ok(st.new_node(NodeKind::ModifyTable(Box::new(node)), out))
 }
@@ -729,13 +820,14 @@ fn plan_delete_inner(st: &mut PlannerState, del: &BoundDelete) -> Result<PlanNod
     let table = table_ref(target, &target_alias(&del.range_table, del.target_rt, &target.name));
     let node = ModifyTableNode {
         op: ModifyOp::Delete,
-        target: ModifyTarget { table, meta: target.clone(), checks: target_checks(target)? },
+        target: ModifyTarget { table, meta: target.clone(), checks: target_checks(target)?, wco: target_wco(st, target)? },
         input,
         rowid_slot: Some(ncols),
         insert: None,
         update: None,
         returning,
         returning_extra_from: Some(ncols + 1),
+        merge: None,
     };
     Ok(st.new_node(NodeKind::ModifyTable(Box::new(node)), out))
 }
@@ -773,6 +865,7 @@ mod tests {
             kind: RelKind::Table,
             columns,
             checks: Vec::new(),
+            wco: Vec::new(),
         }
     }
 

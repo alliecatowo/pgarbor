@@ -4,11 +4,16 @@
 //!
 //! `bind_on_conflict(b, oc, target, columns)` (sqlparser `OnConflict { conflict_target, action }`):
 //! * **Arbiter** (`Arbiter`): `ConflictTarget::Columns(idents)` -> find the unique indexes of the target
-//!   whose key columns EXACTLY match the set of inferred columns (order-insensitive), non-partial, non-
-//!   deferrable, valid (use `env.snapshot().indexes_of(table)`); none -> 42P10 `there is no unique or
-//!   exclusion constraint matching the ON CONFLICT specification`. Expression inference elements
-//!   (`ON CONFLICT ((lower(a)))`) and `WHERE index_predicate` are not representable in sqlparser 0.63's
-//!   `ConflictTarget::Columns(Vec<Ident>)`; document as a gap. `ConflictTarget::OnConstraint(name)` ->
+//!   whose plain key columns EXACTLY match the inferred columns (order-insensitive) and whose expression
+//!   keys EXACTLY match the inferred expressions (PG `infer_arbiter_indexes`), non-partial, immediate,
+//!   valid (use `env.snapshot().indexes_of(table)`); none -> 42P10 `there is no unique or
+//!   exclusion constraint matching the ON CONFLICT specification`. An expression element
+//!   (`ON CONFLICT (lower(a))`) reaches this module as a [`CONFLICT_EXPR_MARKER`] identifier carrying its
+//!   source text (the parser rewrites it, sqlparser 0.63 takes identifiers only); it is parsed, bound in
+//!   the target's scope and compared with the stored key expressions. A COLLATE element is 0A000 SQL-27.
+//!   `WHERE index_predicate` (not representable in sqlparser 0.63's `ConflictTarget::Columns`) reaches
+//!   this module as a trailing [`CONFLICT_WHERE_MARKER`] identifier; a partial index qualifies only when
+//!   its bound predicate equals the written one (PG uses implication). `ConflictTarget::OnConstraint(name)` ->
 //!   the named unique/PK constraint's backing index (42704 `constraint "x" for table "t" does not
 //!   exist`, oracle; a CHECK constraint name: 42809 `constraint in ON CONFLICT clause has no associated
 //!   index`). No target: only legal with `DO NOTHING`
@@ -29,16 +34,18 @@
 //!   within the same command have duplicate constrained values.`
 use pgarbor_catalog::Index;
 use pgarbor_common::{PgError, Result, SqlState};
-use sqlparser::ast::{ConflictTarget, Ident, ObjectName, OnConflict, OnConflictAction};
+use sqlparser::ast::{ConflictTarget, Expr, Ident, ObjectName, OnConflict, OnConflictAction};
 
 use super::coerce::coerce_to_boolean;
 use super::context::{Binder, ExprCtx};
 use super::expr::bind_arg;
 use super::from::relation_range_entry;
 use super::scope::{add_namespace_for_range, add_range_entry};
+use super::stored::{bind_relation_expr, bind_stored_expr};
 use super::update_delete::bind_assignments;
 use crate::diag;
-use crate::ir::{Arbiter, BoundOnConflict, ConflictAction, PseudoRelation, RangeKind, TargetTable};
+use crate::ir::{Arbiter, BoundExpr, BoundOnConflict, ConflictAction, ExprKind, PseudoRelation, RangeKind, TargetTable};
+use crate::parser::{parse_expr_text, CONFLICT_EXPR_MARKER, CONFLICT_WHERE_MARKER};
 
 /// Range-table index of the DML target in the INSERT scope (`open_target_table` registers the
 /// target first, so it is always entry 1).
@@ -99,11 +106,39 @@ fn infer_arbiter(b: &mut Binder, spec: Option<&ConflictTarget>, target: &TargetT
     }
 }
 
-/// `ON CONFLICT (c1, c2, ..)`: every valid unique index over exactly that column set (order
-/// insensitive, repeated columns collapse, as PG's bitmapset comparison does).
+/// `ON CONFLICT (c1, (expr), ..)`: every valid unique index whose plain key columns are exactly the
+/// inferred columns and whose expression keys are exactly the inferred expressions (PG
+/// `infer_arbiter_indexes`). Order-insensitive; repeated elements collapse.
 fn infer_by_columns(b: &mut Binder, idents: &[Ident], target: &TargetTable) -> Result<Arbiter> {
     let mut attnums: Vec<i16> = Vec::with_capacity(idents.len());
+    let mut exprs: Vec<BoundExpr> = Vec::new();
+    let mut predicate: Option<BoundExpr> = None;
     for id in idents {
+        if let Some(text) = id.value.strip_prefix(CONFLICT_WHERE_MARKER) {
+            predicate = Some(bind_inference_expr(b, text, id, target)?);
+            continue;
+        }
+        if let Some(text) = id.value.strip_prefix(CONFLICT_EXPR_MARKER) {
+            let bound = bind_inference_expr(b, text, id, target)?;
+            // A parenthesized column (`((c))`) is the plain column, as in PG's parse tree.
+            let plain = match &bound.kind {
+                ExprKind::Column(c) if c.levels_up == 0 && c.rt_index == 1 && c.attnum >= 1 => Some(c.attnum),
+                _ => None,
+            };
+            match plain {
+                Some(attnum) => {
+                    if !attnums.contains(&attnum) {
+                        attnums.push(attnum);
+                    }
+                }
+                None => {
+                    if !exprs.contains(&bound) {
+                        exprs.push(bound);
+                    }
+                }
+            }
+            continue;
+        }
         let name = b.ident(id);
         let pos = b.pos_span(id.span);
         let attnum = match target.live_columns().find(|c| c.name == name) {
@@ -119,9 +154,19 @@ fn infer_by_columns(b: &mut Binder, idents: &[Ident], target: &TargetTable) -> R
     let env = b.env;
     let mut matched: Vec<&Index> = Vec::new();
     for idx in env.snapshot().indexes_of(target.oid) {
-        match inference_candidate_columns(idx) {
-            Some(cols) if cols == attnums => matched.push(idx),
-            _ => {}
+        match inference_candidate_columns(idx, predicate.is_some()) {
+            Some(cols) if cols == attnums => {}
+            _ => continue,
+        }
+        if let (Some(stored), Some(want)) = (&idx.predicate, &predicate) {
+            // A partial index arbitrates only when the written predicate is the index predicate.
+            let have = bind_stored_expr(b, &stored.sql, target.oid, ExprCtx::index_expr())?;
+            if &have != want {
+                continue;
+            }
+        }
+        if index_expressions_match(b, idx, target, &exprs)? {
+            matched.push(idx);
         }
     }
     if matched.is_empty() {
@@ -188,28 +233,64 @@ fn check_arbiters_immediate(matched: &[&Index], target: &TargetTable) -> Result<
     Ok(())
 }
 
-/// Sorted attnum set of an index usable for `ON CONFLICT (cols)` inference, or None.
-fn inference_candidate_columns(idx: &Index) -> Option<Vec<i16>> {
+/// Sorted attnum set of the plain key columns of an index usable for `ON CONFLICT (..)` inference, or
+/// None. Expression keys are matched by [`index_expressions_match`].
+fn inference_candidate_columns(idx: &Index, allow_partial: bool) -> Option<Vec<i16>> {
     let n = idx.n_key_columns as usize;
     let keys: Vec<Option<i16>> = idx.keys.iter().take(n).map(|k| k.column).collect();
-    candidate_key_set(idx.unique, idx.exclusion, idx.valid, idx.predicate.is_some(), &keys)
+    candidate_key_set(idx.unique, idx.exclusion, idx.valid, idx.predicate.is_some() && !allow_partial, &keys)
 }
 
 /// Core of [`inference_candidate_columns`]: only unique, non-exclusion, valid, non-partial indexes
-/// whose key columns are all plain columns qualify (PG plancat.c `infer_arbiter_indexes`).
+/// qualify (PG plancat.c `infer_arbiter_indexes`). `None` entries are expression keys.
 fn candidate_key_set(unique: bool, exclusion: bool, valid: bool, partial: bool, keys: &[Option<i16>]) -> Option<Vec<i16>> {
     if !unique || exclusion || !valid || partial || keys.is_empty() {
         return None;
     }
-    let mut cols: Vec<i16> = Vec::with_capacity(keys.len());
-    for key in keys {
-        let attnum = (*key)?;
-        if !cols.contains(&attnum) {
-            cols.push(attnum);
+    let mut cols: Vec<i16> = keys.iter().flatten().copied().collect();
+    cols.sort_unstable();
+    cols.dedup();
+    Some(cols)
+}
+
+/// The expression part of PG `infer_arbiter_indexes`: the expression keys of `idx` and the inference
+/// expressions must be the same set (every inference expression is a cataloged index expression and no
+/// cataloged expression is left unmatched). Stored key text is bound in the target's scope.
+fn index_expressions_match(b: &mut Binder, idx: &Index, target: &TargetTable, exprs: &[BoundExpr]) -> Result<bool> {
+    let mut keys: Vec<BoundExpr> = Vec::new();
+    for key in idx.key_columns() {
+        if let Some(stored) = &key.expr {
+            keys.push(bind_stored_expr(b, &stored.sql, target.oid, ExprCtx::index_expr())?);
         }
     }
-    cols.sort_unstable();
-    Some(cols)
+    Ok(keys.iter().all(|k| exprs.contains(k)) && exprs.iter().all(|e| keys.contains(e)))
+}
+
+/// Bind one expression element of an inference list. `text` is its source (see
+/// [`CONFLICT_EXPR_MARKER`]). A `COLLATE` clause is not matched against index collations yet (0A000
+/// SQL-27). Errors are positioned in the query, see [`rebase_position`].
+fn bind_inference_expr(b: &mut Binder, text: &str, id: &Ident, target: &TargetTable) -> Result<BoundExpr> {
+    let start = b.pos_span(id.span);
+    let ast: Expr = parse_expr_text(text)?;
+    if let Expr::Collate { .. } = ast {
+        let err = PgError::unimplemented("SQL-27", "ON CONFLICT inference element with a COLLATE clause");
+        return Err(match start {
+            Some(pos) => err.with_position(pos),
+            None => err,
+        });
+    }
+    bind_relation_expr(b, &ast, target.oid, ExprCtx::index_expr()).map_err(|e| rebase_position(e, start))
+}
+
+/// The element text was parsed on its own, so the positions inside it count from 1 at its start. Move
+/// them to the query: `start` is the element's position in the query (an error without a position is
+/// reported at the element).
+fn rebase_position(e: PgError, start: Option<u32>) -> PgError {
+    match (start, e.position) {
+        (Some(s), Some(p)) => e.with_position(s.saturating_add(p.saturating_sub(1))),
+        (Some(s), None) => e.with_position(s),
+        _ => e,
+    }
 }
 
 /// Register `excluded` (PG `addRangeTableEntry` of the target relation under the alias
@@ -253,8 +334,23 @@ mod tests {
         assert_eq!(candidate_key_set(true, true, true, false, &[Some(1)]), None);
         assert_eq!(candidate_key_set(true, false, false, false, &[Some(1)]), None);
         assert_eq!(candidate_key_set(true, false, true, true, &[Some(1)]), None);
-        assert_eq!(candidate_key_set(true, false, true, false, &[Some(1), None]), None);
         assert_eq!(candidate_key_set(true, false, true, false, &[]), None);
+    }
+
+    #[test]
+    fn expression_keys_leave_the_plain_set_alone() {
+        assert_eq!(candidate_key_set(true, false, true, false, &[Some(1), None]), Some(vec![1]));
+        assert_eq!(candidate_key_set(true, false, true, false, &[None]), Some(Vec::new()));
+    }
+
+    #[test]
+    fn inference_element_positions_move_into_the_query() {
+        let e = PgError::unimplemented("SQL-27", "x").with_position(3);
+        assert_eq!(rebase_position(e, Some(10)).position, Some(12));
+        let e = PgError::unimplemented("SQL-27", "x");
+        assert_eq!(rebase_position(e, Some(10)).position, Some(10));
+        let e = PgError::unimplemented("SQL-27", "x").with_position(3);
+        assert_eq!(rebase_position(e, None).position, Some(3));
     }
 
     #[test]

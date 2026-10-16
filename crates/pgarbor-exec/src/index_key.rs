@@ -39,11 +39,12 @@
 use std::ops::Bound;
 
 use pgarbor_common::kv::prefix_upper_bound;
-use pgarbor_common::{Oid, PgError, Result};
+use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_types::compare::not_distinct;
 use pgarbor_types::context::TypeEnv;
 use pgarbor_types::keycodec::{self, KeyColumn};
-use pgarbor_types::Datum;
+use pgarbor_types::registry::type_info;
+use pgarbor_types::{Datum, TypeId};
 
 use crate::eval;
 use crate::runtime::Executor;
@@ -135,11 +136,13 @@ pub fn make_entry(ex: &mut Executor, idx: &IndexDesc, rowid: u64, row: &[Datum])
             idx.key_cols.len()
         )));
     }
+    let includes = include_values(idx, row)?;
     let has_null = values.iter().any(|v| v.is_null());
     // Unique key without a NULL (or NULLS NOT DISTINCT): the key itself is the uniqueness probe and
     // carries no rowid suffix. Everything else (non-unique, or unique with a NULL) gets the suffix.
     let own_key = idx.unique && (!has_null || idx.nulls_not_distinct);
     let env: &dyn TypeEnv = &ex.cx.se.env;
+    check_tuple_size(env, idx, &values, &includes)?;
     let mut key = Vec::with_capacity(4 + 16 * values.len() + 8);
     key.extend_from_slice(&index_prefix(idx.oid));
     keycodec::encode_key(env, &idx.key_cols, &values, &mut key)?;
@@ -148,6 +151,90 @@ pub fn make_entry(ex: &mut Executor, idx: &IndexDesc, rowid: u64, row: &[Datum])
         key.extend_from_slice(&rowid.to_be_bytes());
     }
     Ok(Some(EntryKey { key, probe, values }))
+}
+
+/// Values of the INCLUDE columns of `idx` over a full table row. They are not stored in the entry.
+fn include_values(idx: &IndexDesc, row: &[Datum]) -> Result<Vec<Datum>> {
+    let mut out = Vec::with_capacity(idx.include.len());
+    for k in &idx.include {
+        let attnum = k.column.ok_or_else(|| {
+            PgError::internal(format!("index \"{}\" has an INCLUDE column without a table attnum", idx.name))
+        })?;
+        out.push(column_value(row, attnum)?);
+    }
+    Ok(out)
+}
+
+/// PG's index tuple size limit (`INDEX_SIZE_MASK`, enforced by `index_form_tuple`).
+pub const MAX_INDEX_TUPLE_SIZE: usize = 8191;
+
+/// Enforce PG's index tuple size limit for the entry of a row. PG forms the index tuple over EVERY
+/// index column, INCLUDE columns too, so their payload counts even though it is not stored here.
+/// Size: 8-byte header (plus the null bitmap when a value is NULL), then each non-NULL datum aligned
+/// per `typalign`, with a 4-byte varlena header or the 1-byte short header when packable (payload
+/// of at most 126 bytes, storage other than PLAIN); the total is MAXALIGNed. Over the limit:
+/// 54000 `index row requires N bytes, maximum size is 8191`.
+/// Not modelled: in-line compression of oversized values (`TOAST_INDEX_HACK`), so this is an upper
+/// bound for compressible payloads.
+fn check_tuple_size(env: &dyn TypeEnv, idx: &IndexDesc, keys: &[Datum], includes: &[Datum]) -> Result<()> {
+    let types: Vec<TypeId> = idx.keys.iter().chain(idx.include.iter()).map(|k| k.ty).collect();
+    let mut has_null = false;
+    let mut data = 0usize;
+    for (ty, v) in types.iter().zip(keys.iter().chain(includes.iter())) {
+        if v.is_null() {
+            has_null = true;
+            continue;
+        }
+        let info = type_info(env, ty.oid)?;
+        let align = match info.align {
+            b'd' => 8,
+            b'i' => 4,
+            b's' => 2,
+            _ => 1,
+        };
+        if info.len < 0 {
+            let payload = varlena_payload_len(env, *ty, v);
+            if info.storage != b'p' && payload <= 126 {
+                data += payload + 1;
+            } else {
+                data = align_up(data, align) + 4 + payload;
+            }
+        } else {
+            data = align_up(data, align) + usize::try_from(info.len).unwrap_or(0);
+        }
+    }
+    let header = if has_null { align_up(8 + types.len().div_ceil(8), 8) } else { 8 };
+    let size = align_up(header + data, 8);
+    if size > MAX_INDEX_TUPLE_SIZE {
+        return Err(PgError::new(
+            SqlState::PROGRAM_LIMIT_EXCEEDED,
+            format!("index row requires {size} bytes, maximum size is {MAX_INDEX_TUPLE_SIZE}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Round `n` up to a multiple of `to` (a power of two).
+fn align_up(n: usize, to: usize) -> usize {
+    (n + to - 1) & !(to - 1)
+}
+
+/// Payload bytes (without the varlena header) of a variable-length datum. Text-like values are
+/// measured directly; other types use their index key encoding as the size estimate, and a type
+/// the key codec cannot encode counts as 0 bytes.
+fn varlena_payload_len(env: &dyn TypeEnv, ty: TypeId, v: &Datum) -> usize {
+    match v {
+        Datum::Text(s) | Datum::Json(s) => s.len(),
+        Datum::Bytea(b) => b.len(),
+        _ => {
+            let mut buf = Vec::new();
+            let col = KeyColumn { ty, desc: false, nulls_first: false };
+            match keycodec::encode_key(env, std::slice::from_ref(&col), std::slice::from_ref(v), &mut buf) {
+                Ok(()) => buf.len(),
+                Err(_) => 0,
+            }
+        }
+    }
 }
 
 /// `[oid] ++ keycodec::encode_key(env, cols, values)` for a (possibly partial) list of leading key
@@ -492,6 +579,7 @@ mod tests {
                 nulls_first: false,
                 label: "a".to_string(),
             }],
+            include: Vec::new(),
             key_cols: vec![KeyColumn::asc(TypeId::INT4)],
             predicate: None,
             constraint: None,
@@ -535,6 +623,36 @@ mod tests {
         let p = make_entry(&mut ex, &plain, 11, &[Datum::Int4(1)])?.expect("entry");
         assert_eq!(p.key, hand_key(16401, &[(Some(1), false, false)], Some(11)));
         assert_eq!(p.probe, None);
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_include_payload_is_54000() -> Result<()> {
+        let (_kv, env) = pgarbor_catalog::testing::bootstrapped()?;
+        let cell = Cell::new(1);
+        let guc = NoGuc;
+        let services = NoServices;
+        let se = SessionEnv::new(env, IoConfig::default(), &guc, &services, &cell, 0, 0);
+        let mut txn = MemTxn::new();
+        let mut cx = ExecContext::new(&mut txn, se);
+        let mut rt = Runtime::default();
+        let mut ex = Executor::new(&mut rt, &mut cx);
+
+        // INCLUDE (b) text: its payload counts toward the index tuple size, the entry does not store it.
+        let mut idx = int4_index(false, false);
+        idx.include.push(IdxKeyDesc {
+            column: Some(2),
+            expr: None,
+            ty: TypeId::TEXT,
+            descending: false,
+            nulls_first: false,
+            label: "b".to_string(),
+        });
+        let small = make_entry(&mut ex, &idx, 1, &[Datum::Int4(1), Datum::Text("small".to_string())])?;
+        assert!(small.is_some());
+        let big = Datum::Text("x".repeat(12800));
+        let err = make_entry(&mut ex, &idx, 2, &[Datum::Int4(2), big]).err().expect("oversized tuple must fail");
+        assert_eq!(err.sqlstate.code(), "54000");
         Ok(())
     }
 

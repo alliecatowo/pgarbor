@@ -50,6 +50,7 @@ pub fn encode_object(obj: &CatalogObject) -> Result<Vec<u8>> {
         CatalogObject::Role(o) => encode(o),
         CatalogObject::RoleMembership(o) => encode(o),
         CatalogObject::Database(o) => encode(o),
+        CatalogObject::Ext(o) => encode(o),
     }
 }
 
@@ -66,6 +67,7 @@ pub fn decode_object(kind: ObjKind, key: &[u8], bytes: &[u8]) -> Result<CatalogO
         ObjKind::Role => CatalogObject::Role(decode(key, bytes)?),
         ObjKind::RoleMembership => CatalogObject::RoleMembership(decode(key, bytes)?),
         ObjKind::Database => CatalogObject::Database(decode(key, bytes)?),
+        ObjKind::Ext => CatalogObject::Ext(decode(key, bytes)?),
         ObjKind::Description => return Err(PgError::internal("description rows are not objects")),
     })
 }

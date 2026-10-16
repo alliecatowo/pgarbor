@@ -44,7 +44,15 @@ pub fn run_ddl<T>(
     let (value, res) = {
         let mut store = ExecCatalogStore::new(&mut *cx.txn);
         let mut ddl = CatalogTxn::begin(&mut store, &env)?;
-        let value = f(&mut ddl)?;
+        let value = match f(&mut ddl) {
+            Ok(v) => v,
+            Err(e) => {
+                for n in ddl.take_notices() {
+                    cx.se.notice(n);
+                }
+                return Err(e);
+            }
+        };
         let res = ddl.finish_statement(stamp)?;
         (value, res)
     };

@@ -98,6 +98,9 @@ impl DepGraph {
         for f in data.functions.values() {
             derive_function(snapshot, f, &mut out);
         }
+        for e in data.ext.values() {
+            derive_ext(snapshot, e, &mut out);
+        }
         Ok(DepGraph::from_entries(out))
     }
 
@@ -275,6 +278,9 @@ fn derive_relation(snapshot: &CatalogSnapshot, r: &Relation, out: &mut Vec<DepEn
         if c.type_id.oid != 0 {
             push(out, col, type_addr(snapshot, c.type_id.oid), DepType::Normal);
         }
+        if c.collation != 0 && snapshot.user_collation(c.collation).is_some() {
+            push(out, col, ObjectAddress::new(ObjClass::Collation, c.collation), DepType::Normal);
+        }
         if let Some(def) = &c.default {
             let ad = ObjectAddress::new(ObjClass::AttrDefault, def.oid);
             let t = if c.generated.is_some() { DepType::Internal } else { DepType::Auto };
@@ -288,6 +294,26 @@ fn derive_relation(snapshot: &CatalogSnapshot, r: &Relation, out: &mut Vec<DepEn
 
     if let Some(v) = &r.view {
         push_expr_normal(out, me, &v.query);
+    }
+
+    // Inheritance (amendment pgarbor-catalog-09): a child depends on each parent, AUTO for a
+    // partition (dropped silently with its parent), NORMAL for regular inheritance.
+    let partition_parent = r.partition_of.as_ref().map(|(p, _)| *p);
+    for p in &r.inherits {
+        let t = if Some(*p) == partition_parent { DepType::Auto } else { DepType::Normal };
+        push(out, me, ObjectAddress::relation(*p), t);
+    }
+    if let Some(p) = partition_parent {
+        if !r.inherits.contains(&p) {
+            push(out, me, ObjectAddress::relation(p), DepType::Auto);
+        }
+    }
+    if let Some(k) = &r.partition_key {
+        for e in &k.exprs {
+            for d in e.depends_on.iter().filter(|d| !(d.class == ObjClass::Relation && d.oid == r.oid)) {
+                push(out, me, *d, DepType::Normal);
+            }
+        }
     }
 }
 
@@ -319,6 +345,14 @@ fn derive_index(i: &Index, out: &mut Vec<DepEntry>) {
         }
     };
     for k in &i.keys {
+        // User collations / operator classes of the key (amendment pgarbor-catalog-09); builtin
+        // ones are pinned and skipped by `push`.
+        if k.collation != 0 {
+            push(out, me, ObjectAddress::new(ObjClass::Collation, k.collation), DepType::Normal);
+        }
+        if k.opclass != 0 {
+            push(out, me, ObjectAddress::new(ObjClass::OpClass, k.opclass), DepType::Normal);
+        }
         if let Some(att) = k.column {
             has_column_ref = true;
             push(out, me, ObjectAddress::column(i.table, att), DepType::Auto);
@@ -387,8 +421,11 @@ fn derive_type(snapshot: &CatalogSnapshot, t: &TypeObj, out: &mut Vec<DepEntry>)
     if t.array_type != 0 {
         push(out, ObjectAddress::type_(t.array_type), me, DepType::Internal);
     }
-    if let TypeDef::Domain { base, default, .. } = &t.def {
+    if let TypeDef::Domain { base, default, collation, .. } = &t.def {
         push(out, me, type_addr(snapshot, base.oid), DepType::Normal);
+        if *collation != 0 && snapshot.user_collation(*collation).is_some() {
+            push(out, me, ObjectAddress::new(ObjClass::Collation, *collation), DepType::Normal);
+        }
         if let Some(d) = default {
             push_expr_normal(out, me, d);
         }
@@ -412,6 +449,112 @@ fn derive_function(snapshot: &CatalogSnapshot, f: &Function, out: &mut Vec<DepEn
     }
     if let Some(b) = &f.sql_body {
         push_expr_normal(out, me, b);
+    }
+}
+
+/// Edges of the extensibility objects (amendment pgarbor-catalog-09), PG `makeOperatorDependencies`,
+/// `AggregateCreate`, `CreateOpFamily`/`DefineOpClass`/`storeOperators`/`storeProcedures`,
+/// `CastCreate`, `ConversionCreate`, `CollationCreate`, `InsertExtensionTuple` + `recordDependencyOnCurrentExtension`.
+fn derive_ext(snapshot: &CatalogSnapshot, e: &ExtObject, out: &mut Vec<DepEntry>) {
+    let proc = ObjectAddress::proc;
+    let opr = |o: Oid| ObjectAddress::new(ObjClass::Operator, o);
+    match e {
+        ExtObject::Operator(o) => {
+            let me = opr(o.oid);
+            push(out, me, ObjectAddress::namespace(o.namespace), DepType::Normal);
+            for t in [o.left, o.right, o.result] {
+                if t != 0 {
+                    push(out, me, type_addr(snapshot, t), DepType::Normal);
+                }
+            }
+            for f in [o.proc, o.restrict, o.join] {
+                if f != 0 {
+                    push(out, me, proc(f), DepType::Normal);
+                }
+            }
+        }
+        ExtObject::Aggregate(a) => {
+            let me = proc(a.fnoid);
+            for f in [a.transfn, a.finalfn, a.combinefn, a.serialfn, a.deserialfn, a.mtransfn, a.minvtransfn, a.mfinalfn] {
+                if f != 0 {
+                    push(out, me, proc(f), DepType::Normal);
+                }
+            }
+            if a.sortop != 0 {
+                push(out, me, opr(a.sortop), DepType::Normal);
+            }
+            for t in [a.transtype, a.mtranstype] {
+                if t != 0 {
+                    push(out, me, type_addr(snapshot, t), DepType::Normal);
+                }
+            }
+        }
+        ExtObject::OpFamily(f) => {
+            let me = ObjectAddress::new(ObjClass::OpFamily, f.oid);
+            push(out, me, ObjectAddress::namespace(f.namespace), DepType::Normal);
+            for m in &f.operators {
+                let dep = ObjectAddress::new(ObjClass::AmOp, m.oid);
+                let hard = m.opclass != 0;
+                push(out, dep, opr(m.operator), if hard { DepType::Normal } else { DepType::Auto });
+                if hard {
+                    push(out, dep, ObjectAddress::new(ObjClass::OpClass, m.opclass), DepType::Internal);
+                } else {
+                    push(out, dep, me, DepType::Auto);
+                }
+                if m.sortfamily != 0 {
+                    push(out, dep, ObjectAddress::new(ObjClass::OpFamily, m.sortfamily), DepType::Normal);
+                }
+            }
+            for m in &f.procs {
+                let dep = ObjectAddress::new(ObjClass::AmProc, m.oid);
+                let hard = m.opclass != 0;
+                push(out, dep, proc(m.proc), if hard { DepType::Normal } else { DepType::Auto });
+                if hard {
+                    push(out, dep, ObjectAddress::new(ObjClass::OpClass, m.opclass), DepType::Internal);
+                } else {
+                    push(out, dep, me, DepType::Auto);
+                }
+            }
+        }
+        ExtObject::OpClass(c) => {
+            let me = ObjectAddress::new(ObjClass::OpClass, c.oid);
+            push(out, me, ObjectAddress::namespace(c.namespace), DepType::Normal);
+            push(out, me, ObjectAddress::new(ObjClass::OpFamily, c.family), DepType::Auto);
+            push(out, me, type_addr(snapshot, c.input_type), DepType::Normal);
+            if c.key_type != 0 {
+                push(out, me, type_addr(snapshot, c.key_type), DepType::Normal);
+            }
+        }
+        ExtObject::Cast(c) => {
+            let me = ObjectAddress::new(ObjClass::Cast, c.oid);
+            push(out, me, type_addr(snapshot, c.source), DepType::Normal);
+            push(out, me, type_addr(snapshot, c.target), DepType::Normal);
+            if c.func != 0 {
+                push(out, me, proc(c.func), DepType::Normal);
+            }
+        }
+        ExtObject::Conversion(c) => {
+            let me = ObjectAddress::new(ObjClass::Conversion, c.oid);
+            push(out, me, ObjectAddress::namespace(c.namespace), DepType::Normal);
+            push(out, me, proc(c.proc), DepType::Normal);
+        }
+        ExtObject::Collation(c) => {
+            let me = ObjectAddress::new(ObjClass::Collation, c.oid);
+            push(out, me, ObjectAddress::namespace(c.namespace), DepType::Normal);
+        }
+        ExtObject::Extension(x) => {
+            let me = ObjectAddress::new(ObjClass::Extension, x.oid);
+            push(out, me, ObjectAddress::namespace(x.namespace), DepType::Normal);
+            for r in &x.requires {
+                push(out, me, ObjectAddress::new(ObjClass::Extension, *r), DepType::Normal);
+            }
+            for m in &x.members {
+                push(out, *m, me, DepType::Extension);
+            }
+            for m in &x.auto_dependents {
+                push(out, *m, me, DepType::AutoExtension);
+            }
+        }
     }
 }
 
@@ -480,6 +623,8 @@ mod derive_tests {
             replica_identity: ReplicaIdentity::Default,
             row_security: false,
             force_row_security: false,
+            policies: Vec::new(),
+            rules: Vec::new(),
             view: None,
             partition_key: None,
             partition_of: None,

@@ -2,8 +2,19 @@ mod support;
 use pgarbor::{Database, OpenOptions};
 use support::*;
 
+/// `separate_process_reads_committed_sql_file` spawns a child process. Between fork and exec the child
+/// holds a copy of every open descriptor of this process, including the `flock` of a database file another
+/// test is closing and reopening, so a parallel reopen can see a spurious 55006. Tests that reopen a file
+/// share this lock; the spawning test takes it exclusively around the spawn.
+static SPAWN_GUARD: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+fn reopen_guard() -> std::sync::RwLockReadGuard<'static, ()> {
+    SPAWN_GUARD.read().unwrap_or_else(|e| e.into_inner())
+}
+
 #[test]
 fn committed_schema_rows_and_unique_index_survive_reopen() {
+    let _guard = reopen_guard();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db.pga");
     {
@@ -24,6 +35,7 @@ fn committed_schema_rows_and_unique_index_survive_reopen() {
 
 #[test]
 fn sole_pga_copy_is_portable_to_empty_directory() {
+    let _guard = reopen_guard();
     let source = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
     let path = source.path().join("source.pga");
@@ -54,14 +66,20 @@ fn separate_process_reads_committed_sql_file() {
         seed(&mut session(&db, "main"));
         db.close().unwrap();
     }
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "separate_process_reads_committed_sql_file", "--nocapture"])
-        .env(CHILD, &path).status().expect("spawn reopen child");
+    let status = {
+        let _spawn = SPAWN_GUARD.write().unwrap_or_else(|e| e.into_inner());
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "separate_process_reads_committed_sql_file", "--nocapture"])
+            .env(CHILD, &path)
+            .status()
+            .expect("spawn reopen child")
+    };
     assert!(status.success(), "reopen process failed: {status}");
 }
 
 #[test]
 fn exclusive_file_lock_is_released_after_handles_drop() {
+    let _guard = reopen_guard();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("locked.pga");
     let db = Database::create(&path, OpenOptions::default()).unwrap();
@@ -75,6 +93,7 @@ fn exclusive_file_lock_is_released_after_handles_drop() {
 
 #[test]
 fn sequence_state_advances_across_clean_reopen() {
+    let _guard = reopen_guard();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sequence.pga");
     {

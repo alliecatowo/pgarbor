@@ -111,6 +111,32 @@ impl Session {
         outcome
     }
 
+    /// Drop the notices below `client_min_messages` (INFO is always sent).
+    pub(crate) fn filter_client_notices(&self, notices: &mut Vec<PgError>) {
+        let rank = |name: &str| match name {
+            "debug5" => 1,
+            "debug4" => 2,
+            "debug3" => 3,
+            "debug2" => 4,
+            "debug1" => 5,
+            "log" => 6,
+            "notice" => 7,
+            "warning" => 8,
+            _ => 9,
+        };
+        let min = rank(self.guc.show("client_min_messages").unwrap_or_default().as_str());
+        notices.retain(|n| {
+            let r = match n.severity {
+                pgarbor_common::Severity::Info => return true,
+                pgarbor_common::Severity::Debug => 5,
+                pgarbor_common::Severity::Log => 6,
+                pgarbor_common::Severity::Notice => 7,
+                _ => 8,
+            };
+            r >= min
+        });
+    }
+
     /// Bind `raw` against the current env with `declared` parameter types (module docs step 4).
     pub(crate) fn bind_statement(&mut self, raw: &RawStatement, declared: &[TypeId]) -> Result<BindOutput> {
         let env = self
@@ -148,6 +174,7 @@ impl Session {
         // Notices in wire order: bind and executor notices (already in `notices`), then the notices the
         // transaction-control layer queued while running this statement.
         notices.append(&mut self.pending_notices);
+        self.filter_client_notices(&mut notices);
         let param_status = self.guc.take_reported_changes();
         Ok(StatementOutput { result, notices, param_status })
     }
@@ -188,6 +215,12 @@ impl Session {
             BoundStatement::Maintenance { kind: MaintenanceKind::Vacuum, .. } => {
                 self.prevent_in_transaction_block("VACUUM")?
             }
+            BoundStatement::Maintenance { kind: MaintenanceKind::ReindexConcurrently, .. } => {
+                self.prevent_in_transaction_block("REINDEX CONCURRENTLY")?
+            }
+            BoundStatement::CreateIndex(spec) if spec.concurrently => {
+                self.prevent_in_transaction_block("CREATE INDEX CONCURRENTLY")?
+            }
             BoundStatement::CreateDatabase(_) => self.prevent_in_transaction_block("CREATE DATABASE")?,
             BoundStatement::DropDatabase { .. } => self.prevent_in_transaction_block("DROP DATABASE")?,
             _ => {}
@@ -201,25 +234,29 @@ impl Session {
         let substituted = match &statement {
             BoundStatement::Explain(explain) => match explain.statement.as_ref() {
                 BoundStatement::Execute(exe) => {
-                    let (inner, vals, ptypes) = self.explain_execute_parts(exe, raw)?;
+                    let (inner, vals, ptypes, generic) = self.explain_execute_parts(exe, raw)?;
                     let explain_stmt = BoundStatement::Explain(Box::new(BoundExplain {
                         options: explain.options.clone(),
                         statement: Box::new(inner),
                     }));
-                    Some((explain_stmt, vals, ptypes))
+                    Some((explain_stmt, vals, ptypes, generic))
                 }
                 _ => None,
             },
             _ => None,
         };
-        if let Some((explain_stmt, vals, ptypes)) = substituted {
+        let mut generic_explain = false;
+        if let Some((explain_stmt, vals, ptypes, generic)) = substituted {
             statement = explain_stmt;
             values = vals;
             types = ptypes;
+            generic_explain = generic;
         }
 
         // Step 5 (plannable statements) and step 6 (execute).
-        let plan = self.plan_statement(&statement, &types, &values)?;
+        // A generic plan (EXPLAIN EXECUTE under force_generic_plan) shows `$n`, not the supplied values.
+        let plan_values: &[Datum] = if generic_explain { &[] } else { &values };
+        let plan = self.plan_statement(&statement, &types, plan_values)?;
         let env = self
             .env
             .clone()
@@ -275,7 +312,7 @@ impl Session {
         &mut self,
         exe: &BoundExecute,
         raw: &RawStatement,
-    ) -> Result<(BoundStatement, Vec<Datum>, Vec<TypeId>)> {
+    ) -> Result<(BoundStatement, Vec<Datum>, Vec<TypeId>, bool)> {
         let prepared = self.ensure_current(&exe.name)?;
         let inner = prepared.bound.clone().ok_or_else(|| {
             PgError::internal(format!("prepared statement \"{}\" has no statement to explain", exe.name))
@@ -305,7 +342,9 @@ impl Session {
             }
             Ok(out)
         })?;
-        Ok((inner, values, prepared.param_types))
+        let mode = self.guc.show("plan_cache_mode")?;
+        let generic = crate::prepared::wants_generic(&mode, prepared.custom_plans, prepared.param_types.len());
+        Ok((inner, values, prepared.param_types, generic))
     }
 
     /// The live core transaction (present whenever a statement runs; `ensure_txn` made it).
@@ -329,7 +368,12 @@ impl Session {
 /// else (data, catalog, PREPARE which binds its inner statement, EXECUTE, LOCK, ...) takes one. Statements
 /// that do not classify as handled take one too, so their binder error is raised against a fresh catalog.
 fn statement_needs_snapshot(raw: &RawStatement) -> bool {
-    if matches!(raw.as_extra(), Some(ExtraStatement::SetConstraints { .. })) {
+    // `TransactionModes` is BEGIN / START TRANSACTION / SET TRANSACTION parsed by the extra parser:
+    // transaction control, which must not take a snapshot (SET TRANSACTION checks FirstSnapshotSet).
+    if matches!(
+        raw.as_extra(),
+        Some(ExtraStatement::SetConstraints { .. } | ExtraStatement::TransactionModes { .. })
+    ) {
         return false;
     }
     !matches!(
@@ -354,6 +398,7 @@ fn command_name(stmt: &BoundStatement) -> &'static str {
         S::Insert(_) => "INSERT",
         S::Update(_) => "UPDATE",
         S::Delete(_) => "DELETE",
+        S::Merge(_) => "MERGE",
         S::CreateTableAs(_) => "CREATE TABLE AS",
         S::Truncate(_) => "TRUNCATE",
         S::CreateSchema { .. } => "CREATE SCHEMA",
@@ -371,6 +416,7 @@ fn command_name(stmt: &BoundStatement) -> &'static str {
         S::Drop(d) => drop_command(d.kind),
         S::DropDatabase { .. } => "DROP DATABASE",
         S::Comment { .. } => "COMMENT",
+        S::Ext(e) => e.tag(),
         S::Grant { revoke: true, .. } | S::RevokeRole { .. } => "REVOKE",
         S::Grant { .. } | S::GrantRole(_) => "GRANT",
         S::ReassignOwned { .. } => "REASSIGN OWNED",
@@ -409,7 +455,7 @@ fn maintenance_command(kind: &MaintenanceKind) -> &'static str {
     match kind {
         MaintenanceKind::Vacuum => "VACUUM",
         MaintenanceKind::Analyze => "ANALYZE",
-        MaintenanceKind::Reindex => "REINDEX",
+        MaintenanceKind::Reindex | MaintenanceKind::ReindexConcurrently => "REINDEX",
         MaintenanceKind::Cluster => "CLUSTER",
         MaintenanceKind::Checkpoint => "CHECKPOINT",
     }

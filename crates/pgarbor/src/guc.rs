@@ -163,6 +163,8 @@ pub struct GucInner {
     pub(crate) levels: Vec<Option<String>>,
     pub(crate) reported: Vec<(String, String)>,
     pub(crate) superuser: bool,
+    /// Custom placeholder parameters (`a.b`, lower-cased name, value); known after the first SET/RESET.
+    pub(crate) placeholders: Vec<(String, String)>,
 }
 
 /// The table (module docs).
@@ -178,12 +180,20 @@ impl GucTable {
         let slots: Vec<GucSlot> = crate::guc_def::GUC_DEFS
             .iter()
             .chain(crate::guc_def::HIDDEN_DEFS.iter())
-            .map(|d| GucSlot {
-                def: d,
-                value: d.boot_val.to_string(),
-                source: GucSource::Default,
-                reset_val: d.boot_val.to_string(),
-                reset_source: GucSource::Default,
+            .map(|d| {
+                // Integer boot values are in base units; SHOW form uses the largest exact unit (`4MB`).
+                let boot = if d.vartype == GucType::Int {
+                    guc_value::normalize(d, d.boot_val).unwrap_or_else(|_| d.boot_val.to_string())
+                } else {
+                    d.boot_val.to_string()
+                };
+                GucSlot {
+                    def: d,
+                    value: boot.clone(),
+                    source: GucSource::Default,
+                    reset_val: boot,
+                    reset_source: GucSource::Default,
+                }
             })
             .collect();
         let mut inner = GucInner { slots, superuser, ..GucInner::default() };
@@ -201,6 +211,11 @@ impl GucTable {
     pub fn apply_startup(&self, name: &str, value: &str, source: GucSource) -> Result<()> {
         let mut guard = self.inner.borrow_mut();
         let inner: &mut GucInner = &mut guard;
+        if is_placeholder_name(name) {
+            check_custom_name(name)?;
+            placeholder_put(inner, name, value.to_string());
+            return Ok(());
+        }
         let idx = lookup(inner, name)?;
         let def = inner.slots[idx].def;
         check_settable(inner, def, true)?;
@@ -216,6 +231,11 @@ impl GucTable {
     /// Current value in SHOW form; unknown -> 42704.
     pub fn show(&self, name: &str) -> Result<String> {
         let inner = self.inner.borrow();
+        if find_def(name).is_none() {
+            if let Some(v) = placeholder_get(&inner, name) {
+                return Ok(v);
+            }
+        }
         let idx = lookup(&inner, name)?;
         Ok(inner.slots[idx].value.clone())
     }
@@ -225,6 +245,12 @@ impl GucTable {
     pub fn set(&self, name: &str, values: &[String], scope: GucScope) -> Result<String> {
         let mut guard = self.inner.borrow_mut();
         let inner: &mut GucInner = &mut guard;
+        if is_placeholder_name(name) {
+            check_custom_name(name)?;
+            let value = values.join(", ");
+            placeholder_put(inner, name, value.clone());
+            return Ok(value);
+        }
         let idx = lookup(inner, name)?;
         let def = inner.slots[idx].def;
         check_settable(inner, def, false)?;
@@ -238,6 +264,11 @@ impl GucTable {
     pub fn reset(&self, name: &str, scope: GucScope) -> Result<String> {
         let mut guard = self.inner.borrow_mut();
         let inner: &mut GucInner = &mut guard;
+        if is_placeholder_name(name) {
+            check_custom_name(name)?;
+            placeholder_put(inner, name, String::new());
+            return Ok(String::new());
+        }
         let idx = lookup(inner, name)?;
         let def = inner.slots[idx].def;
         check_settable(inner, def, false)?;
@@ -390,6 +421,10 @@ impl GucTable {
         let inner: &mut GucInner = &mut guard;
         let idx = lookup(inner, name)?;
         put(inner, idx, value.to_string(), GucSource::Session);
+        if name == "is_superuser" {
+            // PG `superuser()` follows the current role (SET ROLE / SET SESSION AUTHORIZATION).
+            inner.superuser = value == "on";
+        }
         Ok(())
     }
 
@@ -419,6 +454,9 @@ impl pgarbor_exec::GucAccess for GucTable {
     fn check_setting(&self, name: &str, value: &str) -> Result<()> {
         let guard = self.inner.borrow();
         let inner: &GucInner = &guard;
+        if is_placeholder_name(name) {
+            return check_custom_name(name);
+        }
         let idx = lookup(inner, name)?;
         let def = inner.slots[idx].def;
         let text = guc_value::join_set_values(def, &[value.to_string()])?;
@@ -430,6 +468,50 @@ impl pgarbor_exec::GucAccess for GucTable {
 // ---------------------------------------------------------------------------------------------
 // Lookup and validation helpers
 // ---------------------------------------------------------------------------------------------
+
+/// A custom (placeholder) parameter name: contains a dot and is not a built-in.
+fn is_placeholder_name(name: &str) -> bool {
+    name.contains('.') && find_def(name).is_none()
+}
+
+/// guc.c `valid_custom_variable_name`: two or more simple identifiers separated by dots, else 42602.
+fn check_custom_name(name: &str) -> Result<()> {
+    let mut saw_sep = false;
+    let mut name_start = true;
+    let mut valid = true;
+    for c in name.chars() {
+        if c == '.' {
+            if name_start {
+                valid = false;
+                break;
+            }
+            saw_sep = true;
+            name_start = true;
+        } else if c.is_ascii_alphabetic() || c == '_' || !c.is_ascii() {
+            name_start = false;
+        } else if !name_start && (c.is_ascii_digit() || c == '$') {
+        } else {
+            valid = false;
+            break;
+        }
+    }
+    if valid && !name_start && saw_sep {
+        return Ok(());
+    }
+    Err(PgError::new(SqlState::INVALID_NAME, format!("invalid configuration parameter name \"{name}\""))
+        .with_detail("Custom parameter names must be two or more simple identifiers separated by dots."))
+}
+
+fn placeholder_get(inner: &GucInner, name: &str) -> Option<String> {
+    inner.placeholders.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone())
+}
+
+fn placeholder_put(inner: &mut GucInner, name: &str, value: String) {
+    match inner.placeholders.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+        Some(slot) => slot.1 = value,
+        None => inner.placeholders.push((name.to_ascii_lowercase(), value)),
+    }
+}
 
 fn unrecognized(name: &str) -> PgError {
     PgError::new(SqlState::UNDEFINED_OBJECT, format!("unrecognized configuration parameter \"{name}\""))
@@ -574,11 +656,27 @@ fn timezone_value(text: &str) -> Result<String> {
     Ok(setting_display(&setting))
 }
 
-/// `client_encoding` hook: only the UTF8 aliases are accepted (`UTF-8`, `utf_8`, `unicode`...).
+/// Non-UTF8 client encodings PG accepts (normalized key -> canonical name).
+const CLIENT_ENCODINGS: &[(&str, &str)] = &[
+    ("latin1", "LATIN1"),
+    ("iso88591", "LATIN1"),
+    ("latin2", "LATIN2"),
+    ("iso88592", "LATIN2"),
+    ("latin9", "LATIN9"),
+    ("iso885915", "LATIN9"),
+    ("win1252", "WIN1252"),
+    ("windows1252", "WIN1252"),
+    ("sqlascii", "SQL_ASCII"),
+];
+
+/// `client_encoding` hook: UTF8 aliases are accepted (`UTF-8`, `utf_8`, `unicode`...).
 fn client_encoding_value(text: &str) -> Result<String> {
     let key: String = text.chars().filter(|c| *c != '-' && *c != '_').map(|c| c.to_ascii_lowercase()).collect();
     if key == "utf8" || key == "unicode" {
         Ok("UTF8".to_string())
+    } else if let Some((_, canonical)) = CLIENT_ENCODINGS.iter().find(|(k, _)| *k == key) {
+        // Accepted so SET/SHOW round-trip; output is not transcoded (ASCII data is identical).
+        Ok((*canonical).to_string())
     } else {
         Err(PgError::new(
             SqlState::INVALID_PARAMETER_VALUE,
@@ -711,7 +809,7 @@ fn parse_datestyle(text: &str, current: &str) -> Result<String> {
                 SqlState::INVALID_PARAMETER_VALUE,
                 format!("invalid value for parameter \"DateStyle\": \"{text}\""),
             )
-            .with_detail(format!("Unrecognized key word: \"{word}\".")));
+            .with_detail(format!("Unrecognized key word: \"{lower}\".")));
         }
     }
 
@@ -960,8 +1058,9 @@ mod tests {
     fn client_encoding_aliases() {
         assert_eq!(client_encoding_value("UTF-8").expect("alias"), "UTF8");
         assert_eq!(client_encoding_value("unicode").expect("alias"), "UTF8");
-        let e = expect_err_sqlstate(client_encoding_value("latin1").map(|_| String::new()), "22023");
-        assert_eq!(e.message, "invalid value for parameter \"client_encoding\": \"latin1\"");
+        assert_eq!(client_encoding_value("latin1").expect("latin1"), "LATIN1");
+        let e = expect_err_sqlstate(client_encoding_value("NO_SUCH_ENCODING").map(|_| String::new()), "22023");
+        assert_eq!(e.message, "invalid value for parameter \"client_encoding\": \"NO_SUCH_ENCODING\"");
     }
 
     #[test]
@@ -1027,6 +1126,17 @@ mod tests {
         let e = table.show("foo").expect_err("unknown");
         assert_eq!(e.sqlstate.code(), "42704");
         assert_eq!(e.message, "unrecognized configuration parameter \"foo\"");
+    }
+
+    #[test]
+    fn work_mem_boot_value_uses_units_and_placeholders_work() {
+        let table = GucTable::new(true);
+        assert_eq!(table.show("work_mem").expect("known"), "4MB");
+        assert!(table.show("custom.my_guc").is_err());
+        table.set("custom.my_guc", &["42".to_string()], GucScope::Session).expect("placeholder set");
+        assert_eq!(table.show("custom.my_guc").expect("known now"), "42");
+        table.reset("custom.my_guc", GucScope::Session).expect("placeholder reset");
+        assert_eq!(table.show("custom.my_guc").expect("still known"), "");
     }
 
     #[test]

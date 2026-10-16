@@ -10,7 +10,7 @@
 //!    otherwise 0LP01 `invalid privilege type SELECT for schema` (`errors`: build with
 //!    `PgError::new(SqlState(*b"0LP01"), format!("invalid privilege type {PRIV} for {kind_word}"))`,
 //!    PRIV upper-case word `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`,
-//!    `TRIGGER`, `MAINTAIN`, `EXECUTE`, `USAGE`, `CREATE`, `TEMPORARY`, `CONNECT`, `SET`,
+//!    `TRIGGER`, `MAINTAIN`, `EXECUTE`, `USAGE`, `CREATE`, `TEMP`, `CONNECT`, `SET`,
 //!    `ALTER SYSTEM`). `ALL` expands per kind.
 //! 2. sequences accept table-style `GRANT SELECT ON TABLE seq` (privilege set restricted to
 //!    `ALL_SEQUENCE`: PG treats USAGE/SELECT/UPDATE; others -> 0LP01 `invalid privilege type INSERT for
@@ -59,7 +59,7 @@ const PRIV_NAMES: [&str; 15] = [
     "EXECUTE",
     "USAGE",
     "CREATE",
-    "TEMPORARY",
+    "TEMP",
     "CONNECT",
     "SET",
     "ALTER SYSTEM",
@@ -564,6 +564,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         }
     }
 
@@ -615,7 +616,7 @@ mod tests {
     fn privilege_names_follow_pg_bit_order() {
         assert_eq!(priv_name(acl_mode::SELECT), "SELECT");
         assert_eq!(priv_name(acl_mode::USAGE | acl_mode::CREATE), "USAGE");
-        assert_eq!(priv_name(acl_mode::CREATE_TEMP), "TEMPORARY");
+        assert_eq!(priv_name(acl_mode::CREATE_TEMP), "TEMP");
         assert_eq!(priv_name(acl_mode::ALTER_SYSTEM), "ALTER SYSTEM");
         assert_eq!(priv_name(acl_mode::MAINTAIN), "MAINTAIN");
     }

@@ -49,8 +49,8 @@
 //! no position) when the executor starts the node, even for constants (oracle: `select 1 limit -1`). `FETCH FIRST n ROWS
 //! ONLY|WITH TIES`: `FETCH FIRST ROW ONLY` = 1; `percent` -> 0A000; `FETCH` together with `LIMIT` -> 42601 `syntax error at or near "fetch"` (oracle). Returns
 //! `(limit, offset, with_ties)`.
-use pgarbor_common::{PgError, Result, SqlState};
-use pgarbor_types::{Datum, TypeId};
+use pgarbor_common::{Oid, PgError, Result, SqlState};
+use pgarbor_types::{oids, Datum, TypeId};
 use sqlparser::ast::{
     Distinct, Expr, Fetch, LimitClause, ObjectName, ObjectNamePart, OrderByExpr, OrderBySort, UnaryOperator, Value,
 };
@@ -60,7 +60,10 @@ use super::coerce::{coerce_to_specific, resolve_unknown_output};
 use super::expr::bind_expr;
 use super::expr_ops::resolve_named_op;
 use crate::diag::{self, ExprClause};
-use crate::ir::{BoundExpr, CoercionForm, DistinctSpec, ExprKind, OpRef, OutputColumn, SortKey, TargetEntry};
+use crate::ir::{
+    BoundExpr, BoundQuery, BoundSelect, CoercionForm, DistinctSpec, ExprKind, OpRef, OutputColumn, QueryBody, RangeKind,
+    SetOpBody, SortKey, TargetEntry,
+};
 
 /// Integer-constant view of a sort / distinct item (PG `A_Const` with `Integer` or non-`Integer` value).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,6 +171,108 @@ pub fn bind_order_by_output(b: &mut Binder, order_by: &[OrderByExpr], output: &[
         push_sort_key(&mut keys, key);
     }
     Ok(keys)
+}
+
+/// Collation state of one expression, merged across the arms of a set operation (PG
+/// `merge_collation_state`, ordered Nothing < Implicit < Conflict < Explicit). `Unsure` marks a
+/// shape this check does not model; it never raises an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollState {
+    Nothing,
+    Implicit(Oid),
+    Conflict,
+    Explicit(Oid),
+    Unsure,
+}
+
+/// PG `merge_collation_state` for two sibling inputs.
+fn merge_collation(a: CollState, b: CollState) -> CollState {
+    match (a, b) {
+        (CollState::Unsure, _) | (_, CollState::Unsure) => CollState::Unsure,
+        (CollState::Nothing, x) | (x, CollState::Nothing) => x,
+        (CollState::Explicit(x), CollState::Explicit(y)) => {
+            if x == y {
+                CollState::Explicit(x)
+            } else {
+                CollState::Unsure
+            }
+        }
+        (CollState::Explicit(x), _) | (_, CollState::Explicit(x)) => CollState::Explicit(x),
+        (CollState::Conflict, _) | (_, CollState::Conflict) => CollState::Conflict,
+        (CollState::Implicit(x), CollState::Implicit(y)) => {
+            if x == y {
+                CollState::Implicit(x)
+            } else if x == oids::DEFAULT_COLLATION {
+                CollState::Implicit(y)
+            } else if y == oids::DEFAULT_COLLATION {
+                CollState::Implicit(x)
+            } else {
+                CollState::Conflict
+            }
+        }
+    }
+}
+
+/// Collation of an expression of a SELECT block. Column references take the catalog collation of
+/// the table column (or of the subquery's output column); `COLLATE` is explicit. Other shapes
+/// contribute nothing, which can only hide a conflict, never invent one.
+fn expr_collation(b: &Binder, sel: &BoundSelect, e: &BoundExpr) -> CollState {
+    match &e.kind {
+        ExprKind::Collate(c) => CollState::Explicit(c.collation),
+        ExprKind::Column(cr) if cr.levels_up == 0 && cr.attnum > 0 => {
+            let Some(entry) = (cr.rt_index as usize).checked_sub(1).and_then(|k| sel.range_table.get(k)) else {
+                return CollState::Unsure;
+            };
+            let col = (cr.attnum as usize) - 1;
+            match &entry.kind {
+                RangeKind::Relation { oid, .. } => match b.env.snapshot().relation(*oid).and_then(|r| r.columns.get(col)) {
+                    Some(c) if c.collation == 0 => CollState::Nothing,
+                    Some(c) => CollState::Implicit(c.collation),
+                    None => CollState::Unsure,
+                },
+                RangeKind::Subquery { query } => query_column_collation(b, query, col),
+                _ => CollState::Nothing,
+            }
+        }
+        _ => CollState::Nothing,
+    }
+}
+
+/// Collation state of output column `i` of a bound query (visible entries only).
+fn query_column_collation(b: &Binder, q: &BoundQuery, i: usize) -> CollState {
+    match &q.body {
+        QueryBody::Select(sel) => match sel.target_list.iter().filter(|t| !t.junk).nth(i) {
+            Some(t) => expr_collation(b, sel, &t.expr),
+            None => CollState::Unsure,
+        },
+        QueryBody::SetOp(s) => setop_column_collation(b, s, i),
+        QueryBody::Values(_) => CollState::Nothing,
+    }
+}
+
+/// Collation state of output column `i` of a set operation: the merge over both arms.
+fn setop_column_collation(b: &Binder, s: &SetOpBody, i: usize) -> CollState {
+    merge_collation(query_column_collation(b, &s.left, i), query_column_collation(b, &s.right, i))
+}
+
+/// PG `select_common_collation` for set-operation columns: a sort key on a column whose arms have
+/// conflicting implicit collations (no explicit COLLATE wins) has no determinable collation, and
+/// the sort fails with 42P22 `could not determine which collation to use for string comparison`.
+/// PG raises it when the sort starts; this check raises it when the ORDER BY is bound.
+pub fn check_setop_sort_collations(b: &Binder, body: &QueryBody, order_by: &[SortKey]) -> Result<()> {
+    let QueryBody::SetOp(s) = body else {
+        return Ok(());
+    };
+    for key in order_by {
+        if setop_column_collation(b, s, key.target_idx) == CollState::Conflict {
+            return Err(PgError::new(
+                SqlState::INDETERMINATE_COLLATION,
+                "could not determine which collation to use for string comparison",
+            )
+            .with_hint("Use the COLLATE clause to set the collation explicitly."));
+        }
+    }
+    Ok(())
 }
 
 /// LIMIT / OFFSET / FETCH (module docs).
@@ -598,5 +703,22 @@ mod tests {
         );
         assert_eq!(parse_int_text("7", false), IntConst::Integer(7));
         assert_eq!(parse_int_text("1_000", false), IntConst::Integer(1000));
+    }
+
+    #[test]
+    fn merge_collation_follows_pg_strength_rules() {
+        const C: Oid = 950;
+        const POSIX: Oid = 951;
+        let def = CollState::Implicit(oids::DEFAULT_COLLATION);
+        // Two different non-default implicit collations conflict (PG COLLATE_CONFLICT).
+        assert_eq!(merge_collation(CollState::Implicit(C), CollState::Implicit(POSIX)), CollState::Conflict);
+        // Non-default implicit beats the default collation.
+        assert_eq!(merge_collation(def, CollState::Implicit(C)), CollState::Implicit(C));
+        // An explicit COLLATE on one arm resolves the conflict.
+        assert_eq!(
+            merge_collation(CollState::Conflict, CollState::Explicit(C)),
+            CollState::Explicit(C)
+        );
+        assert_eq!(merge_collation(CollState::Implicit(C), CollState::Nothing), CollState::Implicit(C));
     }
 }

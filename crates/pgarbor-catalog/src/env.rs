@@ -16,6 +16,8 @@ pub struct CatalogEnv {
     current_user: Oid,
     session_user: Oid,
     database: Oid,
+    /// The `row_security` GUC (amendment pgarbor-catalog-policies-rules); `true` unless the session set it off.
+    row_security: bool,
 }
 
 impl CatalogEnv {
@@ -35,6 +37,7 @@ impl CatalogEnv {
             current_user,
             session_user: current_user,
             database: crate::builtin::POSTGRES_DATABASE,
+            row_security: true,
         }
     }
 
@@ -55,6 +58,17 @@ impl CatalogEnv {
         self.session_user = session_user;
         self.database = database;
         self
+    }
+
+    /// Same env with the `row_security` setting.
+    pub fn with_row_security(mut self, on: bool) -> CatalogEnv {
+        self.row_security = on;
+        self
+    }
+
+    /// The `row_security` GUC as of statement start.
+    pub fn row_security(&self) -> bool {
+        self.row_security
     }
 
     pub fn snapshot(&self) -> &CatalogSnapshot {

@@ -93,6 +93,8 @@ struct ResolvedOptions {
     encoding: Option<String>,
     freeze: bool,
     force_quote: Option<Vec<String>>,
+    /// `FORCE_QUOTE *`: `force_quote` is then `Some` of an empty list and every column is quoted.
+    force_quote_all: bool,
     force_not_null: Option<Vec<String>>,
     force_null: Option<Vec<String>>,
 }
@@ -180,6 +182,20 @@ fn bind_copy_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
                 // gram.y: COPY (query) only exists in the TO form.
                 return Err(diag::syntax_error_near("(", None));
             }
+            // copy.c `DoCopy`: a data-modifying query needs RETURNING (0A000); COPY over the returned
+            // rows would need a DML-backed copy source, which the IR does not have yet.
+            if let sqlparser::ast::SetExpr::Insert(st) | sqlparser::ast::SetExpr::Update(st) | sqlparser::ast::SetExpr::Delete(st) = &*q.body {
+                let returning = match st {
+                    sqlparser::ast::Statement::Insert(x) => x.returning.is_some(),
+                    sqlparser::ast::Statement::Update(x) => x.returning.is_some(),
+                    sqlparser::ast::Statement::Delete(x) => x.returning.is_some(),
+                    _ => false,
+                };
+                if !returning {
+                    return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "COPY query must have a RETURNING clause"));
+                }
+                return Err(PgError::unimplemented("SQL-42", "COPY (INSERT/UPDATE/DELETE ... RETURNING) TO"));
+            }
             let bq = select::bind_query(b, q, &QueryCtx { top_level: true, ..QueryCtx::default() })?;
             let resolved = resolve_options(&defs, false)?;
             let specs: Vec<ColSpec<'_>> = bq
@@ -205,7 +221,7 @@ fn bind_copy_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
         header: resolved.header,
         quote: resolved.quote,
         escape: resolved.escape,
-        force_quote_all: false,
+        force_quote_all: resolved.force_quote_all,
         force_quote: forces.0,
         force_not_null: forces.1,
         force_null: forces.2,
@@ -353,11 +369,11 @@ fn lookup_copy_relation<'a>(
         }
     }
     let schema = qn.schema.as_deref();
-    let class = env.resolve_class(schema, &qn.name).map_err(|e| diag::with_position(e, pos))?;
+    let class = env.resolve_class(schema, &qn.name)?;
     if let ClassRef::Sequence(_) = class {
         return Ok(CopyRelation::Sequence(qn.name.clone()));
     }
-    let rel = env.resolve_relation(schema, &qn.name).map_err(|e| diag::with_position(e, pos))?;
+    let rel = env.resolve_relation(schema, &qn.name)?;
     Ok(CopyRelation::Relation(rel))
 }
 
@@ -447,6 +463,7 @@ fn resolve_forces(
     opts: &ResolvedOptions,
 ) -> Result<(Vec<i16>, Vec<i16>, Vec<i16>)> {
     let fq = match &opts.force_quote {
+        Some(_) if opts.force_quote_all => Vec::new(),
         Some(n) => copy_attnums(cols, rel, Some(n.as_slice()))?,
         None => Vec::new(),
     };
@@ -690,6 +707,8 @@ fn resolve_options(defs: &[OptDef], is_from: bool) -> Result<ResolvedOptions> {
     } else {
         CopyFormat::Text
     };
+    let force_quote_all = matches!(force_quote.as_deref(), Some([only]) if only == crate::parser::FORCE_QUOTE_ALL_MARKER);
+    let force_quote = if force_quote_all { Some(Vec::new()) } else { force_quote };
     Ok(ResolvedOptions {
         format,
         delimiter: delim_char,
@@ -700,6 +719,7 @@ fn resolve_options(defs: &[OptDef], is_from: bool) -> Result<ResolvedOptions> {
         encoding,
         freeze,
         force_quote,
+        force_quote_all,
         force_not_null,
         force_null,
     })

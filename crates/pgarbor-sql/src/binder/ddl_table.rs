@@ -62,18 +62,68 @@ use pgarbor_types::catalog_data::Volatility;
 use pgarbor_types::{oids, TypeEnv, TypeId};
 use sqlparser::ast::{
     ArrayElemTypeDef, ColumnDef, ColumnOption, CreateTable, CreateTableOptions, DataType, Expr, GeneratedAs,
-    GeneratedExpressionMode, Ident, ObjectNamePart, Query, SelectInto, SequenceOptions as AstSequenceOption, SqlOption,
+    GeneratedExpressionMode, Ident, ObjectNamePart, Query, SelectInto, SetExpr, SequenceOptions as AstSequenceOption, SqlOption,
 };
 
 use super::context::{Binder, ExprCtx};
 use super::ddl_constraint::{self, ConstraintTableCtx};
 use super::ddl_objects::bind_sequence_options;
+use super::ddl_partition;
 use super::select::{self, QueryCtx};
 use super::stored;
 use super::types;
 use crate::diag;
 use crate::ir::{BoundCreateTableAs, BoundQuery, BoundStatement};
 use crate::names::{fold_ident, QualName};
+
+/// heap.c `CheckAttributeType` with `CHKATYPE_IS_VIRTUAL`: 0A000 for a user-defined column type.
+pub(super) fn check_virtual_generated_type(col_name: &str, type_oid: Oid) -> Result<()> {
+    if type_oid >= pgarbor_common::FIRST_NORMAL_OID {
+        return Err(PgError::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("virtual generated column \"{col_name}\" cannot have a user-defined type"),
+        )
+        .with_detail("Virtual generated columns that make use of user-defined types are not yet supported."));
+    }
+    Ok(())
+}
+
+/// heap.c `check_virtual_generated_security`: a virtual generation expression may only use built-in
+/// functions, operators and types.
+pub(super) fn check_virtual_generated_security(bound: &crate::ir::BoundExpr, pos: Option<u32>) -> Result<()> {
+    use crate::ir::ExprKind;
+    let first = pgarbor_common::FIRST_NORMAL_OID;
+    let mut found: Option<bool> = None;
+    bound.walk(&mut |e| {
+        if found.is_some() {
+            return false;
+        }
+        let user_func = match &e.kind {
+            ExprKind::FuncCall(f) => f.func >= first,
+            ExprKind::Op(o) => o.op.proc >= first,
+            _ => false,
+        };
+        if user_func {
+            found = Some(true);
+        } else if e.ty.oid >= first {
+            found = Some(false);
+        }
+        found.is_none()
+    });
+    match found {
+        Some(true) => Err(diag::with_position(
+            PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "generation expression uses user-defined function")
+                .with_detail("Virtual generated columns that make use of user-defined functions are not yet supported."),
+            pos,
+        )),
+        Some(false) => Err(diag::with_position(
+            PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "generation expression uses user-defined type")
+                .with_detail("Virtual generated columns that make use of user-defined types are not yet supported."),
+            pos,
+        )),
+        None => Ok(()),
+    }
+}
 
 /// PostgreSQL `MaxHeapAttributeNumber`.
 const MAX_TABLE_COLUMNS: usize = 1600;
@@ -95,29 +145,58 @@ pub fn bind_create_table(b: &mut Binder, ct: &CreateTable) -> Result<BoundStatem
         return Err(PgError::new(TOO_MANY_COLUMNS, format!("tables can have at most {MAX_TABLE_COLUMNS} columns")));
     }
     let table = qn.name.clone();
-    let mut columns = bind_column_defs(b, &ct.columns)?;
-    let scope: Vec<(String, TypeId)> = columns.iter().map(|c| (c.name.clone(), c.type_id.clone())).collect();
+    let hierarchy = ddl_partition::bind_hierarchy(b, ct)?;
+    let mut columns = bind_column_defs(b, &ct.columns, hierarchy.partition_parent)?;
+    let scope: Vec<(String, TypeId)> = hierarchy.scope(&columns);
     let tctx = ConstraintTableCtx { table_name: table.clone(), table_oid: None, columns: scope.clone() };
     // Every column is declared before any clause is bound (generated expressions may reference later
     // columns). The scope is popped on every path, success or error.
     stored::table_expr_scope(b, &table, &scope)?;
     let outcome = bind_table_level(b, ct, &mut columns, &table, &tctx);
+    let key = match (&outcome, &ct.partition_by) {
+        (Ok(_), Some(by)) => Some(ddl_partition::bind_partition_by(b, by, &scope)),
+        _ => None,
+    };
     b.scopes.pop();
     let constraints = outcome?;
-    let persistence = if ct.unlogged { Persistence::Unlogged } else { Persistence::Permanent };
+    let partition_key = key.transpose()?;
+    let temporary = is_temporary(ct);
+    let persistence = if temporary {
+        Persistence::Temp
+    } else if ct.unlogged {
+        Persistence::Unlogged
+    } else {
+        Persistence::Permanent
+    };
+    let on_commit = ddl_partition::bind_on_commit(ct, temporary)?;
+    let partition_of = match (hierarchy.partition_parent, &ct.for_values) {
+        (Some(parent), Some(fv)) => {
+            let after = ct.partition_of.as_ref().and_then(|n| ddl_partition::after_parent_name(b, n));
+            Some(ddl_partition::bind_partition_bound(b, parent, fv, after)?)
+        }
+        (Some(_), None) => return Err(diag::syntax_error_near("FOR", pos)),
+        _ => None,
+    };
+    let kind = if partition_key.is_some() { RelKind::PartitionedTable } else { RelKind::Table };
     let spec = CreateTableSpec {
         namespace,
         name: table,
         owner: b.env.current_user(),
-        kind: RelKind::Table,
+        kind,
         persistence,
         columns,
         constraints,
         options,
         if_not_exists: ct.if_not_exists,
-        inherits: Vec::new(),
+        inherits: hierarchy.parent_oids(),
+        extra: pgarbor_catalog::ddl::spec::CreateTableExtra { partition_key, partition_of, on_commit },
     };
     Ok(BoundStatement::CreateTable(Box::new(spec)))
+}
+
+/// `CREATE TEMP|TEMPORARY|LOCAL TEMP TABLE` (GLOBAL TEMP is accepted with PG's warning elsewhere).
+fn is_temporary(ct: &CreateTable) -> bool {
+    ct.temporary
 }
 
 /// `CREATE TABLE name [(cols)] AS query [WITH [NO] DATA]` (called by `bind_create_table` when
@@ -146,6 +225,16 @@ pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundSta
     };
     let pos = b.pos(&ct.name);
     reject_unsupported_table(ct, pos)?;
+    ddl_partition::bind_on_commit(ct, is_temporary(ct))?;
+    for (set, what) in [
+        (ct.inherits.is_some(), "INHERITS"),
+        (ct.partition_by.is_some(), "PARTITION BY"),
+        (ct.partition_of.is_some(), "PARTITION OF"),
+    ] {
+        if set {
+            return Err(diag::syntax_error_near(what, pos));
+        }
+    }
     if let Some(tc) = ct.constraints.first() {
         return Err(syntax_near(&tc.to_string(), pos));
     }
@@ -157,7 +246,7 @@ pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundSta
     }
     let qn = b.qual(&ct.name)?;
     check_catalog(b, &qn)?;
-    let namespace = creation_namespace(b, &qn)?;
+    let namespace = ctas_creation_namespace(b, &qn)?;
     let options = bind_table_options(&ct.table_options)?;
     let aliases: Vec<String> = ct.columns.iter().map(|c| b.ident(&c.name)).collect();
     let bq = select::bind_query(
@@ -179,8 +268,28 @@ pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundSta
         options,
         if_not_exists: ct.if_not_exists,
         inherits: Vec::new(),
+        extra: Default::default(),
     };
     Ok(BoundStatement::CreateTableAs(Box::new(BoundCreateTableAs { table, query: Box::new(bq), with_data })))
+}
+
+/// A copy of `q` whose top SELECT block no longer carries its `INTO` clause. The statement-level
+/// `INTO` names the new table and is taken by [`bind_select_into`]; the block itself must bind as a
+/// plain query, otherwise `reject_select_extensions` would refuse it. Nested `INTO` still fails there.
+fn query_without_into(q: &Query) -> Query {
+    let mut inner = q.clone();
+    clear_leftmost_into(&mut inner.body);
+    inner
+}
+
+/// Clears the `INTO` of the leftmost SELECT leaf of a set-operation body (see
+/// `select::leftmost_select_into`); other leaves keep theirs so they are still rejected.
+fn clear_leftmost_into(body: &mut SetExpr) {
+    match body {
+        SetExpr::Select(sel) => sel.into = None,
+        SetExpr::SetOperation { left, .. } => clear_leftmost_into(&mut **left),
+        _ => {}
+    }
 }
 
 /// `SELECT ... INTO [TEMP] t FROM ...` (statement-level; `into` taken from the top SELECT block).
@@ -195,10 +304,11 @@ pub fn bind_select_into(b: &mut Binder, q: &Query, into: &SelectInto) -> Result<
     }
     let qn = into_name(b, target, pos)?;
     check_catalog(b, &qn)?;
-    let namespace = creation_namespace(b, &qn)?;
+    let namespace = ctas_creation_namespace(b, &qn)?;
+    let inner = query_without_into(q);
     let bq = select::bind_query(
         b,
-        q,
+        &inner,
         &QueryCtx { column_aliases: Vec::new(), top_level: false, keep_unknown_outputs: false },
     )?;
     let columns = ctas_columns(&bq, &[])?;
@@ -214,6 +324,7 @@ pub fn bind_select_into(b: &mut Binder, q: &Query, into: &SelectInto) -> Result<
         options: Vec::new(),
         if_not_exists: false,
         inherits: Vec::new(),
+        extra: Default::default(),
     };
     Ok(BoundStatement::CreateTableAs(Box::new(BoundCreateTableAs { table, query: Box::new(bq), with_data: true })))
 }
@@ -266,10 +377,7 @@ fn reject_unsupported_table(ct: &CreateTable, pos: Option<u32>) -> Result<()> {
         (ct.snapshot, "SNAPSHOT TABLE"),
         (ct.like.is_some(), "CREATE TABLE ... LIKE"),
         (ct.clone.is_some(), "CREATE TABLE ... CLONE"),
-        (ct.inherits.is_some(), "INHERITS"),
-        (ct.partition_by.is_some(), "PARTITION BY"),
-        (ct.partition_of.is_some() || ct.for_values.is_some(), "PARTITION OF"),
-        (ct.on_commit.is_some(), "ON COMMIT"),
+        (ct.for_values.is_some() && ct.partition_of.is_none(), "FOR VALUES"),
         (ct.comment.is_some(), "COMMENT"),
         (ct.on_cluster.is_some(), "ON CLUSTER"),
         (ct.order_by.is_some(), "ORDER BY"),
@@ -340,8 +448,19 @@ fn check_catalog(b: &Binder, qn: &QualName) -> Result<()> {
     }
 }
 
+/// Plain CREATE TABLE reports the RangeVar location (`transformCreateStmt` installs a parser
+/// errposition callback); CREATE TABLE AS / SELECT INTO resolve the namespace in `DefineRelation`
+/// at execution time, without a position.
 fn creation_namespace(b: &Binder, qn: &QualName) -> Result<Oid> {
-    b.env.creation_namespace_for(qn.schema.as_deref(), &qn.name)
+    let ns = b.env.creation_namespace_for(qn.schema.as_deref(), &qn.name).map_err(|e| diag::with_position(e, qn.pos))?;
+    b.env.check_schema_create(ns).map_err(|e| diag::with_position(e, qn.pos))?;
+    Ok(ns)
+}
+
+fn ctas_creation_namespace(b: &Binder, qn: &QualName) -> Result<Oid> {
+    let ns = b.env.creation_namespace_for(qn.schema.as_deref(), &qn.name)?;
+    b.env.check_schema_create(ns)?;
+    Ok(ns)
 }
 
 /// Target of `SELECT ... INTO name`: one to three identifiers.
@@ -367,13 +486,19 @@ fn into_name(b: &mut Binder, target: &Expr, pos: Option<u32>) -> Result<QualName
 // ---------------------------------------------------------------------------------------------
 
 /// Pass 1: fold and check names (42701), resolve types (serial pseudo-types, pseudo-types 42P16).
-fn bind_column_defs(b: &mut Binder, defs: &[ColumnDef]) -> Result<Vec<ColumnSpec>> {
+fn bind_column_defs(b: &mut Binder, defs: &[ColumnDef], partition_parent: Option<&pgarbor_catalog::Relation>) -> Result<Vec<ColumnSpec>> {
     let mut columns: Vec<ColumnSpec> = Vec::with_capacity(defs.len());
     let mut seen: HashSet<String> = HashSet::with_capacity(defs.len());
     for def in defs {
         let name = b.ident(&def.name);
         if !seen.insert(name.clone()) {
             return Err(PgError::new(SqlState::DUPLICATE_COLUMN, format!("column \"{name}\" specified more than once")));
+        }
+        if let Some(parent) = partition_parent {
+            // `PARTITION OF` column entries carry no type (parser_hier marker): the parent's type.
+            let ty = ddl_partition::partition_column_type(parent, &name)?;
+            columns.push(ColumnSpec::new(name, ty));
+            continue;
         }
         if is_serial_array(&def.data_type) {
             return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "array of serial is not implemented"));
@@ -415,7 +540,9 @@ fn bind_column_clauses(
         .iter()
         .map(|d| d.options.iter().any(|o| matches!(o.option, ColumnOption::Generated { generation_expr: Some(_), .. })))
         .collect();
-    let names_fn = |attnum: i16| -> Option<String> { attnum_index(attnum).and_then(|i| names.get(i)).cloned() };
+    // Dependencies use binder positions in the table scope (inherited columns follow the local ones).
+    let scope_names: Vec<String> = tctx.columns.iter().map(|(n, _)| n.clone()).collect();
+    let names_fn = |attnum: i16| -> Option<String> { attnum_index(attnum).and_then(|i| scope_names.get(i)).cloned() };
 
     let mut out: Vec<ConstraintSpec> = Vec::new();
     for (i, def) in defs.iter().enumerate() {
@@ -425,7 +552,17 @@ fn bind_column_clauses(
         let mut saw_not_null = false;
         let mut saw_identity = false;
         let mut saw_generated = false;
+        let clause_starts = column_clause_starts(b, def);
+        let mut clause_idx = 0usize;
         for opt in &def.options {
+            // Where PG's `Constraint.location` (the DEFAULT / GENERATED keyword) of this clause is.
+            let clause_pos = if matches!(opt.option, ColumnOption::Default(_) | ColumnOption::Generated { .. }) {
+                let p = clause_starts.get(clause_idx).copied();
+                clause_idx += 1;
+                p
+            } else {
+                None
+            };
             match &opt.option {
                 ColumnOption::Null => {
                     if saw_not_null || columns[i].serial.is_some() || saw_identity {
@@ -448,8 +585,17 @@ fn bind_column_clauses(
                     saw_default = true;
                     let mut refs: Vec<i16> = Vec::new();
                     let ty = columns[i].type_id.clone();
-                    let (_bound, stored_default) =
-                        stored::bind_ddl_expr(b, expr, ExprCtx::column_default(), Some(ty), None, &mut refs, &names_fn)?;
+                    let (bound_default, stored_default) =
+                        stored::bind_ddl_expr_with_source(
+                            b,
+                            expr,
+                            ExprCtx::column_default(),
+                            Some(ty),
+                            None,
+                            &mut refs,
+                            &names_fn,
+                        )?;
+                    stored::reject_regrole_constants(&bound_default)?;
                     columns[i].default = Some(stored_default);
                 }
                 ColumnOption::Collation(name) => {
@@ -457,9 +603,12 @@ fn bind_column_clauses(
                     let ty = columns[i].type_id.clone();
                     let collatable = TypeEnv::type_info(b.env, ty.oid).is_some_and(|info| info.is_collatable());
                     if !collatable {
-                        return Err(PgError::new(
-                            SqlState::DATATYPE_MISMATCH,
-                            format!("collations are not supported by type {}", b.type_name(ty)),
+                        return Err(diag::with_position(
+                            PgError::new(
+                                SqlState::DATATYPE_MISMATCH,
+                                format!("collations are not supported by type {}", b.type_name(ty)),
+                            ),
+                            super::expr::collate_keyword_before(b.src, name),
                         ));
                     }
                     let oid = b.env.collation_oid(qn.schema.as_deref(), &qn.name)?;
@@ -473,29 +622,58 @@ fn bind_column_clauses(
                             }
                             saw_generated = true;
                             let ty = columns[i].type_id.clone();
+                            let is_virtual = !matches!(generation_expr_mode, Some(GeneratedExpressionMode::Stored));
+                            if is_virtual {
+                                check_virtual_generated_type(&col_name, ty.oid)?;
+                            }
                             let mut refs: Vec<i16> = Vec::new();
+                            // The table does not exist yet: column references are recorded against the
+                            // SELF_REL placeholder, rewritten to the new OID by the catalog (PG records
+                            // the generation expression's column dependencies as Normal edges).
                             let (bound, stored_gen) = stored::bind_ddl_expr(
                                 b,
                                 gen_expr,
                                 ExprCtx::generated(),
                                 Some(ty),
-                                None,
+                                Some(pgarbor_catalog::ddl::spec::SELF_REL),
                                 &mut refs,
                                 &names_fn,
                             )?;
                             if let Some(&referenced) = refs.iter().find(|a| flag_at(&generated_flags, **a)) {
                                 let rname = names_fn(referenced).unwrap_or_default();
-                                return Err(PgError::new(
-                                    SqlState::INVALID_OBJECT_DEFINITION,
-                                    format!("cannot use generated column \"{rname}\" in column generation expression"),
-                                )
-                                .with_detail("A generated column cannot reference another generated column."));
+                                // Error position is the offending column reference (PG ParseState location).
+                                let mut ref_pos: Option<u32> = None;
+                                bound.walk(&mut |x| {
+                                    if ref_pos.is_none() {
+                                        if let crate::ir::ExprKind::Column(c) = &x.kind {
+                                            if c.levels_up == 0 && c.attnum == referenced && c.pos > 0 {
+                                                ref_pos = Some(c.pos);
+                                            }
+                                        }
+                                    }
+                                    ref_pos.is_none()
+                                });
+                                return Err(diag::with_position(
+                                    PgError::new(
+                                        SqlState::INVALID_OBJECT_DEFINITION,
+                                        format!("cannot use generated column \"{rname}\" in column generation expression"),
+                                    )
+                                    .with_detail("A generated column cannot reference another generated column."),
+                                    ref_pos,
+                                ));
                             }
                             if bound.volatility() != Volatility::Immutable {
                                 return Err(PgError::new(
                                     SqlState::INVALID_OBJECT_DEFINITION,
                                     "generation expression is not immutable",
                                 ));
+                            }
+                            if is_virtual {
+                                let mut e: &Expr = gen_expr;
+                                while let Expr::Nested(inner) = e {
+                                    e = inner;
+                                }
+                                check_virtual_generated_security(&bound, b.pos(e))?;
                             }
                             let kind = match generation_expr_mode {
                                 Some(GeneratedExpressionMode::Stored) => GeneratedKind::Stored,
@@ -543,6 +721,21 @@ fn bind_column_clauses(
                 // COMMENT, ON UPDATE, CHARACTER SET, MATERIALIZED, EPHEMERAL, ALIAS, MySQL/ClickHouse/BigQuery
                 // options: PostgreSQL's grammar has no such column clause.
                 _ => return Err(syntax_near(&opt.option.to_string(), None)),
+            }
+            // transformColumnDefinition checks the conflicts after every clause, at that clause.
+            if clause_pos.is_some() {
+                let conflict = if saw_default && saw_identity {
+                    Some("both default and identity specified")
+                } else if saw_default && saw_generated {
+                    Some("both default and generation expression specified")
+                } else if saw_identity && saw_generated {
+                    Some("both identity and generation expression specified")
+                } else {
+                    None
+                };
+                if let Some(msg) = conflict {
+                    return Err(diag::with_position(column_error(msg, &col_name, table), clause_pos));
+                }
             }
         }
         let has_default = saw_default || columns[i].serial.is_some();
@@ -644,6 +837,77 @@ fn flag_at(flags: &[bool], attnum: i16) -> bool {
     attnum_index(attnum).and_then(|i| flags.get(i)).copied().unwrap_or(false)
 }
 
+/// Positions of the top-level `DEFAULT` / `GENERATED` keywords of a column definition, in
+/// source order (`BY DEFAULT` of an identity clause is not a DEFAULT clause). Scanning starts at the
+/// column name and stops at the comma or parenthesis that ends the definition.
+fn column_clause_starts(b: &Binder, def: &ColumnDef) -> Vec<u32> {
+    let mut out = Vec::new();
+    let Some(start) = b.src.byte_offset(def.name.span.start) else { return out };
+    let Some(text) = b.src.text().get(start..) else { return out };
+    let bytes = text.as_bytes();
+    let (mut i, mut depth) = (0usize, 0usize);
+    let mut prev = String::new();
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            b'\'' | b'"' => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == c {
+                        if bytes.get(i + 1) == Some(&c) {
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+                i += 1;
+                prev.clear();
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i < bytes.len() && !(bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/')) {
+                    i += 1;
+                }
+                i += 2;
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+                prev.clear();
+            }
+            b')' => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+                i += 1;
+                prev.clear();
+            }
+            b',' if depth == 0 => break,
+            _ if c.is_ascii_alphanumeric() || c == b'_' => {
+                let w0 = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') {
+                    i += 1;
+                }
+                let word = text[w0..i].to_ascii_uppercase();
+                if depth == 0 && ((word == "DEFAULT" && prev != "BY") || word == "GENERATED") {
+                    out.push(b.src.pos_of_byte(start + w0));
+                }
+                prev = word;
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
 /// 42601 for a per-column rule: `<msg> for column "c" of table "t"`.
 fn column_error(msg: &str, col: &str, table: &str) -> PgError {
     PgError::new(SqlState::SYNTAX_ERROR, format!("{msg} for column \"{col}\" of table \"{table}\""))
@@ -711,5 +975,27 @@ mod tests {
         assert_eq!(attnum_index(3), Some(2));
         assert!(flag_at(&[false, true], 2));
         assert!(!flag_at(&[false, true], 1));
+    }
+
+    #[test]
+    fn query_without_into_drops_only_the_statement_target() {
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let mut p = sqlparser::parser::Parser::new(&dialect).try_with_sql("SELECT DISTINCT 1 AS z INTO t FROM generate_series(1, 2) n ORDER BY z LIMIT 1").expect("tokenizes");
+        let q = p.parse_query().expect("parses");
+        let inner = query_without_into(&q);
+        assert!(matches!(&*inner.body, SetExpr::Select(sel) if sel.into.is_none() && sel.distinct.is_some()));
+        assert!(matches!(&*q.body, SetExpr::Select(sel) if sel.into.is_some()));
+        assert_eq!(inner.limit_clause, q.limit_clause);
+    }
+
+    #[test]
+    fn query_without_into_drops_the_leftmost_set_operation_target() {
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let mut p = sqlparser::parser::Parser::new(&dialect).try_with_sql("SELECT 1 AS x INTO su UNION SELECT 2").expect("tokenizes");
+        let q = p.parse_query().expect("parses");
+        let inner = query_without_into(&q);
+        assert!(select::leftmost_select_into(&inner.body).is_none());
+        assert!(select::leftmost_select_into(&q.body).is_some());
+        assert!(matches!(&*inner.body, SetExpr::SetOperation { right, .. } if matches!(&**right, SetExpr::Select(sel) if sel.into.is_none())));
     }
 }

@@ -229,8 +229,63 @@ pub struct CreateTableSpec {
     /// `WITH (fillfactor=70)` as `name=value`.
     pub options: Vec<String>,
     pub if_not_exists: bool,
-    /// Parent tables (`INHERITS`): 0A000 in v1 (reserved).
+    /// Parent tables (`INHERITS`), in written order.
     pub inherits: Vec<Oid>,
+    /// Partitioning and temporary-table clauses (amendment pgarbor-catalog-09).
+    pub extra: CreateTableExtra,
+}
+
+/// `ON COMMIT` action of a temporary table (PG `OnCommitAction`).
+// CONTRACT
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OnCommitAction {
+    /// No ON COMMIT clause.
+    #[default]
+    Noop,
+    PreserveRows,
+    DeleteRows,
+    Drop,
+}
+
+/// One item of `PARTITION BY strategy (item, ...)`.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartitionKeyItemSpec {
+    /// Plain column key (folded name).
+    pub column: Option<String>,
+    /// Expression key (canonical text + dependencies) and its type.
+    pub expr: Option<StoredExpr>,
+    pub expr_type: Option<TypeId>,
+}
+
+/// `PARTITION BY RANGE|LIST|HASH (...)`.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartitionKeySpec {
+    /// b'r' range, b'l' list, b'h' hash.
+    pub strategy: u8,
+    pub items: Vec<PartitionKeyItemSpec>,
+}
+
+/// `PARTITION OF parent FOR VALUES ...` / `DEFAULT`.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartitionOfSpec {
+    pub parent: Oid,
+    /// Bound with values already validated and normalized to the parent key types' text output.
+    pub bound: crate::partition::PartitionBound,
+    /// Error cursor positions of the written bound (`FOR`/`DEFAULT` keyword, each list value, each
+    /// range value); used by overlap errors like PG's `parser_errposition`.
+    pub positions: crate::partition::BoundPositions,
+}
+
+/// Partitioning / temporary-table extras of CREATE TABLE (amendment pgarbor-catalog-09).
+// CONTRACT
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CreateTableExtra {
+    pub partition_key: Option<PartitionKeySpec>,
+    pub partition_of: Option<PartitionOfSpec>,
+    pub on_commit: OnCommitAction,
 }
 
 /// What CREATE TABLE created.
@@ -525,6 +580,12 @@ pub enum FollowUp {
     /// 0A000 `cannot alter type "c" because column "u.c" uses it` (`errors::cannot_alter_type_column_uses_it`)
     /// when the table is not empty.
     RequireEmptyTable { table: Oid, attnum: i16, type_oid: Oid },
+    /// Partitioning (amendment pgarbor-catalog-09): every row of `table` (and of its partitions,
+    /// when partitioned) must satisfy `table`'s partition constraint as the catalog now describes it.
+    /// Violation -> 23514 `updated partition constraint for default partition "t" would be
+    /// violated by some row` (`default_update`) or `partition constraint of relation "t" is
+    /// violated by some row` (ATTACH PARTITION).
+    ValidatePartitionRows { table: Oid, default_update: bool },
 }
 
 /// A name change that invalidates the CANONICAL TEXT of stored expressions (defaults, CHECK bodies,

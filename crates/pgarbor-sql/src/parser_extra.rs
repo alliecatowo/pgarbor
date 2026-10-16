@@ -14,16 +14,20 @@
 //! Grammar sources: `src/backend/parser/gram.y` (PostgreSQL 18.6). Productions are cited per
 //! function; the code is written from the grammar, not copied from it.
 use pgarbor_common::{PgError, Result, SqlState};
-use sqlparser::ast::{DataType, Expr, Ident, ObjectName};
+use sqlparser::ast::{ArgMode, DataType, Expr, Ident, ObjectName, ObjectNamePart, OperateFunctionArg};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithSpan};
 
+#[path = "parser_ext.rs"]
+mod ext;
+
 use crate::diag;
 use crate::extra_stmt::{
-    AlterDatabaseAction, AlterDomainAction, AlterMatViewAction, AlterSequenceAction, ExtraStatement, ReindexKind,
-    RoleOptionAst, RoleOptionItem, RoleStmtKind, SequenceOptionAst,
+    AlterDatabaseAction, AlterDomainAction, AlterMatViewAction, AlterSequenceAction, ExtraStatement, MaintenanceOption,
+    ReindexKind, RelOptionAction, RoleOptionAst, RoleOptionItem, RoleStmtKind, RoutineKind, SequenceOptionAst,
+    TxnCommandKind,
 };
 use crate::parser::RECURSION_LIMIT;
 use crate::source::SourceMap;
@@ -34,7 +38,7 @@ use crate::syntax_error::location_from_message;
 /// Decision table over the first non-whitespace tokens (case-insensitive keywords):
 /// * `REFRESH MATERIALIZED VIEW`, `REINDEX`, `CLUSTER`, `CHECKPOINT`, `SET CONSTRAINTS`,
 ///   `DO`, `DROP OWNED`, `REASSIGN OWNED`, `ALTER SEQUENCE`, `ALTER DOMAIN`, `ALTER DATABASE`,
-///   `ALTER MATERIALIZED VIEW` -> true;
+///   `ALTER MATERIALIZED VIEW`, `ALTER OPERATOR` (not FAMILY/CLASS) -> true;
 /// * recognized-unsupported PostgreSQL commands (the list in `extra_stmt` docs; also
 ///   `CREATE {RULE|CAST|TABLESPACE|EVENT TRIGGER|FOREIGN TABLE|FOREIGN DATA WRAPPER|PUBLICATION|
 ///   SUBSCRIPTION|STATISTICS|LANGUAGE|ACCESS METHOD|TRANSFORM|AGGREGATE|CONVERSION|USER MAPPING|
@@ -46,7 +50,16 @@ use crate::syntax_error::location_from_message;
 /// `CREATE EXTENSION`, `CREATE TRIGGER`, `CREATE POLICY`, `MERGE`, cursors are parsed by sqlparser
 /// and rejected by `classify`, not here.
 pub fn is_extra_statement(tokens: &[TokenWithSpan]) -> Result<bool> {
-    Ok(route(&head_words(tokens)).is_some())
+    if ext::is_ext_statement(tokens) {
+        return Ok(true);
+    }
+    Ok((route(&head_words(tokens)).is_some() && !ts_config_ungrammatical(tokens))
+        || txn_deferrable_form(tokens).is_some()
+        || route_alter_target(tokens).is_some()
+        || role_grant_form(tokens).is_some()
+        || maintenance_kind(tokens).is_some()
+        || merge_returning_with(tokens)
+        || ctas_execute(tokens))
 }
 
 /// Parse the chunk (tokens end with EOF) into an [`ExtraStatement`].
@@ -61,14 +74,45 @@ pub fn is_extra_statement(tokens: &[TokenWithSpan]) -> Result<bool> {
 /// `Parser::parse_literal_string` accepts, incl. `$$..$$`), optional `LANGUAGE ident` before or after.
 /// Numbers in `SequenceOptionAst` keep sign and digits as text (`- 5` with the unary minus folded in).
 pub fn parse_extra(tokens: Vec<TokenWithSpan>, src: &SourceMap) -> Result<ExtraStatement> {
+    if ext::is_ext_statement(&tokens) {
+        // Extensibility statements (amendment pgarbor-sql-rewrite-rls-merge): `parser_ext`.
+        let dialect = PostgreSqlDialect {};
+        let mut cx = Cx {
+            p: Parser::new(&dialect).with_recursion_limit(RECURSION_LIMIT).with_tokens_with_locations(tokens.clone()),
+            tokens,
+            src,
+        };
+        return ext::parse(&mut cx).map(ExtraStatement::Ext);
+    }
+    if merge_returning_with(&tokens) {
+        return Ok(unsupported("MERGE ... RETURNING WITH (OLD/NEW aliases)"));
+    }
+    if ctas_execute(&tokens) {
+        return Ok(unsupported("CREATE TABLE AS EXECUTE"));
+    }
     let head = head_words(&tokens);
-    let route = route(&head);
+    // The mapping forms of ALTER TEXT SEARCH CONFIGURATION win over the generic `ALTER TEXT SEARCH`
+    // entry of UNSUPPORTED_HEADS, which would otherwise hide their specific sub-grammar.
+    let route = match route_alter_target(&tokens) {
+        Some(k @ Known::AlterTsConfigMapping) => Some(Route::Known(k)),
+        other => route(&head).or_else(|| other.map(Route::Known)),
+    };
+    let maintenance = maintenance_kind(&tokens);
     let dialect = PostgreSqlDialect {};
     let mut cx = Cx {
         p: Parser::new(&dialect).with_recursion_limit(RECURSION_LIMIT).with_tokens_with_locations(tokens.clone()),
         tokens,
         src,
     };
+    if let Some(vacuum) = maintenance {
+        return parse_maintenance(&mut cx, vacuum);
+    }
+    if let Some(kind) = txn_deferrable_form(&cx.tokens) {
+        return parse_transaction_modes(&mut cx, kind);
+    }
+    if let Some(grant) = role_grant_form(&cx.tokens) {
+        return parse_grant_role(&mut cx, grant);
+    }
     match route {
         None => Err(cx.fail_here()),
         Some(Route::Unsupported(feature)) => Ok(unsupported(feature)),
@@ -82,12 +126,32 @@ pub fn parse_extra(tokens: Vec<TokenWithSpan>, src: &SourceMap) -> Result<ExtraS
             Known::DropOwned => parse_drop_owned(&mut cx),
             Known::ReassignOwned => parse_reassign_owned(&mut cx),
             Known::AlterSequence => parse_alter_sequence(&mut cx),
+            Known::AlterOperator => parse_alter_operator(&mut cx),
             Known::CreateSequence => parse_create_sequence(&mut cx),
             Known::CreateRole => parse_create_role(&mut cx),
             Known::AlterRole => parse_alter_role(&mut cx),
             Known::AlterDomain => parse_alter_domain(&mut cx),
             Known::AlterDatabase => parse_alter_database(&mut cx),
             Known::AlterMaterializedView => parse_alter_matview(&mut cx),
+            Known::AlterIndex => parse_alter_index(&mut cx),
+            Known::AlterView => parse_alter_view(&mut cx),
+            Known::AlterViewColumnDefault => parse_alter_view_column_default(&mut cx),
+            Known::AlterTypeSetSchema => parse_alter_type_set_schema(&mut cx),
+            Known::AlterTypeOwner => parse_alter_type_owner(&mut cx),
+            Known::AlterViewOwner => parse_alter_view_owner(&mut cx),
+            Known::AlterViewRename => parse_alter_view_rename(&mut cx),
+            Known::AlterTypeRenameAttribute => parse_alter_type_rename_attribute(&mut cx),
+            Known::AlterTableSetSchema => parse_alter_table_set_schema(&mut cx),
+            Known::AlterTableOptions => parse_alter_table_options(&mut cx),
+            Known::AlterTableCluster => parse_alter_table_cluster(&mut cx),
+            Known::CreateExtension => parse_create_extension_unsupported(&mut cx),
+            Known::AlterTypeAttributes => parse_alter_type_attributes(&mut cx),
+            Known::AlterIndexColumn => parse_alter_index_column(&mut cx),
+            Known::AlterDependsOnExtension => parse_alter_depends_on_extension(&mut cx),
+            Known::AlterIndexRename => parse_alter_index_rename(&mut cx),
+            Known::AlterPartitionCmd => parse_alter_partition_cmd(&mut cx),
+            Known::AlterTsConfigMapping => parse_alter_ts_config_mapping(&mut cx),
+            Known::CommentRoutine => parse_comment_routine(&mut cx),
         },
     }
 }
@@ -111,12 +175,52 @@ enum Known {
     AlterDomain,
     AlterDatabase,
     AlterMaterializedView,
+    /// `ALTER INDEX [IF EXISTS] name {SET|RESET (...) | SET TABLESPACE t, ...}` and
+    /// `ALTER INDEX ALL IN TABLESPACE t SET TABLESPACE u`.
+    AlterIndex,
+    /// `ALTER VIEW [IF EXISTS] name {SET|RESET (...)}, ...`.
+    AlterView,
+    /// `ALTER VIEW [IF EXISTS] name ALTER [COLUMN] c {SET DEFAULT e | DROP DEFAULT}`.
+    AlterViewColumnDefault,
+    /// `ALTER TYPE name SET SCHEMA s`.
+    AlterTypeSetSchema,
+    /// `ALTER TYPE name OWNER TO role`.
+    AlterTypeOwner,
+    /// `ALTER VIEW [IF EXISTS] name OWNER TO role`.
+    AlterViewOwner,
+    AlterViewRename,
+    AlterTypeRenameAttribute,
+    /// `ALTER TABLE [IF EXISTS] [ONLY] name RESET (..)` (sqlparser has no such ALTER TABLE action).
+    AlterTableOptions,
+    /// `ALTER TABLE [IF EXISTS] [ONLY] name SET SCHEMA s` (sqlparser has no such ALTER TABLE action).
+    AlterTableSetSchema,
+    /// `ALTER TABLE [IF EXISTS] [ONLY] name CLUSTER ON idx` / `SET WITHOUT CLUSTER`.
+    AlterTableCluster,
+    /// `CREATE EXTENSION [IF NOT EXISTS] name` followed by options without `WITH` (always 0A000 after parsing).
+    CreateExtension,
+    /// `ALTER TYPE name {ADD|DROP|ALTER} ATTRIBUTE ..., ...` (composite types; always 0A000 after parsing).
+    AlterTypeAttributes,
+    /// `ALTER INDEX name [NO] DEPENDS ON EXTENSION ext` (always 0A000 after parsing).
+    AlterDependsOnExtension,
+    /// `ALTER INDEX [IF EXISTS] name ALTER [COLUMN] {column|n} SET STATISTICS n` (always 0A000 after parsing).
+    AlterIndexColumn,
+    /// `ALTER INDEX IF EXISTS name RENAME TO new` (sqlparser's `ALTER INDEX .. RENAME` has no `IF EXISTS`).
+    AlterIndexRename,
+    /// `ALTER {TABLE|INDEX} name {ATTACH|DETACH} PARTITION ..` (always 0A000 after parsing).
+    AlterPartitionCmd,
+    /// `ALTER TEXT SEARCH CONFIGURATION name {ADD|ALTER|DROP} MAPPING ...` (always 0A000 after parsing).
+    AlterTsConfigMapping,
+    /// `ALTER OPERATOR name (types) {SET (...) | OWNER TO | SET SCHEMA}` (always 0A000 after parsing).
+    AlterOperator,
     /// `CREATE [GLOBAL|LOCAL] [TEMP|TEMPORARY|UNLOGGED] SEQUENCE ...` (options in any order).
     CreateSequence,
     /// `CREATE {ROLE|USER|GROUP} ...` (options in any order, signed numbers).
     CreateRole,
     /// `ALTER {ROLE|USER} name [WITH] options` (not RENAME / SET / RESET / IN DATABASE).
     AlterRole,
+    /// `COMMENT ON {FUNCTION|PROCEDURE|ROUTINE} name [(argument list)] IS ...` (sqlparser has no
+    /// argument list for COMMENT, and no ROUTINE object kind).
+    CommentRoutine,
 }
 
 /// Where a chunk goes: a fully parsed statement, or a recognized-but-unsupported feature name.
@@ -140,11 +244,18 @@ const KNOWN_HEADS: &[(&[&str], Known)] = &[
     (&["ALTER", "DOMAIN"], Known::AlterDomain),
     (&["ALTER", "DATABASE"], Known::AlterDatabase),
     (&["ALTER", "MATERIALIZED", "VIEW"], Known::AlterMaterializedView),
+    (&["COMMENT", "ON", "FUNCTION"], Known::CommentRoutine),
+    (&["COMMENT", "ON", "PROCEDURE"], Known::CommentRoutine),
+    (&["COMMENT", "ON", "ROUTINE"], Known::CommentRoutine),
 ];
 
 /// Recognized PostgreSQL commands PGArbor does not implement; the feature text is the 0A000 subject.
 const UNSUPPORTED_HEADS: &[(&[&str], &str)] = &[
     (&["CREATE", "RULE"], "CREATE RULE"),
+    // sqlparser rejects string-literal trigger arguments (`EXECUTE FUNCTION f(col, 'cfg')`), which
+    // PostgreSQL accepts, so every CREATE TRIGGER form is routed here instead of to `classify`.
+    (&["CREATE", "TRIGGER"], "CREATE TRIGGER"),
+    (&["CREATE", "CONSTRAINT", "TRIGGER"], "CREATE TRIGGER"),
     (&["CREATE", "CAST"], "CREATE CAST"),
     (&["CREATE", "TABLESPACE"], "CREATE TABLESPACE"),
     (&["CREATE", "EVENT", "TRIGGER"], "CREATE EVENT TRIGGER"),
@@ -159,7 +270,9 @@ const UNSUPPORTED_HEADS: &[(&[&str], &str)] = &[
     (&["CREATE", "TRANSFORM"], "CREATE TRANSFORM"),
     (&["CREATE", "AGGREGATE"], "CREATE AGGREGATE"),
     (&["CREATE", "CONVERSION"], "CREATE CONVERSION"),
+    (&["CREATE", "DEFAULT", "CONVERSION"], "CREATE CONVERSION"),
     (&["CREATE", "USER", "MAPPING"], "CREATE USER MAPPING"),
+    (&["ALTER", "TEXT", "SEARCH"], "ALTER TEXT SEARCH"),
     (&["ALTER", "SYSTEM"], "ALTER SYSTEM"),
     (&["ALTER", "DEFAULT", "PRIVILEGES"], "ALTER DEFAULT PRIVILEGES"),
     (&["ALTER", "RULE"], "ALTER RULE"),
@@ -190,8 +303,12 @@ const UNSUPPORTED_HEADS: &[(&[&str], &str)] = &[
     (&["DROP", "ACCESS", "METHOD"], "DROP ACCESS METHOD"),
     (&["DROP", "TRANSFORM"], "DROP TRANSFORM"),
     (&["DROP", "CONVERSION"], "DROP CONVERSION"),
+    (&["DROP", "AGGREGATE"], "DROP AGGREGATE"),
     (&["DROP", "USER", "MAPPING"], "DROP USER MAPPING"),
     (&["SECURITY", "LABEL"], "SECURITY LABEL"),
+    (&["COMMENT", "ON", "CONSTRAINT"], "COMMENT ON CONSTRAINT"),
+    (&["COMMENT", "ON", "RULE"], "COMMENT ON RULE"),
+    (&["COMMENT", "ON", "STATISTICS"], "COMMENT ON STATISTICS"),
     (&["IMPORT", "FOREIGN", "SCHEMA"], "IMPORT FOREIGN SCHEMA"),
     (&["PREPARE", "TRANSACTION"], "PREPARE TRANSACTION"),
     (&["COMMIT", "PREPARED"], "COMMIT PREPARED"),
@@ -219,6 +336,10 @@ fn head_words(tokens: &[TokenWithSpan]) -> Vec<String> {
         while at(&head, 1, "TRUSTED") || at(&head, 1, "PROCEDURAL") {
             head.remove(1);
         }
+    }
+    // gram.y `ALTER opt_procedural LANGUAGE` / `DROP opt_procedural LANGUAGE`.
+    if (at(&head, 0, "ALTER") || at(&head, 0, "DROP")) && at(&head, 1, "PROCEDURAL") && at(&head, 2, "LANGUAGE") {
+        head.remove(1);
     }
     head
 }
@@ -252,6 +373,10 @@ fn route_special(head: &[String]) -> Option<Known> {
             return Some(Known::AlterRole);
         }
     }
+    // `ALTER OPERATOR FAMILY` and `ALTER OPERATOR CLASS` are sqlparser's, not this form.
+    if at(head, 0, "ALTER") && at(head, 1, "OPERATOR") && !at(head, 2, "FAMILY") && !at(head, 2, "CLASS") {
+        return Some(Known::AlterOperator);
+    }
     None
 }
 
@@ -275,6 +400,136 @@ fn route(head: &[String]) -> Option<Route> {
         }
     }
     None
+}
+
+/// `ALTER INDEX`, `ALTER VIEW` and `ALTER TYPE` forms whose target name may be qualified (`s.i`), so
+/// the fixed-prefix table in [`route`] cannot see the action word. The word after the optional
+/// `IF EXISTS` and the dotted name decides: `SET (` / `RESET (` for indexes and views, `SET TABLESPACE`
+/// for indexes, `ALL IN TABLESPACE` for indexes, `SET SCHEMA` for types, `ALTER [COLUMN]` for indexes,
+/// `ADD|DROP|ALTER ATTRIBUTE` for composite types, and `ADD|ALTER|DROP MAPPING` for
+/// `ALTER TEXT SEARCH CONFIGURATION` (which sqlparser cannot parse). RENAME and the other forms stay
+/// with sqlparser.
+fn route_alter_target(tokens: &[TokenWithSpan]) -> Option<Known> {
+    let sig: Vec<&Token> = tokens.iter().map(|t| &t.token).filter(|t| !matches!(t, Token::Whitespace(_))).collect();
+    let word = |i: usize| -> Option<String> {
+        match sig.get(i) {
+            Some(Token::Word(w)) if w.quote_style.is_none() => Some(w.value.to_ascii_uppercase()),
+            _ => None,
+        }
+    };
+    let is = |i: usize, kw: &str| word(i).as_deref() == Some(kw);
+    if is(0, "CREATE") && is(1, "EXTENSION") {
+        let mut i = 2;
+        if is(i, "IF") && is(i + 1, "NOT") && is(i + 2, "EXISTS") {
+            i += 3;
+        }
+        // The name, then an option keyword with no `WITH` (sqlparser only accepts `WITH SCHEMA ..`).
+        return (matches!(sig.get(i), Some(Token::Word(_)))
+            && ["SCHEMA", "VERSION", "FROM", "CASCADE"].iter().any(|kw| is(i + 1, kw)))
+        .then_some(Known::CreateExtension);
+    }
+    if !is(0, "ALTER") {
+        return None;
+    }
+    let kind = if is(1, "INDEX") {
+        "INDEX"
+    } else if is(1, "VIEW") {
+        "VIEW"
+    } else if is(1, "TYPE") {
+        "TYPE"
+    } else if is(1, "TABLE") {
+        "TABLE"
+    } else if is(1, "TEXT") && is(2, "SEARCH") && is(3, "CONFIGURATION") {
+        "TS_CONFIG"
+    } else {
+        return None;
+    };
+    if kind == "INDEX" && is(2, "ALL") && is(3, "IN") && is(4, "TABLESPACE") {
+        return Some(Known::AlterIndex);
+    }
+    // `ALTER TEXT SEARCH CONFIGURATION` names its object at token 4; only its mapping forms are routed.
+    let mut i = if kind == "TS_CONFIG" { 4 } else { 2 };
+    let mut has_if_exists = false;
+    if kind != "TS_CONFIG" && is(i, "IF") && is(i + 1, "EXISTS") {
+        i += 2;
+        has_if_exists = true;
+    }
+    if kind == "TABLE" && is(i, "ONLY") {
+        i += 1;
+    }
+    loop {
+        if !matches!(sig.get(i), Some(Token::Word(_))) {
+            return None;
+        }
+        i += 1;
+        if !matches!(sig.get(i), Some(Token::Period)) {
+            break;
+        }
+        i += 1;
+    }
+    let lparen = matches!(sig.get(i + 1), Some(Token::LParen));
+    match (kind, word(i).as_deref()) {
+        ("INDEX", Some("SET")) if lparen || is(i + 1, "TABLESPACE") => Some(Known::AlterIndex),
+        ("INDEX", Some("RESET")) if lparen => Some(Known::AlterIndex),
+        ("INDEX", Some("ALTER")) => Some(Known::AlterIndexColumn),
+        ("INDEX", Some("DEPENDS")) | ("INDEX", Some("NO")) if !has_if_exists && (is(i + 1, "ON") || is(i + 1, "DEPENDS")) => {
+            Some(Known::AlterDependsOnExtension)
+        }
+        ("INDEX", Some("RENAME")) if has_if_exists && is(i + 1, "TO") => Some(Known::AlterIndexRename),
+        ("INDEX", Some("ATTACH")) | ("TABLE", Some("ATTACH" | "DETACH")) if is(i + 1, "PARTITION") => {
+            Some(Known::AlterPartitionCmd)
+        }
+        ("TS_CONFIG", Some("ADD" | "ALTER" | "DROP")) if is(i + 1, "MAPPING") => Some(Known::AlterTsConfigMapping),
+        ("VIEW", Some("SET")) | ("VIEW", Some("RESET")) if lparen => Some(Known::AlterView),
+        ("VIEW", Some("ALTER")) => Some(Known::AlterViewColumnDefault),
+        ("TYPE", Some("SET")) if is(i + 1, "SCHEMA") => Some(Known::AlterTypeSetSchema),
+        ("TABLE", Some("SET")) if is(i + 1, "SCHEMA") => Some(Known::AlterTableSetSchema),
+        ("TABLE", Some("RESET")) if lparen => Some(Known::AlterTableOptions),
+        ("TABLE", Some("CLUSTER")) if is(i + 1, "ON") => Some(Known::AlterTableCluster),
+        ("TABLE", Some("SET")) if is(i + 1, "WITHOUT") && is(i + 2, "CLUSTER") => Some(Known::AlterTableCluster),
+        ("TYPE", Some("OWNER")) if is(i + 1, "TO") => Some(Known::AlterTypeOwner),
+        ("VIEW", Some("OWNER")) if is(i + 1, "TO") => Some(Known::AlterViewOwner),
+        ("VIEW", Some("RENAME")) => Some(Known::AlterViewRename),
+        ("VIEW", Some("SET")) if is(i + 1, "SCHEMA") => Some(Known::AlterViewRename),
+        ("TYPE", Some("RENAME")) if is(i + 1, "ATTRIBUTE") => Some(Known::AlterTypeRenameAttribute),
+        ("TYPE", Some("ADD" | "ALTER" | "DROP")) if is(i + 1, "ATTRIBUTE") => Some(Known::AlterTypeAttributes),
+        _ => None,
+    }
+}
+
+/// `ALTER TEXT SEARCH CONFIGURATION name <subcommand>` whose subcommand is none of gram.y's
+/// `AlterTSConfigurationStmt` / rename / owner / schema forms (`{ADD|ALTER|DROP} MAPPING`, `RENAME TO`,
+/// `OWNER TO`, `SET SCHEMA`). Such a statement is a PostgreSQL syntax error, so it is left to sqlparser
+/// (42601) instead of the generic `ALTER TEXT SEARCH` unsupported head (0A000).
+fn ts_config_ungrammatical(tokens: &[TokenWithSpan]) -> bool {
+    let sig: Vec<&Token> = tokens.iter().map(|t| &t.token).filter(|t| !matches!(t, Token::Whitespace(_))).collect();
+    let word = |i: usize| -> Option<String> {
+        match sig.get(i) {
+            Some(Token::Word(w)) if w.quote_style.is_none() => Some(w.value.to_ascii_uppercase()),
+            _ => None,
+        }
+    };
+    let is = |i: usize, kw: &str| word(i).as_deref() == Some(kw);
+    if !(is(0, "ALTER") && is(1, "TEXT") && is(2, "SEARCH") && is(3, "CONFIGURATION")) {
+        return false;
+    }
+    let mut i = 4;
+    loop {
+        if !matches!(sig.get(i), Some(Token::Word(_))) {
+            return false;
+        }
+        i += 1;
+        if !matches!(sig.get(i), Some(Token::Period)) {
+            break;
+        }
+        i += 1;
+    }
+    match word(i).as_deref() {
+        Some("ADD" | "ALTER" | "DROP") => !is(i + 1, "MAPPING"),
+        Some("RENAME" | "OWNER") => false,
+        Some("SET") => !is(i + 1, "SCHEMA"),
+        _ => true,
+    }
 }
 
 fn unsupported(feature: &str) -> ExtraStatement {
@@ -532,6 +787,10 @@ fn role_spec(cx: &mut Cx<'_>) -> Result<Ident> {
             return Ok(Ident { value: (*kw).to_string(), quote_style: None, span: t.span.clone() });
         }
     }
+    // `GROUP` is a reserved word (not a RoleSpec); the role-membership forms have no GROUP noise word.
+    if is_word(&t, "GROUP") {
+        return Err(cx.fail_at(&t));
+    }
     cx.ident()
 }
 
@@ -652,11 +911,421 @@ fn parse_cluster(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
     Ok(ExtraStatement::Cluster { table: Some(table), index })
 }
 
+/// `VACUUM` or `ANALYZE` in a form `sqlparser` cannot express: an option list `(...)` right after the
+/// keyword, or (VACUUM) one of the legacy keywords FULL, FREEZE, VERBOSE, ANALYZE, or (ANALYZE) VERBOSE.
+/// Returns `Some(true)` for VACUUM. Plain forms (`ANALYZE t`, `VACUUM SORT ONLY t`, ...) stay with sqlparser.
+fn maintenance_kind(tokens: &[TokenWithSpan]) -> Option<bool> {
+    let mut sig = tokens.iter().filter(|t| !matches!(t.token, Token::Whitespace(_)));
+    let first = sig.next()?;
+    let second = sig.next()?;
+    if is_word(first, "VACUUM") {
+        let legacy = ["FULL", "FREEZE", "VERBOSE", "ANALYZE"].iter().any(|kw| is_word(second, kw));
+        return (matches!(second.token, Token::LParen) || legacy).then_some(true);
+    }
+    if is_word(first, "ANALYZE") {
+        return (matches!(second.token, Token::LParen) || is_word(second, "VERBOSE")).then_some(false);
+    }
+    None
+}
+
+/// PG `VacuumStmt` / `AnalyzeStmt` (gram.y): `VACUUM|ANALYZE ( option [value], ... ) [table [(column, ...)]]`.
+/// `VACUUM` also takes the keywords FULL, FREEZE, VERBOSE and ANALYZE before the table, and `ANALYZE` takes
+/// VERBOSE; PG turns those keywords into options without a value, and so does this parser.
+fn parse_maintenance(cx: &mut Cx<'_>, vacuum: bool) -> Result<ExtraStatement> {
+    cx.expect_word(if vacuum { "VACUUM" } else { "ANALYZE" })?;
+    let mut options = Vec::new();
+    if cx.token(&Token::LParen) {
+        options = cx.comma_list(maintenance_option)?;
+        cx.expect_token(&Token::RParen)?;
+    } else {
+        let keywords: &[&str] = if vacuum { &["FULL", "FREEZE", "VERBOSE", "ANALYZE"] } else { &["VERBOSE"] };
+        loop {
+            let t = cx.peek();
+            let Some(kw) = keywords.iter().copied().find(|kw| is_word(&t, kw)) else { break };
+            cx.p.next_token();
+            options.push(MaintenanceOption { name: kw.to_string(), value: None, pos: cx.src.pos_of_span(t.span.clone()) });
+        }
+    }
+    let mut table = None;
+    let mut columns = Vec::new();
+    if !is_eof(&cx.peek()) {
+        table = Some(cx.object_name()?);
+        if cx.token(&Token::LParen) {
+            columns = cx.comma_list(|c| c.ident())?;
+            cx.expect_token(&Token::RParen)?;
+        }
+    }
+    cx.finish()?;
+    Ok(ExtraStatement::Maintenance { vacuum, options, table, columns })
+}
+
+/// One entry of a `VACUUM` / `ANALYZE` option list (PG `utility_option_elem`): `name [value]`. The name is
+/// upper-cased. The value is a word (boolean spellings such as ON), a number with an optional sign, or a
+/// string constant; it is kept as written and interpreted by the binder.
+fn maintenance_option(cx: &mut Cx<'_>) -> Result<MaintenanceOption> {
+    let t = cx.peek();
+    let name = match &t.token {
+        Token::Word(w) => w.value.to_ascii_uppercase(),
+        _ => return Err(cx.fail_at(&t)),
+    };
+    cx.p.next_token();
+    let pos = cx.src.pos_of_span(t.span.clone());
+    let v = cx.peek();
+    let value = match &v.token {
+        Token::Comma | Token::RParen => None,
+        Token::Word(w) => {
+            let s = w.value.clone();
+            cx.p.next_token();
+            Some(s)
+        }
+        Token::Number(digits, _) => {
+            let s = digits.clone();
+            cx.p.next_token();
+            Some(s)
+        }
+        Token::Plus | Token::Minus => Some(cx.numeric()?),
+        _ => match cx.string_const() {
+            Some(s) => Some(s),
+            None => return Err(cx.fail_at(&v)),
+        },
+    };
+    Ok(MaintenanceOption { name, value, pos })
+}
+
+/// PG `CommentStmt` for routines (gram.y): `COMMENT ON {FUNCTION|PROCEDURE|ROUTINE} function_with_argtypes
+/// IS {Sconst|NULL}`, where the name may be followed by `( [arg, ...] )`.
+fn parse_comment_routine(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("COMMENT")?;
+    cx.expect_word("ON")?;
+    let kind = if cx.word("FUNCTION") {
+        RoutineKind::Function
+    } else if cx.word("PROCEDURE") {
+        RoutineKind::Procedure
+    } else {
+        cx.expect_word("ROUTINE")?;
+        RoutineKind::Routine
+    };
+    let name = cx.object_name()?;
+    let args = if cx.token(&Token::LParen) {
+        let list = if cx.token(&Token::RParen) {
+            Vec::new()
+        } else {
+            let list = cx.comma_list(comment_routine_arg)?;
+            cx.expect_token(&Token::RParen)?;
+            list
+        };
+        Some(list)
+    } else {
+        None
+    };
+    cx.expect_word("IS")?;
+    let comment = if cx.word("NULL") {
+        None
+    } else {
+        match cx.string_const() {
+            Some(s) => Some(s),
+            None => return Err(cx.fail_here()),
+        }
+    };
+    cx.finish()?;
+    Ok(ExtraStatement::CommentRoutine { kind, name, args, comment })
+}
+
+/// One argument of a routine named by COMMENT (PG `func_arg` without a default): `[mode] [name] type`.
+/// `name type` is told apart from a bare type by what follows the first parsed type.
+fn comment_routine_arg(cx: &mut Cx<'_>) -> Result<OperateFunctionArg> {
+    let mode = if cx.word("INOUT") {
+        Some(ArgMode::InOut)
+    } else if cx.word("IN") {
+        Some(ArgMode::In)
+    } else if cx.word("OUT") {
+        Some(ArgMode::Out)
+    } else if cx.word("VARIADIC") {
+        Some(ArgMode::Variadic)
+    } else {
+        None
+    };
+    let first = cx.data_type()?;
+    let (name, data_type) = if matches!(cx.peek().token, Token::Comma | Token::RParen) {
+        (None, first)
+    } else {
+        // The first word was read as a one-part type name; the real type follows it.
+        let id = match &first {
+            DataType::Custom(obj, mods) if mods.is_empty() => match obj.0.as_slice() {
+                [ObjectNamePart::Identifier(id)] => id.clone(),
+                _ => return Err(cx.fail_here()),
+            },
+            _ => return Err(cx.fail_here()),
+        };
+        (Some(id), cx.data_type()?)
+    };
+    Ok(OperateFunctionArg { mode, name, data_type, default_expr: None })
+}
+
+/// `MERGE ... RETURNING WITH (OLD AS o, NEW AS n)` (PG 18 old and new row images). sqlparser's RETURNING
+/// has no alias list and PGArbor does not execute MERGE, so such a chunk is reported as unsupported rather
+/// than as a syntax error at the `(`.
+fn merge_returning_with(tokens: &[TokenWithSpan]) -> bool {
+    let sig: Vec<&TokenWithSpan> = tokens.iter().filter(|t| !matches!(t.token, Token::Whitespace(_))).collect();
+    if !sig.first().is_some_and(|t| is_word(t, "MERGE")) {
+        return false;
+    }
+    sig.windows(3).any(|w| is_word(w[0], "RETURNING") && is_word(w[1], "WITH") && matches!(w[2].token, Token::LParen))
+}
+
 /// PG `CheckPointStmt`: `CHECKPOINT` with no arguments.
+/// `CREATE [persistence] TABLE [IF NOT EXISTS] name [(cols)] [options] AS EXECUTE name [(args)]`: sqlparser
+/// rejects the `EXECUTE` source, so it is recognized here by the top-level `AS EXECUTE` word pair and
+/// reported as unsupported rather than as a syntax error.
+fn ctas_execute(tokens: &[TokenWithSpan]) -> bool {
+    let sig: Vec<&Token> = tokens.iter().map(|t| &t.token).filter(|t| !matches!(t, Token::Whitespace(_))).collect();
+    let word = |i: usize, kw: &str| match sig.get(i) {
+        Some(Token::Word(w)) => w.quote_style.is_none() && w.value.eq_ignore_ascii_case(kw),
+        _ => false,
+    };
+    if !word(0, "CREATE") {
+        return false;
+    }
+    let mut i = 1;
+    while ["GLOBAL", "LOCAL", "TEMP", "TEMPORARY", "UNLOGGED"].iter().any(|w| word(i, w)) {
+        i += 1;
+    }
+    if !word(i, "TABLE") {
+        return false;
+    }
+    let mut depth = 0usize;
+    for j in i + 1..sig.len() {
+        match sig[j] {
+            Token::LParen => depth += 1,
+            Token::RParen => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && word(j, "AS") && word(j + 1, "EXECUTE") {
+            return true;
+        }
+    }
+    false
+}
+
 fn parse_checkpoint(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
     cx.expect_word("CHECKPOINT")?;
     cx.finish()?;
     Ok(ExtraStatement::Checkpoint)
+}
+
+/// PG `AlterOperatorStmt` (gram.y): `ALTER OPERATOR any_operator oper_argtypes
+/// { SET '(' operator_def_list ')' | OWNER TO RoleSpec | SET SCHEMA name }`, where `oper_argtypes` is
+/// `(Typename, Typename)`, `(NONE, Typename)` or `(Typename, NONE)`. Executing it needs `pg_operator`
+/// writes that PGArbor does not have, so a well-formed statement is 0A000. The option list is parsed
+/// in the grammar's generic form (`ColLabel [= def_arg]`), so `MERGES = false` and `RESTRICT = NONE`
+/// are syntax-valid as in PostgreSQL. The operator name arrives as one word (see `parser`).
+fn parse_alter_operator(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("OPERATOR")?;
+    cx.object_name()?;
+    cx.expect_token(&Token::LParen)?;
+    oper_argtype(cx)?;
+    if !cx.token(&Token::Comma) {
+        return Err(cx.fail_here());
+    }
+    oper_argtype(cx)?;
+    cx.expect_token(&Token::RParen)?;
+    if cx.word("OWNER") {
+        cx.expect_word("TO")?;
+        role_spec(cx)?;
+    } else if cx.word("SET") {
+        if cx.word("SCHEMA") {
+            cx.object_name()?;
+        } else {
+            cx.expect_token(&Token::LParen)?;
+            cx.comma_list(|c| operator_def(c))?;
+            cx.expect_token(&Token::RParen)?;
+        }
+    } else {
+        return Err(cx.fail_here());
+    }
+    cx.finish()?;
+    Ok(unsupported("ALTER OPERATOR"))
+}
+
+/// One operand type of `oper_argtypes`: `NONE` or a type name.
+fn oper_argtype(cx: &mut Cx<'_>) -> Result<()> {
+    if cx.word("NONE") {
+        Ok(())
+    } else {
+        cx.data_type().map(|_| ())
+    }
+}
+
+/// PG `operator_def_elem`: `ColLabel '=' NONE | ColLabel '=' def_arg | ColLabel`. The attribute name
+/// is checked as `AlterOperator` does (operatorcmds.c): unquoted names are lower-cased, and only
+/// RESTRICT, JOIN, COMMUTATOR, NEGATOR, MERGES and HASHES can be set. MERGES and HASHES take a Boolean.
+fn operator_def(cx: &mut Cx<'_>) -> Result<()> {
+    let label = cx.peek();
+    let Token::Word(w) = &label.token else {
+        return Err(cx.fail_at(&label));
+    };
+    let name = if w.quote_style.is_some() { w.value.clone() } else { w.value.to_ascii_lowercase() };
+    match name.as_str() {
+        "restrict" | "join" | "commutator" | "negator" | "merges" | "hashes" => {}
+        "leftarg" | "rightarg" | "function" | "procedure" => {
+            return Err(PgError::syntax(format!("operator attribute \"{name}\" cannot be changed"), None));
+        }
+        _ => return Err(PgError::syntax(format!("operator attribute \"{name}\" not recognized"), None)),
+    }
+    cx.p.next_token();
+    if cx.token(&Token::Eq) && !cx.word("NONE") {
+        if matches!(name.as_str(), "merges" | "hashes") {
+            cx.bool_value(&name)?;
+        } else {
+            def_arg(cx)?;
+        }
+    }
+    Ok(())
+}
+
+/// PG `def_arg` (the value of an operator option): a dotted name or reserved word, a signed number,
+/// or a string constant. Its meaning is checked by the binder, not here.
+fn def_arg(cx: &mut Cx<'_>) -> Result<()> {
+    let t = cx.peek();
+    match &t.token {
+        Token::Word(_) => {
+            cx.p.next_token();
+            while cx.token(&Token::Period) {
+                cx.ident()?;
+            }
+            Ok(())
+        }
+        Token::Number(..) | Token::Plus | Token::Minus => cx.numeric().map(|_| ()),
+        _ => {
+            if cx.string_const().is_some() {
+                Ok(())
+            } else {
+                Err(cx.fail_at(&t))
+            }
+        }
+    }
+}
+
+/// Which transaction command this chunk is, when it is one that carries `[NOT] DEFERRABLE` (a word
+/// at depth 0 anywhere after the head). `SET TRANSACTION SNAPSHOT` is never this form.
+fn txn_deferrable_form(tokens: &[TokenWithSpan]) -> Option<TxnCommandKind> {
+    let words: Vec<Option<String>> = tokens
+        .iter()
+        .filter(|t| !matches!(t.token, Token::Whitespace(_)))
+        .map(|t| match &t.token {
+            Token::Word(w) if w.quote_style.is_none() => Some(w.value.to_ascii_uppercase()),
+            _ => None,
+        })
+        .collect();
+    let w = |i: usize, s: &str| words.get(i).and_then(|x| x.as_deref()) == Some(s);
+    // `SET TRANSACTION SNAPSHOT` takes a string literal; anything else is a syntax error at that token.
+    if w(0, "SET") && w(1, "TRANSACTION") && w(2, "SNAPSHOT") {
+        let next = tokens.iter().filter(|t| !matches!(t.token, Token::Whitespace(_))).nth(3);
+        let is_string = next.is_some_and(|t| matches!(t.token, Token::SingleQuotedString(_) | Token::DollarQuotedString(_)));
+        return (!is_string).then_some(TxnCommandKind::SetTransaction);
+    }
+    let kind = if w(0, "BEGIN") {
+        TxnCommandKind::Begin
+    } else if w(0, "START") && w(1, "TRANSACTION") {
+        // Every START TRANSACTION goes through `parse_transaction_modes` so a malformed mode list is
+        // reported at the same token as PG (sqlparser would point at the first mode keyword).
+        return Some(TxnCommandKind::StartTransaction);
+    } else if w(0, "SET") && w(1, "TRANSACTION") && !w(2, "SNAPSHOT") {
+        TxnCommandKind::SetTransaction
+    } else if w(0, "SET") && w(1, "SESSION") && w(2, "CHARACTERISTICS") {
+        TxnCommandKind::SetSessionCharacteristics
+    } else {
+        return None;
+    };
+    // The SET forms always go through `parse_transaction_modes` so a malformed mode list is reported at
+    // the same token as PG (an empty list is a syntax error at the end of input).
+    if matches!(kind, TxnCommandKind::SetTransaction | TxnCommandKind::SetSessionCharacteristics) {
+        return Some(kind);
+    }
+    (0..words.len()).any(|i| w(i, "DEFERRABLE")).then_some(kind)
+}
+
+/// PG `TransactionStmt` (`BEGIN` / `START TRANSACTION`) and `transaction_mode_list` with `[NOT] DEFERRABLE`.
+fn parse_transaction_modes(cx: &mut Cx<'_>, kind: TxnCommandKind) -> Result<ExtraStatement> {
+    use crate::ir::IsolationLevel;
+    match kind {
+        TxnCommandKind::Begin => {
+            cx.expect_word("BEGIN")?;
+            if !cx.word("TRANSACTION") {
+                cx.word("WORK");
+            }
+        }
+        TxnCommandKind::StartTransaction => {
+            cx.expect_word("START")?;
+            cx.expect_word("TRANSACTION")?;
+        }
+        TxnCommandKind::SetTransaction => {
+            cx.expect_word("SET")?;
+            cx.expect_word("TRANSACTION")?;
+        }
+        TxnCommandKind::SetSessionCharacteristics => {
+            cx.expect_word("SET")?;
+            cx.expect_word("SESSION")?;
+            cx.expect_word("CHARACTERISTICS")?;
+            cx.expect_word("AS")?;
+            cx.expect_word("TRANSACTION")?;
+        }
+    }
+    let mut isolation = None;
+    let mut read_only = None;
+    let mut deferrable = None;
+    let mut first = true;
+    if matches!(kind, TxnCommandKind::SetTransaction) && cx.word("SNAPSHOT") {
+        // `SET TRANSACTION SNAPSHOT <non-string>` (string literals stay with sqlparser): fail at the operand.
+        return Err(cx.fail_here());
+    }
+    loop {
+        if cx.word("ISOLATION") {
+            cx.expect_word("LEVEL")?;
+            isolation = Some(if cx.word("READ") {
+                if cx.word("UNCOMMITTED") {
+                    IsolationLevel::ReadUncommitted
+                } else if cx.word("COMMITTED") {
+                    IsolationLevel::ReadCommitted
+                } else {
+                    return Err(cx.fail_here());
+                }
+            } else if cx.word("REPEATABLE") {
+                cx.expect_word("READ")?;
+                IsolationLevel::RepeatableRead
+            } else if cx.word("SERIALIZABLE") {
+                IsolationLevel::Serializable
+            } else {
+                return Err(cx.fail_here());
+            });
+        } else if cx.word("READ") {
+            if cx.word("ONLY") {
+                read_only = Some(true);
+            } else if cx.word("WRITE") {
+                read_only = Some(false);
+            } else {
+                return Err(cx.fail_here());
+            }
+        } else if cx.word("NOT") {
+            cx.expect_word("DEFERRABLE")?;
+            deferrable = Some(false);
+        } else if cx.word("DEFERRABLE") {
+            deferrable = Some(true);
+        } else if first
+            && (!is_eof(&cx.peek())
+                || matches!(kind, TxnCommandKind::SetTransaction | TxnCommandKind::SetSessionCharacteristics))
+        {
+            // A malformed mode list (or a statement that mentions DEFERRABLE later on).
+            return Err(cx.fail_here());
+        } else {
+            break;
+        }
+        first = false;
+        cx.token(&Token::Comma);
+    }
+    cx.finish()?;
+    Ok(ExtraStatement::TransactionModes { kind, isolation, read_only, deferrable })
 }
 
 /// PG `ConstraintsSetStmt`: `SET CONSTRAINTS (ALL | qualified_name_list) (DEFERRED | IMMEDIATE)`.
@@ -1316,6 +1985,530 @@ fn parse_alter_matview(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
     Ok(ExtraStatement::AlterMaterializedView { if_exists, name, action })
 }
 
+/// `ALTER INDEX [IF EXISTS] name action, ...` with `SET (..)`, `RESET (..)` or `SET TABLESPACE t`
+/// (PG `AlterTableStmt` with `OBJECT_INDEX`), and `ALTER INDEX ALL IN TABLESPACE from SET TABLESPACE
+/// to [NOWAIT]` (PG `AlterTableMoveAllStmt`). The `OWNED BY` role filter is 0A000.
+fn parse_alter_index(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("INDEX")?;
+    if cx.word("ALL") {
+        cx.expect_word("IN")?;
+        cx.expect_word("TABLESPACE")?;
+        let from = cx.ident()?;
+        if cx.word("OWNED") {
+            cx.expect_word("BY")?;
+            role_list(cx)?;
+            return Ok(unsupported("ALTER INDEX ALL IN TABLESPACE ... OWNED BY"));
+        }
+        cx.expect_word("SET")?;
+        cx.expect_word("TABLESPACE")?;
+        let to = cx.ident()?;
+        cx.word("NOWAIT");
+        cx.finish()?;
+        return Ok(ExtraStatement::AlterIndexAllInTablespace { from, to });
+    }
+    let if_exists = parse_if_exists(cx)?;
+    let name = cx.object_name()?;
+    let actions = cx.comma_list(|c| rel_option_action(c, true))?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterIndex { if_exists, name, actions })
+}
+
+/// `ALTER VIEW [IF EXISTS] name action, ...` with `SET (..)` / `RESET (..)` (PG `AlterTableStmt` with
+/// `OBJECT_VIEW`; the column and default forms stay unparsed, as before).
+fn parse_alter_view(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("VIEW")?;
+    let if_exists = parse_if_exists(cx)?;
+    let name = cx.object_name()?;
+    let actions = cx.comma_list(|c| rel_option_action(c, false))?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterView { if_exists, name, actions })
+}
+
+/// `ALTER VIEW [IF EXISTS] name ALTER [COLUMN] c SET DEFAULT e | DROP DEFAULT` (PG `AlterTableStmt`
+/// with `OBJECT_VIEW` and `AT_ColumnDefault`).
+fn parse_alter_view_column_default(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("VIEW")?;
+    let if_exists = parse_if_exists(cx)?;
+    let name = cx.object_name()?;
+    cx.expect_word("ALTER")?;
+    cx.word("COLUMN");
+    let column = cx.ident()?;
+    let default = if cx.word("DROP") {
+        cx.expect_word("DEFAULT")?;
+        None
+    } else {
+        cx.expect_word("SET")?;
+        cx.expect_word("DEFAULT")?;
+        Some(cx.expr()?)
+    };
+    cx.finish()?;
+    Ok(ExtraStatement::AlterViewColumnDefault { if_exists, name, column, default })
+}
+
+/// `ALTER TYPE name SET SCHEMA new` (PG `AlterObjectSchemaStmt`).
+fn parse_alter_type_set_schema(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TYPE")?;
+    let name = cx.object_name()?;
+    cx.expect_word("SET")?;
+    cx.expect_word("SCHEMA")?;
+    let schema = cx.ident()?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterTypeSetSchema { name, schema })
+}
+
+/// `ALTER TYPE name OWNER TO role` (PG `AlterOwnerStmt`; the role may be `CURRENT_USER` etc.).
+fn parse_alter_type_owner(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TYPE")?;
+    let name = cx.object_name()?;
+    cx.expect_word("OWNER")?;
+    cx.expect_word("TO")?;
+    let role = role_spec(cx)?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterTypeOwner { name, role })
+}
+
+/// `ALTER TABLE [IF EXISTS] [ONLY] name SET SCHEMA s` (PG `AlterObjectSchemaStmt`, `OBJECT_TABLE`).
+fn parse_alter_table_set_schema(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TABLE")?;
+    let if_exists = parse_if_exists(cx)?;
+    cx.word("ONLY");
+    let name = cx.object_name()?;
+    cx.expect_word("SET")?;
+    cx.expect_word("SCHEMA")?;
+    let schema = cx.ident()?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterTableSetSchema { if_exists, name, schema })
+}
+
+/// `ALTER TABLE [IF EXISTS] [ONLY] name CLUSTER ON index` or `SET WITHOUT CLUSTER` (PG `AT_ClusterOn`,
+/// `AT_DropCluster`).
+fn parse_alter_table_cluster(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TABLE")?;
+    let if_exists = parse_if_exists(cx)?;
+    cx.word("ONLY");
+    let name = cx.object_name()?;
+    let index = if cx.word("CLUSTER") {
+        cx.expect_word("ON")?;
+        Some(cx.ident()?)
+    } else {
+        cx.expect_word("SET")?;
+        cx.expect_word("WITHOUT")?;
+        cx.expect_word("CLUSTER")?;
+        None
+    };
+    cx.finish()?;
+    Ok(ExtraStatement::AlterTableCluster { if_exists, name, index })
+}
+
+/// `CREATE EXTENSION [IF NOT EXISTS] name [WITH] {SCHEMA s | VERSION v | FROM v | CASCADE} ...`
+/// (PG `CreateExtensionStmt`), for the forms without `WITH` that sqlparser rejects. Parsed for its
+/// syntax; extensions are not installable yet, so the statement is 0A000.
+fn parse_create_extension_unsupported(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("CREATE")?;
+    cx.expect_word("EXTENSION")?;
+    if cx.word("IF") {
+        cx.expect_word("NOT")?;
+        cx.expect_word("EXISTS")?;
+    }
+    cx.ident()?;
+    cx.word("WITH");
+    // PG `CreateExtension` rejects a repeated option (`errorConflictingDefElem`) after the whole
+    // statement parsed; remember the first repeat and its token.
+    let mut seen = [false; 4];
+    let mut conflict: Option<TokenWithSpan> = None;
+    loop {
+        let t = cx.peek();
+        let which = if cx.word("SCHEMA") {
+            cx.ident()?;
+            0
+        } else if cx.word("VERSION") || cx.word("FROM") {
+            // `NonReservedWord_or_Sconst`
+            if matches!(cx.peek().token, Token::SingleQuotedString(_)) {
+                cx.p.next_token();
+            } else {
+                cx.ident()?;
+            }
+            if is_word(&t, "VERSION") { 1 } else { 2 }
+        } else if cx.word("CASCADE") {
+            3
+        } else {
+            break;
+        };
+        if seen[which] && conflict.is_none() {
+            conflict = Some(t);
+        }
+        seen[which] = true;
+    }
+    cx.finish()?;
+    if let Some(t) = conflict {
+        return Err(conflicting(cx, &t));
+    }
+    Ok(unsupported("CREATE EXTENSION"))
+}
+
+/// Is the chunk a role-membership `GRANT` / `REVOKE` (no `ON` keyword: `GRANT r TO m`)? Returns whether it
+/// is a GRANT (`true`) or a REVOKE (`false`). sqlparser has no AST for the role form, and a privilege
+/// grant always has an `ON` (`ON` is reserved, so no role is named that unquoted).
+fn role_grant_form(tokens: &[TokenWithSpan]) -> Option<bool> {
+    let mut words = tokens.iter().filter_map(|t| match &t.token {
+        Token::Whitespace(_) => None,
+        Token::Word(w) if w.quote_style.is_none() => Some(Some(w.value.to_ascii_uppercase())),
+        _ => Some(None),
+    });
+    let grant = match words.next()?.as_deref() {
+        Some("GRANT") => true,
+        Some("REVOKE") => false,
+        _ => return None,
+    };
+    let mut has_on = false;
+    let mut has_to = false;
+    for w in words {
+        match w.as_deref() {
+            Some("ON") => has_on = true,
+            Some("TO") if grant => has_to = true,
+            Some("FROM") if !grant => has_to = true,
+            _ => {}
+        }
+    }
+    (!has_on && has_to).then_some(grant)
+}
+
+/// `GRANT role, ... TO role, ... [WITH option, ...] [GRANTED BY role]` and
+/// `REVOKE [name OPTION FOR] role, ... FROM role, ... [GRANTED BY role] [CASCADE | RESTRICT]`.
+fn parse_grant_role(cx: &mut Cx<'_>, grant: bool) -> Result<ExtraStatement> {
+    cx.expect_word(if grant { "GRANT" } else { "REVOKE" })?;
+    if grant {
+        let roles = cx.comma_list(|c| c.ident())?;
+        cx.expect_word("TO")?;
+        let grantees = role_list(cx)?;
+        let mut options = Vec::new();
+        if cx.word("WITH") {
+            options = cx.comma_list(|c| {
+                let name = c.ident()?;
+                let value = if c.word("OPTION") || c.word("TRUE") {
+                    true
+                } else if c.word("FALSE") {
+                    false
+                } else {
+                    return Err(c.fail_here());
+                };
+                Ok((name, value))
+            })?;
+        }
+        let grantor = parse_granted_by(cx)?;
+        cx.finish()?;
+        return Ok(ExtraStatement::GrantRole { roles, grantees, options, grantor });
+    }
+    // `REVOKE name OPTION FOR role ..` versus `REVOKE role [, role ...] ..`: the first name decides.
+    let first = cx.ident()?;
+    let mut option_for = None;
+    let mut roles = Vec::new();
+    if cx.word("OPTION") {
+        cx.expect_word("FOR")?;
+        option_for = Some(first);
+        roles = cx.comma_list(|c| c.ident())?;
+    } else {
+        roles.push(first);
+        while cx.token(&Token::Comma) {
+            roles.push(cx.ident()?);
+        }
+    }
+    cx.expect_word("FROM")?;
+    let grantees = role_list(cx)?;
+    let grantor = parse_granted_by(cx)?;
+    let cascade = if cx.word("CASCADE") {
+        true
+    } else {
+        cx.word("RESTRICT");
+        false
+    };
+    cx.finish()?;
+    Ok(ExtraStatement::RevokeRole { option_for, roles, grantees, grantor, cascade })
+}
+
+/// gram.y `opt_granted_by`.
+fn parse_granted_by(cx: &mut Cx<'_>) -> Result<Option<Ident>> {
+    if cx.word("GRANTED") {
+        cx.expect_word("BY")?;
+        return Ok(Some(role_spec(cx)?));
+    }
+    Ok(None)
+}
+
+/// `ALTER TABLE [IF EXISTS] [ONLY] name RESET (name, ...) [, action ...] (PG `AT_ResetRelOptions`).
+fn parse_alter_table_options(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TABLE")?;
+    let if_exists = parse_if_exists(cx)?;
+    cx.word("ONLY");
+    let name = cx.object_name()?;
+    let actions = cx.comma_list(|c| rel_option_action(c, false))?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterTableOptions { if_exists, name, actions })
+}
+
+/// `ALTER INDEX name [NO] DEPENDS ON EXTENSION ext` (gram.y `AlterObjectDependsStmt`; no `IF EXISTS`).
+/// The pg_depend extension marker is not recorded yet, so the statement is 0A000 after parsing.
+fn parse_alter_depends_on_extension(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("INDEX")?;
+    cx.object_name()?;
+    cx.word("NO");
+    cx.expect_word("DEPENDS")?;
+    cx.expect_word("ON")?;
+    cx.expect_word("EXTENSION")?;
+    cx.ident()?;
+    cx.finish()?;
+    Ok(unsupported("ALTER INDEX ... DEPENDS ON EXTENSION"))
+}
+
+/// `ALTER VIEW [IF EXISTS] name OWNER TO role` (PG `AlterTableStmt` with `OBJECT_VIEW`, `AT_ChangeOwner`).
+fn parse_alter_view_owner(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("VIEW")?;
+    let if_exists = parse_if_exists(cx)?;
+    let name = cx.object_name()?;
+    cx.expect_word("OWNER")?;
+    cx.expect_word("TO")?;
+    let role = role_spec(cx)?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterViewOwner { if_exists, name, role })
+}
+
+/// `ALTER VIEW [IF EXISTS] name RENAME TO new` or `RENAME [COLUMN] old TO new` (PG `RenameStmt`).
+fn parse_alter_view_rename(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("VIEW")?;
+    let if_exists = parse_if_exists(cx)?;
+    let name = cx.object_name()?;
+    let action = if cx.word("SET") {
+        cx.expect_word("SCHEMA")?;
+        AlterMatViewAction::SetSchema(cx.ident()?)
+    } else if cx.word("RENAME") && cx.word("TO") {
+        AlterMatViewAction::RenameTo(cx.ident()?)
+    } else {
+        cx.word("COLUMN");
+        let old = cx.ident()?;
+        cx.expect_word("TO")?;
+        let new = cx.ident()?;
+        AlterMatViewAction::RenameColumn { old, new }
+    };
+    cx.finish()?;
+    Ok(ExtraStatement::AlterViewRename { if_exists, name, action })
+}
+
+/// `ALTER TYPE name RENAME ATTRIBUTE old TO new [CASCADE | RESTRICT]` (PG `RenameStmt`, `OBJECT_ATTRIBUTE`).
+fn parse_alter_type_rename_attribute(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TYPE")?;
+    let name = cx.object_name()?;
+    cx.expect_word("RENAME")?;
+    cx.expect_word("ATTRIBUTE")?;
+    let old = cx.ident()?;
+    cx.expect_word("TO")?;
+    let new = cx.ident()?;
+    let cascade = if cx.word("CASCADE") {
+        true
+    } else {
+        cx.word("RESTRICT");
+        false
+    };
+    cx.finish()?;
+    Ok(ExtraStatement::AlterTypeRenameAttribute { name, old, new, cascade })
+}
+
+/// `ALTER TYPE name ADD|DROP|ALTER ATTRIBUTE action, ...` (PG `AlterCompositeTypeStmt`). Parsed for
+/// its syntax; composite attribute changes are not executed yet, so the statement is 0A000.
+fn parse_alter_type_attributes(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TYPE")?;
+    cx.object_name()?;
+    cx.comma_list(|c| composite_attribute_action(c))?;
+    cx.finish()?;
+    Ok(unsupported("ALTER TYPE ... ADD/DROP/ALTER ATTRIBUTE"))
+}
+
+/// One ALTER TYPE attribute action: `ADD ATTRIBUTE name type [COLLATE c]`, `DROP ATTRIBUTE [IF EXISTS]
+/// name`, or `ALTER ATTRIBUTE name [SET DATA] TYPE type [COLLATE c]`; each may end with CASCADE/RESTRICT.
+fn composite_attribute_action(cx: &mut Cx<'_>) -> Result<()> {
+    if cx.word("ADD") {
+        cx.expect_word("ATTRIBUTE")?;
+        cx.ident()?;
+        cx.data_type()?;
+        if cx.word("COLLATE") {
+            cx.object_name()?;
+        }
+    } else if cx.word("DROP") {
+        cx.expect_word("ATTRIBUTE")?;
+        parse_if_exists(cx)?;
+        cx.ident()?;
+    } else {
+        cx.expect_word("ALTER")?;
+        cx.expect_word("ATTRIBUTE")?;
+        cx.ident()?;
+        if cx.word("SET") {
+            cx.expect_word("DATA")?;
+        }
+        cx.expect_word("TYPE")?;
+        cx.data_type()?;
+        if cx.word("COLLATE") {
+            cx.object_name()?;
+        }
+    }
+    parse_drop_behavior(cx);
+    Ok(())
+}
+
+/// `ALTER INDEX [IF EXISTS] name ALTER [COLUMN] {column|n} SET STATISTICS n` (PG `AT_SetStatistics`).
+/// Parsed for its syntax; the per-column statistics target is not stored yet, so the statement is 0A000.
+fn parse_alter_index_column(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("INDEX")?;
+    parse_if_exists(cx)?;
+    cx.object_name()?;
+    cx.expect_word("ALTER")?;
+    cx.word("COLUMN");
+    if matches!(cx.peek().token, Token::Number(..)) {
+        cx.numeric()?;
+    } else {
+        cx.ident()?;
+    }
+    cx.expect_word("SET")?;
+    cx.expect_word("STATISTICS")?;
+    cx.signed_int()?;
+    cx.finish()?;
+    Ok(unsupported("ALTER INDEX ... ALTER COLUMN SET STATISTICS"))
+}
+
+/// `ALTER INDEX IF EXISTS name RENAME TO new` (PG `RenameStmt`, `OBJECT_INDEX`, `missing_ok`).
+fn parse_alter_index_rename(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("INDEX")?;
+    let if_exists = parse_if_exists(cx)?;
+    let name = cx.object_name()?;
+    cx.expect_word("RENAME")?;
+    cx.expect_word("TO")?;
+    let new_name = cx.ident()?;
+    cx.finish()?;
+    Ok(ExtraStatement::AlterIndexRename { if_exists, name, new_name })
+}
+
+/// `ALTER TABLE [IF EXISTS] [ONLY] name {ATTACH PARTITION p {FOR VALUES ..|DEFAULT} | DETACH PARTITION p
+/// [CONCURRENTLY|FINALIZE]}` and `ALTER INDEX [IF EXISTS] name ATTACH PARTITION p` (PG `partition_cmd`,
+/// `AT_AttachPartition` / `AT_DetachPartition` / `AT_AttachPartitionIndex`). Declarative partitioning is
+/// not implemented, so the statement is 0A000 once its head parses; the bound expressions are not parsed.
+fn parse_alter_partition_cmd(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    let is_index = cx.word("INDEX");
+    if !is_index {
+        cx.expect_word("TABLE")?;
+    }
+    parse_if_exists(cx)?;
+    if !is_index {
+        cx.word("ONLY");
+    }
+    cx.object_name()?;
+    let attach = cx.word("ATTACH");
+    if !attach {
+        cx.expect_word("DETACH")?;
+    }
+    cx.expect_word("PARTITION")?;
+    cx.object_name()?;
+    if attach && !is_index && !(cx.word("DEFAULT") || cx.word("FOR")) {
+        return Err(cx.fail_here());
+    }
+    while !is_eof(&cx.peek()) {
+        cx.p.next_token();
+    }
+    Ok(unsupported(match (is_index, attach) {
+        (true, _) => "ALTER INDEX ... ATTACH PARTITION",
+        (false, true) => "ALTER TABLE ... ATTACH PARTITION",
+        (false, false) => "ALTER TABLE ... DETACH PARTITION",
+    }))
+}
+
+/// `ALTER TEXT SEARCH CONFIGURATION name {ADD MAPPING FOR list WITH list | DROP MAPPING [IF EXISTS] FOR
+/// list | ALTER MAPPING {FOR list WITH list | [FOR list] REPLACE old WITH new}}` (PG
+/// `AlterTSConfigurationStmt`). Parsed for its syntax; text search configurations are not implemented,
+/// so the statement is 0A000.
+fn parse_alter_ts_config_mapping(cx: &mut Cx<'_>) -> Result<ExtraStatement> {
+    cx.expect_word("ALTER")?;
+    cx.expect_word("TEXT")?;
+    cx.expect_word("SEARCH")?;
+    cx.expect_word("CONFIGURATION")?;
+    cx.object_name()?;
+    if cx.word("DROP") {
+        cx.expect_word("MAPPING")?;
+        parse_if_exists(cx)?;
+        cx.expect_word("FOR")?;
+        cx.comma_list(|c| c.ident())?;
+    } else if cx.word("ADD") {
+        cx.expect_word("MAPPING")?;
+        cx.expect_word("FOR")?;
+        cx.comma_list(|c| c.ident())?;
+        cx.expect_word("WITH")?;
+        cx.comma_list(|c| c.object_name())?;
+    } else {
+        cx.expect_word("ALTER")?;
+        cx.expect_word("MAPPING")?;
+        if cx.word("REPLACE") {
+            cx.object_name()?;
+            cx.expect_word("WITH")?;
+            cx.object_name()?;
+        } else {
+            cx.expect_word("FOR")?;
+            cx.comma_list(|c| c.ident())?;
+            if cx.word("REPLACE") {
+                cx.object_name()?;
+                cx.expect_word("WITH")?;
+                cx.object_name()?;
+            } else {
+                cx.expect_word("WITH")?;
+                cx.comma_list(|c| c.object_name())?;
+            }
+        }
+    }
+    cx.finish()?;
+    Ok(unsupported("ALTER TEXT SEARCH CONFIGURATION ... MAPPING"))
+}
+
+/// One subcommand of ALTER INDEX / ALTER VIEW: `RESET (name, ...)`, `SET (name [= value], ...)`, or
+/// `SET TABLESPACE name` when `tablespace` is allowed (PG `alter_table_cmd` storage-parameter forms).
+fn rel_option_action(cx: &mut Cx<'_>, tablespace: bool) -> Result<RelOptionAction> {
+    if cx.word("RESET") {
+        cx.expect_token(&Token::LParen)?;
+        let names = cx.comma_list(|c| dotted_name(c))?;
+        cx.expect_token(&Token::RParen)?;
+        return Ok(RelOptionAction::ResetOptions(names));
+    }
+    cx.expect_word("SET")?;
+    if tablespace && cx.word("TABLESPACE") {
+        return Ok(RelOptionAction::SetTablespace(cx.ident()?));
+    }
+    cx.expect_token(&Token::LParen)?;
+    let options = cx.comma_list(|c| reloption_def(c))?;
+    cx.expect_token(&Token::RParen)?;
+    Ok(RelOptionAction::SetOptions(options))
+}
+
+/// PG `def_elem` of a storage-parameter list: `name [= def_arg]`, returned as `name=value`, or as the
+/// bare `name` when there is no value.
+fn reloption_def(cx: &mut Cx<'_>) -> Result<String> {
+    let name = dotted_name(cx)?;
+    if !cx.token(&Token::Eq) {
+        return Ok(name);
+    }
+    let value = var_value(cx)?;
+    Ok(format!("{name}={value}"))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------------------------
@@ -1337,6 +2530,26 @@ mod tests {
     fn run(sql: &str) -> Result<ExtraStatement> {
         let src = SourceMap::new(sql);
         parse_extra(lex(sql), &src)
+    }
+
+    #[test]
+    fn alter_table_cluster_forms() {
+        assert_eq!(
+            ok("ALTER TABLE IF EXISTS ONLY s.t CLUSTER ON t_idx"),
+            ExtraStatement::AlterTableCluster { if_exists: true, name: name(&["s", "t"]), index: Some(ident("t_idx")) }
+        );
+        assert_eq!(
+            ok("ALTER TABLE t SET WITHOUT CLUSTER"),
+            ExtraStatement::AlterTableCluster { if_exists: false, name: name(&["t"]), index: None }
+        );
+    }
+
+    #[test]
+    fn drop_aggregate_parses() {
+        assert!(matches!(
+            ok("DROP AGGREGATE IF EXISTS nosuch(integer)"),
+            ExtraStatement::Ext(crate::ext_stmt::ExtStmt::DropAggregate { .. })
+        ));
     }
 
     fn ok(sql: &str) -> ExtraStatement {
@@ -1366,6 +2579,236 @@ mod tests {
     }
 
     #[test]
+    fn alter_index_view_type_routing() {
+        assert!(is_extra("ALTER INDEX s.i SET (fillfactor = 75)"));
+        assert!(is_extra("ALTER INDEX IF EXISTS i SET TABLESPACE pg_default"));
+        assert!(is_extra("ALTER INDEX ALL IN TABLESPACE pg_default SET TABLESPACE pg_default NOWAIT"));
+        assert!(is_extra("ALTER VIEW v RESET (check_option)"));
+        assert!(is_extra("ALTER VIEW IF EXISTS s.v ALTER COLUMN c SET DEFAULT 1"));
+        assert!(is_extra("ALTER TEXT SEARCH CONFIGURATION c ALTER MAPPING FOR asciiword WITH d"));
+        assert!(is_extra("ALTER TYPE s.t SET SCHEMA c"));
+        assert!(!is_extra("ALTER INDEX i RENAME TO j"));
+        assert!(!is_extra("ALTER TYPE t RENAME TO u"));
+        assert!(is_extra("ALTER INDEX IF EXISTS i RENAME TO j"));
+        assert!(is_extra("ALTER VIEW IF EXISTS v SET SCHEMA s"));
+        assert!(is_extra("ALTER INDEX p ATTACH PARTITION c"));
+        assert!(is_extra("ALTER TABLE ONLY p ATTACH PARTITION c FOR VALUES FROM (0) TO (10)"));
+        assert!(is_extra("ALTER TABLE p DETACH PARTITION c CONCURRENTLY"));
+    }
+
+    #[test]
+    fn alter_index_rename_view_set_schema_and_partition_cmds_parse() {
+        assert_eq!(
+            ok("ALTER INDEX IF EXISTS s.i RENAME TO j"),
+            ExtraStatement::AlterIndexRename { if_exists: true, name: name(&["s", "i"]), new_name: ident("j") }
+        );
+        assert_eq!(
+            ok("ALTER VIEW v SET SCHEMA s"),
+            ExtraStatement::AlterViewRename {
+                if_exists: false,
+                name: name(&["v"]),
+                action: AlterMatViewAction::SetSchema(ident("s")),
+            }
+        );
+        assert_eq!(
+            ok("ALTER TABLE p ATTACH PARTITION c FOR VALUES FROM (0) TO (10)"),
+            ExtraStatement::Unsupported { feature: "ALTER TABLE ... ATTACH PARTITION".into() }
+        );
+        assert_eq!(
+            ok("ALTER INDEX p ATTACH PARTITION c"),
+            ExtraStatement::Unsupported { feature: "ALTER INDEX ... ATTACH PARTITION".into() }
+        );
+    }
+
+    #[test]
+    fn alter_index_view_type_parse() {
+        assert_eq!(
+            ok("ALTER INDEX IF EXISTS s.i SET (fillfactor = 'abc', deduplicate_items), RESET (x)"),
+            ExtraStatement::AlterIndex {
+                if_exists: true,
+                name: name(&["s", "i"]),
+                actions: vec![
+                    RelOptionAction::SetOptions(vec!["fillfactor=abc".into(), "deduplicate_items".into()]),
+                    RelOptionAction::ResetOptions(vec!["x".into()]),
+                ],
+            }
+        );
+        assert_eq!(
+            ok("ALTER INDEX i SET TABLESPACE pg_default"),
+            ExtraStatement::AlterIndex {
+                if_exists: false,
+                name: name(&["i"]),
+                actions: vec![RelOptionAction::SetTablespace(ident("pg_default"))],
+            }
+        );
+        assert_eq!(
+            ok("ALTER INDEX ALL IN TABLESPACE a SET TABLESPACE b NOWAIT"),
+            ExtraStatement::AlterIndexAllInTablespace { from: ident("a"), to: ident("b") }
+        );
+        assert_eq!(
+            ok("ALTER VIEW v SET (check_option = LOCAL)"),
+            ExtraStatement::AlterView {
+                if_exists: false,
+                name: name(&["v"]),
+                actions: vec![RelOptionAction::SetOptions(vec!["check_option=local".into()])],
+            }
+        );
+        assert!(matches!(
+            ok("ALTER VIEW IF EXISTS s.v ALTER c DROP DEFAULT"),
+            ExtraStatement::AlterViewColumnDefault { if_exists: true, default: None, .. }
+        ));
+        assert!(matches!(
+            ok("ALTER VIEW v ALTER COLUMN c SET DEFAULT 1"),
+            ExtraStatement::AlterViewColumnDefault { if_exists: false, default: Some(_), .. }
+        ));
+        assert!(matches!(
+            ok("ALTER VIEW v RENAME TO w"),
+            ExtraStatement::AlterViewRename { if_exists: false, action: AlterMatViewAction::RenameTo(_), .. }
+        ));
+        assert!(matches!(
+            ok("ALTER VIEW IF EXISTS v RENAME a TO b"),
+            ExtraStatement::AlterViewRename { if_exists: true, action: AlterMatViewAction::RenameColumn { .. }, .. }
+        ));
+        assert!(matches!(
+            ok("ALTER TYPE t RENAME ATTRIBUTE a TO b CASCADE"),
+            ExtraStatement::AlterTypeRenameAttribute { cascade: true, .. }
+        ));
+        assert_eq!(
+            ok("ALTER TYPE customers.email SET SCHEMA other"),
+            ExtraStatement::AlterTypeSetSchema { name: name(&["customers", "email"]), schema: ident("other") }
+        );
+        assert_eq!(
+            ok("ALTER TYPE email OWNER TO CURRENT_ROLE"),
+            ExtraStatement::AlterTypeOwner { name: name(&["email"]), role: ident("CURRENT_ROLE") }
+        );
+        assert_eq!(
+            ok("ALTER VIEW IF EXISTS v OWNER TO joe"),
+            ExtraStatement::AlterViewOwner { if_exists: true, name: name(&["v"]), role: ident("joe") }
+        );
+    }
+
+    #[test]
+    fn role_membership_rejects_group_noise_word() {
+        assert_eq!(err("GRANT a TO GROUP b").message, "syntax error at or near \"GROUP\"");
+        assert_eq!(err("REVOKE a FROM GROUP b").message, "syntax error at or near \"GROUP\"");
+        assert!(matches!(ok("REASSIGN OWNED BY CURRENT_ROLE TO m"), ExtraStatement::ReassignOwned { .. }));
+    }
+
+    #[test]
+    fn role_membership_grant_revoke_and_misc_alter_forms() {
+        assert!(!is_extra("GRANT SELECT ON t TO r"));
+        assert_eq!(
+            ok("GRANT a, b TO m WITH ADMIN OPTION, INHERIT FALSE GRANTED BY g"),
+            ExtraStatement::GrantRole {
+                roles: vec![ident("a"), ident("b")],
+                grantees: vec![ident("m")],
+                options: vec![(ident("ADMIN"), true), (ident("INHERIT"), false)],
+                grantor: Some(ident("g")),
+            }
+        );
+        assert_eq!(
+            ok("REVOKE ADMIN OPTION FOR a FROM m CASCADE"),
+            ExtraStatement::RevokeRole {
+                option_for: Some(ident("ADMIN")),
+                roles: vec![ident("a")],
+                grantees: vec![ident("m")],
+                grantor: None,
+                cascade: true,
+            }
+        );
+        assert_eq!(
+            ok("REVOKE a, b FROM m"),
+            ExtraStatement::RevokeRole {
+                option_for: None,
+                roles: vec![ident("a"), ident("b")],
+                grantees: vec![ident("m")],
+                grantor: None,
+                cascade: false,
+            }
+        );
+        assert!(matches!(
+            ok("ALTER TABLE IF EXISTS t RESET (fillfactor)"),
+            ExtraStatement::AlterTableOptions { if_exists: true, .. }
+        ));
+        assert_eq!(
+            ok("ALTER INDEX i NO DEPENDS ON EXTENSION plpgsql"),
+            ExtraStatement::Unsupported { feature: "ALTER INDEX ... DEPENDS ON EXTENSION".to_string() }
+        );
+        assert!(is_extra("ALTER PROCEDURAL LANGUAGE plpgsql RENAME TO x"));
+    }
+
+    #[test]
+    fn alter_table_set_schema_and_create_extension_without_with() {
+        assert_eq!(
+            ok("ALTER TABLE IF EXISTS ONLY a.t SET SCHEMA s"),
+            ExtraStatement::AlterTableSetSchema { if_exists: true, name: name(&["a", "t"]), schema: ident("s") }
+        );
+        assert!(matches!(
+            ok("CREATE EXTENSION hstore SCHEMA addons"),
+            ExtraStatement::Ext(crate::ext_stmt::ExtStmt::CreateExtension { .. })
+        ));
+        assert!(is_extra("create extension if not exists x version '1.0' cascade"));
+        assert!(is_extra("create extension x with schema s"));
+    }
+
+    #[test]
+    fn text_search_mapping_forms_use_their_own_sub_grammar() {
+        assert_eq!(
+            ok("ALTER TEXT SEARCH CONFIGURATION public.onlystop ALTER MAPPING FOR asciiword WITH my_stop"),
+            ExtraStatement::Unsupported { feature: "ALTER TEXT SEARCH CONFIGURATION ... MAPPING".into() }
+        );
+        assert_eq!(
+            ok("ALTER TEXT SEARCH CONFIGURATION thes_cfg ALTER MAPPING FOR asciiword, hword_asciipart WITH thes, english_stem"),
+            ExtraStatement::Unsupported { feature: "ALTER TEXT SEARCH CONFIGURATION ... MAPPING".into() }
+        );
+        assert_eq!(err("ALTER TEXT SEARCH CONFIGURATION c ALTER MAPPING FOR asciiword").sqlstate, SqlState::SYNTAX_ERROR);
+        assert_eq!(
+            ok("ALTER TEXT SEARCH DICTIONARY d (STOPWORDS = english)"),
+            ExtraStatement::Unsupported { feature: "ALTER TEXT SEARCH".into() }
+        );
+    }
+
+    #[test]
+    fn create_table_as_execute_is_unsupported_not_syntax_error() {
+        assert_eq!(
+            ok("CREATE TEMP TABLE r ON COMMIT DROP AS EXECUTE p('2002-01-01')"),
+            ExtraStatement::Unsupported { feature: "CREATE TABLE AS EXECUTE".into() }
+        );
+        assert!(is_extra("CREATE TABLE IF NOT EXISTS r (a) AS EXECUTE q WITH NO DATA"));
+        assert!(!is_extra("CREATE TABLE r AS SELECT 1"));
+    }
+
+    #[test]
+    fn statistics_mapping_and_attribute_forms_are_unsupported() {
+        assert!(is_extra("ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS 1000"));
+        assert!(is_extra("ALTER TEXT SEARCH CONFIGURATION my_config DROP MAPPING IF EXISTS FOR word"));
+        assert!(is_extra("ALTER TYPE compfoo ALTER ATTRIBUTE f1 TYPE text, ADD ATTRIBUTE f4 int, DROP ATTRIBUTE f2"));
+        assert!(!is_extra("ALTER TEXT SEARCH CONFIGURATION c SET (x = 1)"));
+        assert!(!is_extra("ALTER TYPE t ADD VALUE 'x'"));
+        assert_eq!(
+            ok("ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS -1"),
+            ExtraStatement::Unsupported { feature: "ALTER INDEX ... ALTER COLUMN SET STATISTICS".into() }
+        );
+        assert_eq!(
+            ok("ALTER TYPE compfoo ALTER ATTRIBUTE f4 SET DATA TYPE bigint"),
+            ExtraStatement::Unsupported { feature: "ALTER TYPE ... ADD/DROP/ALTER ATTRIBUTE".into() }
+        );
+        assert!(matches!(
+            ok("ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING FOR asciiword, word REPLACE swedish WITH english"),
+            ExtraStatement::Unsupported { .. }
+        ));
+        assert!(matches!(
+            ok("ALTER TEXT SEARCH CONFIGURATION my_config ALTER MAPPING REPLACE swedish WITH english"),
+            ExtraStatement::Unsupported { .. }
+        ));
+        assert!(matches!(
+            ok("ALTER TEXT SEARCH CONFIGURATION my_config ADD MAPPING FOR asciiword WITH simple"),
+            ExtraStatement::Unsupported { .. }
+        ));
+        assert_eq!(err("ALTER INDEX i ALTER COLUMN 1 SET STATISTICS").sqlstate, SqlState::SYNTAX_ERROR);
+    }
+
+    #[test]
     fn detection_table() {
         assert!(is_extra("refresh materialized view v"));
         assert!(is_extra("  -- note\n REINDEX TABLE t"));
@@ -1380,7 +2823,7 @@ mod tests {
         assert!(!is_extra("alter table t add column a int"));
         assert!(!is_extra("drop table t"));
         assert!(!is_extra("commit"));
-        assert!(!is_extra("create extension hstore"));
+        assert!(is_extra("create extension hstore"));
         assert!(!is_extra("set search_path to a"));
     }
 
@@ -1463,6 +2906,47 @@ mod tests {
         let e = err("SET CONSTRAINTS a");
         assert_eq!(e.message, "syntax error at end of input");
         assert_eq!(e.position, Some(18));
+    }
+
+    #[test]
+    fn maintenance_option_lists_and_routine_comment_args() {
+        let ExtraStatement::Maintenance { vacuum, options, table, columns } = ok("VACUUM (ANALYZE, verbose off) vst (v, w)")
+        else {
+            panic!("VACUUM option list parses as Maintenance");
+        };
+        assert!(vacuum);
+        let shown: Vec<(&str, Option<&str>)> = options.iter().map(|o| (o.name.as_str(), o.value.as_deref())).collect();
+        assert_eq!(shown, vec![("ANALYZE", None), ("VERBOSE", Some("off"))]);
+        assert_eq!(table, Some(name(&["vst"])));
+        assert_eq!(columns, vec![ident("v"), ident("w")]);
+
+        let ExtraStatement::Maintenance { vacuum, options, table, .. } = ok("analyze verbose") else {
+            panic!("ANALYZE VERBOSE parses as Maintenance");
+        };
+        assert!(!vacuum);
+        assert_eq!(options.len(), 1);
+        assert!(table.is_none());
+        // Plain forms stay with sqlparser.
+        assert!(!is_extra("ANALYZE an_b"));
+        assert!(!is_extra("VACUUM SORT ONLY t"));
+
+        let ExtraStatement::CommentRoutine { kind, args, comment, .. } =
+            ok("COMMENT ON ROUTINE cmt(x int, OUT text) IS NULL")
+        else {
+            panic!("COMMENT ON ROUTINE parses");
+        };
+        assert_eq!(kind, RoutineKind::Routine);
+        assert_eq!(args.map(|a| a.len()), Some(2));
+        assert_eq!(comment, None);
+        assert!(matches!(ok("COMMENT ON FUNCTION f IS 'x'"), ExtraStatement::CommentRoutine { args: None, .. }));
+        assert!(matches!(
+            ok("COMMENT ON FUNCTION f() IS 'x'"),
+            ExtraStatement::CommentRoutine { args: Some(ref a), .. } if a.is_empty()
+        ));
+        assert!(matches!(
+            ok("MERGE INTO tgt t USING src s ON t.id = s.id WHEN MATCHED THEN DELETE RETURNING WITH (OLD AS o, NEW AS n) o.id"),
+            ExtraStatement::Unsupported { .. }
+        ));
     }
 
     #[test]
@@ -1569,6 +3053,19 @@ mod tests {
         let e = err("ALTER SEQUENCE s");
         assert_eq!(e.message, "syntax error at end of input");
         assert_eq!(e.position, Some(17));
+    }
+
+    #[test]
+    fn transaction_modes_with_deferrable() {
+        match ok("BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY NOT DEFERRABLE") {
+            ExtraStatement::TransactionModes { kind, isolation, read_only, deferrable } => {
+                assert_eq!(kind, TxnCommandKind::Begin);
+                assert_eq!(isolation, Some(crate::ir::IsolationLevel::Serializable));
+                assert_eq!(read_only, Some(true));
+                assert_eq!(deferrable, Some(false));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]
@@ -1701,6 +3198,14 @@ mod tests {
         assert_eq!(
             ok("SECURITY LABEL ON TABLE t IS 'x'"),
             ExtraStatement::Unsupported { feature: "SECURITY LABEL".into() }
+        );
+    }
+
+    #[test]
+    fn create_trigger_with_string_argument_is_unsupported() {
+        assert_eq!(
+            ok("CREATE TRIGGER t BEFORE INSERT ON m FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger(tsv, 'pg_catalog.english', title)"),
+            ExtraStatement::Unsupported { feature: "CREATE TRIGGER".into() }
         );
     }
 

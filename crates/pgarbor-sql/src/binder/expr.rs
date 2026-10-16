@@ -107,8 +107,14 @@ fn dispatch(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundExpr> {
         Expr::IsNotFalse(x) => expr_ops::bind_is_test(b, x, "false", true, ec),
         Expr::IsUnknown(x) => expr_ops::bind_is_test(b, x, "unknown", false, ec),
         Expr::IsNotUnknown(x) => expr_ops::bind_is_test(b, x, "unknown", true, ec),
-        Expr::IsDistinctFrom(l, r) => expr_ops::bind_distinct_from(b, l, r, false, ec),
-        Expr::IsNotDistinctFrom(l, r) => expr_ops::bind_distinct_from(b, l, r, true, ec),
+        Expr::IsDistinctFrom(l, r) => {
+            let op_pos = binary_op_pos(b.src, l);
+            expr_ops::bind_distinct_from(b, l, r, false, op_pos, ec)
+        }
+        Expr::IsNotDistinctFrom(l, r) => {
+            let op_pos = binary_op_pos(b.src, l);
+            expr_ops::bind_distinct_from(b, l, r, true, op_pos, ec)
+        }
         Expr::InList { expr, list, negated } => expr_ops::bind_in_list(b, expr, list, *negated, ec),
         Expr::InSubquery { expr, subquery, negated } => {
             check_sublink(ec, pos)?;
@@ -140,10 +146,18 @@ fn dispatch(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundExpr> {
         Expr::RLike { regexp, .. } => Err(diag::syntax_error_near(if *regexp { "REGEXP" } else { "RLIKE" }, pos)),
         Expr::AnyOp { left, compare_op, right, .. } => bind_any_all(b, left, compare_op, right, false, ec),
         Expr::AllOp { left, compare_op, right } => bind_any_all(b, left, compare_op, right, true, ec),
-        Expr::UnaryOp { op, expr } => {
-            let op_pos = unary_op_pos(b.src, expr);
-            expr_ops::bind_unary_op(b, op, expr, op_pos, ec)
-        }
+        Expr::UnaryOp { op, expr } => match qualified_prefix_operator(b.src, expr) {
+            // `OPERATOR(schema.op) x` (the parser stands a plain prefix token in for it).
+            Some((name, kw_pos)) => expr_ops::bind_named_prefix_op(b, &name, expr, kw_pos, ec),
+            None => match custom_prefix_operator(b.src, op, expr) {
+                // A user prefix operator spelled by several tokens (`parser::spell_operator_runs`).
+                Some((name, op_pos)) => expr_ops::bind_named_prefix_op(b, &name, expr, op_pos, ec),
+                None => {
+                    let op_pos = unary_op_pos(b.src, expr);
+                    expr_ops::bind_unary_op(b, op, expr, op_pos, ec)
+                }
+            },
+        },
         Expr::AtTimeZone { timestamp, time_zone } => expr_ops::bind_at_time_zone(b, timestamp, time_zone, ec),
         Expr::Extract { .. }
         | Expr::Ceil { .. }
@@ -249,7 +263,18 @@ pub fn bind_column_ref(b: &mut Binder, parts: &[Ident], pos: Option<u32>, ec: Ex
 /// Resolve `qualifier.name` with the probe-then-final-error protocol described on
 /// [`bind_column_ref`].
 fn resolve_name(b: &mut Binder, qualifier: &[String], name: &str, pos: Option<u32>) -> Result<BoundExpr> {
-    if let Some(found) = scope::resolve_column(b, qualifier, name, pos, false)? {
+    if super::plhook::hook_active(b.src) {
+        let src = b.src;
+        let found = super::plhook::resolve_with_hook(src, qualifier, name, pos, || {
+            if b.scopes.is_empty() {
+                return Ok(None);
+            }
+            Ok(scope::resolve_column(b, qualifier, name, pos, false)?.map(|f| f.expr))
+        })?;
+        if let Some(e) = found {
+            return Ok(e);
+        }
+    } else if let Some(found) = scope::resolve_column(b, qualifier, name, pos, false)? {
         return Ok(found.expr);
     }
     match scope::resolve_column(b, qualifier, name, pos, true)? {
@@ -261,6 +286,16 @@ fn resolve_name(b: &mut Binder, qualifier: &[String], name: &str, pos: Option<u3
 /// `CAST(e AS t)` / `e::t` (module docs). The operand is bound first (as PG `transformTypeCast`
 /// does), then the type is resolved, then the explicit coercion is applied.
 pub fn bind_cast(b: &mut Binder, operand: &Expr, data_type: &DataType, pos: Option<u32>, ec: ExprCtx) -> Result<BoundExpr> {
+    // `ARRAY[]::T[]`: the empty array takes the cast's type (see `expr_misc::cast_empty_array`).
+    if let Expr::Array(arr) = operand {
+        if arr.named && arr.elem.is_empty() {
+            let type_pos = type_pos_after(b.src, operand).or(pos);
+            let target = types::resolve_data_type(b, data_type, type_pos)?.id;
+            if let Some(empty) = expr_misc::cast_empty_array(b, target) {
+                return Ok(empty);
+            }
+        }
+    }
     let operand_expr = bind_expr(b, operand, ec)?;
     let arg = BoundArg::new(operand_expr, arg_pos(b, operand));
     let type_pos = type_pos_after(b.src, operand).or(pos);
@@ -270,13 +305,8 @@ pub fn bind_cast(b: &mut Binder, operand: &Expr, data_type: &DataType, pos: Opti
 
 /// Sub-links are forbidden in some clauses (`cannot use subquery in {clause}`, 0A000).
 fn check_sublink(ec: ExprCtx, pos: Option<u32>) -> Result<()> {
-    if ec.sublinks_ok {
-        return Ok(());
-    }
-    Err(diag::with_position(
-        PgError::new(SqlState::FEATURE_NOT_SUPPORTED, format!("cannot use subquery in {}", ec.clause.name())),
-        pos,
-    ))
+    // `expr_sublink` words the clause as PG `transformSubLink` does (`index predicate`, `check constraint`).
+    expr_sublink::check_sublinks_allowed(ec, pos)
 }
 
 /// `left op ANY (..)` / `left op ALL (..)`: a subquery right side goes to `expr_sublink`, anything
@@ -341,7 +371,36 @@ fn skip_blank(text: &str, mut i: usize) -> usize {
 
 /// Position of a binary operator token: the first token after the left operand's text.
 fn binary_op_pos(src: &SourceMap, left: &Expr) -> Option<u32> {
-    let i = skip_blank(src.text(), byte_after_end(src, left)?);
+    let text = src.text();
+    let bytes = text.as_bytes();
+    let mut i = skip_blank(text, byte_after_end(src, left)?);
+    // sqlparser's span of `x::type` ends at `x`, so the cast suffix (`::type`, possibly chained)
+    // still precedes the operator: step over it. A type name never contains an operator character
+    // outside parentheses, so the first such character at depth 0 starts the operator.
+    // `byte_after_end` may have stepped one character past the span end (it assumes an inclusive
+    // end), so also accept a cast whose first colon is the character just before `i`.
+    if i > 0 && bytes.get(i - 1) == Some(&b':') && bytes.get(i) == Some(&b':') {
+        i -= 1;
+    }
+    while text.get(i..).is_some_and(|r| r.starts_with("::")) {
+        i += 2;
+        let mut depth = 0i32;
+        while i < bytes.len() {
+            let c = bytes[i];
+            match c {
+                b'(' | b'[' => depth += 1,
+                b')' | b']' => depth -= 1,
+                b'+' | b'-' | b'*' | b'/' | b'<' | b'>' | b'=' | b'~' | b'!' | b'@' | b'#' | b'%' | b'^' | b'&'
+                | b'|' | b'?'
+                    if depth <= 0 =>
+                {
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
     Some(src.pos_of_byte(i))
 }
 
@@ -362,6 +421,119 @@ fn unary_op_pos(src: &SourceMap, operand: &Expr) -> Option<u32> {
     } else {
         Some(src.pos_of_byte(i))
     }
+}
+
+/// The prefix operator written as `OPERATOR([schema.]op)` straight before `operand`, as the operator name the
+/// resolver looks up (`op` for `pg_catalog` or no schema, else `schema.op`, which no built-in operator has)
+/// and the position of the `OPERATOR` keyword. `parser::prefix_qualified_operators` replaces such a spelling by
+/// one plain prefix token, so the AST operator is not used.
+fn qualified_prefix_operator(src: &SourceMap, operand: &Expr) -> Option<(String, Option<u32>)> {
+    let text = src.text();
+    let bytes = text.as_bytes();
+    let mut i = src.byte_offset(operand.span().start)?.min(bytes.len());
+    while i > 0 && is_blank(bytes[i - 1]) {
+        i -= 1;
+    }
+    if i == 0 || bytes[i - 1] != b')' {
+        return None;
+    }
+    let close = i - 1;
+    let open = text.get(..close)?.rfind('(')?;
+    let before = text.get(..open)?.trim_end();
+    let kw_len = "OPERATOR".len();
+    if before.len() < kw_len || !before.is_char_boundary(before.len() - kw_len) {
+        return None;
+    }
+    let kw_start = before.len() - kw_len;
+    if !before[kw_start..].eq_ignore_ascii_case("OPERATOR") {
+        return None;
+    }
+    if before[..kw_start].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let body = text.get(open + 1..close)?.trim();
+    let (schema, op) = match body.rfind('.') {
+        Some(dot) => (body[..dot].trim(), body[dot + 1..].trim()),
+        None => ("", body),
+    };
+    if op.is_empty() || !op.chars().all(|c| "+-*/<>=~!@#%^&|`?".contains(c)) {
+        return None;
+    }
+    let name = if schema.is_empty() || schema.eq_ignore_ascii_case("pg_catalog") {
+        op.to_string()
+    } else {
+        format!("{schema}.{op}")
+    };
+    Some((name, Some(src.pos_of_byte(kw_start))))
+}
+
+/// The name and position of a user prefix operator that the parser replaced by a plain `-` token
+/// (`parser::spell_operator_runs`): the operator characters right before the operand, when they are
+/// not a plain minus (amendment pgarbor-sql-05).
+fn custom_prefix_operator(src: &SourceMap, op: &sqlparser::ast::UnaryOperator, operand: &Expr) -> Option<(String, Option<u32>)> {
+    if !matches!(op, sqlparser::ast::UnaryOperator::Minus) {
+        return None;
+    }
+    let text = src.text();
+    let bytes = text.as_bytes();
+    let mut i = src.byte_offset(operand.span().start)?.min(bytes.len());
+    while i > 0 && is_blank(bytes[i - 1]) {
+        i -= 1;
+    }
+    let end = i;
+    while i > 0 && "+-*/<>=~!@#%^&|`?".contains(bytes[i - 1] as char) {
+        i -= 1;
+    }
+    let run = text.get(i..end)?;
+    if run.is_empty() || run.contains("*/") || run.contains("--") {
+        return None;
+    }
+    // PG scan.l splits the run into operators (trailing `+`/`-` trimmed from multi-character
+    // operators without any of `~!@#^&|`?%`); the last one applies to the operand.
+    let mut start = 0usize;
+    let mut last = (0usize, run.len());
+    while start < run.len() {
+        let rest = &run[start..];
+        let mut len = rest.len();
+        if len > 1 && !rest.chars().any(|c| "~!@#^&|`?%".contains(c)) {
+            while len > 1 && (rest.as_bytes()[len - 1] == b'+' || rest.as_bytes()[len - 1] == b'-') {
+                len -= 1;
+            }
+        }
+        last = (start, start + len);
+        start += len;
+    }
+    let name = &run[last.0..last.1];
+    if name.len() < 2 && matches!(name, "-" | "+" | "~" | "@" | "#" | "!") {
+        return None;
+    }
+    if matches!(name, "|/" | "||/" | "!!" | "@-@" | "?-" | "?|") {
+        return None;
+    }
+    Some((name.to_string(), Some(src.pos_of_byte(i + last.0))))
+}
+
+/// Position of the `COLLATE` keyword of `operand COLLATE name`: the first token after the operand's
+/// text (PG reports collation conflicts at the COLLATE clause, `CollateClause.location`).
+pub(super) fn collate_keyword_pos(src: &SourceMap, operand: &Expr) -> Option<u32> {
+    let text = src.text();
+    let i = skip_blank(text, byte_after_end(src, operand)?);
+    let tok = text.get(i..i + "COLLATE".len())?;
+    if tok.eq_ignore_ascii_case("COLLATE") {
+        Some(src.pos_of_byte(i))
+    } else {
+        None
+    }
+}
+
+/// Position of the `COLLATE` keyword written directly before the collation name `name` (a column
+/// definition `col type COLLATE name`; PG reports column collation errors at `CollateClause.location`).
+pub(super) fn collate_keyword_before(src: &SourceMap, name: &sqlparser::ast::ObjectName) -> Option<u32> {
+    let start = src.byte_offset(name.0.first()?.as_ident()?.span.start)?;
+    let head = src.text().get(..start)?.trim_end();
+    let kw = head.len().checked_sub("COLLATE".len())?;
+    let tok = head.get(kw..)?;
+    tok.eq_ignore_ascii_case("COLLATE").then(|| src.pos_of_byte(kw))
 }
 
 /// Position of the type name of a cast: after `::`, or after `AS` in `CAST(e AS t)`.

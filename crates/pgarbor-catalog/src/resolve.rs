@@ -135,6 +135,27 @@ impl CatalogEnv {
         Ok(ns)
     }
 
+    /// CREATE privilege on schema `ns` for the current user (superuser, owner or ACL grant), else 42501
+    /// `permission denied for schema <name>`. Lets the binder raise the error with a source position
+    /// (PG `RangeVarGetAndCheckCreationNamespace`); the catalog transaction re-checks at execution.
+    pub fn check_schema_create(&self, ns: Oid) -> Result<()> {
+        let cur = self.current_user();
+        let snap = self.snapshot();
+        if cur == builtin::BOOTSTRAP_SUPERUSER || snap.role(cur).is_some_and(|r| r.superuser) {
+            return Ok(());
+        }
+        let Some(schema) = snap.namespace(ns) else {
+            return Ok(());
+        };
+        let eff = crate::acl::effective_acl(crate::acl::AclObject::Schema, schema.owner, schema.acl.as_ref())?;
+        let graph = crate::acl::RoleGraph::build(snap, self.database())?;
+        if crate::acl::has_privilege(&graph, cur, schema.owner, &eff, crate::model::acl_mode::CREATE)? {
+            Ok(())
+        } else {
+            Err(crate::errors::permission_denied_for("schema", &schema.name))
+        }
+    }
+
     /// Type OID by catalog typname (builtin or user), honoring the search path (module docs).
     // CONTRACT
     pub fn lookup_type(&self, schema: Option<&str>, typname: &str) -> Result<Option<Oid>> {
@@ -244,14 +265,8 @@ impl CatalogEnv {
     /// Collation OID by possibly-qualified name (module docs).
     // CONTRACT
     pub fn collation_oid(&self, schema: Option<&str>, name: &str) -> Result<Oid> {
-        let find = |ns: Oid| -> Option<Oid> {
-            builtin::COLLATIONS
-                .iter()
-                .find(|c| {
-                    c.namespace == ns && c.name == name && (c.encoding == -1 || c.encoding == builtin::UTF8_ENCODING)
-                })
-                .map(|c| c.oid)
-        };
+        // Builtin pg_catalog collations and user collations (amendment pgarbor-catalog-09).
+        let find = |ns: Oid| -> Option<Oid> { self.collation_in_ns(ns, name) };
         match schema {
             Some(s) => {
                 let ns = self.explicit_namespace(s).ok_or_else(|| crate::errors::schema_does_not_exist(s))?;
@@ -367,7 +382,7 @@ impl CatalogEnv {
     // ------------------------------------------------------------------ private helpers
 
     /// Schema by name, with `pg_temp` meaning the session's temp schema when one exists.
-    fn explicit_namespace(&self, name: &str) -> Option<Oid> {
+    pub(crate) fn explicit_namespace(&self, name: &str) -> Option<Oid> {
         if name == "pg_temp" {
             if let Some(t) = self.path().temp_namespace {
                 return Some(t);
@@ -475,6 +490,7 @@ mod tests {
             options: vec![],
             if_not_exists: false,
             inherits: vec![],
+            extra: Default::default(),
         }
     }
 

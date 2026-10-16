@@ -404,13 +404,7 @@ fn append_opclass(env: &CatalogEnv, opclass: Oid, keytype: Oid, buf: &mut String
 
 /// PG `generate_collation_name`.
 fn collation_name(env: &CatalogEnv, oid: Oid) -> Result<String> {
-    let c = builtin::builtin_collation(oid).ok_or_else(|| errors::cache_lookup_failed("collation", oid))?;
-    let q = quote_identifier(c.name)?;
-    if c.namespace == builtin::PG_CATALOG_NAMESPACE || env.search_path().contains(&c.namespace) {
-        Ok(q)
-    } else {
-        Ok(format!("{}.{}", quote_identifier(&namespace_name(env, c.namespace)?)?, q))
-    }
+    env.format_collation(oid).ok_or_else(|| errors::cache_lookup_failed("collation", oid))
 }
 
 // ---------------------------------------------------------------- indexes

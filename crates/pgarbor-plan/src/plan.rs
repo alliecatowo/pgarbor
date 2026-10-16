@@ -70,6 +70,8 @@ pub enum PlanKind {
     Update,
     /// `DELETE`: tag `DELETE n`.
     Delete,
+    /// `MERGE`: tag `MERGE n`.
+    Merge,
     /// `CREATE TABLE AS` / `SELECT INTO` / `CREATE MATERIALIZED VIEW ... AS` / `REFRESH MATERIALIZED
     /// VIEW`: the root yields the rows to store; the executor creates/fills the table.
     Populate,
@@ -791,6 +793,8 @@ pub enum ModifyOp {
     Insert,
     Update,
     Delete,
+    /// MERGE (amendment pgarbor-plan-merge-wco).
+    Merge,
 }
 
 /// INSERT specifics. The input child produces rows with ONE value per entry of `columns`, in that order
@@ -858,6 +862,9 @@ pub struct ModifyTarget {
     pub meta: TargetTable,
     /// CHECK constraints rewritten over the NEW row (`InputRef(attnum-1)`), `(constraint oid, name, expr)`.
     pub checks: Vec<(Oid, String, BoundExpr)>,
+    /// View check options and row-security WITH CHECKs (amendment pgarbor-plan-merge-wco), `expr` rewritten over
+    /// the NEW row (`InputRef(attnum-1)`) like `checks`.
+    pub wco: Vec<pgarbor_sql::ir::TargetWco>,
 }
 
 /// INSERT / UPDATE / DELETE.
@@ -883,6 +890,43 @@ pub struct ModifyTableNode {
     pub update: Option<UpdateSpec>,
     pub returning: Vec<BoundExpr>,
     pub returning_extra_from: Option<u32>,
+    /// `ModifyOp::Merge` only (amendment pgarbor-plan-merge-wco).
+    pub merge: Option<MergeSpec>,
+}
+
+/// MERGE specifics (amendment pgarbor-plan-merge-wco). The input is the join of the target scan (with rowid)
+/// and the source; every expression below is over that INPUT row (`InputRef`). `rowid_slot` of the node
+/// is NULL when no target row matched; `source_marker_slot` is NULL when no source row matched.
+/// Actions are tried in order; the first whose `match_kind` fits and whose `condition` is TRUE runs.
+/// RETURNING input row: `image (ncols) ++ old row (ncols) ++ new row (ncols) ++ input row ++ [action
+/// text]` where image = new row for INSERT/UPDATE and the deleted row for DELETE; missing old/new rows
+/// are all NULL.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MergeSpec {
+    pub source_marker_slot: u32,
+    /// Input slot of each target attnum (index = attnum - 1; `None` for dropped columns): the old row.
+    pub target_slots: Vec<Option<u32>>,
+    pub actions: Vec<MergePlanAction>,
+}
+
+/// One WHEN clause of a MERGE.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MergePlanAction {
+    pub match_kind: pgarbor_sql::ir::MergeMatchKind,
+    pub condition: Option<BoundExpr>,
+    pub kind: MergePlanActionKind,
+}
+
+/// What a MERGE WHEN clause does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MergePlanActionKind {
+    /// UPDATE: `spec.assignments` over the input row, `spec.generated` over the new row.
+    Update(UpdateSpec),
+    Delete,
+    /// INSERT: `values[i]` (over the input row) feeds `spec.columns[i]`; `spec.defaults`/`generated` as
+    /// for INSERT.
+    Insert { values: Vec<BoundExpr>, spec: InsertSpec },
+    DoNothing,
 }
 
 // ---------------------------------------------------------------------------------------------

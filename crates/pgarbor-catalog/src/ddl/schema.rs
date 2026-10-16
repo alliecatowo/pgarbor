@@ -30,7 +30,7 @@ fn is_reserved_name(name: &str) -> bool {
 /// PG `check_can_set_role` (miscinit.c) over `member_can_set_role` (acl.c): `member` may act as
 /// `role` when they are the same role, `member` is a superuser, or `member` reaches `role` through
 /// SET-ROLE-capable memberships. Otherwise 42501 `must be able to SET ROLE "role"`.
-fn check_can_set_role(snap: &CatalogSnapshot, graph: &RoleGraph, member: Oid, role: Oid) -> Result<()> {
+pub(crate) fn check_can_set_role(snap: &CatalogSnapshot, graph: &RoleGraph, member: Oid, role: Oid) -> Result<()> {
     if member == role || graph.is_superuser(member) || graph.can_set_role(member, role)? {
         return Ok(());
     }

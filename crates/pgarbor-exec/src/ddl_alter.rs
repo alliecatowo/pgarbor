@@ -52,6 +52,10 @@ use crate::tabledesc::{columns_to_input_refs, table_desc, TableDesc};
 pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResult> {
     let rw = SqlExprRewriter;
     match action {
+        AlterAction::Routine { tag, inner } => {
+            exec_alter(cx, inner)?;
+            return Ok(ExecResult::command(*tag));
+        }
         AlterAction::RenameRelation { rel, new_name, keyword } => {
             let rel = *rel;
             if *keyword == AlterRelKeyword::Index {
@@ -93,7 +97,7 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
             let ty = *ty;
             run_plain(cx, |d| d.rename_type(ty, new_name, &rw))?;
         }
-        AlterAction::SetTypeSchema { ty, new_schema } => {
+        AlterAction::SetTypeSchema { ty, new_schema } | AlterAction::SetDomainSchema { ty, new_schema } => {
             let (ty, new_schema) = (*ty, *new_schema);
             run_plain(cx, |d| d.set_type_schema(ty, new_schema, &rw))?;
         }
@@ -180,7 +184,10 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
         }
         AlterAction::Role { role, changes } => {
             let role = *role;
-            run_plain(cx, |d| d.alter_role(role, changes))?;
+            let mut changes = changes.clone();
+            let role_name = cx.se.env.snapshot().role_name(role).unwrap_or_default().to_string();
+            changes.password = changes.password.take().map(|p| p.map(|p| crate::role_password::encrypt_password_for(&cx.se, &p, &role_name)));
+            run_plain(cx, |d| d.alter_role(role, &changes))?;
         }
         AlterAction::RenameRole { role, new_name } => {
             let role = *role;

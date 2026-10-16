@@ -83,8 +83,14 @@ pub fn bind_value(b: &mut Binder, v: &ValueWithSpan, negate: bool) -> Result<Bou
                 let text = format!("0x{digits}");
                 numeric_literal(b, &text, negate, pos)
             } else {
+                check_bit_digits(digits, false, pos)?;
                 Err(diag::unsupported_construct("bit string literal", pos))
             }
+        }
+        // `B'101'` is a PG bit-string literal (sqlparser: byte string); no bit datum exists yet.
+        Value::SingleQuotedByteStringLiteral(digits) => {
+            check_bit_digits(digits, true, pos)?;
+            Err(diag::unsupported_construct("bit string literal", pos))
         }
         Value::Placeholder(text) => {
             if negate {
@@ -144,6 +150,26 @@ fn _value_marker(_: &Value) {}
 // ---------------------------------------------------------------------------------------------
 // Helpers: source access and string values
 // ---------------------------------------------------------------------------------------------
+
+/// `bit_in` digit validation: every character of a `B'..'` (binary) or `X'..'` (hex) literal must be
+/// a digit of that base, else 22P02 `"c" is not a valid binary digit` / `... hexadecimal digit`.
+fn check_bit_digits(digits: &str, binary: bool, pos: Option<u32>) -> Result<()> {
+    for c in digits.chars() {
+        let ok = if binary { c == '0' || c == '1' } else { c.is_ascii_hexdigit() };
+        if !ok {
+            let kind = if binary { "binary" } else { "hexadecimal" };
+            let mut e = PgError::new(
+                SqlState::INVALID_TEXT_REPRESENTATION,
+                format!("\"{c}\" is not a valid {kind} digit"),
+            );
+            if let Some(p) = pos {
+                e = e.with_position(p);
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
+}
 
 /// Source text covered by a token span (sqlparser spans are inclusive of the last character).
 fn raw_token<'s>(src: &'s SourceMap, span: &Span) -> Option<&'s str> {

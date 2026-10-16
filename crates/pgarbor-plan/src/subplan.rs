@@ -351,6 +351,9 @@ fn visit_kind_exprs_mut(kind: &mut NodeKind, f: &mut dyn FnMut(&mut BoundExpr) -
             for (_, _, e) in n.target.checks.iter_mut() {
                 f(e)?;
             }
+            for w in n.target.wco.iter_mut() {
+                f(&mut w.expr)?;
+            }
             if let Some(ins) = &mut n.insert {
                 for (_, e) in ins.defaults.iter_mut() {
                     f(e)?;
@@ -373,6 +376,25 @@ fn visit_kind_exprs_mut(kind: &mut NodeKind, f: &mut dyn FnMut(&mut BoundExpr) -
                 }
                 for (_, e) in upd.generated.iter_mut() {
                     f(e)?;
+                }
+            }
+            if let Some(mg) = &mut n.merge {
+                for a in mg.actions.iter_mut() {
+                    visit_opt(&mut a.condition, f)?;
+                    match &mut a.kind {
+                        crate::plan::MergePlanActionKind::Update(u) => {
+                            for (_, e) in u.assignments.iter_mut().chain(u.generated.iter_mut()) {
+                                f(e)?;
+                            }
+                        }
+                        crate::plan::MergePlanActionKind::Insert { values, spec } => {
+                            visit_vec(values, f)?;
+                            for (_, e) in spec.defaults.iter_mut().chain(spec.generated.iter_mut()) {
+                                f(e)?;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             visit_vec(&mut n.returning, f)?;
@@ -480,6 +502,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         }
     }
 

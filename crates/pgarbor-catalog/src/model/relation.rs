@@ -342,7 +342,7 @@ pub struct ViewDef {
     pub populated: bool,
 }
 
-/// Partition key (`pg_partitioned_table`), reserved for later partitioning work.
+/// Partition key (`pg_partitioned_table`).
 // CONTRACT
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartitionKey {
@@ -351,6 +351,9 @@ pub struct PartitionKey {
     /// Key column attnums (0 for an expression, consumed in order from `exprs`).
     pub columns: Vec<i16>,
     pub exprs: Vec<StoredExpr>,
+    /// Result types of `exprs`, parallel to it (amendment pgarbor-catalog-policies-rules).
+    #[serde(default)]
+    pub expr_types: Vec<TypeId>,
 }
 
 /// A relation: table, partitioned table, view, materialized view, composite type, foreign table.
@@ -400,6 +403,60 @@ pub struct Relation {
     /// Parents in `pg_inherits` order (later).
     #[serde(default)]
     pub inherits: Vec<Oid>,
+    /// Row-level security policies (`pg_policy` rows), in creation order (amendment pgarbor-catalog-policies-rules).
+    #[serde(default)]
+    pub policies: Vec<Policy>,
+    /// User rewrite rules (`pg_rewrite` rows other than a view's `_RETURN`), in creation order
+    /// (amendment pgarbor-catalog-policies-rules).
+    #[serde(default)]
+    pub rules: Vec<Rule>,
+}
+
+/// A row-level security policy (`pg_policy`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Policy {
+    pub oid: Oid,
+    /// `polname` (unique per table).
+    pub name: String,
+    /// `polcmd`: b'*' ALL, b'r' SELECT, b'a' INSERT, b'w' UPDATE, b'd' DELETE.
+    pub cmd: u8,
+    /// `polpermissive`.
+    pub permissive: bool,
+    /// `polroles`; `0` = PUBLIC.
+    pub roles: Vec<Oid>,
+    /// `polqual` (USING), canonical text over the table's columns.
+    #[serde(default)]
+    pub using: Option<StoredExpr>,
+    /// `polwithcheck` (WITH CHECK).
+    #[serde(default)]
+    pub with_check: Option<StoredExpr>,
+}
+
+/// A user rewrite rule (`pg_rewrite`, `CREATE RULE`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Rule {
+    pub oid: Oid,
+    pub name: String,
+    /// `ev_type`: b'1' SELECT, b'2' UPDATE, b'3' INSERT, b'4' DELETE.
+    pub event: u8,
+    /// `is_instead`.
+    pub instead: bool,
+    /// `ev_enabled`: b'O' (origin, default), b'D' disabled, b'R' replica, b'A' always.
+    #[serde(default = "default_rule_enabled")]
+    pub enabled: u8,
+    /// `WHERE` condition text as written in the canonical rule definition (over `old`/`new`).
+    #[serde(default)]
+    pub qual: Option<String>,
+    /// The actions as canonical statement texts (empty = `NOTHING`).
+    #[serde(default)]
+    pub actions: Vec<String>,
+    /// Objects the rule's condition and actions reference (relations, columns, functions, types).
+    #[serde(default)]
+    pub depends_on: Vec<super::common::ObjectAddress>,
+}
+
+fn default_rule_enabled() -> u8 {
+    b'O'
 }
 
 impl Relation {

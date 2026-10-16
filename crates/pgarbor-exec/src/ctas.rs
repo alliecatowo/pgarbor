@@ -27,6 +27,7 @@ use pgarbor_catalog::CatalogEnv;
 use pgarbor_catalog::RelKind;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_plan::context::{PlanContext, PlanOptions};
+use pgarbor_plan::explain_fmt::NodeActual;
 use pgarbor_plan::plan::Plan;
 use pgarbor_sql::ir::BoundCreateTableAs;
 use pgarbor_sql::{BindContext, BindSession};
@@ -73,8 +74,34 @@ pub fn exec_create_table_as(cx: &mut ExecContext, bound: &BoundCreateTableAs, pl
         _ => return Err(PgError::internal(format!("table \"{}\" was not created", spec.name))),
     };
     let td = tabledesc::table_desc(&*cx, oid)?;
-    let n = insert_query_rows(&mut *cx, plan, &td)?;
+    let (n, _) = insert_query_rows(&mut *cx, plan, &td)?;
     Ok(ExecResult::command(format!("SELECT {n}")))
+}
+
+/// `EXPLAIN ANALYZE` of `CREATE TABLE AS ... WITH DATA` (PG: `ExplainOneUtility` hands the query to
+/// `ExplainOnePlan` with the INTO clause, so the table is created and filled while the plan runs). The
+/// caller has set `collect_stats`. Returns `None` when `IF NOT EXISTS` skipped the table (PG prints no
+/// plan for it), else the actuals of the query plan.
+pub fn analyze_create_table_as(
+    cx: &mut ExecContext,
+    bound: &BoundCreateTableAs,
+    plan: &Plan,
+) -> Result<Option<Vec<NodeActual>>> {
+    let spec = &bound.table;
+    let existed = cx.se.env.snapshot().class_in_namespace(spec.namespace, &spec.name).is_some();
+    ddl_table::exec_create_table(&mut *cx, spec)?;
+    if existed {
+        return Ok(None);
+    }
+    let oid = match cx.se.env.snapshot().class_in_namespace(spec.namespace, &spec.name) {
+        Some(ClassRef::Relation(oid)) => oid,
+        _ => return Err(PgError::internal(format!("table \"{}\" was not created", spec.name))),
+    };
+    let td = tabledesc::table_desc(&*cx, oid)?;
+    match insert_query_rows(&mut *cx, plan, &td)? {
+        (_, Some(actuals)) => Ok(Some(actuals)),
+        (_, None) => Err(PgError::internal("EXPLAIN ANALYZE: operator statistics were not collected for the plan")),
+    }
 }
 
 /// `REFRESH MATERIALIZED VIEW` data step and the population after `CREATE MATERIALIZED VIEW ... WITH
@@ -148,12 +175,13 @@ pub fn populate_matview(cx: &mut ExecContext, relation: Oid) -> Result<u64> {
         }
     }
 
-    insert_query_rows(&mut *cx, &plan, &td)
+    let (n, _) = insert_query_rows(&mut *cx, &plan, &td)?;
+    Ok(n)
 }
 
 /// Run `plan` in batches and insert every output row into `td` (through `dml_insert::insert_row`, so
 /// constraints, indexes and foreign keys are all applied). Returns the number of rows inserted.
-fn insert_query_rows(cx: &mut ExecContext, plan: &Plan, td: &TableDesc) -> Result<u64> {
+fn insert_query_rows(cx: &mut ExecContext, plan: &Plan, td: &TableDesc) -> Result<(u64, Option<Vec<NodeActual>>)> {
     let mut stream = open_plan(plan, &mut *cx)?;
     let dropped = live_mask(td);
     let mut rt = Runtime::default();
@@ -173,7 +201,7 @@ fn insert_query_rows(cx: &mut ExecContext, plan: &Plan, td: &TableDesc) -> Resul
             inserted += 1;
         }
     }
-    Ok(inserted)
+    Ok((inserted, stream.actuals()))
 }
 
 /// `dropped[i]` for every stored column slot of `td` (attnum order).

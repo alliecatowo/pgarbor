@@ -40,6 +40,7 @@ use pgarbor_exec::{ExecContext, SessionEnv};
 use pgarbor_plan::plan::ColumnDesc;
 use pgarbor_plan::PlanContext;
 use pgarbor_sql::{BindContext, BindSession};
+use pgarbor_types::registry::base_type_and_typmod;
 use pgarbor_types::{Datum, TypeEnv, TypeId};
 
 use crate::engine_info::SessionServices;
@@ -73,14 +74,15 @@ fn now_pg_us() -> Result<i64> {
 fn columns_to_infos(env: &CatalogEnv, cols: &[ColumnDesc]) -> Result<Vec<ColumnInfo>> {
     let mut out = Vec::with_capacity(cols.len());
     for c in cols {
-        let oid = c.type_id.oid;
+        // PG `SendRowDescriptionMessage`: a domain-typed column is described by its base type and typmod.
+        let (oid, type_mod) = base_type_and_typmod(env, c.type_id.oid, c.type_id.typmod);
         let info = env
             .type_info(oid)
             .ok_or_else(|| PgError::internal(format!("cache lookup failed for type {oid}")))?;
         out.push(ColumnInfo {
             name: c.name.clone(),
             type_oid: oid,
-            type_mod: c.type_id.typmod,
+            type_mod,
             type_len: info.len,
             table_oid: c.table_oid,
             column_attnum: c.column_attnum,
@@ -110,7 +112,9 @@ impl Session {
             // short read-only look at the branch head (no transaction snapshot is taken).
             let (_, snap) = crate::bootstrap::read_catalog(&self.db, &self.branch_name())?;
             let sp = guc_derive::search_path(&self.guc)?;
-            let env = CatalogEnv::new(snap, &sp, self.user_oid)?.with_session(self.session_user_oid, self.database_oid);
+            let env = CatalogEnv::new(snap, &sp, self.user_oid)?
+                .with_session(self.session_user_oid, self.database_oid)
+                .with_row_security(guc_derive::row_security(&self.guc)?);
             self.env = Some(env.clone());
             return Ok(env);
         }
@@ -128,6 +132,7 @@ impl Session {
         };
 
         let sp = guc_derive::search_path(&self.guc)?;
+        let row_security = guc_derive::row_security(&self.guc)?;
         let user = self.user_oid;
         let session_user = self.session_user_oid;
         let database = self.database_oid;
@@ -140,6 +145,7 @@ impl Session {
                 && old.current_user() == user
                 && old.session_user() == session_user
                 && old.database() == database
+                && old.row_security() == row_security
             {
                 let candidate = CatalogEnv::new(snap.clone(), &sp, user)?;
                 if candidate.search_path() == old.search_path()
@@ -159,7 +165,7 @@ impl Session {
                 }
             }
         }
-        let env = CatalogEnv::new(snap, &sp, user)?.with_session(session_user, database);
+        let env = CatalogEnv::new(snap, &sp, user)?.with_session(session_user, database).with_row_security(row_security);
         self.env = Some(env.clone());
         Ok(env)
     }
@@ -223,7 +229,7 @@ impl Session {
         let database_name = self.database_name().to_string();
 
         let (result, notices, catalog_changed, new_env) = {
-            let Session { txn, guc, rng, prepared, db, handle, listen, .. } = self;
+            let Session { txn, guc, rng, prepared, db, handle, listen, pending_notices, .. } = self;
             let txn = txn
                 .as_mut()
                 .ok_or_else(|| PgError::internal("statement execution requested without a transaction"))?;
@@ -242,7 +248,14 @@ impl Session {
             se.param_types = param_types;
 
             let mut cx = ExecContext::new(&mut kv, se);
-            let result = f(&mut cx)?;
+            let result = match f(&mut cx) {
+                Ok(r) => r,
+                Err(e) => {
+                    // Notices raised before the error (e.g. RAISE NOTICE in a function) are still sent.
+                    pending_notices.extend(cx.se.take_notices());
+                    return Err(e);
+                }
+            };
             let notices = cx.se.take_notices();
             let catalog_changed = cx.stmt.catalog_changed;
             let new_env = if catalog_changed { Some(cx.se.env.clone()) } else { None };
@@ -292,6 +305,19 @@ mod tests {
         assert_eq!(infos[2].table_oid, 0);
         assert_eq!(infos[2].column_attnum, 0);
         assert_eq!(infos[2].type_mod, -1);
+    }
+
+    #[test]
+    fn domain_columns_are_described_by_base_type_and_typmod() {
+        // information_schema.sql_identifier (13312) is a domain over name; yes_or_no (13320) is a
+        // domain over varchar(3), so its typmod is 3 + VARHDRSZ.
+        let (_, env) = pgarbor_catalog::testing::bootstrapped().expect("catalog bootstrap");
+        let cols = vec![col("schema_name", 13312, 13467, 2), col("is_nullable", 13320, 13381, 7)];
+        let infos = columns_to_infos(&env, &cols).expect("column infos");
+        assert_eq!(infos[0].type_oid, 19);
+        assert_eq!(infos[0].type_mod, -1);
+        assert_eq!(infos[1].type_oid, 1043);
+        assert_eq!(infos[1].type_mod, 7);
     }
 
     #[test]

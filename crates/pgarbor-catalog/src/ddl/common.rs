@@ -163,6 +163,11 @@ fn class_word(class: ObjClass) -> &'static str {
         ObjClass::Extension => "extension",
         ObjClass::Trigger => "trigger",
         ObjClass::Tablespace => "tablespace",
+        ObjClass::OpClass => "operator class",
+        ObjClass::OpFamily => "operator family",
+        ObjClass::AmOp => "operator of access method",
+        ObjClass::AmProc => "function of access method",
+        ObjClass::Conversion => "conversion",
     }
 }
 
@@ -406,6 +411,15 @@ impl<'a> CatalogTxn<'a> {
                 None => builtin_or_missing_owner(oid, "database"),
             },
             ObjClass::Trigger => Err(errors::cache_lookup_failed("trigger", oid)),
+            ObjClass::Operator
+            | ObjClass::OpClass
+            | ObjClass::OpFamily
+            | ObjClass::Conversion
+            | ObjClass::Collation
+            | ObjClass::Extension => match self.env()?.ext_owner_word_name(addr) {
+                Some((owner, _, _)) => Ok(owner),
+                None => builtin_or_missing_owner(oid, class_word(addr.class)),
+            },
             other => builtin_or_missing_owner(oid, class_word(other)),
         }
     }
@@ -415,6 +429,9 @@ impl<'a> CatalogTxn<'a> {
         let oid = addr.oid;
         let word_and_name = match addr.class {
             ObjClass::Relation => match snap.class_identity(oid) {
+                // A column address (COMMENT ON COLUMN) reports `OBJECT_COLUMN`, which aclcheck_error words
+                // as plain "relation".
+                Some((_, name, _)) if addr.is_column() => ("relation", name.to_string()),
                 Some((_, name, kind)) => (relkind_word(kind), name.to_string()),
                 None => return Err(errors::cache_lookup_failed("relation", oid)),
             },
@@ -453,6 +470,15 @@ impl<'a> CatalogTxn<'a> {
             },
             ObjClass::Role => ("role", name_or_oid(snap.role(oid).map(|r| r.name.as_str()), oid)),
             ObjClass::Database => ("database", name_or_oid(snap.database(oid).map(|d| d.name.as_str()), oid)),
+            ObjClass::Operator
+            | ObjClass::OpClass
+            | ObjClass::OpFamily
+            | ObjClass::Conversion
+            | ObjClass::Collation
+            | ObjClass::Extension => match self.env()?.ext_owner_word_name(addr) {
+                Some((_, word, name)) => (word, name),
+                None => (class_word(addr.class), oid.to_string()),
+            },
             other => (class_word(other), oid.to_string()),
         };
         Ok(word_and_name)

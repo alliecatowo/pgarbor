@@ -76,6 +76,31 @@ pub struct TargetTable {
     /// One entry per attnum slot (index = attnum - 1), dropped columns included.
     pub columns: Vec<TargetColumn>,
     pub checks: Vec<TargetCheck>,
+    /// WITH CHECK OPTIONs of auto-updatable views and row-level security policies that every new row
+    /// version must satisfy (amendment pgarbor-sql-rewrite-rls-merge). Expressions over the target's own columns
+    /// (`Column{rt_index: 1, ..}`).
+    pub wco: Vec<TargetWco>,
+}
+
+/// Kind of a [`TargetWco`] (PG `WCOKind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WcoKind {
+    /// `WITH [LOCAL|CASCADED] CHECK OPTION` of a view: 44000 `new row violates check option for view "v"`.
+    ViewCheck,
+    /// Row-level security INSERT / UPDATE WITH CHECK: 42501 `new row violates row-level security policy ...`.
+    RlsInsert,
+    RlsUpdate,
+}
+
+/// One WITH CHECK OPTION (PG `WithCheckOption`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetWco {
+    pub kind: WcoKind,
+    /// View or table name used in the error message.
+    pub relname: String,
+    /// Restrictive policy name (RLS), named in the message.
+    pub polname: Option<String>,
+    pub expr: BoundExpr,
 }
 
 impl TargetTable {
@@ -217,6 +242,67 @@ pub struct BoundDelete {
     pub returning: Vec<TargetEntry>,
 }
 
+/// `WHEN [NOT] MATCHED [BY SOURCE|BY TARGET]` of a MERGE clause (amendment pgarbor-sql-rewrite-rls-merge).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeMatchKind {
+    /// `WHEN MATCHED`: a target row joined with a source row.
+    Matched,
+    /// `WHEN NOT MATCHED BY SOURCE`: a target row without a source row.
+    NotMatchedBySource,
+    /// `WHEN NOT MATCHED [BY TARGET]`: a source row without a target row.
+    NotMatchedByTarget,
+}
+
+/// The action of one MERGE WHEN clause.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MergeActionKind {
+    /// `UPDATE SET ...` (assignments as for UPDATE; values reference target and source columns).
+    Update { assignments: Vec<Assignment> },
+    Delete,
+    /// `INSERT [(cols)] [OVERRIDING ..] VALUES (..)` / `INSERT DEFAULT VALUES` (`columns` empty).
+    /// `values[i]` (assignment-coerced, may be `SetToDefault`) is stored into `columns[i]`.
+    Insert { columns: Vec<i16>, values: Vec<BoundExpr>, overriding: Option<Overriding> },
+    DoNothing,
+}
+
+/// One `WHEN ... [AND condition] THEN action` clause.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoundMergeWhen {
+    pub match_kind: MergeMatchKind,
+    pub condition: Option<BoundExpr>,
+    pub action: MergeActionKind,
+}
+
+/// Bound MERGE (PG `transformMergeStmt`). `range_table[target_rt - 1]` is the target; the source FROM
+/// item follows. Three pseudo entries (never scanned) back the RETURNING-only references:
+/// `merge_action()` = `Column{action_rt, 1}` (text), `old.c` = `Column{old_rt, attnum}`, `new.c` =
+/// `Column{new_rt, attnum}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoundMerge {
+    pub target: TargetTable,
+    pub target_rt: u32,
+    pub range_table: Vec<RangeEntry>,
+    pub ctes: Vec<BoundCte>,
+    pub source: FromItem,
+    pub join_condition: BoundExpr,
+    /// Quals restricting the target rows (an auto-updatable view's WHERE), over the target entry.
+    pub target_quals: Vec<BoundExpr>,
+    pub whens: Vec<BoundMergeWhen>,
+    pub returning: Vec<TargetEntry>,
+    pub action_rt: u32,
+    pub old_rt: u32,
+    pub new_rt: u32,
+}
+
+/// CREATE / ALTER / DROP POLICY (amendment pgarbor-sql-rewrite-rls-merge).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PolicyStmt {
+    Create(pgarbor_catalog::ddl::policy::PolicySpec),
+    Alter { table: Oid, name: String, changes: pgarbor_catalog::ddl::policy::PolicyChanges },
+    Rename { table: Oid, name: String, new_name: String },
+    Drop { table: Oid, name: String, missing_ok: bool },
+}
+
 /// `CREATE TABLE ... AS query` / `SELECT ... INTO`.
 // CONTRACT
 #[derive(Clone, Debug, PartialEq)]
@@ -314,6 +400,8 @@ pub enum AlterTableCmd {
     ReplicaIdentity(ReplicaIdentitySetting),
     /// `set_row_security(table, enable, force)`.
     RowSecurity { enable: Option<bool>, force: Option<bool> },
+    /// `CLUSTER ON index` (`Some`) / `SET WITHOUT CLUSTER` (`None`): sets or clears `indisclustered`.
+    ClusterOn { index: Option<Oid> },
 }
 
 /// `ALTER TABLE`/`VIEW`/`MATERIALIZED VIEW`/`TYPE (composite)` with a command list.
@@ -324,6 +412,8 @@ pub struct BoundAlterTable {
     /// Which keyword was used (decides the error wording and the command tag).
     pub keyword: AlterRelKeyword,
     pub commands: Vec<AlterTableCmd>,
+    /// `ALTER TABLE ONLY` (no recursion to inheritance children; amendment pgarbor-sql-06).
+    pub only: bool,
 }
 
 /// The object-kind word of an ALTER statement over a relation.
@@ -365,8 +455,11 @@ pub enum AlterAction {
     SchemaOwner { name: String, new_owner: Oid },
     /// `rename_type(ty, new_name, rewriter)` (enum, domain).
     RenameType { ty: Oid, new_name: String },
-    /// `set_type_schema(ty, new_schema, rewriter)`.
+    /// `set_type_schema(ty, new_schema, rewriter)`: `ALTER TYPE ... SET SCHEMA` (enum, composite).
     SetTypeSchema { ty: Oid, new_schema: Oid },
+    /// `set_type_schema(ty, new_schema, rewriter)` for `ALTER DOMAIN ... SET SCHEMA` (same effect,
+    /// command tag `ALTER DOMAIN`).
+    SetDomainSchema { ty: Oid, new_schema: Oid },
     /// `alter_type_owner(ty, new_owner)`.
     TypeOwner { ty: Oid, new_owner: Oid },
     /// `add_enum_value(ty, label, &position, if_not_exists)`.
@@ -409,6 +502,8 @@ pub enum AlterAction {
     DatabaseOptions { name: String, allow_conn: Option<bool>, conn_limit: Option<i32>, is_template: Option<bool> },
     /// Generic `alter_owner(addr, new_owner)` for objects without a dedicated variant.
     Owner { addr: ObjectAddress, new_owner: Oid },
+    /// `ALTER PROCEDURE` / `ALTER ROUTINE`: runs `inner` (a function action) but reports `tag`.
+    Routine { tag: &'static str, inner: Box<AlterAction> },
 }
 
 impl AlterAction {
@@ -443,7 +538,8 @@ impl AlterAction {
             | AlterAction::AddDomainConstraint { .. }
             | AlterAction::DropDomainConstraint { .. }
             | AlterAction::RenameDomainConstraint { .. }
-            | AlterAction::ValidateDomainConstraint { .. } => "ALTER DOMAIN",
+            | AlterAction::ValidateDomainConstraint { .. }
+            | AlterAction::SetDomainSchema { .. } => "ALTER DOMAIN",
             AlterAction::FunctionAttrs { .. }
             | AlterAction::RenameFunction { .. }
             | AlterAction::SetFunctionSchema { .. }
@@ -454,6 +550,7 @@ impl AlterAction {
             | AlterAction::DatabaseConfig { .. }
             | AlterAction::DatabaseOptions { .. } => "ALTER DATABASE",
             AlterAction::Owner { .. } => "ALTER OWNER",
+            AlterAction::Routine { tag, .. } => tag,
         }
     }
 }
@@ -701,6 +798,8 @@ pub struct BoundPrepare {
 pub struct BoundExecute {
     pub name: String,
     pub args: Vec<BoundExpr>,
+    /// Source position of each argument (for errors raised while coercing/evaluating it).
+    pub arg_positions: Vec<Option<u32>>,
 }
 
 /// `DISCARD {ALL|PLANS|SEQUENCES|TEMP}`.
@@ -760,6 +859,8 @@ pub enum MaintenanceKind {
     Vacuum,
     Analyze,
     Reindex,
+    /// `REINDEX ... CONCURRENTLY`: same work as `Reindex`, but forbidden inside a transaction block.
+    ReindexConcurrently,
     Cluster,
     Checkpoint,
 }
@@ -779,6 +880,10 @@ pub enum BoundStatement {
     Insert(Box<BoundInsert>),
     Update(Box<BoundUpdate>),
     Delete(Box<BoundDelete>),
+    /// MERGE (amendment pgarbor-sql-rewrite-rls-merge).
+    Merge(Box<BoundMerge>),
+    /// CREATE / ALTER / DROP POLICY (amendment pgarbor-sql-rewrite-rls-merge).
+    Policy(Box<PolicyStmt>),
     CreateTableAs(Box<BoundCreateTableAs>),
     Truncate(BoundTruncate),
 
@@ -799,6 +904,9 @@ pub enum BoundStatement {
     Drop(Box<BoundDrop>),
     DropDatabase { name: String, if_exists: bool, force: bool },
     Comment { addr: ObjectAddress, text: Option<String> },
+    /// Extensibility DDL (operators, aggregates, operator classes/families, casts, conversions,
+    /// collations, extensions): executed by `CatalogTxn::run_ext` (amendment pgarbor-sql-rewrite-rls-merge).
+    Ext(Box<pgarbor_catalog::ddl::ext_spec::ExtDdl>),
     /// `GRANT privileges ON ...` / `REVOKE` (`revoke = true`). One spec per (object, ...) pair of the
     /// statement: `GRANT SELECT ON a, b TO x, y` is two specs (each listing both grantees).
     Grant { specs: Vec<GrantSpec>, revoke: bool },
@@ -849,6 +957,12 @@ impl BoundStatement {
             BoundStatement::Insert(_) => "INSERT".into(),
             BoundStatement::Update(_) => "UPDATE".into(),
             BoundStatement::Delete(_) => "DELETE".into(),
+            BoundStatement::Merge(_) => "MERGE".into(),
+            BoundStatement::Policy(p) => match **p {
+                PolicyStmt::Create(_) => "CREATE POLICY".into(),
+                PolicyStmt::Alter { .. } | PolicyStmt::Rename { .. } => "ALTER POLICY".into(),
+                PolicyStmt::Drop { .. } => "DROP POLICY".into(),
+            },
             BoundStatement::CreateTableAs(_) => "SELECT".into(),
             BoundStatement::Truncate(_) => "TRUNCATE TABLE".into(),
             BoundStatement::CreateSchema { .. } => "CREATE SCHEMA".into(),
@@ -882,6 +996,7 @@ impl BoundStatement {
             BoundStatement::Drop(d) => format!("DROP {}", drop_kind_word(d.kind)),
             BoundStatement::DropDatabase { .. } => "DROP DATABASE".into(),
             BoundStatement::Comment { .. } => "COMMENT".into(),
+            BoundStatement::Ext(e) => e.tag().into(),
             BoundStatement::Grant { revoke, .. } => if *revoke { "REVOKE".into() } else { "GRANT".into() },
             BoundStatement::GrantRole(_) => "GRANT ROLE".into(),
             BoundStatement::RevokeRole { .. } => "REVOKE ROLE".into(),
@@ -891,7 +1006,7 @@ impl BoundStatement {
             BoundStatement::Maintenance { kind, .. } => match kind {
                 MaintenanceKind::Vacuum => "VACUUM",
                 MaintenanceKind::Analyze => "ANALYZE",
-                MaintenanceKind::Reindex => "REINDEX",
+                MaintenanceKind::Reindex | MaintenanceKind::ReindexConcurrently => "REINDEX",
                 MaintenanceKind::Cluster => "CLUSTER",
                 MaintenanceKind::Checkpoint => "CHECKPOINT",
             }
@@ -944,6 +1059,7 @@ impl BoundStatement {
             BoundStatement::Insert(i) => returning_columns(&i.returning),
             BoundStatement::Update(u) => returning_columns(&u.returning),
             BoundStatement::Delete(d) => returning_columns(&d.returning),
+            BoundStatement::Merge(m) => returning_columns(&m.returning),
             BoundStatement::Show(None) => Some(vec![text_col("name"), text_col("setting"), text_col("description")]),
             BoundStatement::Show(Some(n)) => Some(vec![text_col(n)]),
             BoundStatement::Explain(e) => Some(vec![match e.options.format {
@@ -966,6 +1082,7 @@ impl BoundStatement {
                 | BoundStatement::Insert(_)
                 | BoundStatement::Update(_)
                 | BoundStatement::Delete(_)
+                | BoundStatement::Merge(_)
                 | BoundStatement::CreateTableAs(_)
         )
     }

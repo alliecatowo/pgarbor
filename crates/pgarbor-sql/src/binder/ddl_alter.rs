@@ -52,7 +52,7 @@
 //! [`bind_alter_view`]: `RENAME TO`, `RENAME COLUMN`, `OWNER TO`, `SET SCHEMA`, `SET (opt=..)`/`RESET`, `ALTER COLUMN .. SET
 //! DEFAULT` -> as above with `keyword = View`. [`bind_alter_index`]: `RENAME TO`, `SET (..)`/`RESET (..)`,
 //! `SET TABLESPACE` (0A000), `ATTACH PARTITION` (0A000), `ALTER COLUMN SET STATISTICS`.
-use pgarbor_catalog::ddl::alter_column::ReplicaIdentitySetting;
+use pgarbor_catalog::ddl::alter_column::{ColumnAttribute, ReplicaIdentitySetting};
 use pgarbor_catalog::ddl::spec::{
     ColumnSpec, ConstraintSpec, GeneratedSpec, IdentitySpec, SeqBound,
     SequenceOptions as CatSeqOpts, SerialKind,
@@ -70,12 +70,13 @@ use pgarbor_types::{oids, Datum, TypeId};
 use sqlparser::ast::{
     AlterColumnOperation, AlterIndexOperation, AlterTable, AlterTableOperation, ColumnDef,
     ColumnOption, DataType, DropBehavior as AstDropBehavior, Expr, GeneratedAs,
-    GeneratedExpressionMode, Ident, MySQLColumnPosition, ObjectName, ObjectNamePart, Owner,
+    FunctionArg, FunctionArgExpr, FunctionArguments, GeneratedExpressionMode, Ident, MySQLColumnPosition, ObjectName, ObjectNamePart, Owner,
     RenameTableNameKind, ReplicaIdentity, SequenceOptions as AstSeqOpt, SqlOption, Statement,
     UnaryOperator, Value,
 };
 
 use crate::diag::{self, ExprClause};
+use crate::extra_stmt::RelOptionAction;
 use crate::ir::{
     AlterAction, AlterRelKeyword, AlterTableCmd, BoundAlterTable, BoundExpr, BoundStatement,
     CoercionForm, ExprKind,
@@ -84,10 +85,11 @@ use crate::names::QualName;
 
 use super::coerce::try_coerce;
 use super::context::{Binder, BoundArg, ExprCtx};
+use super::ddl_view::check_alter_view_check_option;
 use super::ddl_constraint::{bind_column_constraint, bind_table_constraint, ConstraintTableCtx};
 use super::ddl_table::identity_option_list;
 use super::expr::bind_expr;
-use super::stored::{bind_ddl_expr, bind_stored_expr, store_expr, table_expr_scope};
+use super::stored::{bind_ddl_expr, bind_stored_expr, reject_regrole_constants, store_expr, table_expr_scope};
 use super::types::{is_pseudo_type, resolve_data_type};
 
 // ---------------------------------------------------------------------------------------------
@@ -210,6 +212,12 @@ fn with_table_scope<T>(
 
 fn no_names(_attnum: i16) -> Option<String> {
     None
+}
+
+/// Name of column `attnum` (1-based) of a synthetic table scope built by [`with_table_scope`].
+fn scope_col_name(cols: &[(String, TypeId)], attnum: i16) -> Option<String> {
+    let idx = usize::try_from(attnum).ok()?.checked_sub(1)?;
+    cols.get(idx).map(|(name, _)| name.clone())
 }
 
 /// Expression context for `ALTER COLUMN ... TYPE ... USING expr` (PG `EXPR_KIND_ALTER_COL_TRANSFORM`).
@@ -376,6 +384,13 @@ fn action_word(op: &AlterTableOperation) -> &'static str {
 fn disallowed_action(kind: RelKind, op: &AlterTableOperation) -> Option<&'static str> {
     match kind {
         RelKind::Table | RelKind::PartitionedTable | RelKind::Toast => None,
+        RelKind::View if matches!(
+            op,
+            AlterTableOperation::AlterColumn { op: AlterColumnOperation::SetDefault { .. } | AlterColumnOperation::DropDefault, .. }
+        ) =>
+        {
+            None
+        }
         RelKind::View | RelKind::MatView => match op {
             AlterTableOperation::RenameColumn { .. }
             | AlterTableOperation::RenameTable { .. }
@@ -574,6 +589,19 @@ fn fast_default_of(b: &Binder, e: &BoundExpr) -> Result<(Option<String>, bool)> 
     }
 }
 
+/// Stored default text of the domain `ty` (`None` when `ty` is not a domain or has no default).
+fn domain_default_sql(b: &Binder, ty: Oid) -> Option<String> {
+    use pgarbor_catalog::model::TypeDef;
+    use pgarbor_catalog::snapshot::UserTypeRef;
+    let snap = b.env.snapshot();
+    let Some(UserTypeRef::Type(t)) = snap.user_type(ty) else { return None };
+    let obj = snap.type_obj(t)?;
+    match &obj.def {
+        TypeDef::Domain { default: Some(d), .. } => Some(d.sql.clone()),
+        _ => None,
+    }
+}
+
 /// `serial`, `serial2/4/8`, `smallserial`, `bigserial` (arrive as custom type names).
 fn serial_kind(dt: &DataType) -> Option<SerialKind> {
     if let DataType::Custom(name, mods) = dt {
@@ -719,6 +747,7 @@ fn bind_column_def(b: &mut Binder, cd: &ColumnDef, ev: &Evolving) -> Result<Boun
                         &no_names,
                     )
                 })?;
+                reject_regrole_constants(&bound)?;
                 let (fast, volatile) = fast_default_of(b, &bound)?;
                 spec.default = Some(stored);
                 spec.fast_default = fast;
@@ -730,12 +759,15 @@ fn bind_column_def(b: &mut Binder, cd: &ColumnDef, ev: &Evolving) -> Result<Boun
                 let coll = b.env.collation_oid(qn.schema_str(), &qn.name)?;
                 let info = pgarbor_types::registry::type_info(b.env as &dyn TypeEnv, type_id.oid)?;
                 if info.collation == 0 {
-                    return Err(PgError::new(
-                        SqlState::DATATYPE_MISMATCH,
-                        format!(
-                            "collations are not supported by type {}",
-                            b.type_name(type_id)
+                    return Err(diag::with_position(
+                        PgError::new(
+                            SqlState::DATATYPE_MISMATCH,
+                            format!(
+                                "collations are not supported by type {}",
+                                b.type_name(type_id)
+                            ),
                         ),
+                        super::expr::collate_keyword_before(b.src, cname),
                     ));
                 }
                 spec.collation = Some(coll);
@@ -758,6 +790,7 @@ fn bind_column_def(b: &mut Binder, cd: &ColumnDef, ev: &Evolving) -> Result<Boun
                     }
                     let oid = ev.oid;
                     let ty = type_id;
+                    let col_names = |attnum: i16| scope_col_name(&base_cols, attnum);
                     let (bound, stored) = with_table_scope(b, &table, &base_cols, |b| {
                         bind_ddl_expr(
                             b,
@@ -766,7 +799,7 @@ fn bind_column_def(b: &mut Binder, cd: &ColumnDef, ev: &Evolving) -> Result<Boun
                             Some(ty),
                             Some(oid),
                             &mut Vec::new(),
-                            &no_names,
+                            &col_names,
                         )
                     })?;
                     if !matches!(bound.volatility(), Volatility::Immutable) {
@@ -829,6 +862,17 @@ fn bind_column_def(b: &mut Binder, cd: &ColumnDef, ev: &Evolving) -> Result<Boun
         spec.default_is_volatile = true;
         if spec.not_null.is_none() {
             spec.not_null = Some(None);
+        }
+    } else if !has_default && !is_identity && !is_generated {
+        // A column of a domain with a DEFAULT: existing rows take the domain's default as the
+        // column's missing value (PG `ATExecAddColumn` uses `get_typdefault`).
+        if let Some(sql) = domain_default_sql(b, type_id.oid) {
+            let bound = bind_stored_expr(b, &sql, ev.oid, ExprCtx::column_default())?;
+            let coerced = super::coerce::coerce_assignment(b, &BoundArg::new(bound, None), &name, type_id)?;
+            let (fast, volatile) = fast_default_of(b, &coerced)?;
+            if !volatile {
+                spec.fast_default = fast;
+            }
         }
     }
     Ok(BoundColDef { spec, constraints })
@@ -1138,10 +1182,18 @@ fn cmd_alter_column(
             ev.cols[idx].not_null = false;
         }
         AlterColumnOperation::SetDefault { value } => {
+            if let Some((marker, calls)) = marker_call(value) {
+                if marker == crate::parser::IDENTITY_ALTER_MARKER {
+                    return cmd_alter_identity(&col, &calls, out);
+                }
+            }
+            if let Some((marker, arg)) = expression_marker(value) {
+                return cmd_alter_expression(b, ev, idx, &col, marker, arg, out);
+            }
             let ty = ev.cols[idx].type_id;
             let oid = ev.oid;
             let scope = ev.scope_cols();
-            let (_bound, stored) = with_table_scope(b, &ev.rel_name, &scope, |b| {
+            let (bound, stored) = with_table_scope(b, &ev.rel_name, &scope, |b| {
                 bind_ddl_expr(
                     b,
                     value,
@@ -1152,6 +1204,7 @@ fn cmd_alter_column(
                     &no_names,
                 )
             })?;
+            reject_regrole_constants(&bound)?;
             out.push(AlterTableCmd::SetDefault {
                 column: col,
                 expr: Some(stored),
@@ -1190,6 +1243,146 @@ fn cmd_alter_column(
         }
     }
     Ok(())
+}
+
+/// A call `"name"(args...)` written by the parser as a marker (quoted name holding a NUL): the marker
+/// name and its argument expressions.
+fn marker_call(value: &Expr) -> Option<(&str, Vec<&Expr>)> {
+    let Expr::Function(f) = value else {
+        return None;
+    };
+    let [ObjectNamePart::Identifier(id)] = f.name.0.as_slice() else {
+        return None;
+    };
+    if id.quote_style != Some('"') {
+        return None;
+    }
+    let args: Vec<&Expr> = match &f.args {
+        FunctionArguments::List(list) => list
+            .args
+            .iter()
+            .filter_map(|a| match a {
+                FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => Some(e),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some((id.value.as_str(), args))
+}
+
+/// `ALTER COLUMN c SET GENERATED {ALWAYS | BY DEFAULT}`, `SET <sequence option>` and `RESTART [WITH n]`
+/// (PG `ATExecSetIdentity`), as the item calls that `parser::identity_alter_at` writes. The kind (when
+/// given) and the sequence options become one `SetIdentity` command; `RESTART` sets `restart`. The
+/// catalog reports a column that is not an identity column (55000).
+fn cmd_alter_identity(col: &str, calls: &[&Expr], out: &mut Vec<AlterTableCmd>) -> Result<()> {
+    let mut kind = None;
+    let mut options = CatSeqOpts::default();
+    for call in calls {
+        let Some((name, args)) = marker_call(call) else {
+            return Err(syntax_at(""));
+        };
+        let key = name
+            .strip_prefix(crate::parser::IDENTITY_OPTION_PREFIX)
+            .ok_or_else(|| syntax_at(""))?;
+        let arg = args.first().copied();
+        match (key, arg) {
+            ("always", None) => kind = Some(IdentityKind::Always),
+            ("by default", None) => kind = Some(IdentityKind::ByDefault),
+            ("increment", Some(e)) => options.increment = Some(int_literal(e)?),
+            ("start", Some(e)) => options.start = Some(int_literal(e)?),
+            ("minvalue", Some(e)) => options.minvalue = Some(SeqBound::Value(int_literal(e)?)),
+            ("no minvalue", None) => options.minvalue = Some(SeqBound::Default),
+            ("maxvalue", Some(e)) => options.maxvalue = Some(SeqBound::Value(int_literal(e)?)),
+            ("no maxvalue", None) => options.maxvalue = Some(SeqBound::Default),
+            ("cache", Some(e)) => options.cache = Some(int_literal(e)?),
+            ("cycle", None) => options.cycle = Some(true),
+            ("no cycle", None) => options.cycle = Some(false),
+            ("restart", None) => options.restart = Some(None),
+            ("restart", Some(e)) => options.restart = Some(Some(int_literal(e)?)),
+            _ => return Err(syntax_at("")),
+        }
+    }
+    out.push(AlterTableCmd::SetIdentity {
+        column: col.to_string(),
+        kind,
+        options,
+    });
+    Ok(())
+}
+
+/// The call the parser writes for `ALTER COLUMN c SET EXPRESSION AS (e)` and
+/// `ALTER COLUMN c DROP EXPRESSION [IF EXISTS]` (`parser::mark_expression_alters`): the marker name
+/// and the first argument (the SET expression). `None` for any other `SET DEFAULT` value.
+fn expression_marker(value: &Expr) -> Option<(&str, Option<&Expr>)> {
+    let (marker, args) = marker_call(value)?;
+    Some((marker, args.first().copied()))
+}
+
+/// `ALTER COLUMN c SET EXPRESSION AS (e)` and `DROP EXPRESSION [IF EXISTS]` on one column. The SET
+/// expression is bound like a generation expression (see the `ColumnOption::Generated` arm above).
+/// Whether the column is generated at all is checked by the catalog (`set_generation_expression`,
+/// `drop_expression`).
+fn cmd_alter_expression(
+    b: &mut Binder,
+    ev: &Evolving,
+    idx: usize,
+    col: &str,
+    marker: &str,
+    arg: Option<&Expr>,
+    out: &mut Vec<AlterTableCmd>,
+) -> Result<()> {
+    match (marker, arg) {
+        (crate::parser::SET_STATISTICS_MARKER, Some(value)) => {
+            // `SET STATISTICS n` (-1 = default); the catalog checks the range (22023 `statistics target .. is too low`).
+            let n = int_literal(value)?;
+            let target = i32::try_from(n).map_err(|_| PgError::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "integer out of range"))?;
+            out.push(AlterTableCmd::SetColumnAttribute { column: col.to_string(), attr: ColumnAttribute::Statistics(target) });
+            Ok(())
+        }
+        (crate::parser::SET_EXPRESSION_MARKER, Some(value)) => {
+            let ty = ev.cols[idx].type_id;
+            let oid = ev.oid;
+            let scope = ev.scope_cols();
+            let col_names = |attnum: i16| scope_col_name(&scope, attnum);
+            let (bound, stored) = with_table_scope(b, &ev.rel_name, &scope, |b| {
+                bind_ddl_expr(
+                    b,
+                    value,
+                    ExprCtx::generated(),
+                    Some(ty),
+                    Some(oid),
+                    &mut Vec::new(),
+                    &col_names,
+                )
+            })?;
+            if !matches!(bound.volatility(), Volatility::Immutable) {
+                return Err(PgError::new(
+                    SqlState::INVALID_OBJECT_DEFINITION,
+                    "generation expression is not immutable",
+                ));
+            }
+            out.push(AlterTableCmd::SetExpression { column: col.to_string(), expr: stored });
+            Ok(())
+        }
+        (crate::parser::DROP_EXPRESSION_MARKER, None) => {
+            out.push(AlterTableCmd::DropExpression { column: col.to_string(), missing_ok: false });
+            Ok(())
+        }
+        (crate::parser::DROP_EXPRESSION_IF_EXISTS_MARKER, None) => {
+            out.push(AlterTableCmd::DropExpression { column: col.to_string(), missing_ok: true });
+            Ok(())
+        }
+        (crate::parser::DROP_IDENTITY_MARKER, None) => {
+            out.push(AlterTableCmd::DropIdentity { column: col.to_string(), missing_ok: false });
+            Ok(())
+        }
+        (crate::parser::DROP_IDENTITY_IF_EXISTS_MARKER, None) => {
+            out.push(AlterTableCmd::DropIdentity { column: col.to_string(), missing_ok: true });
+            Ok(())
+        }
+        _ => Err(syntax_at("EXPRESSION")),
+    }
 }
 
 fn replica_setting(
@@ -1472,6 +1665,7 @@ pub fn bind_alter_table(b: &mut Binder, at: &AlterTable) -> Result<BoundStatemen
         relation: oid,
         keyword: AlterRelKeyword::Table,
         commands: cmds,
+        only: false,
     })))
 }
 
@@ -1531,7 +1725,7 @@ pub fn bind_alter_index(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
                 let oid = match lookup_target(b, &qn)? {
                     Some((oid, RelKind::Index)) | Some((oid, RelKind::PartitionedIndex)) => oid,
                     Some(_) => return Err(errors::not_a(&qn.name, "index")),
-                    None => return Err(missing_relation(&qn)),
+                    None => return Err(errors::relation_does_not_exist(qn.schema_str(), &qn.name)),
                 };
                 let new_name = rename_target(b, index_name)?;
                 Ok(BoundStatement::Alter(Box::new(
@@ -1547,6 +1741,274 @@ pub fn bind_alter_index(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
             "ddl_alter::bind_alter_index called with a non-ALTER INDEX statement",
         )),
     }
+}
+
+/// `ExtraStatement::AlterIndexRename`: `ALTER INDEX IF EXISTS i RENAME TO j`. A missing index is a
+/// NOTICE and a no-op; the error for a missing index carries no position, like PG's.
+pub fn bind_alter_index_rename(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    new_name: &Ident,
+) -> Result<BoundStatement> {
+    let qn = qualify(b, name)?;
+    let oid = match lookup_target(b, &qn)? {
+        Some((oid, RelKind::Index)) | Some((oid, RelKind::PartitionedIndex)) => oid,
+        Some(_) => return Err(errors::not_a(&qn.name, "index")),
+        None if if_exists => {
+            return Ok(BoundStatement::Noop {
+                tag: "ALTER INDEX".to_string(),
+                notices: vec![errors::kind_does_not_exist_skipping("relation", qn.schema_str(), &qn.name)],
+            })
+        }
+        None => return Err(errors::relation_does_not_exist(qn.schema_str(), &qn.name)),
+    };
+    let new_name = b.ident(new_name);
+    Ok(BoundStatement::Alter(Box::new(AlterAction::RenameRelation {
+        rel: oid,
+        new_name,
+        keyword: AlterRelKeyword::Index,
+    })))
+}
+
+/// Tablespace named by `SET TABLESPACE` on an index. The engine has only `pg_default` (the database
+/// default, where every user index lives) and `pg_global` (shared relations only: 22023 for a user
+/// index). Any other name does not exist (42704).
+fn check_index_tablespace(b: &mut Binder, id: &Ident) -> Result<()> {
+    let name = b.ident(id);
+    match name.as_str() {
+        "pg_default" => Ok(()),
+        "pg_global" => Err(PgError::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "only shared relations can be placed in pg_global tablespace",
+        )),
+        _ => Err(PgError::new(SqlState::UNDEFINED_OBJECT, format!("tablespace \"{name}\" does not exist"))),
+    }
+}
+
+/// `ExtraStatement::AlterIndex`: `ALTER INDEX [IF EXISTS] i SET (..) | RESET (..) | SET TABLESPACE t`,
+/// comma-separated. PG applies the subcommands in order; the catalog takes one reset list and one set
+/// list and applies the resets first, so a RESET after a SET in the same statement is 0A000 here.
+pub fn bind_alter_index_options(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    actions: &[RelOptionAction],
+) -> Result<BoundStatement> {
+    let qn = qualify(b, name)?;
+    let oid = match lookup_target(b, &qn)? {
+        Some((oid, RelKind::Index)) | Some((oid, RelKind::PartitionedIndex)) => oid,
+        Some(_) => return Err(errors::not_a(&qn.name, "index")),
+        None if if_exists => {
+            return Ok(BoundStatement::Noop {
+                tag: "ALTER INDEX".to_string(),
+                notices: vec![errors::kind_does_not_exist_skipping("relation", qn.schema_str(), &qn.name)],
+            })
+        }
+        None => return Err(errors::relation_does_not_exist(qn.schema_str(), &qn.name)),
+    };
+    let mut set: Vec<String> = Vec::new();
+    let mut reset: Vec<String> = Vec::new();
+    for action in actions {
+        match action {
+            RelOptionAction::SetOptions(opts) => set.extend(opts.iter().cloned()),
+            RelOptionAction::ResetOptions(names) => {
+                if !set.is_empty() {
+                    return Err(diag::unsupported_construct(
+                        "ALTER INDEX ... RESET after SET in one statement",
+                        None,
+                    ));
+                }
+                reset.extend(names.iter().cloned());
+            }
+            RelOptionAction::SetTablespace(id) => check_index_tablespace(b, id)?,
+        }
+    }
+    if set.is_empty() && reset.is_empty() {
+        return Ok(BoundStatement::Noop { tag: "ALTER INDEX".to_string(), notices: Vec::new() });
+    }
+    Ok(BoundStatement::Alter(Box::new(AlterAction::IndexOptions { index: oid, set, reset })))
+}
+
+/// `ExtraStatement::AlterTableOptions`: `ALTER TABLE [IF EXISTS] t RESET (..)` (optionally followed by more
+/// `SET (..)` / `RESET (..)` actions). The catalog applies resets before sets, so a RESET after a SET in
+/// one statement is 0A000 here.
+pub fn bind_alter_table_options(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    actions: &[RelOptionAction],
+) -> Result<BoundStatement> {
+    let qn = qualify(b, name)?;
+    let oid = match lookup_target(b, &qn)? {
+        Some((oid, RelKind::Table)) | Some((oid, RelKind::PartitionedTable)) => oid,
+        Some(_) => return Err(errors::not_a(&qn.name, "table")),
+        None if if_exists => {
+            return Ok(BoundStatement::Noop {
+                tag: "ALTER TABLE".to_string(),
+                notices: vec![errors::kind_does_not_exist_skipping("relation", qn.schema_str(), &qn.name)],
+            })
+        }
+        None => return Err(missing_relation(&qn)),
+    };
+    let mut set: Vec<String> = Vec::new();
+    let mut reset: Vec<String> = Vec::new();
+    for action in actions {
+        match action {
+            RelOptionAction::SetOptions(opts) => set.extend(opts.iter().cloned()),
+            RelOptionAction::ResetOptions(names) => {
+                if !set.is_empty() {
+                    return Err(diag::unsupported_construct("ALTER TABLE ... RESET after SET in one statement", None));
+                }
+                reset.extend(names.iter().cloned());
+            }
+            RelOptionAction::SetTablespace(_) => return Err(diag::syntax_error_near("TABLESPACE", None)),
+        }
+    }
+    Ok(BoundStatement::AlterTable(Box::new(BoundAlterTable {
+        relation: oid,
+        keyword: AlterRelKeyword::Table,
+        commands: vec![AlterTableCmd::SetOptions { set, reset }],
+        only: false,
+    })))
+}
+
+/// `ExtraStatement::AlterTableCluster`: `ALTER TABLE [IF EXISTS] t CLUSTER ON idx` / `SET WITHOUT CLUSTER`.
+/// The index is looked up in the table's namespace and must index this table (tablecmds.c
+/// `ATExecClusterOn`: 42704 `index "i" for table "t" does not exist`).
+pub fn bind_alter_table_cluster(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    index: Option<&Ident>,
+) -> Result<BoundStatement> {
+    let qn = qualify(b, name)?;
+    let oid = match lookup_target(b, &qn)? {
+        Some((oid, RelKind::Table)) | Some((oid, RelKind::MatView)) => oid,
+        Some(_) => return Err(errors::not_a(&qn.name, "table or materialized view")),
+        None if if_exists => {
+            return Ok(BoundStatement::Noop {
+                tag: "ALTER TABLE".to_string(),
+                notices: vec![errors::kind_does_not_exist_skipping("relation", qn.schema_str(), &qn.name)],
+            })
+        }
+        None => return Err(missing_relation(&qn)),
+    };
+    let target = match index {
+        None => None,
+        Some(id) => {
+            let idx_name = b.ident(id);
+            let found = b.env.snapshot().indexes_of(oid).into_iter().find(|i| i.name == idx_name).map(|i| i.oid);
+            match found {
+                Some(i) => Some(i),
+                None => {
+                    return Err(PgError::new(
+                        SqlState::UNDEFINED_OBJECT,
+                        format!("index \"{idx_name}\" for table \"{}\" does not exist", qn.name),
+                    ))
+                }
+            }
+        }
+    };
+    Ok(BoundStatement::AlterTable(Box::new(BoundAlterTable {
+        relation: oid,
+        keyword: AlterRelKeyword::Table,
+        commands: vec![AlterTableCmd::ClusterOn { index: target }],
+        only: false,
+    })))
+}
+
+/// `ExtraStatement::AlterIndexAllInTablespace`. An index can only live in `pg_default` here, so moving
+/// the indexes of `from` (either existing tablespace) to `to` moves nothing once both names are
+/// valid: the names are checked (42704 for an unknown source, then the target rules) and the
+/// statement is a no-op with tag `ALTER INDEX`.
+pub fn bind_alter_index_all_tablespace(b: &mut Binder, from: &Ident, to: &Ident) -> Result<BoundStatement> {
+    let source = b.ident(from);
+    if source != "pg_default" && source != "pg_global" {
+        return Err(PgError::new(SqlState::UNDEFINED_OBJECT, format!("tablespace \"{source}\" does not exist")));
+    }
+    check_index_tablespace(b, to)?;
+    Ok(BoundStatement::Noop { tag: "ALTER INDEX".to_string(), notices: Vec::new() })
+}
+
+/// `ExtraStatement::AlterView`: `ALTER VIEW [IF EXISTS] v SET (..) | RESET (..)`, comma-separated.
+/// `SET (check_option = ..)` requires an automatically updatable view (checked by
+/// `ddl_view::check_alter_view_check_option`, before the catalog applies the change).
+pub fn bind_alter_view_options(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    actions: &[RelOptionAction],
+) -> Result<BoundStatement> {
+    let qn = qualify(b, name)?;
+    let oid = match lookup_target(b, &qn)? {
+        Some((oid, RelKind::View)) => oid,
+        Some(_) => return Err(errors::not_a(&qn.name, "view")),
+        None if if_exists => {
+            return Ok(BoundStatement::Noop {
+                tag: "ALTER VIEW".to_string(),
+                notices: vec![errors::kind_does_not_exist_skipping("relation", qn.schema_str(), &qn.name)],
+            })
+        }
+        None => return Err(missing_relation(&qn)),
+    };
+    let mut set: Vec<String> = Vec::new();
+    let mut reset: Vec<String> = Vec::new();
+    for action in actions {
+        match action {
+            RelOptionAction::SetOptions(opts) => set.extend(opts.iter().cloned()),
+            RelOptionAction::ResetOptions(names) => {
+                if !set.is_empty() {
+                    return Err(diag::unsupported_construct(
+                        "ALTER VIEW ... RESET after SET in one statement",
+                        None,
+                    ));
+                }
+                reset.extend(names.iter().cloned());
+            }
+            RelOptionAction::SetTablespace(_) => return Err(diag::syntax_error_near("TABLESPACE", None)),
+        }
+    }
+    check_alter_view_check_option(b, oid, &set)?;
+    Ok(BoundStatement::Alter(Box::new(AlterAction::ViewOptions { view: oid, set, reset })))
+}
+
+/// `ExtraStatement::AlterViewColumnDefault`: `ALTER VIEW [IF EXISTS] v ALTER [COLUMN] c SET DEFAULT e`
+/// or `DROP DEFAULT`. The column is bound exactly like `ALTER TABLE ... ALTER COLUMN c SET DEFAULT`
+/// (`cmd_alter_column`), and the command list runs through the same `AlterTableCmd::SetDefault`
+/// catalog call, tagged `ALTER VIEW`. A non-view relation is 42809 `"x" is not a view`.
+pub fn bind_alter_view_column_default(
+    b: &mut Binder,
+    if_exists: bool,
+    name: &ObjectName,
+    column: &Ident,
+    default: Option<&Expr>,
+) -> Result<BoundStatement> {
+    let qn = qualify(b, name)?;
+    let oid = match lookup_target(b, &qn)? {
+        Some((oid, RelKind::View)) => oid,
+        Some(_) => return Err(errors::not_a(&qn.name, "view")),
+        None if if_exists => {
+            return Ok(BoundStatement::Noop {
+                tag: "ALTER VIEW".to_string(),
+                notices: vec![errors::kind_does_not_exist_skipping("relation", qn.schema_str(), &qn.name)],
+            })
+        }
+        None => return Err(missing_relation(&qn)),
+    };
+    let op = match default {
+        Some(value) => AlterColumnOperation::SetDefault { value: value.clone() },
+        None => AlterColumnOperation::DropDefault,
+    };
+    let mut ev = Evolving::load(b.env, oid, &qn.name);
+    let mut commands: Vec<AlterTableCmd> = Vec::new();
+    cmd_alter_column(b, &mut ev, column, &op, &mut commands)?;
+    Ok(BoundStatement::AlterTable(Box::new(BoundAlterTable {
+        relation: oid,
+        keyword: AlterRelKeyword::View,
+        commands,
+        only: false,
+    })))
 }
 
 #[cfg(test)]

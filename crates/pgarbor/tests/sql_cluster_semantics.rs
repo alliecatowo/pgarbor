@@ -14,6 +14,18 @@ fn view_dependency_survives_expansion() {
 }
 
 #[test]
+fn view_grouped_by_pk_pins_the_primary_key() {
+    let db = Database::in_memory().expect("db");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    s.simple_query("CREATE TABLE a(id int CONSTRAINT a_pkey PRIMARY KEY, k text); CREATE VIEW fdv AS SELECT id, k FROM a GROUP BY id")
+        .expect("setup");
+    let e = s.simple_query("ALTER TABLE a DROP CONSTRAINT a_pkey RESTRICT").expect_err("pinned by view");
+    assert_eq!(e.sqlstate.code(), "2BP01");
+    s.simple_query("DROP VIEW fdv").expect("drop view");
+    s.simple_query("ALTER TABLE a DROP CONSTRAINT a_pkey RESTRICT").expect("unpinned");
+}
+
+#[test]
 fn system_columns_cannot_be_index_keys_expressions_or_predicates() {
     let db = Database::in_memory().expect("db");
     let mut s = db.session("main", SessionOptions::default()).expect("session");

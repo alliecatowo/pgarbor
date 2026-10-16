@@ -149,10 +149,26 @@ pub fn input(ctx: &IoCtx, ty: TypeId, s: &str) -> Result<Datum> {
 #[allow(unused_variables)]
 pub fn output(ctx: &IoCtx, ty: TypeId, d: &Datum) -> Result<String> {
     if ty.oid == oids::RECORD {
-        return Err(PgError::new(
-            SqlState::FEATURE_NOT_SUPPORTED,
-            "output of anonymous composite types requires field types",
-        ));
+        // Anonymous record (`ROW(1, 'x')`): the stored datums carry no tuple descriptor, so each field's
+        // output type is its datum's natural type; fields without one stay unsupported.
+        let vals = record_values(d)?;
+        let mut parts = Vec::with_capacity(vals.len());
+        for v in vals {
+            if v.is_null() {
+                parts.push(None);
+                continue;
+            }
+            let tid = natural_type(v)
+                .or_else(|| match v {
+                    Datum::Array(a) => crate::registry::array_type_of(ctx.env, a.elem).map(TypeId::of),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "output of anonymous composite types requires field types")
+            })?;
+            parts.push(Some(io::output(ctx, tid, v)?));
+        }
+        return Ok(format_record(&parts));
     }
     let stored = record_values(d)?;
     let mut expanded;
@@ -172,6 +188,35 @@ pub fn output(ctx: &IoCtx, ty: TypeId, d: &Datum) -> Result<String> {
         parts.push(io::output_opt(ctx, tid, &vals[idx])?);
     }
     Ok(format_record(&parts))
+}
+
+/// The type a datum prints as inside an anonymous record (`None` when the variant alone does not
+/// determine one).
+fn natural_type(d: &Datum) -> Option<TypeId> {
+    Some(match d {
+        Datum::Bool(_) => TypeId::BOOL,
+        Datum::Int2(_) => TypeId::INT2,
+        Datum::Int4(_) => TypeId::INT4,
+        Datum::Int8(_) => TypeId::INT8,
+        Datum::Float4(_) => TypeId::FLOAT4,
+        Datum::Float8(_) => TypeId::FLOAT8,
+        Datum::Numeric(_) => TypeId::NUMERIC,
+        Datum::Text(_) => TypeId::TEXT,
+        Datum::Bytea(_) => TypeId::BYTEA,
+        Datum::Uuid(_) => TypeId::UUID,
+        Datum::Date(_) => TypeId::DATE,
+        Datum::Time(_) => TypeId::TIME,
+        Datum::TimeTz(..) => TypeId::TIMETZ,
+        Datum::Timestamp(_) => TypeId::TIMESTAMP,
+        Datum::TimestampTz(_) => TypeId::TIMESTAMPTZ,
+        Datum::Interval(_) => TypeId::INTERVAL,
+        Datum::Json(_) => TypeId::JSON,
+        Datum::Jsonb(_) => TypeId::JSONB,
+        Datum::Oid(_) => TypeId::OID,
+        Datum::Char(_) => TypeId::CHAR,
+        Datum::Record(_) => TypeId::RECORD,
+        Datum::Null | Datum::Array(_) => return None,
+    })
 }
 
 /// `record_recv`.

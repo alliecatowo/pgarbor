@@ -44,15 +44,17 @@ use pgarbor_catalog::snapshot::ClassRef;
 use pgarbor_catalog::{builtin, errors, CatalogEnv};
 use pgarbor_common::{Oid, PgError, Result, Severity, SqlState};
 use pgarbor_types::catalog_data::ProcKind;
+use pgarbor_types::names::format_type;
 use sqlparser::ast::{
-    ArgMode, CascadeOption, CommentObject, DropBehavior, FunctionDesc, ObjectName, ObjectNamePart, ObjectType,
+    ArgMode, CascadeOption, CommentObject, DropBehavior, FunctionDesc, Ident, ObjectName, ObjectNamePart, ObjectType,
     OperateFunctionArg, Statement, TruncateIdentityOption,
 };
 
 use super::context::Binder;
+use super::dispatch::{DROP_DOMAIN_KEY, DROP_ROUTINE_KEY};
 use super::types::resolve_data_type;
 use crate::diag;
-use crate::extra_stmt::ExtraStatement;
+use crate::extra_stmt::{ExtraStatement, RoutineKind};
 use crate::ir::{BoundDrop, BoundStatement, BoundTruncate};
 use crate::names::QualName;
 
@@ -105,7 +107,7 @@ fn plain_name(b: &mut Binder, name: &ObjectName) -> Result<QualName> {
 /// The DROP target of a schema-qualifiable name without arguments (tables, types, domains, ...).
 fn plain_target(b: &mut Binder, name: &ObjectName) -> Result<DropTarget> {
     let q = name_of(b, name)?;
-    Ok(DropTarget { schema: q.schema, name: q.name, args: None })
+    Ok(DropTarget { schema: q.schema, name: q.name, args: None, all_args_lookup: false })
 }
 
 /// `ObjectType` -> `DropKind` for the object types that go through `drop_by_names`.
@@ -135,7 +137,7 @@ fn drop_targets(b: &mut Binder, kind: DropKind, names: &[ObjectName]) -> Result<
         let target = match kind {
             DropKind::Schema | DropKind::Role => {
                 let q = plain_name(b, name)?;
-                DropTarget { schema: None, name: q.name, args: None }
+                DropTarget { schema: None, name: q.name, args: None, all_args_lookup: false }
             }
             _ => plain_target(b, name)?,
         };
@@ -168,7 +170,9 @@ fn routine_targets(b: &mut Binder, descs: &[FunctionDesc]) -> Result<Vec<DropTar
             None => None,
             Some(list) => Some(arg_type_oids(b, list, q.pos)?),
         };
-        out.push(DropTarget { schema: q.schema, name: q.name, args });
+        // PG `LookupFuncWithArgs`: a non-empty list with no parameter mode at all (no IN/OUT/INOUT/VARIADIC).
+        let all_args_lookup = desc.args.as_ref().is_some_and(|list| !list.is_empty() && list.iter().all(|a| a.mode.is_none()));
+        out.push(DropTarget { schema: q.schema, name: q.name, args, all_args_lookup });
     }
     Ok(out)
 }
@@ -218,13 +222,16 @@ pub fn bind_drop(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
             if *cascade && *restrict {
                 return Err(diag::syntax_error_near("RESTRICT", None));
             }
-            let kind = drop_kind_of(object_type)?;
+            // A multi-name `DROP DOMAIN` arrives as `DROP TYPE` (see `parser::drop_domain_list_as_type`).
+            let kind = if b.scratch.contains_key(DROP_DOMAIN_KEY) { DropKind::Domain } else { drop_kind_of(object_type)? };
             let targets = drop_targets(b, kind, names)?;
             Ok(drop_bound(kind, targets, *if_exists, *cascade))
         }
         Statement::DropFunction(d) => {
             let targets = routine_targets(b, &d.func_desc)?;
-            Ok(drop_bound(DropKind::Function, targets, d.if_exists, is_cascade(&d.drop_behavior)))
+            // `DROP ROUTINE` (PG `OBJECT_ROUTINE`) matches a function or a procedure of any kind.
+            let kind = if b.scratch.contains_key(DROP_ROUTINE_KEY) { DropKind::Routine } else { DropKind::Function };
+            Ok(drop_bound(kind, targets, d.if_exists, is_cascade(&d.drop_behavior)))
         }
         Statement::DropProcedure { if_exists, proc_desc, drop_behavior } => {
             let targets = routine_targets(b, proc_desc)?;
@@ -400,6 +407,10 @@ fn comment_column(b: &mut Binder, name: &ObjectName, if_exists: bool) -> Result<
             return Err(at(errors::operation_not_supported_for(&what, "indexes"), pos));
         }
         Some(ClassRef::Sequence(_)) => {
+            // A sequence's own columns are last_value, log_cnt and is_called; any other name is missing.
+            if !matches!(column, "last_value" | "log_cnt" | "is_called") {
+                return Err(at(errors::column_of_relation_does_not_exist(column, table), pos));
+            }
             let what = format!("cannot open relation \"{table}\"");
             return Err(at(errors::operation_not_supported_for(&what, "sequences"), pos));
         }
@@ -463,25 +474,74 @@ fn comment_type(b: &mut Binder, name: &ObjectName, domain: bool, if_exists: bool
     Ok(Resolved::Addr(ObjectAddress::type_(oid)))
 }
 
-/// COMMENT ON FUNCTION / PROCEDURE name (no argument list: the name must be unique).
-fn comment_routine(b: &mut Binder, name: &ObjectName, procedure: bool, if_exists: bool) -> Result<Resolved> {
+/// COMMENT ON FUNCTION / PROCEDURE / ROUTINE name [(argument list)] (PG `get_object_address` and
+/// `LookupFuncWithArgs`). With an argument list the routine is identified by its input argument types alone
+/// (OUT arguments, names and defaults do not take part). Without one the name must be unambiguous.
+/// A routine of the other kind is 42809.
+fn comment_routine(
+    b: &mut Binder,
+    name: &ObjectName,
+    args: Option<&[OperateFunctionArg]>,
+    kind: RoutineKind,
+    if_exists: bool,
+) -> Result<Resolved> {
     let q = name_of(b, name)?;
     let env = b.env;
     let schema = q.schema.as_deref();
     let cands = env.function_candidates(schema, &q.name).map_err(|e| at(e, q.pos))?;
-    let word = if procedure { "procedure" } else { "function" };
-    let matching: Vec<_> = cands.iter().filter(|c| matches!(c.kind, ProcKind::Procedure) == procedure).collect();
-    match matching.as_slice() {
-        [] => {
-            if if_exists {
-                let msg = format!("{word} {}() does not exist, skipping", q.display());
-                return Ok(Resolved::Skip(notice(msg)));
+    let word = match kind {
+        RoutineKind::Procedure => "procedure",
+        RoutineKind::Function | RoutineKind::Routine => "function",
+    };
+    let Some(list) = args else {
+        let matching: Vec<_> = cands.iter().filter(|c| kind_matches(kind, &c.kind)).collect();
+        return match matching.as_slice() {
+            [] => {
+                if if_exists {
+                    let msg = format!("{word} {}() does not exist, skipping", q.display());
+                    return Ok(Resolved::Skip(notice(msg)));
+                }
+                Err(at(errors::no_function_named(word, &q.display()), q.pos))
             }
-            Err(at(errors::no_function_named(word, &q.display()), q.pos))
+            [one] => Ok(Resolved::Addr(ObjectAddress::proc(one.oid))),
+            _ => Err(at(errors::function_name_not_unique(&q.display()), q.pos)),
+        };
+    };
+    let types = arg_type_oids(b, list, q.pos)?;
+    let Some(cand) = cands.iter().filter(|c| c.arg_types == types).min_by_key(|c| c.path_pos) else {
+        let sig = format!("{}({})", q.display(), oid_type_names(env, &types)?);
+        if if_exists {
+            return Ok(Resolved::Skip(notice(format!("{word} {sig} does not exist, skipping"))));
         }
-        [one] => Ok(Resolved::Addr(ObjectAddress::proc(one.oid))),
-        _ => Err(at(errors::function_name_not_unique(&q.display()), q.pos)),
+        let err = match kind {
+            RoutineKind::Procedure => PgError::new(SqlState::UNDEFINED_FUNCTION, format!("procedure {sig} does not exist")),
+            RoutineKind::Function | RoutineKind::Routine => errors::function_does_not_exist(&sig),
+        };
+        return Err(at(err, q.pos));
+    };
+    if !kind_matches(kind, &cand.kind) {
+        let sig = format!("{}({})", q.display(), oid_type_names(env, &types)?);
+        return Err(at(errors::wrong_routine_kind(&sig, word), q.pos));
     }
+    Ok(Resolved::Addr(ObjectAddress::proc(cand.oid)))
+}
+
+/// Whether a routine of kind `proc_kind` is named by COMMENT ON `kind` (FUNCTION names a non-procedure).
+fn kind_matches(kind: RoutineKind, proc_kind: &ProcKind) -> bool {
+    match kind {
+        RoutineKind::Routine => true,
+        RoutineKind::Procedure => matches!(proc_kind, ProcKind::Procedure),
+        RoutineKind::Function => !matches!(proc_kind, ProcKind::Procedure),
+    }
+}
+
+/// Type names of an argument list for messages (`integer, text`).
+fn oid_type_names(env: &CatalogEnv, oids: &[Oid]) -> Result<String> {
+    let mut names = Vec::with_capacity(oids.len());
+    for oid in oids {
+        names.push(format_type(env, *oid, -1)?);
+    }
+    Ok(names.join(", "))
 }
 
 /// COMMENT ON ROLE / USER name.
@@ -514,8 +574,21 @@ fn comment_database(b: &mut Binder, name: &ObjectName, if_exists: bool) -> Resul
     }
 }
 
+/// COMMENT resolves its object through `get_object_address`, which has no parse location: only syntax
+/// errors carry a position.
+fn drop_comment_position(mut e: PgError) -> PgError {
+    if e.sqlstate != SqlState::SYNTAX_ERROR {
+        e.position = None;
+    }
+    e
+}
+
 /// `Statement::Comment`.
 pub fn bind_comment(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
+    bind_comment_inner(b, stmt).map_err(drop_comment_position)
+}
+
+fn bind_comment_inner(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
     let (object_type, object_name, comment, if_exists) = match stmt {
         Statement::Comment { object_type, object_name, comment, if_exists } => {
             (object_type, object_name, comment, *if_exists)
@@ -537,8 +610,8 @@ pub fn bind_comment(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> 
         CommentObject::Schema => comment_schema(b, object_name, if_exists)?,
         CommentObject::Type => comment_type(b, object_name, false, if_exists)?,
         CommentObject::Domain => comment_type(b, object_name, true, if_exists)?,
-        CommentObject::Function => comment_routine(b, object_name, false, if_exists)?,
-        CommentObject::Procedure => comment_routine(b, object_name, true, if_exists)?,
+        CommentObject::Function => comment_routine(b, object_name, None, RoutineKind::Function, if_exists)?,
+        CommentObject::Procedure => comment_routine(b, object_name, None, RoutineKind::Procedure, if_exists)?,
         CommentObject::Role | CommentObject::User => comment_role(b, object_name, if_exists)?,
         CommentObject::Database => comment_database(b, object_name, if_exists)?,
         CommentObject::Collation | CommentObject::Extension => {
@@ -551,26 +624,56 @@ pub fn bind_comment(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> 
     })
 }
 
+/// `ExtraStatement::CommentRoutine`: COMMENT ON FUNCTION / PROCEDURE / ROUTINE with an optional argument list.
+pub fn bind_comment_routine(
+    b: &mut Binder,
+    kind: RoutineKind,
+    name: &ObjectName,
+    args: Option<&[OperateFunctionArg]>,
+    comment: Option<&str>,
+) -> Result<BoundStatement> {
+    // PG treats an empty string like NULL: both remove the comment.
+    let text = match comment {
+        Some(s) if !s.is_empty() => Some(s.to_string()),
+        _ => None,
+    };
+    let resolved = comment_routine(b, name, args, kind, false).map_err(drop_comment_position)?;
+    Ok(match resolved {
+        Resolved::Addr(addr) => BoundStatement::Comment { addr, text },
+        Resolved::Skip(n) => BoundStatement::Noop { tag: "COMMENT".to_string(), notices: vec![n] },
+    })
+}
+
+/// A `RoleSpec` of DROP OWNED / REASSIGN OWNED: unquoted `CURRENT_USER` / `CURRENT_ROLE` are the current
+/// user, `SESSION_USER` the session user (PG `get_rolespec_oid`); anything else is a role name.
+fn owned_role_oid(b: &mut Binder, id: &Ident) -> Result<Oid> {
+    if id.quote_style.is_none() {
+        match id.value.to_ascii_lowercase().as_str() {
+            "current_user" | "current_role" => return Ok(b.env.current_user()),
+            "session_user" => return Ok(b.env.session_user()),
+            _ => {}
+        }
+    }
+    let name = b.ident(id);
+    b.env.role_oid(&name)
+}
+
 /// `ExtraStatement::DropOwned` / `ReassignOwned`.
 pub fn bind_owned(b: &mut Binder, stmt: &ExtraStatement) -> Result<BoundStatement> {
-    let env = b.env;
     match stmt {
         ExtraStatement::DropOwned { roles, cascade } => {
             let mut oids = Vec::with_capacity(roles.len());
             for role in roles {
-                let name = b.ident(role);
-                oids.push(env.role_oid(&name)?);
+                oids.push(owned_role_oid(b, role)?);
             }
             Ok(BoundStatement::DropOwned { roles: oids, cascade: *cascade })
         }
         ExtraStatement::ReassignOwned { old_roles, new_role } => {
             let mut oids = Vec::with_capacity(old_roles.len());
             for role in old_roles {
-                let name = b.ident(role);
-                oids.push(env.role_oid(&name)?);
+                oids.push(owned_role_oid(b, role)?);
             }
-            let new_name = b.ident(new_role);
-            let new_owner = env.role_oid(&new_name)?;
+            let new_owner = owned_role_oid(b, new_role)?;
             Ok(BoundStatement::ReassignOwned { old_roles: oids, new_owner })
         }
         _ => Err(PgError::internal("ddl_drop::bind_owned: not a DROP OWNED / REASSIGN OWNED statement")),
@@ -611,6 +714,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;
         Ok(env)

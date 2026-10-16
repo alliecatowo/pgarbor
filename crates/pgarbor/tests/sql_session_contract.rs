@@ -201,12 +201,30 @@ fn unsupported_security_and_deferred_constraints_fail_closed() {
     let db = Database::in_memory().expect("database");
     let mut s = db.session("main", SessionOptions::default()).expect("session");
     s.simple_query("CREATE TABLE t(id int primary key)").expect("create");
-    for sql in ["ALTER TABLE t ENABLE ROW LEVEL SECURITY", "ALTER TABLE t FORCE ROW LEVEL SECURITY", "CREATE TABLE d(id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"] {
+    // Row-level security is enforced since the RLS amendment; deferred constraints still fail closed.
+    for sql in ["CREATE TABLE d(id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"] {
         let e = s.simple_query(sql).expect_err("must reject unenforced semantics");
         assert_eq!(e.sqlstate.code(), "0A000", "{sql}: {e:?}");
         assert!(e.is_unimplemented());
     }
     s.simple_query("INSERT INTO t VALUES (1)").expect("transaction recovers");
+}
+
+#[test]
+fn sql_function_pseudo_types_are_rejected_at_definition() {
+    let db = Database::in_memory().expect("create");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    let e = s.simple_query("CREATE FUNCTION int_arg(internal) RETURNS int LANGUAGE sql AS 'SELECT 1'").unwrap_err();
+    assert_eq!(e.sqlstate.code(), "42P13");
+    assert_eq!(e.message, "SQL functions cannot have arguments of type internal");
+    let e = s.simple_query("CREATE FUNCTION noargs() RETURNS anyelement LANGUAGE sql AS 'SELECT 1'").unwrap_err();
+    assert_eq!(e.sqlstate.code(), "42P13");
+    assert_eq!(e.message, "cannot determine result data type");
+    let out = s.simple_query("SELECT count(*) FROM pg_proc WHERE proname IN ('int_arg', 'noargs')").expect("count");
+    match &out[0].result {
+        StatementResult::Rows { rows, .. } => assert_eq!(rows, &vec![vec![Datum::Int8(0)]]),
+        other => panic!("expected rows: {other:?}"),
+    }
 }
 
 #[test]

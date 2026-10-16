@@ -18,7 +18,38 @@
 //! `SECURITY LABEL`, `PREPARE TRANSACTION`, `COMMIT PREPARED`, `ROLLBACK PREPARED`, `LOAD`,
 //! `START`-less `DECLARE`...) become [`ExtraStatement::Unsupported`] so the binder reports 0A000
 //! instead of a bogus 42601.
-use sqlparser::ast::{Ident, ObjectName};
+use sqlparser::ast::{Ident, ObjectName, OperateFunctionArg};
+
+/// Which command an [`ExtraStatement::TransactionModes`] was written as.
+// CONTRACT
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxnCommandKind {
+    Begin,
+    StartTransaction,
+    SetTransaction,
+    SetSessionCharacteristics,
+}
+
+/// One option of `VACUUM` / `ANALYZE` (PG `DefElem` in `VacuumStmt.options`). `name` is upper-cased.
+/// `value` is the value as written (a boolean word, a number with its sign, or a string's contents);
+/// `None` when the option has no value.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaintenanceOption {
+    pub name: String,
+    pub value: Option<String>,
+    /// 1-based character position of the option name (for 42601 errors).
+    pub pos: Option<u32>,
+}
+
+/// Object kind named by `COMMENT ON FUNCTION`, `PROCEDURE` or `ROUTINE`.
+// CONTRACT
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoutineKind {
+    Function,
+    Procedure,
+    Routine,
+}
 
 /// What `REINDEX` targets.
 // CONTRACT
@@ -153,6 +184,9 @@ pub enum AlterDatabaseAction {
 // CONTRACT
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExtraStatement {
+    /// Extensibility statements (operators, aggregates, operator classes/families, casts,
+    /// conversions, collations, extensions, COMMENT ON those): amendment pgarbor-sql-rewrite-rls-merge.
+    Ext(crate::ext_stmt::ExtStmt),
     /// `REFRESH MATERIALIZED VIEW [CONCURRENTLY] name [WITH [NO] DATA]`.
     RefreshMaterializedView { name: ObjectName, concurrently: bool, with_data: bool },
     /// `REINDEX [(options)] {INDEX|TABLE|SCHEMA|DATABASE|SYSTEM} [CONCURRENTLY] [name]`.
@@ -161,8 +195,25 @@ pub enum ExtraStatement {
     Cluster { table: Option<ObjectName>, index: Option<Ident> },
     /// `CHECKPOINT`.
     Checkpoint,
+    /// `VACUUM` (`vacuum` true) or `ANALYZE` written with an option list `(...)` or a legacy option
+    /// keyword (`VACUUM FULL|FREEZE|VERBOSE|ANALYZE`, `ANALYZE VERBOSE`), then `[table [(column, ...)]]`.
+    /// Legacy keywords become options without a value, as PG's grammar does.
+    Maintenance { vacuum: bool, options: Vec<MaintenanceOption>, table: Option<ObjectName>, columns: Vec<Ident> },
+    /// `COMMENT ON {FUNCTION|PROCEDURE|ROUTINE} name [(argument list)] IS {'text' | NULL}`. `args` is
+    /// `None` when the argument list was omitted; argument modes and names are kept (the binder ignores
+    /// them for identity).
+    CommentRoutine { kind: RoutineKind, name: ObjectName, args: Option<Vec<OperateFunctionArg>>, comment: Option<String> },
     /// `SET CONSTRAINTS { ALL | name, ... } { DEFERRED | IMMEDIATE }` (`names` None = ALL).
     SetConstraints { names: Option<Vec<ObjectName>>, deferred: bool },
+    /// `BEGIN` / `START TRANSACTION` / `SET TRANSACTION` / `SET SESSION CHARACTERISTICS AS TRANSACTION`
+    /// with at least one `[NOT] DEFERRABLE` mode, which sqlparser's transaction modes cannot hold.
+    /// Later modes override earlier ones, as in PG.
+    TransactionModes {
+        kind: TxnCommandKind,
+        isolation: Option<crate::ir::IsolationLevel>,
+        read_only: Option<bool>,
+        deferrable: Option<bool>,
+    },
     /// `DO [LANGUAGE lang] 'code'` (code = the string literal contents, dollar-quotes removed).
     Do { language: Option<Ident>, code: String },
     /// `CREATE [TEMP|TEMPORARY|UNLOGGED] SEQUENCE [IF NOT EXISTS] name [options in any order]`.
@@ -185,6 +236,42 @@ pub enum ExtraStatement {
     /// `ALTER MATERIALIZED VIEW [IF EXISTS] name RENAME TO new` / `SET SCHEMA` / `OWNER TO` (the only
     /// forms bound in v1); other actions are `Unsupported`.
     AlterMaterializedView { if_exists: bool, name: ObjectName, action: AlterMatViewAction },
+    /// `ALTER INDEX [IF EXISTS] name action [, action ...]` for the storage-parameter and tablespace
+    /// subcommands (`SET (..)`, `RESET (..)`, `SET TABLESPACE`). `RENAME TO` stays with sqlparser.
+    AlterIndex { if_exists: bool, name: ObjectName, actions: Vec<RelOptionAction> },
+    /// `ALTER INDEX ALL IN TABLESPACE from SET TABLESPACE to [NOWAIT]`.
+    AlterIndexAllInTablespace { from: Ident, to: Ident },
+    /// `ALTER INDEX IF EXISTS name RENAME TO new` (the form without `IF EXISTS` stays with sqlparser).
+    AlterIndexRename { if_exists: bool, name: ObjectName, new_name: Ident },
+    /// `ALTER VIEW [IF EXISTS] name action [, action ...]` with `SET (..)` / `RESET (..)`.
+    AlterView { if_exists: bool, name: ObjectName, actions: Vec<RelOptionAction> },
+    /// `ALTER VIEW [IF EXISTS] name ALTER [COLUMN] c SET DEFAULT e | DROP DEFAULT` (PG `AT_ColumnDefault`
+    /// on a view; `default` is `None` for DROP DEFAULT). sqlparser 0.63 parses only `ALTER VIEW .. AS`.
+    AlterViewColumnDefault { if_exists: bool, name: ObjectName, column: Ident, default: Option<sqlparser::ast::Expr> },
+    /// `ALTER TYPE name SET SCHEMA new` (`RENAME TO` stays with sqlparser).
+    AlterTypeSetSchema { name: ObjectName, schema: Ident },
+    /// `GRANT role, ... TO member, ... [WITH {ADMIN|INHERIT|SET} {OPTION|TRUE|FALSE}, ...] [GRANTED BY r]`
+    /// (gram.y `GrantRoleStmt`). `options` keep the written option name and its boolean value.
+    GrantRole { roles: Vec<Ident>, grantees: Vec<Ident>, options: Vec<(Ident, bool)>, grantor: Option<Ident> },
+    /// `REVOKE [{ADMIN|INHERIT|SET} OPTION FOR] role, ... FROM member, ... [GRANTED BY r] [CASCADE|RESTRICT]`
+    /// (gram.y `RevokeRoleStmt`); `option_for` is the written option name.
+    RevokeRole { option_for: Option<Ident>, roles: Vec<Ident>, grantees: Vec<Ident>, grantor: Option<Ident>, cascade: bool },
+    /// `ALTER TABLE [IF EXISTS] [ONLY] name RESET (..) [, SET (..) | RESET (..) ...]` (sqlparser has no
+    /// `RESET` ALTER TABLE action).
+    AlterTableOptions { if_exists: bool, name: ObjectName, actions: Vec<RelOptionAction> },
+    /// `ALTER TABLE [IF EXISTS] [ONLY] name CLUSTER ON index` / `SET WITHOUT CLUSTER` (`index` is `None`).
+    AlterTableCluster { if_exists: bool, name: ObjectName, index: Option<Ident> },
+    /// `ALTER TABLE [IF EXISTS] [ONLY] name SET SCHEMA new`.
+    AlterTableSetSchema { if_exists: bool, name: ObjectName, schema: Ident },
+    /// `ALTER TYPE name OWNER TO role` (role may be a `CURRENT_USER`/`SESSION_USER`/`CURRENT_ROLE` ident).
+    AlterTypeOwner { name: ObjectName, role: Ident },
+    /// `ALTER VIEW [IF EXISTS] name RENAME TO new` / `RENAME [COLUMN] old TO new` (only the
+    /// `RenameTo` and `RenameColumn` actions are produced).
+    AlterViewRename { if_exists: bool, name: ObjectName, action: AlterMatViewAction },
+    /// `ALTER TYPE name RENAME ATTRIBUTE old TO new [CASCADE | RESTRICT]` (composite types).
+    AlterTypeRenameAttribute { name: ObjectName, old: Ident, new: Ident, cascade: bool },
+    /// `ALTER VIEW [IF EXISTS] name OWNER TO role`.
+    AlterViewOwner { if_exists: bool, name: ObjectName, role: Ident },
     /// A PostgreSQL command PGArbor recognizes but does not implement: reported as 0A000
     /// `<feature> is not supported by PGArbor yet`. Examples of `feature`: `CREATE RULE`,
     /// `CREATE CAST`, `ALTER SYSTEM`, `ALTER DEFAULT PRIVILEGES`, `SECURITY LABEL`.
@@ -200,4 +287,18 @@ pub enum AlterMatViewAction {
     OwnerTo(Ident),
     /// `RENAME [COLUMN] old TO new`.
     RenameColumn { old: Ident, new: Ident },
+}
+
+/// One subcommand of `ALTER INDEX` / `ALTER VIEW` (PG `alter_table_cmds` subset), in source order.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub enum RelOptionAction {
+    /// `SET (name [= value], ...)` as `name=value` strings; a bare name is kept as `name` (PG reads
+    /// it as the boolean `true`). Values follow PG `def_arg`: strings as written, numbers with sign,
+    /// unquoted words case-folded.
+    SetOptions(Vec<String>),
+    /// `RESET (name, ...)`.
+    ResetOptions(Vec<String>),
+    /// `SET TABLESPACE name` (indexes only).
+    SetTablespace(Ident),
 }

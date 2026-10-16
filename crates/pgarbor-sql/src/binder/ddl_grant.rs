@@ -30,7 +30,7 @@
 //! NOT REACHABLE with sqlparser 0.63: its `parse_grant_permission` rejects a bare role name in the
 //! privilege list, so no `Statement` value represents the role form. See the function's body.
 //! Self-membership and other membership rules are enforced by the catalog (`ddl::spec::MembershipSpec`).
-use pgarbor_catalog::ddl::spec::{GrantSpec, GrantTarget, PrivilegeSet};
+use pgarbor_catalog::ddl::spec::{GrantSpec, GrantTarget, MembershipSpec, PrivilegeSet};
 use pgarbor_catalog::model::acl_mode;
 use pgarbor_catalog::snapshot::ClassRef;
 use pgarbor_catalog::{errors as cat_errors, CatalogEnv, ObjClass, ObjectAddress, RelKind};
@@ -43,6 +43,7 @@ use sqlparser::ast::{
 };
 
 use super::context::Binder;
+use super::dispatch::GRANT_ROUTINE_KEY;
 use super::types;
 use crate::diag;
 use crate::ir::BoundStatement;
@@ -50,6 +51,15 @@ use crate::names::QualName;
 
 /// SQLSTATE 0LP01 `invalid_grant_operation` (also the SQLSTATE of the privilege WARNINGs).
 const INVALID_GRANT_OPERATION: SqlState = SqlState(*b"0LP01");
+
+/// Routine kinds a `ON FUNCTION|PROCEDURE|ROUTINE` object names: `Function` (not procedures),
+/// `Procedure` (procedures only), `Any` (`ROUTINE`, PG `OBJECT_ROUTINE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoutineWant {
+    Function,
+    Procedure,
+    Any,
+}
 
 /// The statement's `objtype` (PG `GrantStmt.objtype`): decides the top-level privilege check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,6 +202,90 @@ pub fn bind_grant_role(b: &mut Binder, stmt: &Statement) -> Result<BoundStatemen
     ))
 }
 
+/// `ExtraStatement::GrantRole`: `GRANT r1, r2 TO m1, m2 [WITH ADMIN|INHERIT|SET ..] [GRANTED BY g]`, one
+/// [`MembershipSpec`] per (role, member) pair. Order of checks follows `GrantRole` in user.c: option
+/// names, grantor, grantees, then the granted roles.
+pub fn bind_grant_role_extra(
+    b: &mut Binder,
+    roles: &[Ident],
+    grantees: &[Ident],
+    options: &[(Ident, bool)],
+    grantor: Option<&Ident>,
+) -> Result<BoundStatement> {
+    let (mut admin_option, mut inherit_option, mut set_option) = (false, None, true);
+    for (name, value) in options {
+        match name.value.to_ascii_lowercase().as_str() {
+            "admin" => admin_option = *value,
+            "inherit" => inherit_option = Some(*value),
+            "set" => set_option = *value,
+            _ => return Err(unrecognized_role_option(b, name)),
+        }
+    }
+    let grantor = match grantor {
+        Some(id) => role_from_ident(b, id)?,
+        None => 0,
+    };
+    let mut members: Vec<Oid> = Vec::with_capacity(grantees.len());
+    for g in grantees {
+        members.push(role_from_ident(b, g)?);
+    }
+    let mut specs = Vec::with_capacity(roles.len() * members.len());
+    for r in roles {
+        let role = role_from_ident(b, r)?;
+        for &member in &members {
+            specs.push(MembershipSpec { role, member, grantor, admin_option, inherit_option, set_option });
+        }
+    }
+    Ok(BoundStatement::GrantRole(specs))
+}
+
+/// `ExtraStatement::RevokeRole`: `REVOKE [ADMIN OPTION FOR] r FROM m [GRANTED BY g] [CASCADE]`. Only the
+/// `ADMIN OPTION FOR` form is executed; `INHERIT` / `SET OPTION FOR` are 0A000.
+pub fn bind_revoke_role_extra(
+    b: &mut Binder,
+    option_for: Option<&Ident>,
+    roles: &[Ident],
+    grantees: &[Ident],
+    grantor: Option<&Ident>,
+    cascade: bool,
+) -> Result<BoundStatement> {
+    let mut admin_option_only = false;
+    if let Some(name) = option_for {
+        match name.value.to_ascii_lowercase().as_str() {
+            "admin" => admin_option_only = true,
+            "inherit" | "set" => {
+                return Err(diag::unsupported_construct("REVOKE INHERIT/SET OPTION FOR role membership", b.pos_span(name.span)))
+            }
+            _ => return Err(unrecognized_role_option(b, name)),
+        }
+    }
+    let grantor = match grantor {
+        Some(id) => role_from_ident(b, id)?,
+        None => 0,
+    };
+    let mut members: Vec<Oid> = Vec::with_capacity(grantees.len());
+    for g in grantees {
+        members.push(role_from_ident(b, g)?);
+    }
+    let mut specs = Vec::with_capacity(roles.len() * members.len());
+    for r in roles {
+        let role = role_from_ident(b, r)?;
+        for &member in &members {
+            specs.push(MembershipSpec { role, member, grantor, admin_option: false, inherit_option: None, set_option: true });
+        }
+    }
+    Ok(BoundStatement::RevokeRole { specs, admin_option_only, cascade })
+}
+
+/// 42601 `unrecognized role option "x"` at the option name.
+fn unrecognized_role_option(b: &Binder, name: &Ident) -> PgError {
+    let mut e = PgError::new(SqlState::SYNTAX_ERROR, format!("unrecognized role option \"{}\"", name.value));
+    if let Some(p) = b.pos_span(name.span) {
+        e = e.with_position(p);
+    }
+    e
+}
+
 /// Shared GRANT / REVOKE implementation over the sqlparser fields (PG `ExecuteGrantStmt`).
 fn bind_grant_input(b: &mut Binder, input: GrantInput<'_>) -> Result<BoundStatement> {
     // Syntax stage: privilege names become acl bits (unknown names are parse errors in PG).
@@ -324,6 +418,11 @@ fn privilege_bits(action: &Action) -> Result<(u32, Option<&[Ident]>)> {
         Action::Connect => (acl_mode::CONNECT, None),
         Action::Create { obj_type: None } => (acl_mode::CREATE, None),
         Action::Execute { obj_type: None } => (acl_mode::EXECUTE, None),
+        Action::Role { role }
+            if matches!(role.0.as_slice(), [ObjectNamePart::Identifier(id)] if id.value == crate::parser::MAINTAIN_PRIVILEGE_MARKER) =>
+        {
+            (acl_mode::MAINTAIN, None)
+        }
         other => return Err(diag::syntax_error_near(first_word(&other.to_string()), None)),
     };
     Ok(item)
@@ -421,6 +520,8 @@ fn role_from_ident(b: &mut Binder, id: &Ident) -> Result<Oid> {
 fn resolve_objects(b: &mut Binder, objects: &GrantObjects) -> Result<(ObjType, Vec<Resolved>)> {
     let env: &CatalogEnv = b.env;
     let mut out: Vec<Resolved> = Vec::new();
+    // `ROUTINE` / `ALL ROUTINES IN SCHEMA` keyword of the statement text (dispatch::GRANT_ROUTINE_KEY).
+    let routine_keyword: Option<String> = b.scratch.get(GRANT_ROUTINE_KEY).cloned();
     let kind = match objects {
         GrantObjects::Tables(names) => {
             for name in names {
@@ -464,11 +565,12 @@ fn resolve_objects(b: &mut Binder, objects: &GrantObjects) -> Result<(ObjType, V
             ObjType::Database
         }
         GrantObjects::Function { name, arg_types } => {
-            out.push(resolve_routine(b, name, arg_types, false)?);
+            let want = if routine_keyword.as_deref() == Some("routine") { RoutineWant::Any } else { RoutineWant::Function };
+            out.push(resolve_routine(b, name, arg_types, want)?);
             ObjType::Function
         }
         GrantObjects::Procedure { name, arg_types } => {
-            out.push(resolve_routine(b, name, arg_types, true)?);
+            out.push(resolve_routine(b, name, arg_types, RoutineWant::Procedure)?);
             ObjType::Procedure
         }
         GrantObjects::AllTablesInSchema { schemas } => {
@@ -497,6 +599,10 @@ fn resolve_objects(b: &mut Binder, objects: &GrantObjects) -> Result<(ObjType, V
         }
         GrantObjects::AllFunctionsInSchema { schemas } => {
             for schema in schemas {
+                if routine_keyword.as_deref() == Some("all routines") {
+                    all_routines_in_schema(b, env, schema, &mut out)?;
+                    continue;
+                }
                 let (name, oid) = schema_target(b, env, schema)?;
                 out.push(Resolved {
                     target: GrantTarget::AllFunctionsInSchema(oid),
@@ -558,9 +664,10 @@ fn resolve_relation_target(b: &mut Binder, name: &ObjectName, want_sequence: boo
 /// No argument list: the name must be unique (42725). With arguments: an exact match on the IN
 /// argument types (42883 when none). sqlparser cannot tell `f()` from `f`, so an empty list means
 /// "no argument list".
-fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], procedure: bool) -> Result<Resolved> {
+fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], want: RoutineWant) -> Result<Resolved> {
     let env: &CatalogEnv = b.env;
-    let word = if procedure { "procedure" } else { "function" };
+    // PG reports a missing ROUTINE as "function ... does not exist" (parse_func.c).
+    let word = if want == RoutineWant::Procedure { "procedure" } else { "function" };
     let qn = qualify(b, name)?;
     let schema = qn.schema.as_deref();
     let candidates = env.function_candidates(schema, &qn.name)?;
@@ -587,11 +694,11 @@ fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], pr
             }
         }
     };
-    if !procedure && kind == ProcKind::Procedure {
+    if want == RoutineWant::Function && kind == ProcKind::Procedure {
         let sig = routine_signature(b, &qn, &arg_oids);
         return Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("{sig} is not a function")));
     }
-    if procedure && kind != ProcKind::Procedure {
+    if want == RoutineWant::Procedure && kind != ProcKind::Procedure {
         let sig = routine_signature(b, &qn, &arg_oids);
         return Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("{sig} is not a procedure")));
     }
@@ -607,6 +714,27 @@ fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], pr
 fn routine_signature(b: &Binder, qn: &QualName, arg_oids: &[Oid]) -> String {
     let names: Vec<String> = arg_oids.iter().map(|oid| b.type_name(TypeId { oid: *oid, typmod: -1 })).collect();
     format!("{}({})", qn.display(), names.join(", "))
+}
+
+/// `ALL ROUTINES IN SCHEMA s` (PG `objectsInSchemaToOids`, OBJECT_ROUTINE): one object target per
+/// function, aggregate and procedure of the schema, in OID order. Builtin schemas are system catalogs
+/// (42501 like `ALL FUNCTIONS`), checked here because the catalog's schema-wide targets exclude
+/// procedures.
+fn all_routines_in_schema(b: &mut Binder, env: &CatalogEnv, schema: &ObjectName, out: &mut Vec<Resolved>) -> Result<()> {
+    let (name, oid) = schema_target(b, env, schema)?;
+    let data = env.snapshot().data();
+    if !data.namespaces.contains_key(&oid) {
+        return Err(cat_errors::system_catalog_permission(&name));
+    }
+    for f in data.functions.values().filter(|f| f.namespace == oid) {
+        out.push(Resolved {
+            target: GrantTarget::Object(ObjectAddress::proc(f.oid)),
+            name: f.name.clone(),
+            is_sequence: false,
+            relation: None,
+        });
+    }
+    Ok(())
 }
 
 /// Schema for an `ALL ... IN SCHEMA` target: (name, OID), 3F000 when missing.

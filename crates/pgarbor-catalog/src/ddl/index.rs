@@ -218,11 +218,10 @@ impl<'a> CatalogTxn<'a> {
         self.require_owner(&ObjectAddress::relation(index))?;
         let new_set = validate_btree_options(set)?;
         let mut opts = idx.options.clone();
+        // RESET names are not validated (PG `ATExecSetRelOptions` drops them as given): a name that
+        // is not a parameter of this index simply matches nothing.
         for r in reset {
             let (name, _) = split_option(r);
-            if btree_option_kind(name).is_none() {
-                return Err(errors::unrecognized_parameter(name));
-            }
             opts.retain(|o| option_name(o) != name);
         }
         for s in new_set {
@@ -635,16 +634,19 @@ fn validate_btree_options(opts: &[String]) -> Result<Vec<String>> {
         seen.push(name);
         let normalized = match kind {
             OptKind::Bool => {
-                let b = match value {
-                    None => true,
-                    Some(v) => parse_bool_option(v).ok_or_else(|| {
-                        PgError::new(
-                            SqlState::INVALID_PARAMETER_VALUE,
-                            format!("invalid value for boolean option \"{name}\": {v}"),
-                        )
-                    })?,
-                };
-                format!("{name}={b}")
+                // PG `transformRelOptions` stores the value text as written (`off` stays `off`).
+                match value {
+                    None => format!("{name}=true"),
+                    Some(v) => {
+                        if parse_bool_option(v).is_none() {
+                            return Err(PgError::new(
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                format!("invalid value for boolean option \"{name}\": {v}"),
+                            ));
+                        }
+                        format!("{name}={v}")
+                    }
+                }
             }
             OptKind::Int => {
                 let v = value.ok_or_else(|| requires_value(name))?;
@@ -740,6 +742,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         }
     }
 
@@ -875,6 +878,8 @@ mod tests {
         assert_eq!(ok, vec!["fillfactor=70".to_string()]);
         let bare = validate_btree_options(&["deduplicate_items".to_string()]).ok().expect("bare bool");
         assert_eq!(bare, vec!["deduplicate_items=true".to_string()]);
+        let off = validate_btree_options(&["deduplicate_items=off".to_string()]).ok().expect("bool word");
+        assert_eq!(off, vec!["deduplicate_items=off".to_string()]);
         let e = validate_btree_options(&["deduplicate_items=maybe".to_string()]).err().expect("bad bool");
         assert_eq!(e.sqlstate.code(), "22023");
         let e = validate_btree_options(&["nope=1".to_string()]).err().expect("unknown");

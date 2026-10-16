@@ -218,6 +218,14 @@ impl Session {
         self.guc.at_txn_end(committed)
     }
 
+    /// Characteristics of a block chained from a failed one: the abort already reverted the
+    /// transaction-scoped `transaction_isolation` / `transaction_read_only` settings, so xact.c
+    /// `RestoreTransactionCharacteristics` restores the session defaults.
+    fn chain_defaults(&self) -> Result<TxnOptions> {
+        let defaults = guc_derive::txn_defaults(&self.guc)?;
+        Ok(TxnOptions { kind: TxnKind::Explicit, ..defaults })
+    }
+
     /// Start a new explicit block with the given characteristics (`AND CHAIN`).
     fn start_chained(&mut self, opts: TxnOptions) -> Result<()> {
         let txn = self.db.engine().begin(&self.handle, &opts)?;
@@ -276,6 +284,13 @@ impl Session {
         match self.block {
             BlockState::InBlock | BlockState::Failed => {
                 self.push_warning(SqlState::ACTIVE_SQL_TRANSACTION, "there is already a transaction in progress");
+                // PG `standard_ProcessUtility` applies the modes of a nested BEGIN/START TRANSACTION
+                // after the warning (errors such as 25001 after the first query still surface).
+                if self.block == BlockState::InBlock {
+                    if let Some(t) = self.txn.as_mut() {
+                        apply_modes(t, modes)?;
+                    }
+                }
             }
             _ => self.convert_to_block(modes)?,
         }
@@ -286,10 +301,11 @@ impl Session {
     fn commit_statement(&mut self, chain: bool) -> Result<StatementResult> {
         match self.block {
             BlockState::InBlock | BlockState::Failed => {
+                let failed = self.block == BlockState::Failed;
                 let chars = characteristics(self.txn.as_ref().ok_or_else(no_txn_err)?);
                 let outcome = self.end_transaction(true)?;
                 if chain {
-                    self.start_chained(chars)?;
+                    self.start_chained(if failed { self.chain_defaults()? } else { chars })?;
                 }
                 Ok(command(tag_for(outcome)))
             }
@@ -311,10 +327,11 @@ impl Session {
     fn rollback_statement(&mut self, chain: bool) -> Result<StatementResult> {
         match self.block {
             BlockState::InBlock | BlockState::Failed => {
+                let failed = self.block == BlockState::Failed;
                 let chars = characteristics(self.txn.as_ref().ok_or_else(no_txn_err)?);
                 self.end_transaction(false)?;
                 if chain {
-                    self.start_chained(chars)?;
+                    self.start_chained(if failed { self.chain_defaults()? } else { chars })?;
                 }
                 Ok(command("ROLLBACK"))
             }

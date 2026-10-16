@@ -99,11 +99,23 @@ pub struct DropTarget {
     pub name: String,
     /// Routines only: `Some(IN-argument types)` or `None` when the argument list was omitted.
     pub args: Option<Vec<Oid>>,
+    /// Routines only: the written argument list has no parameter mode at all, so PG's second
+    /// `LookupFuncWithArgs` pass (PROCEDURE and ROUTINE) also matches all argument types, OUT included.
+    pub all_args_lookup: bool,
 }
 
 impl DropTarget {
     pub fn simple(name: impl Into<String>) -> DropTarget {
-        DropTarget { schema: None, name: name.into(), args: None }
+        DropTarget { schema: None, name: name.into(), args: None, all_args_lookup: false }
+    }
+}
+
+/// All argument types of a routine candidate, OUT included (PG `proallargtypes`, or the input types when
+/// every argument is IN). Built-in candidates have no entry in the snapshot, so their input types stand in.
+fn all_arg_types(env: &CatalogEnv, cand: &FuncCandidate) -> Vec<Oid> {
+    match env.snapshot().function(cand.oid) {
+        Some(f) => f.args.iter().map(|a| a.type_oid).collect(),
+        None => cand.arg_types.clone(),
     }
 }
 
@@ -380,10 +392,26 @@ impl<'a> CatalogTxn<'a> {
         let cands = env.function_candidates(schema, &t.name)?;
         let (cand, sig): (&FuncCandidate, String) = match &t.args {
             Some(types) => {
-                let found = cands
+                // PG LookupFuncWithArgs: input-argument types first; a PROCEDURE or ROUTINE written without
+                // argmodes is then looked up again with all argument types (OUT included).
+                let mut found: Option<&FuncCandidate> = cands
                     .iter()
                     .filter(|c| c.arg_types.as_slice() == types.as_slice())
                     .min_by_key(|c| c.path_pos);
+                if t.all_args_lookup && matches!(kind, DropKind::Procedure | DropKind::Routine) && !types.is_empty() {
+                    let by_all_types = cands
+                        .iter()
+                        .filter(|c| all_arg_types(env, c).as_slice() == types.as_slice())
+                        .min_by_key(|c| c.path_pos);
+                    match (found, by_all_types) {
+                        (Some(a), Some(b)) if a.oid != b.oid => {
+                            let what = if matches!(kind, DropKind::Routine) { "routine" } else { "procedure" };
+                            return Err(PgError::new(SqlState::AMBIGUOUS_FUNCTION, format!("{what} name \"{qualified}\" is not unique")));
+                        }
+                        (None, Some(b)) => found = Some(b),
+                        _ => {}
+                    }
+                }
                 match found {
                     Some(c) => (c, signature_string(env, &qualified, types)?),
                     None => {
@@ -431,7 +459,15 @@ impl<'a> CatalogTxn<'a> {
                     });
                 }
                 if cands.len() > 1 {
-                    return Err(errors::function_name_not_unique(&qualified));
+                    // PG LookupFuncWithArgs: the bare name of a procedure or routine is "not unique" in its own words.
+                    return Err(match kind {
+                        DropKind::Procedure | DropKind::Routine => {
+                            let what = if matches!(kind, DropKind::Routine) { "routine" } else { "procedure" };
+                            PgError::new(SqlState::AMBIGUOUS_FUNCTION, format!("{what} name \"{qualified}\" is not unique"))
+                                .with_hint(format!("Specify the argument list to select the {what} unambiguously."))
+                        }
+                        _ => errors::function_name_not_unique(&qualified),
+                    });
                 }
                 (&cands[0], format!("{qualified}()"))
             }
@@ -518,6 +554,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;
         Ok((kv, env))
@@ -550,7 +587,7 @@ mod tests {
     #[test]
     fn missing_schema_if_exists_is_notice() -> Result<()> {
         let (mut kv, env) = testing::bootstrapped()?;
-        let target = DropTarget { schema: Some("zz_nos".to_string()), name: "a".to_string(), args: None };
+        let target = DropTarget { schema: Some("zz_nos".to_string()), name: "a".to_string(), args: None, all_args_lookup: false };
         let (res, _) = testing::run(&mut kv, &env, |t| {
             t.drop_by_names(DropKind::Table, &[target], true, DropBehavior::Restrict)
         })?;
@@ -562,7 +599,7 @@ mod tests {
     #[test]
     fn missing_schema_without_if_exists_is_3f000() -> Result<()> {
         let (mut kv, env) = testing::bootstrapped()?;
-        let target = DropTarget { schema: Some("zz_nos".to_string()), name: "a".to_string(), args: None };
+        let target = DropTarget { schema: Some("zz_nos".to_string()), name: "a".to_string(), args: None, all_args_lookup: false };
         let err = testing::run(&mut kv, &env, |t| {
             t.drop_by_names(DropKind::Table, &[target], false, DropBehavior::Restrict)
         })
@@ -596,7 +633,7 @@ mod tests {
     #[test]
     fn routine_with_args_if_exists_notice_uses_internal_names() -> Result<()> {
         let (mut kv, env) = testing::bootstrapped()?;
-        let target = DropTarget { schema: None, name: "nosuch".to_string(), args: Some(vec![oids::INT4]) };
+        let target = DropTarget { schema: None, name: "nosuch".to_string(), args: Some(vec![oids::INT4]), all_args_lookup: false };
         let (res, _) = testing::run(&mut kv, &env, |t| {
             t.drop_by_names(DropKind::Function, &[target], true, DropBehavior::Restrict)
         })?;
@@ -621,7 +658,7 @@ mod tests {
     #[test]
     fn system_relation_is_permission_denied() -> Result<()> {
         let (mut kv, env) = testing::bootstrapped()?;
-        let target = DropTarget { schema: Some("pg_catalog".to_string()), name: "pg_class".to_string(), args: None };
+        let target = DropTarget { schema: Some("pg_catalog".to_string()), name: "pg_class".to_string(), args: None, all_args_lookup: false };
         let err = testing::run(&mut kv, &env, |t| {
             t.drop_by_names(DropKind::Table, &[target], false, DropBehavior::Restrict)
         })

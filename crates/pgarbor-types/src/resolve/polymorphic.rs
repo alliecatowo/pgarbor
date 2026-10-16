@@ -177,15 +177,14 @@ fn analyze(env: &dyn TypeEnv, actual: &[Oid], declared: &[Oid], strict: bool) ->
         elem = te;
     }
     if elem == 0 && have1 {
-        if anyenum {
-            if strict {
-                return Err(PgError::new(
-                    SqlState::DATATYPE_MISMATCH,
-                    "could not determine polymorphic type because input has type unknown",
-                ));
-            }
-        } else {
-            // All polymorphic inputs are unknown: PG resolves them as text.
+        // Only way to get here: every anyelement/anyarray/anynonarray/anyenum input is unknown.
+        if strict {
+            return Err(PgError::new(
+                SqlState::DATATYPE_MISMATCH,
+                "could not determine polymorphic type because input has type unknown",
+            ));
+        }
+        if !anyenum {
             elem = oids::TEXT;
         }
     }
@@ -337,17 +336,15 @@ mod tests {
     }
 
     #[test]
-    fn unknowns_resolve_to_text() {
+    fn all_unknown_family_one_inputs_are_an_error() {
+        // PG enforce_generic_type_consistency: with no non-unknown anyelement/anyarray input the
+        // type cannot be determined (42804), unlike anycompatible inputs which fall back to text.
         let env = builtin_env();
         let d = [oids::ANYELEMENT, oids::ANYELEMENT];
-        let (args, ret) =
-            enforce_generic_type_consistency(env, &[oids::UNKNOWN, oids::UNKNOWN], &d, oids::ANYELEMENT).unwrap();
-        assert_eq!(args, vec![oids::TEXT, oids::TEXT]);
-        assert_eq!(ret, oids::TEXT);
+        let e = enforce_generic_type_consistency(env, &[oids::UNKNOWN, oids::UNKNOWN], &d, oids::ANYELEMENT).unwrap_err();
+        assert_eq!(e.sqlstate, SqlState::DATATYPE_MISMATCH);
+        assert_eq!(e.message, "could not determine polymorphic type because input has type unknown");
         let d = [oids::ANYARRAY, oids::ANYELEMENT];
-        let (_, ret) =
-            enforce_generic_type_consistency(env, &[oids::UNKNOWN, oids::UNKNOWN], &d, oids::ANYARRAY).unwrap();
-        assert_eq!(ret, oids::TEXT_ARRAY);
         let (_, ret) = enforce_generic_type_consistency(env, &[oids::UNKNOWN, oids::INT4], &d, oids::ANYARRAY).unwrap();
         assert_eq!(ret, oids::INT4_ARRAY);
     }

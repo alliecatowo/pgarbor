@@ -35,7 +35,7 @@
 
 use pgarbor_common::{PgError, Result, SqlState};
 use pgarbor_types::catalog_data::CastContext;
-use pgarbor_types::registry::array_type_of;
+use pgarbor_types::registry::{array_type_of, is_array_type};
 use pgarbor_types::{oids, TypeEnv, TypeId};
 use sqlparser::ast::{BinaryOperator, Expr, Query};
 
@@ -69,7 +69,7 @@ pub fn bind_scalar_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<Bo
     check_sublinks_allowed(ec, pos)?;
     let mut sub = bind_nested_query(b, q)?;
     if sub.width() != 1 {
-        return Err(diag::subquery_one_column(pos));
+        return Err(diag::subquery_one_column(open_paren_pos(b, pos)));
     }
     if sub.output[0].ty.oid == oids::UNKNOWN {
         coerce_output_column(b, &mut sub, 0, TypeId::TEXT, pos)?;
@@ -77,6 +77,43 @@ pub fn bind_scalar_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<Bo
     let ty = sub.output[0].ty;
     b.scope_mut()?.has_sublinks = true;
     Ok(sub_link_expr(SubLinkKind::Scalar, None, Vec::new(), sub, ty))
+}
+
+/// A sub-select written beside a row constructor in a comparison (`(1, 2) = (SELECT a, b ...)`). A
+/// multi-column sub-select becomes a `Row` over one `FieldSelect` per output column of a single
+/// `SubLink{Row}` (NULL when the sub-select returns no row, 21000 for more than one), so the caller can
+/// compare it field by field. A one-column sub-select is the scalar sub-link.
+pub fn bind_row_operand_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<BoundExpr> {
+    let pos = b.pos(q);
+    check_sublinks_allowed(ec, pos)?;
+    let mut sub = bind_nested_query(b, q)?;
+    let width = sub.width();
+    if width == 1 {
+        if sub.output[0].ty.oid == oids::UNKNOWN {
+            coerce_output_column(b, &mut sub, 0, TypeId::TEXT, pos)?;
+        }
+        let ty = sub.output[0].ty;
+        b.scope_mut()?.has_sublinks = true;
+        return Ok(sub_link_expr(SubLinkKind::Scalar, None, Vec::new(), sub, ty));
+    }
+    for i in 0..width {
+        if sub.output[i].ty.oid == oids::UNKNOWN {
+            coerce_output_column(b, &mut sub, i, TypeId::TEXT, pos)?;
+        }
+    }
+    let tys = sub.output_types();
+    b.scope_mut()?.has_sublinks = true;
+    let whole = sub_link_expr(SubLinkKind::Row, None, Vec::new(), sub, TypeId::of(oids::RECORD));
+    let mut args: Vec<BoundExpr> = Vec::with_capacity(width);
+    let mut names: Vec<String> = Vec::with_capacity(width);
+    for (i, ty) in tys.into_iter().enumerate() {
+        let number = i16::try_from(i + 1).map_err(|_| PgError::internal("sub-select row has too many columns"))?;
+        let name = format!("f{}", i + 1);
+        let sel = crate::ir::FieldSelect { arg: whole.clone(), field: number, field_name: name.clone() };
+        args.push(BoundExpr::new(ExprKind::FieldSelect(Box::new(sel)), ty));
+        names.push(name);
+    }
+    Ok(BoundExpr::new(ExprKind::Row(Box::new(RowExpr { args, names })), TypeId::of(oids::RECORD)))
 }
 
 /// `Expr::InSubquery { expr, subquery, negated }`.
@@ -103,6 +140,22 @@ pub fn bind_any_all_subquery(b: &mut Binder, left: &Expr, op: &BinaryOperator, q
     Ok(sub_link_expr(kind, Some(test), ops, sub, TypeId::BOOL))
 }
 
+/// Position of the `(` that opens a parenthesized sub-select whose query starts at `pos` (PG
+/// `SubLink.location` is the opening parenthesis). Falls back to `pos` when no `(` precedes it.
+fn open_paren_pos(b: &Binder, pos: Option<u32>) -> Option<u32> {
+    let start = pos?;
+    let chars: Vec<char> = b.src.text().chars().collect();
+    // `start` is a 1-based character position: the character before the query is at index `start - 2`.
+    let mut idx = (start as usize).checked_sub(2)?;
+    loop {
+        match chars.get(idx) {
+            Some(c) if c.is_whitespace() => idx = idx.checked_sub(1)?,
+            Some('(') => return Some(idx as u32 + 1),
+            _ => return pos,
+        }
+    }
+}
+
 /// `ARRAY(select ...)`.
 pub fn bind_array_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<BoundExpr> {
     let pos = b.pos(q);
@@ -116,7 +169,9 @@ pub fn bind_array_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<Bou
     }
     let elem = sub.output[0].ty;
     let env: &dyn TypeEnv = b.env;
-    let array_oid = match array_type_of(env, elem.oid) {
+    // PG get_promoted_array_type: an array-valued column makes the (multidimensional) array type itself.
+    let promoted = if is_array_type(env, elem.oid) { Some(elem.oid) } else { array_type_of(env, elem.oid) };
+    let array_oid = match promoted {
         Some(oid) => oid,
         None => {
             let mut e = PgError::new(
@@ -143,7 +198,7 @@ fn sub_link_expr(kind: SubLinkKind, test: Option<BoundExpr>, ops: Vec<OpRef>, su
 
 /// Reject sub-links in expression contexts that forbid them (PG `transformSubLink` switch on
 /// `p_expr_kind`). The message names the clause with PG's wording for the sub-link check.
-fn check_sublinks_allowed(ec: ExprCtx, pos: Option<u32>) -> Result<()> {
+pub(super) fn check_sublinks_allowed(ec: ExprCtx, pos: Option<u32>) -> Result<()> {
     if ec.sublinks_ok {
         return Ok(());
     }

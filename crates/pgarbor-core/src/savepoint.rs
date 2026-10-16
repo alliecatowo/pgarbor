@@ -28,6 +28,9 @@ use crate::error;
 use crate::types::{TxnKind, TxnState};
 use pgarbor_common::Result;
 
+/// Name of the savepoint entries of internal subtransactions (cannot be written in SQL).
+const INTERNAL_SUBXACT: &str = "\u{0}internal subtransaction";
+
 // CONTRACT
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Savepoint {
@@ -105,6 +108,62 @@ impl Txn {
     /// Number of active savepoints.
     pub fn savepoint_depth(&self) -> usize {
         self.savepoints.len()
+    }
+
+    /// Start an INTERNAL subtransaction (PL/pgSQL `BEGIN ... EXCEPTION` blocks, PG
+    /// `BeginInternalSubTransaction`). Unlike `SAVEPOINT` it is legal in implicit transactions.
+    /// Returns a token for [`Txn::release_subxact`] / [`Txn::rollback_subxact`] (amendment core-04).
+    pub fn begin_subxact(&mut self) -> Result<usize> {
+        self.check_not_failed()?;
+        self.overlay.set_logging(true)?;
+        self.last_subxact += 1;
+        let sp = Savepoint { name: INTERNAL_SUBXACT.to_string(), mark: self.overlay.mark(), subxact: SubXactId(self.last_subxact) };
+        self.savepoints.push(sp);
+        Ok(self.savepoints.len())
+    }
+
+    /// Commit an internal subtransaction: its writes and locks move to the enclosing level.
+    pub fn release_subxact(&mut self, token: usize) -> Result<()> {
+        let idx = self.internal_subxact_index(token)?;
+        let from = self.savepoints[idx].subxact;
+        let parent = if idx > 0 { self.savepoints[idx - 1].subxact } else { SubXactId::TOP };
+        self.engine.locks().reassign_subxacts(self.session.id, self.id, from, parent)?;
+        for h in self.held_keys.values_mut() {
+            if h.subxact >= from {
+                h.subxact = parent;
+            }
+        }
+        self.savepoints.truncate(idx);
+        if self.savepoints.is_empty() {
+            self.overlay.set_logging(false)?;
+        }
+        Ok(())
+    }
+
+    /// Abort an internal subtransaction: undo its writes, release its locks, and leave the
+    /// transaction in progress (PG `RollbackAndReleaseCurrentSubTransaction`).
+    pub fn rollback_subxact(&mut self, token: usize) -> Result<()> {
+        let idx = self.internal_subxact_index(token)?;
+        let mark = self.savepoints[idx].mark;
+        let from = self.savepoints[idx].subxact;
+        self.overlay.rollback_to(mark)?;
+        self.engine.locks().release_subxacts(self.session.id, self.id, from)?;
+        self.held_keys.retain(|_, h| h.subxact < from);
+        self.savepoints.truncate(idx);
+        if self.savepoints.is_empty() {
+            self.overlay.set_logging(false)?;
+        }
+        if self.state == TxnState::Failed {
+            self.state = TxnState::InProgress;
+        }
+        Ok(())
+    }
+
+    fn internal_subxact_index(&self, token: usize) -> Result<usize> {
+        match token.checked_sub(1) {
+            Some(idx) if self.savepoints.get(idx).is_some_and(|s| s.name == INTERNAL_SUBXACT) => Ok(idx),
+            _ => Err(error::internal("internal subtransaction is not the expected savepoint level")),
+        }
     }
 }
 

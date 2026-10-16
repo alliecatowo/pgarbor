@@ -78,9 +78,10 @@ impl From<&BuiltinType> for TypeInfo {
 }
 
 impl TypeInfo {
-    /// Array type in PG's sense (category 'A' with an element type), e.g. `_int4`.
+    /// Array type in PG's sense (category 'A' with an element type), e.g. `_int4`. `_record` (category 'P')
+    /// is a true array type too (`IsTrueArrayType`: typelem set with the array subscript handler).
     pub fn is_array(&self) -> bool {
-        self.category == b'A' && self.elem != 0
+        (self.category == b'A' || self.oid == oids::RECORD_ARRAY) && self.elem != 0
     }
     pub fn is_enum(&self) -> bool {
         self.typtype == b'e'

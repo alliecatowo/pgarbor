@@ -11,7 +11,7 @@
 //! | `setval(regclass, bigint)` / `(regclass, bigint, boolean)` | `seq_setval(relid, params, value, is_called)` (default `is_called = true`); out of range 22003 `setval: value 11 is out of bounds for sequence "s" (1..10)`; returns the value. |
 //! | `set_config(name, value, is_local)` | `guc.set(name, value, is_local)`; NULL value = reset to default; returns the new value text. |
 //! | `current_setting(name)` / `(name, missing_ok)` | `guc.get`; unknown -> 42704 `unrecognized configuration parameter "x"` unless `missing_ok` (then NULL). |
-//! | `pg_advisory_lock[_shared]`, `pg_advisory_xact_lock[_shared]`, `pg_try_advisory_*`, `pg_advisory_unlock[_shared]`, `pg_advisory_unlock_all` | `ExecTxn::advisory_*`: `(bigint)` -> `AdvisoryKey::Single`, `(int4, int4)` -> `AdvisoryKey::Pair`; `lock` forms return void (`Datum::Null`), `try` forms boolean, unlock forms boolean plus the WARNING from `UnlockResult::warning` pushed to `cx.se.notice`. Scope: session for `pg_advisory_lock*`/`pg_try_advisory_lock*`, transaction for `*_xact_*`. |
+//! | `pg_advisory_lock[_shared]`, `pg_advisory_xact_lock[_shared]`, `pg_try_advisory_*`, `pg_advisory_unlock[_shared]`, `pg_advisory_unlock_all` | `ExecTxn::advisory_*`: `(bigint)` -> `AdvisoryKey::Single`, `(int4, int4)` -> `AdvisoryKey::Pair`; `lock` forms and `unlock_all` return void (`void_result()`, a non-NULL empty text, rendered as `""`), `try` forms boolean, unlock forms boolean plus the WARNING from `UnlockResult::warning` pushed to `cx.se.notice`. Scope: session for `pg_advisory_lock*`/`pg_try_advisory_lock*`, transaction for `*_xact_*`. |
 //! | `pg_sleep(float8)`, `pg_sleep_for(interval)`, `pg_sleep_until(timestamptz)` | sleep in slices of <= 10 ms calling `ex.check_interrupts()` between slices (cancel/statement_timeout must interrupt); returns void (`Null`). |
 //! | `txid_current()`, `pg_current_xact_id()` | `Int8(txn_id)` (xid8 maps to `Datum::Int8`); the `_if_assigned` forms return NULL until the transaction has written (use `ExecTxn::txn_id` and a "has written" hint: always return the id once any write happened, else NULL; v1 may return the id). |
 //! | `txid_status(bigint)`, `pg_xact_status(xid8)` | `committed` for ids below the current one, `in progress` for the current id, NULL otherwise (v1 approximation). |
@@ -167,6 +167,12 @@ fn advisory_key(args: &[Datum]) -> Result<AdvisoryKey> {
     }
 }
 
+/// Result of a void-returning advisory function. PG's `void` is never SQL NULL: its text output is
+/// the empty string, so the value must be non-NULL for the void type's output routine to render `""`.
+fn void_result() -> Datum {
+    Datum::Text(String::new())
+}
+
 /// Mode and scope encoded in an advisory function name (`_shared` suffix, `_xact_` infix).
 fn advisory_flags(name: &str) -> (AdvisoryMode, AdvisoryScope) {
     let mode = if name.ends_with("_shared") { AdvisoryMode::Shared } else { AdvisoryMode::Exclusive };
@@ -196,7 +202,22 @@ fn seq_params_in(env: &CatalogEnv, relid: Oid) -> Result<SequenceParams> {
             })
         }
         None => match identity {
-            Some((_, name, _)) => Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{name}\" is not a sequence"))),
+            Some((_, name, _)) => {
+                // sequence.c `sequence_open`: "cannot open relation" + errdetail_relkind_not_supported.
+                let word = match snap.relation(relid).map(|r| &r.kind) {
+                    Some(pgarbor_catalog::model::RelKind::Table) => "tables",
+                    Some(pgarbor_catalog::model::RelKind::PartitionedTable) => "partitioned tables",
+                    Some(pgarbor_catalog::model::RelKind::View) => "views",
+                    Some(pgarbor_catalog::model::RelKind::MatView) => "materialized views",
+                    Some(pgarbor_catalog::model::RelKind::Index) => "indexes",
+                    Some(pgarbor_catalog::model::RelKind::PartitionedIndex) => "partitioned indexes",
+                    Some(pgarbor_catalog::model::RelKind::CompositeType) => "composite types",
+                    Some(pgarbor_catalog::model::RelKind::ForeignTable) => "foreign tables",
+                    _ => "this kind of relation",
+                };
+                Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("cannot open relation \"{name}\""))
+                    .with_detail(format!("This operation is not supported for {word}.")))
+            }
             None => Err(PgError::new(SqlState::UNDEFINED_TABLE, format!("relation with OID {relid} does not exist"))),
         },
     }
@@ -279,6 +300,14 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         "current_setting" => {
             let setting = text_arg(args, 0)?;
             let missing_ok = bool_or(args, 1, false);
+            // Transaction characteristics come from the live transaction (they may differ from the GUC
+            // slots after `START TRANSACTION <modes>`), as in `Session::current_setting`.
+            let on_off = |v: bool| if v { "on" } else { "off" }.to_string();
+            match setting.to_ascii_lowercase().as_str() {
+                "transaction_isolation" => return Ok(Datum::Text(ex.txn().isolation().as_pg_str().to_string())),
+                "transaction_read_only" => return Ok(Datum::Text(on_off(ex.txn().is_read_only()))),
+                _ => {}
+            }
             match ex.se().guc.get(setting) {
                 Some(v) => Ok(Datum::Text(v)),
                 None if missing_ok => Ok(Datum::Null),
@@ -292,7 +321,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
             let key = advisory_key(args)?;
             let (mode, scope) = advisory_flags(name);
             ex.txn().advisory_lock(key, mode, scope, true)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_try_advisory_lock"
         | "pg_try_advisory_lock_shared"
@@ -314,12 +343,12 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         }
         "pg_advisory_unlock_all" => {
             ex.txn().advisory_unlock_all()?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_sleep" => {
             let secs = float_arg(args, 0)?;
             sleep_for(ex, secs_to_duration(secs))?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_sleep_for" => {
             let iv = args.first().and_then(Datum::as_interval).ok_or_else(|| bad_arg(0))?;
@@ -333,7 +362,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 Duration::from_micros(u64::try_from(total).unwrap_or(u64::MAX))
             };
             sleep_for(ex, duration)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_sleep_until" => {
             let target = match args.first() {
@@ -348,7 +377,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 Duration::from_micros(u64::try_from(micros).unwrap_or(u64::MAX))
             };
             sleep_for(ex, duration)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         // v1: the transaction id is returned even before the first write (module docs allow this).
         "txid_current" | "txid_current_if_assigned" | "pg_current_xact_id" | "pg_current_xact_id_if_assigned" => {
@@ -387,7 +416,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "payload string too long"));
             }
             ex.se().services.notify(channel, payload)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_listening_channels" => Err(PgError::internal(
             "set-returning function pg_listening_channels called in a scalar position",
@@ -395,6 +424,12 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         "pg_cancel_backend" => {
             let pid = i32::try_from(int_arg(args, 0)?).map_err(|_| bad_arg(0))?;
             let signalled = ex.se().services.cancel_backend(pid, false)?;
+            if !signalled {
+                ex.se().notice(crate::error::warning(
+                    SqlState::WARNING,
+                    format!("PID {pid} is not a PostgreSQL backend process"),
+                ));
+            }
             Ok(Datum::Bool(signalled))
         }
         "pg_terminate_backend" => {
@@ -405,6 +440,12 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "\"timeout\" must not be negative"));
             }
             let signalled = ex.se().services.cancel_backend(pid, true)?;
+            if !signalled {
+                ex.se().notice(crate::error::warning(
+                    SqlState::WARNING,
+                    format!("PID {pid} is not a PostgreSQL backend process"),
+                ));
+            }
             Ok(Datum::Bool(signalled))
         }
         "pg_trigger_depth" => Ok(Datum::Int4(0)),
@@ -579,8 +620,23 @@ mod tests {
             Ok((l, u))
         })
         .unwrap();
-        assert!(locked.is_null());
+        assert_eq!(locked, Datum::Text(String::new()));
         assert_eq!(unlocked.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn advisory_void_results_are_empty_not_null() {
+        let mut txn = MemTxn::new();
+        let (kv, env) = testing::bootstrapped().unwrap();
+        txn.kv = kv;
+        let (all, shared) = run_ex(&mut txn, env, |ex| {
+            let a = call_named(ex, "pg_advisory_unlock_all", &[])?;
+            let s = call_named(ex, "pg_advisory_lock_shared", &[Datum::Int8(7)])?;
+            Ok((a, s))
+        })
+        .unwrap();
+        assert_eq!(all, Datum::Text(String::new()));
+        assert_eq!(shared, Datum::Text(String::new()));
     }
 
     #[test]
@@ -624,7 +680,7 @@ mod tests {
         txn.kv = kv;
         let start = Instant::now();
         let v = run_ex(&mut txn, env, |ex| call_named(ex, "pg_sleep", &[Datum::Float8(0.05)])).unwrap();
-        assert!(v.is_null());
+        assert_eq!(v, Datum::Text(String::new()));
         assert!(start.elapsed() >= Duration::from_millis(45));
     }
 

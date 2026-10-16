@@ -22,6 +22,7 @@ use std::sync::OnceLock;
 
 pub mod descriptions;
 pub mod objects;
+pub mod ext_rows;
 pub mod system_rels;
 
 pub use descriptions::BUILTIN_DESCRIPTIONS;
@@ -276,6 +277,8 @@ pub fn builtin_relations() -> &'static [Relation] {
                     },
                     row_security: false,
                     force_row_security: false,
+                    policies: Vec::new(),
+                    rules: Vec::new(),
                     view: system_view_def(r.oid).map(|d| ViewDef {
                         query: StoredExpr::new(d),
                         check_option: None,

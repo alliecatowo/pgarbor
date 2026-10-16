@@ -13,14 +13,17 @@
 //! | `D` | detail | `detail` (omitted when `None`) |
 //! | `H` | hint | `hint` |
 //! | `P` | cursor position (1-based char index, decimal) | `position` |
+//! | `p` | internal position | `internal_position` |
+//! | `q` | internal query | `internal_query` |
+//! | `W` | context | `context` |
 //! | `s` | schema name | `schema` |
 //! | `t` | table name | `table` |
 //! | `c` | column name | `column` |
 //! | `d` | data type name | `datatype` |
 //! | `n` | constraint name | `constraint` |
 //!
-//! Emission order is exactly `S V C M D H P s t c d n`. `F`/`L`/`R` (source file/line/routine) and
-//! `W` (context) are NOT sent: [`PgError`] has no such fields and fabricating values would break
+//! Emission order is exactly `S V C M D H P p q W s t c d n` (amendment common-01 added `p q W`).
+//! `F`/`L`/`R` (source file/line/routine) are NOT sent: [`PgError`] has no such fields and fabricating values would break
 //! transcript parity checks (a `ServerConfig::emit_source_fields` switch is deliberately absent).
 //!
 //! Severity text: `Severity::as_str()` already returns PG's strings (`ERROR`, `FATAL`, `PANIC`,
@@ -69,6 +72,11 @@ pub fn fields_from_pg_error(err: &PgError) -> pgarbor_common::Result<ErrorFields
     if let Some(position) = err.position {
         fields.push((b'P', position.to_string()));
     }
+    if let Some(position) = err.internal_position {
+        fields.push((b'p', position.to_string()));
+    }
+    push_optional(&mut fields, b'q', err.internal_query.as_deref());
+    push_optional(&mut fields, b'W', err.context.as_deref());
     push_optional(&mut fields, b's', err.schema.as_deref());
     push_optional(&mut fields, b't', err.table.as_deref());
     push_optional(&mut fields, b'c', err.column.as_deref());

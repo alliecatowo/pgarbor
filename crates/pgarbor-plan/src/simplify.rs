@@ -530,7 +530,13 @@ fn step_foldable(step: &CastStep) -> bool {
             Some(p) => p.volatility == Volatility::Immutable,
             None => false,
         },
-        CastStep::ViaIo { from, to } => !(is_text_like(from.oid) && is_clock_type(to.oid)),
+        // Date/time I/O depends on DateStyle/TimeZone/IntervalStyle (stable in PG), in either direction.
+        CastStep::ViaIo { from, to } => {
+            !(is_text_like(from.oid) && is_clock_type(to.oid))
+                && !(is_clock_type(from.oid) && is_text_like(to.oid))
+                && !(from.oid == TypeId::INTERVAL.oid && is_text_like(to.oid))
+                && !(is_text_like(from.oid) && to.oid == TypeId::INTERVAL.oid)
+        }
         CastStep::ArrayCoerce { elem_plan } => cast_foldable(elem_plan),
     }
 }
