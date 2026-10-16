@@ -101,6 +101,8 @@ pub enum CteState {
     Pending,
     /// Currently executing (a recursive reference sees only the work table).
     Running,
+    /// A recursive CTE between iterations: `rows` holds a prefix of the result.
+    Streaming,
     /// `rows` is complete.
     Done,
 }
@@ -142,6 +144,20 @@ pub struct CteRt {
     /// The working table of a recursive CTE: rows produced by the previous iteration, read by
     /// `WorkTableScan { cte_id }`.
     pub worktable: Rc<RefCell<Vec<Row>>>,
+    /// Progress of a recursive CTE that is evaluated one iteration at a time (so that a consumer
+    /// such as `LIMIT` can stop an infinite recursion).
+    pub stream: RecStream,
+}
+
+/// Iteration state of a recursive CTE (see `node_cte`).
+#[derive(Default)]
+pub struct RecStream {
+    /// The non-recursive term has been run.
+    pub started: bool,
+    /// Rows produced by the previous iteration (the next work table).
+    pub working: Vec<Row>,
+    /// Keys of every row emitted so far (`UNION` de-duplication).
+    pub seen: std::collections::HashSet<Vec<u8>>,
 }
 
 /// Mutable per-execution state that is not part of any single operator.

@@ -35,7 +35,6 @@
 //! * `WorkTableScan{cte_id, filter}`: yields the rows currently in `ctes[cte_id].worktable` (a snapshot
 //!   cloned at (re)scan time); `rescan` re-reads the work table. Output row = CTE columns.
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use pgarbor_common::{PgError, Result};
@@ -45,30 +44,31 @@ use pgarbor_types::{Datum, TypeId};
 
 use crate::build::BuildCtx;
 use crate::eval::eval_opt_qual;
-use crate::runtime::{CteBodyRt, CteRt, CteState, Executor, Row, RowSource};
+use crate::runtime::{CteBodyRt, CteRt, CteState, Executor, RecStream, Row, RowSource};
 use crate::sortutil::row_key_bytes;
 
 /// `CteScan` operator (module docs).
 struct CteScanOp {
     cte_id: u32,
     filter: Option<BoundExpr>,
-    /// Shared buffer, taken on the first `next` after construction (CTE evaluated by then).
-    rows: Option<Rc<Vec<Row>>>,
     pos: usize,
     skipped: u32,
 }
 
 impl RowSource for CteScanOp {
     fn next(&mut self, ex: &mut Executor) -> Result<Option<Row>> {
-        if self.rows.is_none() {
-            ensure_cte(ex, self.cte_id)?;
-            let idx = cte_index(ex, self.cte_id)?;
-            self.rows = Some(Rc::clone(&ex.rt.ctes[idx].rows));
-        }
+        let idx = cte_index(ex, self.cte_id)?;
         loop {
-            let row = match self.rows.as_ref().and_then(|r| r.get(self.pos)) {
-                Some(r) => r.clone(),
-                None => return Ok(None),
+            let row = loop {
+                if let Some(r) = ex.rt.ctes[idx].rows.get(self.pos) {
+                    break r.clone();
+                }
+                match ex.rt.ctes[idx].state {
+                    CteState::Done => return Ok(None),
+                    CteState::Streaming => advance_recursive(ex, idx)?,
+                    _ if matches!(ex.rt.ctes[idx].body, CteBodyRt::Recursive { .. }) => advance_recursive(ex, idx)?,
+                    _ => ensure_cte(ex, self.cte_id)?,
+                }
             };
             self.pos += 1;
             if eval_opt_qual(ex, &self.filter, &row)? {
@@ -164,7 +164,7 @@ fn check_width(node: &PlanNode, def: &CteDef) -> Result<()> {
 pub fn build_cte_scan(node: &PlanNode, n: &CteScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
     let def = def_for(b.plan, n.cte_id)?;
     check_width(node, def)?;
-    Ok(Box::new(CteScanOp { cte_id: n.cte_id, filter: n.filter.clone(), rows: None, pos: 0, skipped: 0 }))
+    Ok(Box::new(CteScanOp { cte_id: n.cte_id, filter: n.filter.clone(), pos: 0, skipped: 0 }))
 }
 
 pub fn build_worktable_scan(node: &PlanNode, n: &WorkTableScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
@@ -199,6 +199,7 @@ pub fn build_cte_rt(def: &CteDef, b: &mut BuildCtx) -> Result<CteRt> {
         state: CteState::Pending,
         rows: Rc::new(Vec::new()),
         worktable: Rc::new(RefCell::new(Vec::new())),
+        stream: RecStream::default(),
     })
 }
 
@@ -213,83 +214,95 @@ fn drain_rows(ex: &mut Executor, op: &mut dyn RowSource) -> Result<Vec<Row>> {
     Ok(out)
 }
 
-/// Duplicate elimination for `UNION` (`!union_all`) recursion: keys over all columns, NULLs equal.
-struct Dedup {
-    union_all: bool,
-    types: Vec<TypeId>,
-    slots: Vec<usize>,
-    seen: HashSet<Vec<u8>>,
+/// `true` when `row` is new for the CTE (and remembers it). Always `true` for `UNION ALL`.
+fn admit(ex: &Executor, stream: &mut RecStream, columns: &[OutCol], union_all: bool, row: &[Datum]) -> Result<bool> {
+    if union_all {
+        return Ok(true);
+    }
+    let types: Vec<TypeId> = columns.iter().map(|c| c.ty).collect();
+    let slots: Vec<usize> = (0..columns.len()).collect();
+    let key = row_key_bytes(ex, &types, &slots, row)?;
+    Ok(stream.seen.insert(key))
 }
 
-impl Dedup {
-    fn new(columns: &[OutCol], union_all: bool) -> Dedup {
-        Dedup {
-            union_all,
-            types: columns.iter().map(|c| c.ty).collect(),
-            slots: (0..columns.len()).collect(),
-            seen: HashSet::new(),
+/// Run one step of a recursive CTE: the non-recursive term first, then one iteration of the
+/// recursive term per call, appending the new rows to `rows`. When the work table runs dry the CTE
+/// is `Done`. Consumers call this only when they have read every buffered row, so a `LIMIT` above
+/// an infinite recursion terminates (PG produces the rows lazily as well).
+fn advance_recursive(ex: &mut Executor, idx: usize) -> Result<()> {
+    let mut body = std::mem::replace(&mut ex.rt.ctes[idx].body, CteBodyRt::Taken);
+    let prev = ex.rt.ctes[idx].state;
+    ex.rt.ctes[idx].state = CteState::Running;
+    let result = match &mut body {
+        CteBodyRt::Recursive { non_recursive, recursive, union_all } => {
+            step_recursive(ex, idx, &mut **non_recursive, &mut **recursive, *union_all)
         }
-    }
-
-    /// `true` when `row` is new (and remembers it). Always `true` for `UNION ALL`.
-    fn admit(&mut self, ex: &Executor, row: &[Datum]) -> Result<bool> {
-        if self.union_all {
-            return Ok(true);
+        _ => Err(PgError::internal("advance of a CTE that is not recursive")),
+    };
+    ex.rt.ctes[idx].body = body;
+    match result {
+        Ok(true) => {
+            ex.rt.ctes[idx].state = CteState::Done;
+            ex.rt.ctes[idx].worktable.borrow_mut().clear();
+            ex.rt.ctes[idx].stream = RecStream::default();
+            Ok(())
         }
-        let key = row_key_bytes(ex, &self.types, &self.slots, row)?;
-        Ok(self.seen.insert(key))
+        Ok(false) => {
+            ex.rt.ctes[idx].state = CteState::Streaming;
+            Ok(())
+        }
+        Err(e) => {
+            ex.rt.ctes[idx].state = prev;
+            Err(e)
+        }
     }
 }
 
-/// Iterate a recursive CTE until its working table is empty (module docs).
-fn run_recursive(
+/// One step; returns `true` when the recursion is finished.
+fn step_recursive(
     ex: &mut Executor,
     idx: usize,
     non_recursive: &mut dyn RowSource,
     recursive: &mut dyn RowSource,
     union_all: bool,
-) -> Result<Vec<Row>> {
-    let mut dedup = Dedup::new(&ex.rt.ctes[idx].columns, union_all);
-    let worktable = Rc::clone(&ex.rt.ctes[idx].worktable);
-    let mut result: Vec<Row> = Vec::new();
-    let mut ticks: u32 = 0;
-
-    let first = drain_rows(ex, non_recursive)?;
-    let mut working: Vec<Row> = Vec::with_capacity(first.len());
-    for row in first {
-        ex.tick(&mut ticks)?;
-        if dedup.admit(ex, &row)? {
-            result.push(row.clone());
-            working.push(row);
-        }
-    }
-
-    while !working.is_empty() {
-        ex.check_interrupts()?;
-        *worktable.borrow_mut() = working;
-        recursive.rescan(ex, &[])?;
-        let produced = drain_rows(ex, recursive)?;
-        let mut next_rows: Vec<Row> = Vec::with_capacity(produced.len());
-        for row in produced {
+) -> Result<bool> {
+    let columns = ex.rt.ctes[idx].columns.clone();
+    let mut stream = std::mem::take(&mut ex.rt.ctes[idx].stream);
+    let result = (|| -> Result<bool> {
+        let mut ticks = 0;
+        loop {
             ex.tick(&mut ticks)?;
-            if dedup.admit(ex, &row)? {
-                result.push(row.clone());
-                next_rows.push(row);
+            let row = if !stream.started {
+                non_recursive.next(ex)?
+            } else {
+                recursive.next(ex)?
+            };
+            if let Some(row) = row {
+                if admit(ex, &mut stream, &columns, union_all, &row)? {
+                    stream.working.push(row.clone());
+                    Rc::make_mut(&mut ex.rt.ctes[idx].rows).push(row);
+                    return Ok(false);
+                }
+                continue;
             }
+            if stream.working.is_empty() { return Ok(true); }
+            *ex.rt.ctes[idx].worktable.borrow_mut() = std::mem::take(&mut stream.working);
+            // A new working table invalidates cached hash/materialize/sort inputs, just like
+            // changing a nested-loop parameter. Reusing the old hash table can recurse forever.
+            ex.rt.epoch = ex.rt.epoch.wrapping_add(1);
+            recursive.rescan(ex, &[])?;
+            stream.started = true;
         }
-        working = next_rows;
-    }
-    worktable.borrow_mut().clear();
-    Ok(result)
+    })();
+    ex.rt.ctes[idx].stream = stream;
+    result
 }
 
 /// Run one CTE body to completion (the body is owned by the caller while it runs).
-fn run_body(ex: &mut Executor, idx: usize, body: &mut CteBodyRt) -> Result<Vec<Row>> {
+fn run_body(ex: &mut Executor, _idx: usize, body: &mut CteBodyRt) -> Result<Vec<Row>> {
     match body {
         CteBodyRt::Query(op) | CteBodyRt::Modify(op) => drain_rows(ex, &mut **op),
-        CteBodyRt::Recursive { non_recursive, recursive, union_all } => {
-            run_recursive(ex, idx, &mut **non_recursive, &mut **recursive, *union_all)
-        }
+        CteBodyRt::Recursive { .. } => Err(PgError::internal("recursive CTE bodies are advanced step by step")),
         CteBodyRt::Taken => Err(PgError::internal("CTE body is already being evaluated")),
     }
 }
@@ -297,8 +310,15 @@ fn run_body(ex: &mut Executor, idx: usize, body: &mut CteBodyRt) -> Result<Vec<R
 /// Execute CTE `id` if still pending (module docs).
 pub fn ensure_cte(ex: &mut Executor, id: u32) -> Result<()> {
     let idx = cte_index(ex, id)?;
+    if matches!(ex.rt.ctes[idx].body, CteBodyRt::Recursive { .. }) && ex.rt.ctes[idx].state != CteState::Running {
+        while ex.rt.ctes[idx].state != CteState::Done {
+            advance_recursive(ex, idx)?;
+        }
+        return Ok(());
+    }
     match ex.rt.ctes[idx].state {
         CteState::Done => return Ok(()),
+        CteState::Streaming => return Err(PgError::internal("CTE is streaming")),
         CteState::Running => {
             return Err(PgError::internal(format!(
                 "CTE \"{}\" is referenced while it is being evaluated",
@@ -413,6 +433,7 @@ mod tests {
             state: CteState::Pending,
             rows: Rc::new(Vec::new()),
             worktable: wt,
+            stream: RecStream::default(),
         }
     }
 
@@ -487,7 +508,7 @@ mod tests {
         let q = Fixed { rows: vec![vec![Datum::Int4(1)], vec![Datum::Int4(2)]], pos: 0, calls };
         let wt = Rc::new(RefCell::new(Vec::new()));
         exec_ctes(vec![int_cte(0, CteBodyRt::Query(Box::new(q)), wt)], |ex| {
-            let mut op = CteScanOp { cte_id: 0, filter: None, rows: None, pos: 0, skipped: 0 };
+            let mut op = CteScanOp { cte_id: 0, filter: None, pos: 0, skipped: 0 };
             let first = drain_rows(ex, &mut op)?;
             assert_eq!(first.len(), 2);
             op.rescan(ex, &[])?;
