@@ -1,29 +1,36 @@
-# PGArbor project state — 2026-10-15, verified on a socket-capable machine
+# PGArbor project state — 2026-10-15
 
-PGArbor is a running pre-alpha SQL engine, not a PostgreSQL-compatible release. Codex's
-work (see [runs/review/codex-final-01.md](runs/review/codex-final-01.md)) and the
-`feat/bindings-wasm` and `fix/seq-role-parser` branches are merged into main.
+PGArbor is a running pre-alpha SQL engine. It is not a PostgreSQL-compatible
+release. The committed CTE scope repair is preserved; final review 02 changes
+remain in the working tree because the sandbox mounts `.git` read-only.
 
-Verified on this machine after the merges:
+Verified on the final working tree:
 
 | Layer | Result |
 |---|---|
-| `cargo build --workspace --all-targets` | PASS (compiler warnings remain) |
-| `cargo test --workspace --no-fail-fast` | 2,431 passed, 0 failed, 272 ignored |
-| `cargo test -p pgarbor-ffi` | PASS |
-| Harness pytest (`-o addopts=""`) | 1,090 passed, 14 skipped, 0 failed |
-| `harness/smoke/wire_smoke.py` (live server) | 21 ok, 1 intended duplicate-key error |
-| wasm: `demo/build.sh` + `node demo/test-node.mjs` | PASS |
-| Python binding tests (`bindings/python`) | 2 passed |
+| `cargo build --workspace --all-targets` | PASS; warnings remain |
+| `cargo test --workspace --no-fail-fast` | 2,476 passed, 0 failed, 272 ignored |
+| Harness pytest (`-o addopts=""`) | 1,090 passed, 0 failed, 14 skipped |
+| Full embedded corpus | 2,154 / 5,837 PASS (36.90%), versus 1,992 / 5,837 (34.13%) in 01 |
 
-Not re-verified here: the embedded differential corpus figure below was measured by Codex
-(1,992 of 5,837 selected cases PASS, 34.13%; 2,320 MISMATCH, 1,163 UNSUPPORTED, 102
-internal XX000, 58 unexpected acceptance, 152 blocked; per-family rates in
-[runs/review/codex-differential-by-family.csv](runs/review/codex-differential-by-family.csv)).
-It compares against existing PG18 recordings, not a live oracle. Live psql, app/ORM and
-upstream native suites have not been run since the repairs; ORM results in
-runs/review/orm-fixtures-01.md predate them. Raw corpus dumps under runs/review/embedded-*
-are intentionally uncommitted.
+The embedded campaign has 2,251 MISMATCH, 1,194 UNSUPPORTED,
+0 CRASH, 36 UNEXPECTED_ACCEPTANCE, 10 HARNESS_ERROR,
+152 BLOCKED and 40 quarantined cases. Final process timeouts: 0.
+No original PASS case regressed. Separate inspection of complete transcripts and
+bridge errors found zero XX-class errors. Cases and recorded expectations were
+not edited; comparison used existing PG18 recordings, not a fresh live oracle.
 
-Known unfinished: SSI, ordered wire COPY, CONTEXT, IANA timezones, additional types,
-complete native-runner parity. Open work is in Taskwarrior (`task project:pgarbor list`).
+The named slot-resolution, ALTER USING and VARIADIC internal-error clusters are
+repaired or fail closed for specific unsupported features. Added regressions cover
+outer-join whole rows/tableoid, functional dependencies, recursive CTE laziness
+and cache invalidation, LATERAL, GUCs, composites and completion tags. Semantic
+unexpected acceptances remain; SSI, function-body validation/execution, catalog
+breadth, timezone/type support and native/wire COPY parity are unfinished.
+
+Details, limits and executed commands: [runs/review/codex-final-02.md](runs/review/codex-final-02.md).
+All 400 per-family comparisons: [runs/review/codex-differential-by-family-02.csv](runs/review/codex-differential-by-family-02.csv).
+Owner commit groups: [runs/review/patches-02/manifest.json](runs/review/patches-02/manifest.json).
+
+Earlier owner checks of wire smoke, WASM and bindings remain in review 01 and
+its preceding STATUS history. They were not repeated as part of this campaign.
+Taskwarrior is unavailable here (database/WAL error 14); no tasks were changed.
