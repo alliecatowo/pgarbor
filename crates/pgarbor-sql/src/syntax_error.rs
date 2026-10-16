@@ -111,7 +111,7 @@ fn parser_problem(msg: &str, src: &SourceMap, tokens: &[TokenWithSpan]) -> PgErr
 }
 
 /// The error for an offending token, printed the way PG prints it (source text, not `Display`).
-fn token_problem(t: &TokenWithSpan, src: &SourceMap) -> PgError {
+pub(crate) fn token_problem(t: &TokenWithSpan, src: &SourceMap) -> PgError {
     let pos = src.char_pos(t.span.start);
     match &t.token {
         Token::EOF => diag::syntax_error_eof(src.end_pos()),

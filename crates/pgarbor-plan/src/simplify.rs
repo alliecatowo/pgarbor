@@ -240,7 +240,9 @@ fn try_fold(ctx: &PlanContext, e: &BoundExpr) -> Result<Option<Datum>> {
             .as_ref()
             .and_then(|vals| vals.get((*n as usize).wrapping_sub(1)).cloned())),
         ExprKind::FuncCall(f) => {
-            if f.retset || f.volatility != Volatility::Immutable {
+            // `f(VARIADIC arr)` is left to the executor, which unpacks the array for VARIADIC "any"
+            // procs (`eval_call::eval_func_call`); `fold_call` does not do that.
+            if f.retset || f.variadic || f.volatility != Volatility::Immutable {
                 return Ok(None);
             }
             fold_call(ctx, f.func, &f.args, e.ty)

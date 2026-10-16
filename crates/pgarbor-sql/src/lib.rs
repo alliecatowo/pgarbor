@@ -32,6 +32,7 @@ pub mod parser;
 pub mod parser_extra;
 pub mod rewrite;
 pub mod source;
+pub mod strict_check;
 pub mod syntax_error;
 
 pub use binder::{bind, BindContext, BindOutput, BindSession};

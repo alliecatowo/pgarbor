@@ -164,7 +164,36 @@ pub fn call_function(
 /// Evaluate a `FuncCall` expression node over `row`.
 pub fn eval_func_call(ex: &mut Executor, f: &FuncCallExpr, result_type: TypeId, row: &[Datum]) -> Result<Datum> {
     let handle = resolve_handle(ex, f.func, &f.name)?;
-    let (args, arg_types) = eval_args(ex, &f.args, row)?;
+    let (mut args, mut arg_types) = eval_args(ex, &f.args, row)?;
+    if f.variadic && handle.proc.variadic == pgarbor_types::oids::ANY {
+        // `f(VARIADIC arr)` on a `VARIADIC "any"` proc: PG hands the array over with funcvariadic set
+        // and the proc unpacks it. The builtins here take the elements one by one, so unpack first.
+        match args.pop().zip(arg_types.pop()) {
+            Some((Datum::Null, _)) => {
+                // PG `extract_variadic_args` returns -1 for a NULL array: these procs return NULL.
+                // `format` instead sees no variadic values.
+                let null_yields_null = matches!(
+                    handle.proc.name,
+                    "concat" | "concat_ws" | "json_build_object" | "json_build_array" | "jsonb_build_object" | "jsonb_build_array" | "num_nulls" | "num_nonnulls"
+                );
+                if null_yields_null {
+                    return Ok(Datum::Null);
+                }
+            }
+            Some((Datum::Array(arr), _)) => {
+                let elem = TypeId::of(arr.elem);
+                for item in arr.items.iter() {
+                    args.push(item.clone());
+                    arg_types.push(elem);
+                }
+            }
+            Some((other, ty)) => {
+                args.push(other);
+                arg_types.push(ty);
+            }
+            None => {}
+        }
+    }
     invoke(ex, &handle, f.strict, &args, &arg_types, result_type)
 }
 

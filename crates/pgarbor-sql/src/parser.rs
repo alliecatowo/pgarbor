@@ -59,7 +59,8 @@ use pgarbor_common::{PgError, Result};
 use sqlparser::ast::{Expr, Statement};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
-use sqlparser::tokenizer::{Span, Token, TokenWithSpan, Tokenizer};
+use sqlparser::keywords::Keyword;
+use sqlparser::tokenizer::{Span, Token, TokenWithSpan, Tokenizer, Word};
 
 use crate::classify;
 use crate::diag;
@@ -67,6 +68,7 @@ use crate::extra_stmt::ExtraStatement;
 use crate::identity_opts::{self, IdentityGroup};
 use crate::parser_extra;
 use crate::source::SourceMap;
+use crate::strict_check;
 use crate::syntax_error;
 
 /// Maximum expression/subquery nesting accepted by the parser (sqlparser recursion counter). PG's
@@ -107,6 +109,14 @@ pub struct RawStatement {
 }
 
 impl RawStatement {
+    /// Completion tags for syntax distinctions intentionally shared by bound session statements.
+    pub fn session_completion_tag(&self) -> Option<&'static str> {
+        match self.as_ast()? {
+            Statement::StartTransaction { begin: false, .. } => Some("START TRANSACTION"),
+            Statement::Reset(_) => Some("RESET"),
+            _ => None,
+        }
+    }
     /// The sqlparser statement, if this is not an extra.
     pub fn as_ast(&self) -> Option<&Statement> {
         match &self.parsed {
@@ -157,6 +167,7 @@ pub fn parse(sql: &str) -> Result<Vec<RawStatement>> {
         let parsed = if parser_extra::is_extra_statement(&toks)? {
             Parsed::Extra(parser_extra::parse_extra(toks, &src)?)
         } else {
+            strict_check::check(&toks, &src)?;
             let (ast_toks, groups) = identity_opts::extract(&toks, &src)?;
             identity_groups = groups;
             Parsed::Ast(Box::new(parse_ast_chunk(&ast_toks, &src)?))
@@ -217,6 +228,42 @@ fn bare_word(t: &Token) -> Option<String> {
         Token::Word(w) if w.quote_style.is_none() => Some(w.value.to_ascii_uppercase()),
         _ => None,
     }
+}
+
+/// Name of the marker argument that stands for a `VARIADIC` call argument (PG `func_arg_expr`
+/// after `VARIADIC`). sqlparser 0.63 has no `VARIADIC expr` argument form, so [`mark_variadic_args`]
+/// rewrites the keyword into a synthetic named argument: a synthetic identifier containing a NUL,
+/// which PostgreSQL identifiers cannot contain. The binder recognizes it and clears it
+/// (`expr_func::variadic_call`).
+pub const VARIADIC_MARKER: &str = "\0pgarbor variadic";
+
+/// Rewrite each `VARIADIC` keyword that starts a call argument (directly after `(` or `,`) into the
+/// marker argument [`VARIADIC_MARKER`]. Only statements other than `CREATE`/`ALTER`/`DROP` are
+/// rewritten: there `VARIADIC` is an argument mode in a function signature, which sqlparser parses.
+fn mark_variadic_args(toks: &[TokenWithSpan]) -> Vec<TokenWithSpan> {
+    let head: Vec<String> = toks.iter().filter_map(|t| bare_word(&t.token)).take(4).collect();
+    let words: Vec<&str> = head.iter().map(String::as_str).collect();
+    if is_function_header(&words) || matches!(words.as_slice(), ["ALTER" | "DROP", "FUNCTION" | "PROCEDURE", ..]) {
+        return toks.to_vec();
+    }
+    let mut out = Vec::with_capacity(toks.len());
+    let mut prev: Option<&Token> = None;
+    for t in toks {
+        if matches!(t.token, Token::Whitespace(_)) {
+            out.push(t.clone());
+            continue;
+        }
+        let starts_arg = matches!(prev, Some(Token::LParen | Token::Comma));
+        if starts_arg && bare_word(&t.token).as_deref() == Some("VARIADIC") {
+            let word = Word { value: VARIADIC_MARKER.to_string(), quote_style: Some('"'), keyword: Keyword::NoKeyword };
+            out.push(TokenWithSpan::new(Token::Word(word), t.span));
+            out.push(TokenWithSpan::new(Token::RArrow, t.span));
+        } else {
+            out.push(t.clone());
+        }
+        prev = Some(&t.token);
+    }
+    out
 }
 
 /// Is this the head of `CREATE [OR REPLACE] FUNCTION|PROCEDURE` (the first significant words)?
@@ -311,6 +358,7 @@ fn trim_range(tokens: &[TokenWithSpan], start: usize, end: usize) -> Option<(usi
 /// Parse one chunk (tokens end with EOF) with sqlparser; the whole chunk must be one statement.
 fn parse_ast_chunk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<Statement> {
     let toks = signed_connection_limit(toks);
+    let toks = mark_variadic_args(&toks);
     let toks = toks.as_slice();
     let dialect = PostgreSqlDialect {};
     let mut parser = Parser::new(&dialect)
@@ -413,7 +461,9 @@ pub fn parse_one(sql: &str) -> Result<RawStatement> {
 pub fn parse_expr_text(sql: &str) -> Result<Expr> {
     let dialect = PostgreSqlDialect {};
     let fail = || PgError::internal(format!("could not parse stored expression \"{sql}\""));
-    let mut parser = Parser::new(&dialect).try_with_sql(sql).map_err(|_| fail())?;
+    let tokens = Tokenizer::new(&dialect, sql).tokenize_with_location().map_err(|_| fail())?;
+    let tokens = mark_variadic_args(&tokens);
+    let mut parser = Parser::new(&dialect).with_tokens_with_locations(tokens);
     let expr = parser.parse_expr().map_err(|_| fail())?;
     if !matches!(parser.peek_token().token, Token::EOF) {
         return Err(fail());

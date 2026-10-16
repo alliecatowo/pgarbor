@@ -249,6 +249,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
     }
 
     let flags = call_flags(f, pos)?;
+    let variadic_kw = variadic_call(f, pos)?;
     let cands = b
         .env
         .function_candidates(schema, &name)
@@ -273,7 +274,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
 
     // Step 4: resolve.
     let arg_oids: Vec<Oid> = args.iter().map(|a| a.ty().oid).collect();
-    let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), false, pos) {
+    let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), variadic_kw, pos) {
         Ok(r) => r,
         Err(e) => {
             if e.sqlstate == SqlState::UNDEFINED_FUNCTION && args.len() == 1 && names.iter().all(|n| n.is_none()) {
@@ -286,6 +287,9 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
     };
 
     // Step 5: kind dispatch.
+    if variadic_kw && matches!(resolved.kind, ProcKind::Aggregate | ProcKind::Window) {
+        return Err(PgError::unimplemented("SQL-12", format!("VARIADIC call of aggregate or window function {qdisp}")));
+    }
     match resolved.kind {
         ProcKind::Procedure => {
             let sig = func::signature_string(b.env, &name, &arg_oids)?;
@@ -318,7 +322,7 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
                 ));
             }
             check_srf_placement(b, resolved.retset, ec, pos)?;
-            build_call(b, &resolved, &name, args, false, false, pos, ec)
+            build_call(b, &resolved, &name, args, variadic_kw, false, pos, ec)
         }
         ProcKind::Aggregate => {
             if f.over.is_none() && !ec.aggs_ok {
@@ -417,6 +421,33 @@ pub fn build_call(
         let target = TypeId::of(resolved.coerce_to[j]);
         let e = coerce::coerce_strict(b, a, target, CastContext::Implicit, CoercionForm::Implicit)?;
         coerced.push(Some(e));
+    }
+
+    // VARIADIC "any" (concat, format, json_build_array, num_nulls, ...): PG passes the trailing
+    // arguments through unpacked, so the call may carry more args than declared parameters. The
+    // resolver expands `arg_order` to one entry per call argument in that case (identity order, no
+    // packing, `nvariadic == 0`).
+    if nargs > nparams && resolved.nvariadic == 0 {
+        if resolved.arg_order.len() != nargs {
+            return Err(PgError::internal("binder: more call arguments than declared parameters"));
+        }
+        let mut out: Vec<BoundExpr> = Vec::with_capacity(nargs);
+        for j in 0..nargs {
+            out.push(take_arg(&mut coerced, j)?);
+        }
+        return Ok(BoundExpr::new(
+            ExprKind::FuncCall(Box::new(FuncCallExpr {
+                func: resolved.oid,
+                name: name.to_string(),
+                args: out,
+                variadic: variadic_kw,
+                retset: resolved.retset,
+                volatility: info.volatility,
+                strict: info.strict,
+                is_cast_call,
+            })),
+            resolved.ret,
+        ));
     }
 
     // Place the arguments into declared parameter order.
@@ -621,6 +652,30 @@ struct CallFlags {
     order_by: bool,
 }
 
+/// Is this argument the parser's `VARIADIC` marker (`crate::parser::VARIADIC_MARKER`)?
+fn is_variadic_marker(a: &FunctionArg) -> bool {
+    let id = match a {
+        FunctionArg::Named { name, .. } => Some(name),
+        FunctionArg::ExprNamed { name: Expr::Identifier(id), .. } => Some(id),
+        _ => None,
+    };
+    id.is_some_and(|i| i.quote_style == Some('"') && i.value == crate::parser::VARIADIC_MARKER)
+}
+
+/// Does the call use the VARIADIC keyword (`f(a, VARIADIC arr)`)? PG grammar allows it only as the
+/// last argument, so a marker anywhere else is a syntax error.
+fn variadic_call(f: &Function, pos: Option<u32>) -> Result<bool> {
+    let FunctionArguments::List(list) = &f.args else {
+        return Ok(false);
+    };
+    let marks: Vec<usize> = list.args.iter().enumerate().filter(|(_, a)| is_variadic_marker(a)).map(|(i, _)| i).collect();
+    match marks.as_slice() {
+        [] => Ok(false),
+        [i] if *i + 1 == list.args.len() => Ok(true),
+        _ => Err(diag::syntax("syntax error", pos)),
+    }
+}
+
 fn call_flags(f: &Function, pos: Option<u32>) -> Result<CallFlags> {
     let mut flags = CallFlags { distinct: false, order_by: false };
     if let FunctionArguments::List(list) = &f.args {
@@ -816,6 +871,18 @@ fn bind_call_args(b: &mut Binder, f: &Function, ec: ExprCtx, pos: Option<u32>) -
         FunctionArguments::List(list) => {
             let mut seen_named = false;
             for a in &list.args {
+                if is_variadic_marker(a) {
+                    // `VARIADIC expr` (the last argument): bound as a plain positional argument; the
+                    // variadic flag itself comes from `variadic_call`.
+                    let (FunctionArg::Named { arg: FunctionArgExpr::Expr(e), .. }
+                    | FunctionArg::ExprNamed { arg: FunctionArgExpr::Expr(e), .. }) = a
+                    else {
+                        return Err(diag::syntax("syntax error", pos));
+                    };
+                    args.push(bind_arg(b, e, ec)?);
+                    names.push(None);
+                    continue;
+                }
                 match a {
                     FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => {
                         if seen_named {
