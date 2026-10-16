@@ -158,7 +158,12 @@ pub fn output(ctx: &IoCtx, ty: TypeId, d: &Datum) -> Result<String> {
                 parts.push(None);
                 continue;
             }
-            let tid = natural_type(v).ok_or_else(|| {
+            let tid = natural_type(v)
+                .or_else(|| match v {
+                    Datum::Array(a) => crate::registry::array_type_of(ctx.env, a.elem).map(TypeId::of),
+                    _ => None,
+                })
+                .ok_or_else(|| {
                 PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "output of anonymous composite types requires field types")
             })?;
             parts.push(Some(io::output(ctx, tid, v)?));

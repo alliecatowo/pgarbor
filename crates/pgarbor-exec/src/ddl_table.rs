@@ -73,6 +73,7 @@ pub fn exec_alter_table(cx: &mut ExecContext, alter: &BoundAlterTable) -> Result
     let mut rewrites: Vec<ColumnRewrite> = Vec::new();
     let ((), outcome) = run_ddl(cx, |ddl| {
         for cmd in &alter.commands {
+            check_inheritance(ddl, table, cmd, alter.only)?;
             apply_command(ddl, table, cmd, &mut rewrites)?;
         }
         Ok(())
@@ -81,6 +82,61 @@ pub fn exec_alter_table(cx: &mut ExecContext, alter: &BoundAlterTable) -> Result
         run_followups(cx, &outcome.follow_ups, Some(table), &rewrites)?;
     }
     Ok(ExecResult::command(alter_tag(alter.keyword)))
+}
+
+fn invalid_table_definition(msg: String) -> PgError {
+    PgError::new(pgarbor_common::SqlState::INVALID_TABLE_DEFINITION, msg)
+}
+
+/// tablecmds.c top-level (non-recursing) inheritance rules: inherited columns and constraints of a
+/// child cannot be dropped, renamed or retyped from the child; commands PG propagates to
+/// inheritance children (or partitions) are a leased 0A000 until recursion is implemented.
+fn check_inheritance(ddl: &mut CatalogTxn<'_>, table: Oid, cmd: &AlterTableCmd, only: bool) -> Result<()> {
+    let snap = ddl.snapshot()?;
+    let Some(rel) = snap.relation(table) else { return Ok(()) };
+    let inherited_col = |name: &str| rel.column_by_name(name).is_some_and(|c| c.inh_count > 0);
+    let con_of = |name: &str| snap.constraints_of(table).into_iter().find(|c| c.name == name).map(|c| c.inh_count);
+    match cmd {
+        AlterTableCmd::DropColumn { name, .. } if inherited_col(name) => {
+            return Err(invalid_table_definition(format!("cannot drop inherited column \"{name}\"")));
+        }
+        AlterTableCmd::RenameColumn { old, .. } if inherited_col(old) => {
+            return Err(invalid_table_definition(format!("cannot rename inherited column \"{old}\"")));
+        }
+        AlterTableCmd::AlterColumnType { column, .. } if inherited_col(column) => {
+            return Err(invalid_table_definition(format!("cannot alter inherited column \"{column}\"")));
+        }
+        AlterTableCmd::DropConstraint { name, .. } if con_of(name).is_some_and(|n| n > 0) => {
+            return Err(invalid_table_definition(format!(
+                "cannot drop inherited constraint \"{name}\" of relation \"{}\"",
+                rel.name
+            )));
+        }
+        AlterTableCmd::RenameConstraint { old, .. } if con_of(old).is_some_and(|n| n > 0) => {
+            return Err(invalid_table_definition(format!("cannot rename inherited constraint \"{old}\"")));
+        }
+        _ => {}
+    }
+    let recursing = matches!(
+        cmd,
+        AlterTableCmd::AddColumn { .. }
+            | AlterTableCmd::DropColumn { .. }
+            | AlterTableCmd::RenameColumn { .. }
+            | AlterTableCmd::AlterColumnType { .. }
+            | AlterTableCmd::SetNotNull { .. }
+            | AlterTableCmd::DropNotNull { .. }
+            | AlterTableCmd::AddConstraint(_)
+            | AlterTableCmd::DropConstraint { .. }
+            | AlterTableCmd::RenameConstraint { .. }
+            | AlterTableCmd::ValidateConstraint { .. }
+            | AlterTableCmd::AlterConstraint { .. }
+            | AlterTableCmd::DropExpression { .. }
+            | AlterTableCmd::SetExpression { .. }
+    );
+    if recursing && !only && !snap.inheritance_children(table).is_empty() {
+        return Err(PgError::unimplemented("EXE-33", "ALTER TABLE recursion into inheritance children or partitions"));
+    }
+    Ok(())
 }
 
 /// Command tag for an ALTER keyword (same mapping as `BoundStatement::tag`).

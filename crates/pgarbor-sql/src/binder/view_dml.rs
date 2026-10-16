@@ -563,6 +563,13 @@ pub fn rewrite_insert(b: &mut Binder, ins: &mut BoundInsert) -> Result<()> {
                 let e = std::mem::replace(cell, BoundExpr::bool_const(false));
                 *cell = map_defaults(&info, e)?;
             }
+            // The base table's identity / generated column rules apply to what the view passes down.
+            if row.len() == ins.columns.len() {
+                for (cell, attnum) in row.iter_mut().zip(ins.columns.iter()) {
+                    let e = std::mem::replace(cell, BoundExpr::bool_const(false));
+                    *cell = super::insert::bind_value_cell(&tt, *attnum, e, ins.overriding)?;
+                }
+            }
         }
     }
     ins.target = tt;

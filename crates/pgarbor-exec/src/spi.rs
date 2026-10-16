@@ -202,6 +202,18 @@ fn session_statement(cx: &mut ExecContext, stmt: &BoundStatement) -> Result<Opti
             }))
         }
         S::Transaction(_) => Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "unsupported transaction command in PL/pgSQL")),
+        // PreventInTransactionBlock(isTopLevel = false): 25001 `X cannot be executed from a function`.
+        S::Maintenance { kind: pgarbor_sql::ir::MaintenanceKind::Vacuum, .. } => {
+            Err(PgError::new(SqlState::ACTIVE_SQL_TRANSACTION, "VACUUM cannot be executed from a function"))
+        }
+        S::CreateIndex(spec) if spec.concurrently => {
+            Err(PgError::new(SqlState::ACTIVE_SQL_TRANSACTION, "CREATE INDEX CONCURRENTLY cannot be executed from a function"))
+        }
+        S::CreateDatabase(_) => Err(PgError::new(SqlState::ACTIVE_SQL_TRANSACTION, "CREATE DATABASE cannot be executed from a function")),
+        S::DropDatabase { .. } => Err(PgError::new(SqlState::ACTIVE_SQL_TRANSACTION, "DROP DATABASE cannot be executed from a function")),
+        S::Maintenance { kind: pgarbor_sql::ir::MaintenanceKind::ReindexConcurrently, .. } => {
+            Err(PgError::new(SqlState::ACTIVE_SQL_TRANSACTION, "REINDEX CONCURRENTLY cannot be executed from a function"))
+        }
         S::Reset(_)
         | S::Show(None)
         | S::SetRole { .. }

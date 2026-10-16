@@ -154,7 +154,7 @@ fn select_exprs(sel: &BoundSelect) -> Vec<&BoundExpr> {
 fn add_table_identity(plan: &mut LogicalPlan, sel: &BoundSelect) -> Result<()> {
     match &mut plan.node {
         LogicalNode::Scan(scan) => {
-            if !matches!(scan.source, ScanSource::Table { is_virtual: false, .. }) {
+            if !matches!(scan.source, ScanSource::Table { .. }) {
                 return Ok(());
             }
             let rt = scan.rt_index;

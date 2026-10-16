@@ -230,6 +230,9 @@ impl<'a> CatalogTxn<'a> {
     fn con_check_target(&mut self, table: Oid, action: &str) -> Result<Relation> {
         let rel = self.con_rel(table)?;
         self.require_owner(&ObjectAddress::relation(table))?;
+        if rel.kind == RelKind::PartitionedTable {
+            return Err(PgError::unimplemented("CAT-13", "constraints on a partitioned table"));
+        }
         if rel.kind != RelKind::Table {
             return Err(errors::alter_action_not_supported(action, &rel.name, kind_plural(rel.kind)));
         }

@@ -177,15 +177,14 @@ fn analyze(env: &dyn TypeEnv, actual: &[Oid], declared: &[Oid], strict: bool) ->
         elem = te;
     }
     if elem == 0 && have1 {
-        if anyenum {
-            if strict {
-                return Err(PgError::new(
-                    SqlState::DATATYPE_MISMATCH,
-                    "could not determine polymorphic type because input has type unknown",
-                ));
-            }
-        } else {
-            // All polymorphic inputs are unknown: PG resolves them as text.
+        // Only way to get here: every anyelement/anyarray/anynonarray/anyenum input is unknown.
+        if strict {
+            return Err(PgError::new(
+                SqlState::DATATYPE_MISMATCH,
+                "could not determine polymorphic type because input has type unknown",
+            ));
+        }
+        if !anyenum {
             elem = oids::TEXT;
         }
     }

@@ -290,7 +290,19 @@ impl Interp {
             let Some(raw) = raws.first() else {
                 return Ok(SpiResult::default());
             };
-            let bound = spi::bind(cx, raw, &types, None).map_err(decorate)?;
+            let mut bound = spi::bind(cx, raw, &types, None).map_err(decorate)?;
+            // Utility DDL is analysed without parameters: `$1` in a DEFAULT or CHECK is 42P02.
+            if !types.is_empty()
+                && matches!(
+                    bound.statement,
+                    BoundStatement::CreateTable(_) | BoundStatement::AlterTable(_) | BoundStatement::CreateIndex(_) | BoundStatement::CreateView(_)
+                )
+            {
+                bound = spi::bind(cx, raw, &[], None).map_err(decorate)?;
+                if !bound.param_types.is_empty() {
+                    return Err(decorate(PgError::new(SqlState::UNDEFINED_PARAMETER, "there is no parameter $1")));
+                }
+            }
             check(&bound.statement).map_err(decorate)?;
             let ptypes = spi::merged_types(&types, &bound.param_types);
             let mut vals = values.clone();

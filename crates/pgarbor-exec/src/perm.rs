@@ -124,6 +124,22 @@ pub fn require_sequence_privilege(se: &SessionEnv, seq: Oid, mode: u32) -> Resul
     Err(permission_denied_for("sequence", &s.name))
 }
 
+/// Require `EXECUTE` on user function `f` (PG `pg_proc_aclcheck`): superusers pass; otherwise the
+/// function's ACL (`acldefault(Function)` = PUBLIC may execute, when `acl` is None).
+pub fn require_function_privilege(se: &SessionEnv, f: &pgarbor_catalog::model::Function) -> Result<()> {
+    let snap = se.env.snapshot();
+    let user = se.env.current_user();
+    let graph = RoleGraph::build(snap, se.env.database())?;
+    if graph.is_superuser(user) {
+        return Ok(());
+    }
+    let acl = effective_acl(AclObject::Function, f.owner, f.acl.as_ref())?;
+    if privilege_mask(&graph, user, f.owner, &acl, acl_mode::EXECUTE, false)? != 0 {
+        return Ok(());
+    }
+    Err(permission_denied_for("function", &f.name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

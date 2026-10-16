@@ -345,7 +345,12 @@ fn oper_name(cx: &mut Cx<'_>) -> Result<OperName> {
             _ => break,
         }
     }
+    let first = cx.peek();
     let (name, _) = all_op(cx)?;
+    // `=>` is its own token in PG's grammar and `/*` always opens a comment: neither is an operator name.
+    if name == "=>" || name.contains("/*") || name.contains("--") {
+        return Err(cx.fail_at(&first));
+    }
     Ok(OperName { schema, name, pos })
 }
 

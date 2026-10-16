@@ -355,6 +355,13 @@ pub fn bind_collate(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundExpr> 
         let msg = format!("collations are not supported by type {}", b.type_name(arg_ty));
         return Err(diag::with_position(PgError::new(SqlState::DATATYPE_MISMATCH, msg), clause_pos));
     }
+    // Comparison is code-point order only: ICU-provider user collations and nondeterministic ones
+    // would silently give wrong answers.
+    if let Some(info) = b.env.collation_info(oid) {
+        if !info.builtin && (!info.deterministic || info.provider == b'i') {
+            return Err(PgError::unimplemented("SQL-14", "ICU and nondeterministic collations in expressions"));
+        }
+    }
     Ok(BoundExpr::new(ExprKind::Collate(Box::new(CollateExpr { arg: arg.expr, collation: oid })), arg_ty))
 }
 

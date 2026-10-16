@@ -112,6 +112,7 @@ pub fn call_user_function(
     want_set: bool,
 ) -> Result<CallOutput> {
     let f = lookup(cx, oid)?;
+    crate::perm::require_function_privilege(&cx.se, &f)?;
     if f.strict && args.iter().any(|a| a.is_null()) {
         return Ok(if want_set || f.retset { CallOutput::Set(Vec::new()) } else { CallOutput::Scalar(Datum::Null) });
     }

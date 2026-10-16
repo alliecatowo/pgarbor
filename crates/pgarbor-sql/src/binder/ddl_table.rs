@@ -225,6 +225,7 @@ pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundSta
     };
     let pos = b.pos(&ct.name);
     reject_unsupported_table(ct, pos)?;
+    ddl_partition::bind_on_commit(ct, is_temporary(ct))?;
     for (set, what) in [
         (ct.inherits.is_some(), "INHERITS"),
         (ct.partition_by.is_some(), "PARTITION BY"),

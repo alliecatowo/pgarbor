@@ -562,7 +562,13 @@ impl<'a> CatalogTxn<'a> {
                 ));
             }
             if r.is_some() && provider != b'i' {
-                return Err(invalid("ICU rules cannot be specified unless locale provider is ICU".into()));
+                return Err(PgError::new(
+                    SqlState::INVALID_OBJECT_DEFINITION,
+                    "ICU rules cannot be specified unless locale provider is ICU",
+                ));
+            }
+            if r.is_some() {
+                return Err(PgError::unimplemented("CAT-EXT-04", "ICU collation rules (no ICU rule parser)"));
             }
             encoding = match provider {
                 b'b' => {

@@ -211,6 +211,11 @@ impl GucTable {
     pub fn apply_startup(&self, name: &str, value: &str, source: GucSource) -> Result<()> {
         let mut guard = self.inner.borrow_mut();
         let inner: &mut GucInner = &mut guard;
+        if is_placeholder_name(name) {
+            check_custom_name(name)?;
+            placeholder_put(inner, name, value.to_string());
+            return Ok(());
+        }
         let idx = lookup(inner, name)?;
         let def = inner.slots[idx].def;
         check_settable(inner, def, true)?;
@@ -416,6 +421,10 @@ impl GucTable {
         let inner: &mut GucInner = &mut guard;
         let idx = lookup(inner, name)?;
         put(inner, idx, value.to_string(), GucSource::Session);
+        if name == "is_superuser" {
+            // PG `superuser()` follows the current role (SET ROLE / SET SESSION AUTHORIZATION).
+            inner.superuser = value == "on";
+        }
         Ok(())
     }
 

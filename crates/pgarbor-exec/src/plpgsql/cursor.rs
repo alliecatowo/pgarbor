@@ -88,6 +88,19 @@ impl Interp {
             let (val, t) = self.eval_expr(cx, &PlSql { text, offset: 0 }, None)?;
             evaluated.push((decl.args[k].0.clone(), decl.args[k].1, val, t));
         }
+        // PG resolves the query when the cursor is declared: later declarations stay invisible.
+        let hidden: Vec<(usize, Vec<(String, usize)>)> = {
+            let mut scopes = self.scopes.borrow_mut();
+            scopes
+                .iter_mut()
+                .enumerate()
+                .map(|(i, sc)| {
+                    let (keep, drop): (Vec<_>, Vec<_>) = sc.names.drain(..).partition(|(_, v)| *v < decl.visible_vars);
+                    sc.names = keep;
+                    (i, drop)
+                })
+                .collect()
+        };
         self.push_scope(None);
         let r = (|| -> Result<SpiResult> {
             for (n, ty, val, t) in evaluated {
@@ -97,6 +110,14 @@ impl Interp {
             self.run_sql(cx, &decl.query.text, &|_| Ok(()))
         })();
         self.pop_scope();
+        {
+            let mut scopes = self.scopes.borrow_mut();
+            for (i, drop) in hidden {
+                if let Some(sc) = scopes.get_mut(i) {
+                    sc.names.extend(drop);
+                }
+            }
+        }
         Ok((r?, decl.scroll, decl.query.text.clone()))
     }
 

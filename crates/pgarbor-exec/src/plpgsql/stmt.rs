@@ -163,7 +163,7 @@ impl Interp {
                     cargs.push((an.clone(), self.resolve_type(cx, at)?));
                 }
                 let idx = self.declare_var(cx, name, TypeId::of(oids::REFCURSOR), Datum::Null)?;
-                self.vars.borrow_mut()[idx].cursor = Some(Rc::new(CursorDecl { scroll: *scroll, args: cargs, query: query.clone() }));
+                self.vars.borrow_mut()[idx].cursor = Some(Rc::new(CursorDecl { scroll: *scroll, args: cargs, query: query.clone(), visible_vars: idx }));
                 // A bound cursor's portal is named after the variable unless assigned otherwise.
                 self.vars.borrow_mut()[idx].value = Datum::Text(name.clone());
                 Ok(())

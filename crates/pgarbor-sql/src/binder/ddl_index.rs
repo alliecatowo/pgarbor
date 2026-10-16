@@ -169,7 +169,7 @@ fn resolve_table<'a>(b: &mut Binder<'a>, n: &ObjectName) -> Result<&'a Relation>
     if rel.oid < FIRST_NORMAL_OID || rel.namespace == builtin::PG_CATALOG_NAMESPACE || rel.namespace == builtin::PG_TOAST_NAMESPACE {
         return Err(at(catalog_errors::system_catalog_permission(&rel.name), qn.pos));
     }
-    if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
+    if !matches!(rel.kind, RelKind::Table | RelKind::MatView | RelKind::PartitionedTable) {
         return Err(at(
             PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{}\" is not a table or materialized view", rel.name)),
             qn.pos,
@@ -303,7 +303,11 @@ fn sort_options(b: &Binder, oe: &OrderByExpr) -> Result<(bool, Option<bool>)> {
 /// `COLLATE name` -> collation OID (42704 `collation "x" for encoding "UTF8" does not exist` via the catalog).
 fn resolve_collation(b: &mut Binder, n: &ObjectName) -> Result<Oid> {
     let qn: QualName = b.qual(n)?;
-    b.env.collation_oid(qn.schema_str(), &qn.name).map_err(|e| at(e, qn.pos))
+    let oid = b.env.collation_oid(qn.schema_str(), &qn.name).map_err(|e| at(e, qn.pos))?;
+    if b.env.collation_info(oid).is_some_and(|c| !c.deterministic) {
+        return Err(at(PgError::unimplemented("SQL-14", "indexes with a nondeterministic collation"), qn.pos));
+    }
+    Ok(oid)
 }
 
 /// Operator class by name among the builtin btree opclasses (module docs). `key_type` (when known)

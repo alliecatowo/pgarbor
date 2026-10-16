@@ -1280,6 +1280,61 @@ fn check_plpgsql_compile(
         err.position = plpgsql_body_position(b, e, text, idx);
         return Err(err);
     }
+    // The real parser has the last word (EXIT / CONTINUE label rules and whatever the scans above miss).
+    let parsed = crate::plpgsql::parse_body(text);
+    if let Ok(f) = &parsed {
+        check_plpgsql_type_anchors(b, &f.block, &names)?;
+    }
+    if let Err(pe) = parsed {
+        let mut err = pe.error;
+        err.position = None;
+        err.internal_position = None;
+        err.internal_query = None;
+        if let Some(off) = pe.offset {
+            let idx = text.get(..off.min(text.len())).map_or(0, |s| s.chars().count());
+            err.position = plpgsql_body_position(b, e, text, idx);
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// `table.column%TYPE` anchors of a block's declarations must name an existing column (the compile of
+/// PG's validator resolves them): 42703 `column "c" of relation "t" does not exist`. Anchors whose
+/// first name is a variable or parameter, or that do not name a relation, are left to run time.
+fn check_plpgsql_type_anchors(b: &Binder<'_>, block: &crate::plpgsql::PlBlock, params: &[&str]) -> Result<()> {
+    use crate::plpgsql::{PlDecl, PlType};
+    let mut declared: Vec<&str> = params.to_vec();
+    for d in &block.decls {
+        match d {
+            PlDecl::Var { name, ty: PlType::VarType { name: path, .. }, .. } => {
+                if path.len() >= 2 && !declared.contains(&path[0].as_str()) {
+                    let (schema, table, column) = match path.as_slice() {
+                        [t, c] => (None, t.as_str(), c.as_str()),
+                        [s, t, c] => (Some(s.as_str()), t.as_str(), c.as_str()),
+                        _ => (None, "", ""),
+                    };
+                    if !table.is_empty() {
+                        if let Ok(rel) = b.env.resolve_relation(schema, table) {
+                            if rel.column_by_name(column).is_none() {
+                                return Err(PgError::new(
+                                    SqlState::UNDEFINED_COLUMN,
+                                    format!("column \"{column}\" of relation \"{}\" does not exist", rel.name),
+                                ));
+                            }
+                        }
+                    }
+                }
+                declared.push(name.as_str());
+            }
+            PlDecl::Var { name, .. } | PlDecl::Alias { name, .. } | PlDecl::Cursor { name, .. } => declared.push(name.as_str()),
+        }
+    }
+    for st in &block.body {
+        if let crate::plpgsql::PlStmtKind::Block(inner) = &st.kind {
+            check_plpgsql_type_anchors(b, inner, &declared)?;
+        }
+    }
     Ok(())
 }
 
@@ -1907,6 +1962,31 @@ fn out_placeholders(env: &CatalogEnv, c: &FuncCandidate, names: &[Option<String>
     Some(drop)
 }
 
+/// PG matches CALL arguments against all arguments including OUT ones: each argument supplied for
+/// an OUT parameter must convert to its type implicitly.
+fn out_args_coercible(env: &CatalogEnv, c: &FuncCandidate, names: &[Option<String>], arg_oids: &[Oid], drop: &[bool]) -> bool {
+    let Some(f) = env.snapshot().function(c.oid) else { return false };
+    for (i, d) in drop.iter().enumerate() {
+        if !*d {
+            continue;
+        }
+        let decl = match &names[i] {
+            None => f.args.get(i),
+            Some(n) => f.args.iter().find(|a| a.mode == ArgMode::Out && a.name == *n),
+        };
+        let Some(decl) = decl else { return false };
+        if !can_coerce_type(env, &[arg_oids[i]], &[decl.type_oid], CastContext::Implicit).unwrap_or(false) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Types of every declared argument (IN and OUT, in order): PG's `proallargtypes` view of a procedure.
+fn all_arg_types(env: &CatalogEnv, oid: Oid) -> Vec<Oid> {
+    env.snapshot().function(oid).map(|f| f.args.iter().map(|a| a.type_oid).collect()).unwrap_or_default()
+}
+
 /// True when procedure candidate `c` has OUT parameters.
 fn has_out_params(env: &CatalogEnv, c: &FuncCandidate) -> bool {
     env.snapshot().function(c.oid).is_some_and(|f| f.args.iter().any(|a| a.mode == ArgMode::Out))
@@ -1990,11 +2070,28 @@ fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Re
         Ok(r) => plan = Some((r, no_drop)),
         Err(e) => first_err = Some(e),
     }
+    if let Some((r, _)) = &plan {
+        // An OUT-parameter overload with the same full argument list as the match is equally good.
+        let chosen = all_arg_types(env, r.oid);
+        for c in all_procs.iter().filter(|c| c.oid != r.oid) {
+            let Some(drop) = out_placeholders(env, c, &names) else { continue };
+            if out_args_coercible(env, c, &names, &arg_oids, &drop) && all_arg_types(env, c.oid) == chosen {
+                return Err(at(
+                    PgError::new(SqlState::AMBIGUOUS_FUNCTION, format!("procedure {sig} is not unique"))
+                        .with_hint("Could not choose a best candidate procedure. You might need to add explicit type casts."),
+                    name_pos,
+                ));
+            }
+        }
+    }
     if plan.is_none() {
         for c in all_procs.iter() {
             let Some(drop) = out_placeholders(env, c, &names) else {
                 continue;
             };
+            if !out_args_coercible(env, c, &names, &arg_oids, &drop) {
+                continue;
+            }
             let kept_types: Vec<Oid> =
                 arg_oids.iter().zip(drop.iter()).filter(|(_, d)| !**d).map(|(t, _)| *t).collect();
             let kept_names: Vec<Option<String>> =

@@ -40,6 +40,8 @@ struct Parser<'a> {
     pos: usize,
     /// Cursor names declared in the enclosing blocks (for FOR-over-cursor detection).
     cursors: Vec<HashSet<String>>,
+    /// Enclosing blocks and loops, innermost last: (label, is_loop). For EXIT / CONTINUE validation.
+    scopes: Vec<(Option<String>, bool)>,
 }
 
 /// Parse a routine body.
@@ -50,7 +52,7 @@ pub fn parse_body(src: &str) -> std::result::Result<PlFunction, PlParseError> {
         e.internal_position = None;
         perr(e, off)
     })?;
-    let mut p = Parser { src, toks, pos: 0, cursors: Vec::new() };
+    let mut p = Parser { src, toks, pos: 0, cursors: Vec::new(), scopes: Vec::new() };
     let options = p.parse_directives()?;
     let label = p.opt_label()?;
     let block = p.parse_block(label, true)?;
@@ -215,7 +217,10 @@ impl<'a> Parser<'a> {
         }
         self.pos += 1;
         // `BEGIN;` is a syntax error at the semicolon (PG: proc_sect cannot start with ';').
-        let body = self.parse_stmts()?;
+        self.scopes.push((label.clone(), false));
+        let body = self.parse_stmts();
+        self.scopes.pop();
+        let body = body?;
         let mut handlers = None;
         if self.at_word("exception") {
             self.pos += 1;
@@ -609,6 +614,34 @@ impl<'a> Parser<'a> {
                         label = Some(l.text);
                     }
                 }
+                let word = if is_continue { "CONTINUE" } else { "EXIT" };
+                match &label {
+                    Some(l) => match self.scopes.iter().rev().find(|(sl, _)| sl.as_deref() == Some(l.as_str())) {
+                        None => {
+                            return Err(perr(
+                                PgError::new(
+                                    SqlState::SYNTAX_ERROR,
+                                    format!("there is no label \"{l}\" attached to any block or loop enclosing this statement"),
+                                ),
+                                Some(t.start),
+                            ))
+                        }
+                        Some((_, false)) if is_continue => {
+                            return Err(perr(
+                                PgError::new(SqlState::SYNTAX_ERROR, format!("block label \"{l}\" cannot be used in CONTINUE")),
+                                Some(t.start),
+                            ))
+                        }
+                        Some(_) => {}
+                    },
+                    None if !self.scopes.iter().any(|(_, is_loop)| *is_loop) => {
+                        return Err(perr(
+                            PgError::new(SqlState::SYNTAX_ERROR, format!("{word} cannot be used outside a loop, unless it has a label")),
+                            Some(t.start),
+                        ))
+                    }
+                    None => {}
+                }
                 let mut cond = None;
                 if self.at_word("when") {
                     self.pos += 1;
@@ -936,6 +969,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_stmt_with_label(&mut self, label: Option<String>) -> PResult<PlStmt> {
+        self.scopes.push((label.clone(), true));
+        let r = self.parse_stmt_with_label_inner(label);
+        self.scopes.pop();
+        r
+    }
+
+    fn parse_stmt_with_label_inner(&mut self, label: Option<String>) -> PResult<PlStmt> {
         let t = self.peek().cloned().ok_or_else(|| self.syntax_here())?;
         let line = t.line;
         self.pos += 1;

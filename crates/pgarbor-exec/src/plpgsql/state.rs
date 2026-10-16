@@ -30,6 +30,8 @@ pub struct CursorDecl {
     pub scroll: Option<bool>,
     pub args: Vec<(String, TypeId)>,
     pub query: pgarbor_sql::plpgsql::PlSql,
+    /// Variables with an index at or above this were declared after the cursor: not visible to its query.
+    pub visible_vars: usize,
 }
 
 impl Var {

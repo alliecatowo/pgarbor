@@ -110,7 +110,7 @@ pub fn func_signature(env: &CatalogEnv, name: &QName, args: &[Oid]) -> String {
 /// function (but not a missing schema) is `Ok(None)`.
 pub fn lookup_func_exact(env: &CatalogEnv, name: &QName, args: &[Oid], missing_ok: bool) -> Result<Option<Oid>> {
     let cands = env.function_candidates(name.schema.as_deref(), &name.name)?;
-    if let Some(c) = cands.iter().find(|c| c.arg_types.as_slice() == args) {
+    if let Some(c) = cands.iter().find(|c| c.arg_types.as_slice() == args && c.kind != pgarbor_types::catalog_data::ProcKind::Procedure) {
         return Ok(Some(c.oid));
     }
     if missing_ok {
