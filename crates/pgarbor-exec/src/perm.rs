@@ -69,6 +69,10 @@ pub fn require_relation_privilege(se: &SessionEnv, rel: Oid, mode: u32, columns:
     if graph.is_superuser(user) {
         return Ok(());
     }
+    if snap.relation(rel).is_none() && snap.sequence(rel).is_some() {
+        // `SELECT * FROM seq`: the sequence's own ACL decides.
+        return require_sequence_privilege(se, rel, mode);
+    }
     let r = snap.relation(rel).ok_or_else(|| missing_relation(rel))?;
     let owner = r.owner;
 

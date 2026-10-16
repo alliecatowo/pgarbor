@@ -662,7 +662,11 @@ impl VirtualScanSource {
             })?;
             eq.push((idx, value));
         }
-        let rows = {
+        let rows = if ex.cx.se.env.snapshot().sequence(self.oid).is_some() {
+            // `SELECT * FROM seq`: the one-row sequence state (last_value, log_cnt, is_called).
+            let st = ex.cx.txn.seq_state(self.oid)?;
+            vec![vec![Datum::Int8(st.last_value), Datum::Int8(st.log_cnt), Datum::Bool(st.is_called)]]
+        } else {
             let info = ExecSessionInfo::new(&ex.cx.se, &*ex.cx.txn);
             let ctx = ScanContext { env: &ex.cx.se.env, session: &info, io_config: &ex.cx.se.io };
             vrel_scan(&ctx, self.oid, &ScanRequest { eq })?
@@ -704,7 +708,11 @@ impl RowSource for VirtualScanSource {
     }
 }
 
-pub fn build_virtual_scan(node: &PlanNode, n: &VirtualScan, _b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
+pub fn build_virtual_scan(node: &PlanNode, n: &VirtualScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
+    // `SELECT ... FROM seq` needs SELECT on the sequence (USAGE alone is not enough).
+    if b.cx.se.env.snapshot().sequence(n.table.oid).is_some() {
+        perm::require_sequence_privilege(&b.cx.se, n.table.oid, acl_mode::SELECT)?;
+    }
     Ok(Box::new(VirtualScanSource {
         oid: n.table.oid,
         width: node.width(),

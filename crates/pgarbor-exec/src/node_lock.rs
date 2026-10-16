@@ -71,6 +71,16 @@ pub fn build_lock_rows(node: &PlanNode, n: &LockRowsNode, b: &mut BuildCtx) -> R
                 t.table_oid, rowid_slot, ncols
             )));
         }
+        // PG `ExecCheckXactReadOnly`: a row lock needs write permission (ACL_UPDATE) on a non-temp relation.
+        if !td.schema.starts_with("pg_temp") {
+            let what = match n.strength {
+                LockStrength::Update => "SELECT FOR UPDATE",
+                LockStrength::NoKeyUpdate => "SELECT FOR NO KEY UPDATE",
+                LockStrength::Share => "SELECT FOR SHARE",
+                LockStrength::KeyShare => "SELECT FOR KEY SHARE",
+            };
+            b.cx.txn.check_writable(what)?;
+        }
         targets.push(LockTargetRt { td, rowid_slot, ncols, start: rowid_slot - ncols });
     }
     Ok(Box::new(LockRowsOp { input, strength: n.strength, wait: n.wait, targets }))

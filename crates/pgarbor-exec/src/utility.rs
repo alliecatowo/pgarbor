@@ -82,7 +82,7 @@ pub fn exec_maintenance(cx: &mut ExecContext, kind: MaintenanceKind, targets: &[
             require_checkpoint_privilege(cx)?;
             Ok(ExecResult::command("CHECKPOINT"))
         }
-        MaintenanceKind::Reindex => reindex(cx, targets),
+        MaintenanceKind::Reindex | MaintenanceKind::ReindexConcurrently => reindex(cx, targets),
     }
 }
 

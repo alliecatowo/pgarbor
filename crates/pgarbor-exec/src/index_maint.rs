@@ -344,6 +344,7 @@ mod tests {
                 constraint: None,
             }],
             checks: Vec::new(),
+            virtual_not_null: Vec::new(),
             fks_out: Vec::new(),
             fks_in: Vec::new(),
         }

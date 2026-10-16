@@ -154,6 +154,9 @@ pub struct TableDesc {
     pub cols: Vec<ColDesc>,
     pub indexes: Vec<IndexDesc>,
     pub checks: Vec<CheckDesc>,
+    /// NOT NULL VIRTUAL generated columns as (slot, generation expression over the full row): stored
+    /// as NULL, so NOT NULL is enforced against the computed value (PG `ExecConstraints`).
+    pub virtual_not_null: Vec<(usize, BoundExpr)>,
     /// FKs where this table is the referencing side.
     pub fks_out: Vec<FkDesc>,
     /// FKs where this table is the referenced side.
@@ -250,6 +253,16 @@ pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
     let cols = rel.columns.iter().map(|c| col_desc(se, c)).collect::<Result<Vec<ColDesc>>>()?;
     let indexes = index_descs(se, snap, oid)?;
     let checks = check_descs(se, snap, oid)?;
+    let mut virtual_not_null: Vec<(usize, BoundExpr)> = Vec::new();
+    for (slot, c) in rel.columns.iter().enumerate() {
+        if c.dropped || !c.not_null || c.generated != Some(GeneratedKind::Virtual) {
+            continue;
+        }
+        if let Some(d) = c.default.as_ref() {
+            let g = bind_column_default_text(se, &d.expr.sql, oid, &c.name, c.type_id)?;
+            virtual_not_null.push((slot, columns_to_input_refs(expand_virtual_columns(se, snap, oid, g)?)?));
+        }
+    }
     let fks_out = snap
         .constraints_of(oid)
         .into_iter()
@@ -270,6 +283,7 @@ pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
         cols,
         indexes,
         checks,
+        virtual_not_null,
         fks_out,
         fks_in,
     })
@@ -374,14 +388,48 @@ fn check_descs(se: &SessionEnv, snap: &CatalogSnapshot, table: Oid) -> Result<Ve
             .check
             .as_ref()
             .ok_or_else(|| PgError::internal(format!("cache lookup failed for constraint {}", c.oid)))?;
+        // VIRTUAL generated columns are NULL in storage: a CHECK reads their generation expression
+        // (PG `expand_generated_columns_in_expr` in `ExecRelCheck`).
+        let bound = expand_virtual_columns(se, snap, table, bind_stored_text(se, &stored.sql, table)?)?;
         out.push(CheckDesc {
             oid: c.oid,
             name: c.name.clone(),
-            expr: bound_row_expr(se, &stored.sql, table)?,
+            expr: columns_to_input_refs(bound)?,
             validated: c.validated,
         });
     }
     Ok(out)
+}
+
+/// Replace references to VIRTUAL generated columns of `table` (bind-time `Column{rt_index: 1}`) with
+/// their bound generation expressions, which themselves reference only non-virtual columns.
+fn expand_virtual_columns(se: &SessionEnv, snap: &CatalogSnapshot, table: Oid, expr: BoundExpr) -> Result<BoundExpr> {
+    let rel = match snap.relation(table) {
+        Some(r) => r,
+        None => return Ok(expr),
+    };
+    let mut gens: Vec<(i16, BoundExpr)> = Vec::new();
+    for c in rel.columns.iter() {
+        if c.dropped || c.generated != Some(GeneratedKind::Virtual) {
+            continue;
+        }
+        if let Some(d) = c.default.as_ref() {
+            gens.push((c.attnum, bind_column_default_text(se, &d.expr.sql, table, &c.name, c.type_id)?));
+        }
+    }
+    if gens.is_empty() {
+        return Ok(expr);
+    }
+    expr.transform(&mut |node: BoundExpr| -> Result<BoundExpr> {
+        if let ExprKind::Column(c) = &node.kind {
+            if c.levels_up == 0 && c.rt_index == 1 {
+                if let Some((_, g)) = gens.iter().find(|(a, _)| *a == c.attnum) {
+                    return Ok(g.clone());
+                }
+            }
+        }
+        Ok(node)
+    })
 }
 
 fn fk_desc(snap: &CatalogSnapshot, c: &Constraint) -> Result<FkDesc> {

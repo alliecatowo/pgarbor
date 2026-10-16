@@ -57,13 +57,14 @@
 use pgarbor_catalog::model::{GeneratedKind, IdentityKind};
 use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_sql::ir::{
-    Assignment, BoundCreateTableAs, BoundDelete, BoundExpr, BoundInsert, BoundQuery, BoundStatement, BoundUpdate,
+    Assignment, BoundCreateTableAs, BoundCte, BoundDelete, BoundExpr, BoundInsert, BoundQuery, BoundStatement, BoundUpdate,
     ColumnRef, ConflictAction, ExprKind, FieldSelect, FromItem, InsertSource, Overriding, RangeEntry, TargetColumn,
     TargetEntry, TargetTable,
 };
 use pgarbor_types::{Datum, TypeId};
 
 use crate::build;
+use crate::cte;
 use crate::context::PlannerState;
 use crate::join;
 use crate::logical::{LogicalJoin, LogicalNode, LogicalPlan};
@@ -93,17 +94,17 @@ pub fn plan_dml_statement(st: &mut PlannerState, stmt: &BoundStatement) -> Resul
 
 /// INSERT.
 pub fn plan_insert(st: &mut PlannerState, ins: &BoundInsert) -> Result<PlanNode> {
-    in_level(st, &ins.range_table, |st| plan_insert_inner(st, ins))
+    with_ctes(st, &ins.ctes, |st| in_level(st, &ins.range_table, |st| plan_insert_inner(st, ins)))
 }
 
 /// UPDATE.
 pub fn plan_update(st: &mut PlannerState, upd: &BoundUpdate) -> Result<PlanNode> {
-    in_level(st, &upd.range_table, |st| plan_update_inner(st, upd))
+    with_ctes(st, &upd.ctes, |st| in_level(st, &upd.range_table, |st| plan_update_inner(st, upd)))
 }
 
 /// DELETE.
 pub fn plan_delete(st: &mut PlannerState, del: &BoundDelete) -> Result<PlanNode> {
-    in_level(st, &del.range_table, |st| plan_delete_inner(st, del))
+    with_ctes(st, &del.ctes, |st| in_level(st, &del.range_table, |st| plan_delete_inner(st, del)))
 }
 
 /// CREATE TABLE AS source query.
@@ -139,6 +140,22 @@ fn level_names(entries: &[RangeEntry]) -> Vec<(String, Vec<String>)> {
 }
 
 /// Run `f` inside a fresh query level built from the statement's range table.
+/// Register the statement's top-level WITH list (if any) around planning the statement, so CTE
+/// references (`levels_up` counts WITH frames) resolve and data-modifying CTEs are planned.
+fn with_ctes<'a, T>(
+    st: &mut PlannerState<'a>,
+    ctes: &[BoundCte],
+    f: impl FnOnce(&mut PlannerState<'a>) -> Result<T>,
+) -> Result<T> {
+    if ctes.is_empty() {
+        return f(st);
+    }
+    cte::register_ctes(st, ctes)?;
+    let result = f(&mut *st);
+    cte::unregister_ctes(st);
+    result
+}
+
 fn in_level<'a, T>(
     st: &mut PlannerState<'a>,
     entries: &[RangeEntry],
@@ -301,7 +318,24 @@ fn default_expr(st: &mut PlannerState, target: &TargetTable, attnum: i16) -> Res
             note_expr_deps(st, d);
             Ok(d.clone())
         }
-        None => Ok(BoundExpr::null(col.ty)),
+        None => {
+            let null = BoundExpr::null(col.ty);
+            // rewriteHandler.c `build_column_default`: a domain-typed column without a default gets
+            // `coerce_to_domain(NULL)`, so the domain's NOT NULL / CHECK constraints still apply.
+            let is_domain =
+                pgarbor_types::TypeEnv::type_info(st.ctx.env, col.ty.oid).is_some_and(|t| t.typtype == b'd');
+            if !is_domain {
+                return Ok(null);
+            }
+            Ok(BoundExpr::new(
+                ExprKind::CoerceToDomain(Box::new(pgarbor_sql::ir::CoerceToDomain {
+                    arg: null,
+                    domain: col.ty.oid,
+                    form: pgarbor_sql::ir::CoercionForm::Implicit,
+                })),
+                col.ty,
+            ))
+        }
     }
 }
 

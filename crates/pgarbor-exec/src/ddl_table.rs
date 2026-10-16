@@ -166,6 +166,14 @@ fn apply_command(
             new_default,
             needs_rewrite,
         } => {
+            let old_missing = if *needs_rewrite {
+                let snap = ddl.snapshot()?;
+                snap.relation(table)
+                    .and_then(|r| r.column_by_name(column))
+                    .and_then(|c| c.missing_value.clone().map(|m| (m, c.type_id)))
+            } else {
+                None
+            };
             ddl.alter_column_type(
                 table,
                 column,
@@ -180,7 +188,7 @@ fn apply_command(
                 let expr = using.clone().ok_or_else(|| {
                     PgError::internal("ALTER COLUMN TYPE needs a row rewrite but has no USING expression")
                 })?;
-                rewrites.push(ColumnRewrite::Using { attnum, expr });
+                rewrites.push(ColumnRewrite::Using { attnum, expr, old_missing });
             }
         }
         AlterTableCmd::SetDefault { column, expr } => {
@@ -249,6 +257,22 @@ fn apply_command(
                 return Err(PgError::unimplemented("EXE-33", "row security policy enforcement"));
             }
             ddl.set_row_security(table, *enable, *force)?;
+        }
+        AlterTableCmd::ClusterOn { index } => {
+            // cluster.c `mark_index_clustered`: the chosen index gets the flag, its siblings lose it.
+            let changes: Vec<(Oid, bool)> = ddl
+                .snapshot()?
+                .indexes_of(table)
+                .into_iter()
+                .filter(|i| i.clustered != (Some(i.oid) == *index))
+                .map(|i| (i.oid, Some(i.oid) == *index))
+                .collect();
+            for (oid, flag) in changes {
+                ddl.update_index(oid, |i| {
+                    i.clustered = flag;
+                    Ok(())
+                })?;
+            }
         }
     }
     Ok(())

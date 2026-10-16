@@ -21,7 +21,8 @@ use pgarbor_common::Result;
 use pgarbor_types::Datum;
 
 use crate::error::{check_violation, not_null_violation, row_description};
-use crate::eval::eval_bool3;
+use crate::eval::{eval, eval_bool3};
+use pgarbor_catalog::model::GeneratedKind;
 use crate::runtime::Executor;
 use crate::tabledesc::{CheckDesc, ColDesc, TableDesc};
 
@@ -29,7 +30,7 @@ use crate::tabledesc::{CheckDesc, ColDesc, TableDesc};
 /// the column list counts the missing slots as NULL.
 fn first_null_violation<'t>(td: &'t TableDesc, row: &[Datum]) -> Option<&'t ColDesc> {
     for (i, c) in td.cols.iter().enumerate() {
-        if c.dropped || !c.not_null {
+        if c.dropped || !c.not_null || c.generated == Some(GeneratedKind::Virtual) {
             continue;
         }
         let is_null = match row.get(i) {
@@ -52,7 +53,18 @@ fn checks_in_name_order(td: &TableDesc) -> Vec<&CheckDesc> {
 
 /// NOT NULL enforcement for the NEW row (module docs). 23502 on the first NULL in a NOT NULL column.
 pub fn check_not_null(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Result<()> {
-    let col = match first_null_violation(td, row) {
+    let mut col = first_null_violation(td, row);
+    // NOT NULL on a VIRTUAL generated column applies to its computed value; an earlier attnum wins.
+    for (slot, expr) in &td.virtual_not_null {
+        if col.map(|c| c.attnum as usize - 1 < *slot).unwrap_or(false) {
+            break;
+        }
+        if eval(ex, expr, row)?.is_null() {
+            col = td.cols.get(*slot);
+            break;
+        }
+    }
+    let col = match col {
         Some(c) => c,
         None => return Ok(()),
     };
@@ -117,6 +129,7 @@ mod tests {
             cols,
             indexes: Vec::new(),
             checks,
+            virtual_not_null: Vec::new(),
             fks_out: Vec::new(),
             fks_in: Vec::new(),
         }

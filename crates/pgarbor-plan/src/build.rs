@@ -206,6 +206,25 @@ pub fn build_range_scan(st: &mut PlannerState, entries: &[RangeEntry], rt_index:
     let source = match &entry.kind {
         RangeKind::Relation { oid, schema, name, .. } => {
             let env = st.ctx.env;
+            // A sequence (`SELECT * FROM seq`) is a one-row virtual relation: last_value, log_cnt, is_called.
+            if env.snapshot().relation(*oid).is_none() && env.snapshot().sequence(*oid).is_some() {
+                return Ok(LogicalScan {
+                    rt_index,
+                    source: ScanSource::Table {
+                        table: TableRef {
+                            oid: *oid,
+                            schema: schema.clone(),
+                            name: name.clone(),
+                            alias: entry.alias.clone(),
+                            ncols: 3,
+                            col_types: vec![TypeId::of(pgarbor_types::oids::INT8), TypeId::of(pgarbor_types::oids::INT8), TypeId::of(pgarbor_types::oids::BOOL)],
+                        },
+                        is_virtual: true,
+                    },
+                    quals: Vec::new(),
+                    with_rowid: false,
+                });
+            }
             let rel = env
                 .snapshot()
                 .relation(*oid)

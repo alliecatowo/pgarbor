@@ -71,6 +71,7 @@ pub mod node_sort;
 pub mod node_window;
 pub mod perm;
 pub mod result;
+pub mod role_password;
 pub mod rowstore;
 pub mod runtime;
 pub mod session_fns;

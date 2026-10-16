@@ -202,7 +202,22 @@ fn seq_params_in(env: &CatalogEnv, relid: Oid) -> Result<SequenceParams> {
             })
         }
         None => match identity {
-            Some((_, name, _)) => Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{name}\" is not a sequence"))),
+            Some((_, name, _)) => {
+                // sequence.c `sequence_open`: "cannot open relation" + errdetail_relkind_not_supported.
+                let word = match snap.relation(relid).map(|r| &r.kind) {
+                    Some(pgarbor_catalog::model::RelKind::Table) => "tables",
+                    Some(pgarbor_catalog::model::RelKind::PartitionedTable) => "partitioned tables",
+                    Some(pgarbor_catalog::model::RelKind::View) => "views",
+                    Some(pgarbor_catalog::model::RelKind::MatView) => "materialized views",
+                    Some(pgarbor_catalog::model::RelKind::Index) => "indexes",
+                    Some(pgarbor_catalog::model::RelKind::PartitionedIndex) => "partitioned indexes",
+                    Some(pgarbor_catalog::model::RelKind::CompositeType) => "composite types",
+                    Some(pgarbor_catalog::model::RelKind::ForeignTable) => "foreign tables",
+                    _ => "this kind of relation",
+                };
+                Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("cannot open relation \"{name}\""))
+                    .with_detail(format!("This operation is not supported for {word}.")))
+            }
             None => Err(PgError::new(SqlState::UNDEFINED_TABLE, format!("relation with OID {relid} does not exist"))),
         },
     }
@@ -285,6 +300,14 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         "current_setting" => {
             let setting = text_arg(args, 0)?;
             let missing_ok = bool_or(args, 1, false);
+            // Transaction characteristics come from the live transaction (they may differ from the GUC
+            // slots after `START TRANSACTION <modes>`), as in `Session::current_setting`.
+            let on_off = |v: bool| if v { "on" } else { "off" }.to_string();
+            match setting.to_ascii_lowercase().as_str() {
+                "transaction_isolation" => return Ok(Datum::Text(ex.txn().isolation().as_pg_str().to_string())),
+                "transaction_read_only" => return Ok(Datum::Text(on_off(ex.txn().is_read_only()))),
+                _ => {}
+            }
             match ex.se().guc.get(setting) {
                 Some(v) => Ok(Datum::Text(v)),
                 None if missing_ok => Ok(Datum::Null),
@@ -325,7 +348,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         "pg_sleep" => {
             let secs = float_arg(args, 0)?;
             sleep_for(ex, secs_to_duration(secs))?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_sleep_for" => {
             let iv = args.first().and_then(Datum::as_interval).ok_or_else(|| bad_arg(0))?;
@@ -339,7 +362,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 Duration::from_micros(u64::try_from(total).unwrap_or(u64::MAX))
             };
             sleep_for(ex, duration)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_sleep_until" => {
             let target = match args.first() {
@@ -354,7 +377,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 Duration::from_micros(u64::try_from(micros).unwrap_or(u64::MAX))
             };
             sleep_for(ex, duration)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         // v1: the transaction id is returned even before the first write (module docs allow this).
         "txid_current" | "txid_current_if_assigned" | "pg_current_xact_id" | "pg_current_xact_id_if_assigned" => {
@@ -393,7 +416,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "payload string too long"));
             }
             ex.se().services.notify(channel, payload)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_listening_channels" => Err(PgError::internal(
             "set-returning function pg_listening_channels called in a scalar position",
@@ -401,6 +424,12 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         "pg_cancel_backend" => {
             let pid = i32::try_from(int_arg(args, 0)?).map_err(|_| bad_arg(0))?;
             let signalled = ex.se().services.cancel_backend(pid, false)?;
+            if !signalled {
+                ex.se().notice(crate::error::warning(
+                    SqlState::WARNING,
+                    format!("PID {pid} is not a PostgreSQL backend process"),
+                ));
+            }
             Ok(Datum::Bool(signalled))
         }
         "pg_terminate_backend" => {
@@ -411,6 +440,12 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
                 return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "\"timeout\" must not be negative"));
             }
             let signalled = ex.se().services.cancel_backend(pid, true)?;
+            if !signalled {
+                ex.se().notice(crate::error::warning(
+                    SqlState::WARNING,
+                    format!("PID {pid} is not a PostgreSQL backend process"),
+                ));
+            }
             Ok(Datum::Bool(signalled))
         }
         "pg_trigger_depth" => Ok(Datum::Int4(0)),
@@ -645,7 +680,7 @@ mod tests {
         txn.kv = kv;
         let start = Instant::now();
         let v = run_ex(&mut txn, env, |ex| call_named(ex, "pg_sleep", &[Datum::Float8(0.05)])).unwrap();
-        assert!(v.is_null());
+        assert_eq!(v, Datum::Text(String::new()));
         assert!(start.elapsed() >= Duration::from_millis(45));
     }
 
