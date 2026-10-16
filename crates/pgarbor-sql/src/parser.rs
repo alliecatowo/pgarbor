@@ -6317,30 +6317,20 @@ mod tests {
 
     #[test]
     fn operator_names_with_repeated_symbols_parse() {
-        // PostgreSQL reads `===` and `====` as one operator name; these reach the support check, not 42601.
-        let e = parse_one("ALTER OPERATOR === (boolean, real) SET (MERGES = false)").err().expect("unsupported");
-        assert_eq!(e.sqlstate.code(), "0A000");
-        assert!(e.message.starts_with("ALTER OPERATOR is not supported"));
-        let e = parse_one("CREATE OPERATOR === (LEFTARG = boolean, RIGHTARG = real, PROCEDURE = f, COMMUTATOR = ====)")
-            .err()
-            .expect("unsupported");
-        assert_eq!(e.sqlstate.code(), "0A000");
-        assert!(e.message.starts_with("CREATE OPERATOR is not supported"));
+        // PostgreSQL reads `===` and `====` as one operator name, so these parse (no 42601).
+        assert!(parse_one("ALTER OPERATOR === (boolean, real) SET (MERGES = false)").is_ok());
+        assert!(parse_one("CREATE OPERATOR === (LEFTARG = boolean, RIGHTARG = real, PROCEDURE = f, COMMUTATOR = ====)").is_ok());
         let e = parse_one("ALTER OPERATOR === (boolean, real) SET (MERGES = )").err().expect("syntax error");
         assert_eq!(e.sqlstate.code(), "42601");
-        // An unknown CREATE OPERATOR attribute is only a WARNING in PostgreSQL, so it reaches the support check.
-        let e = parse_one("CREATE OPERATOR #@%# (rightarg = int8, procedure = dbl, invalid_att = int8)")
-            .err()
-            .expect("unsupported");
-        assert_eq!(e.sqlstate.code(), "0A000");
+        // An unknown CREATE OPERATOR attribute is only a WARNING in PostgreSQL, so it parses.
+        assert!(parse_one("CREATE OPERATOR #@%# (rightarg = int8, procedure = dbl, invalid_att = int8)").is_ok());
         // `SET SCHEMA 'x'` and `SET XML OPTION` are special SET spellings.
         assert!(parse("SET SCHEMA 'x'").is_ok());
         assert!(parse("SET XML OPTION DOCUMENT").is_ok());
-        // `NONE` resets RESTRICT and JOIN; a quoted attribute name is case-sensitive and not recognized (42601).
-        let e = parse_one("ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE, JOIN = NONE)").err().expect("unsupported");
-        assert_eq!(e.sqlstate.code(), "0A000");
-        let e = parse_one("ALTER OPERATOR === (boolean, boolean) SET (\"Restrict\" = contsel)").err().expect("syntax error");
-        assert_eq!(e.sqlstate.code(), "42601");
+        // `NONE` resets RESTRICT and JOIN; a quoted attribute name is case-sensitive and rejected (42601)
+        // by the catalog layer, not the grammar.
+        assert!(parse_one("ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE, JOIN = NONE)").is_ok());
+        assert!(parse_one("ALTER OPERATOR === (boolean, boolean) SET (\"Restrict\" = contsel)").is_ok());
         // Outside operator DDL the tokens are untouched: `= -1` stays an expression.
         assert!(parse("SELECT 1 WHERE 2 = -1").is_ok());
     }
@@ -6741,11 +6731,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_operator_options_are_unsupported_not_syntax_errors() {
-        let e = parse("CREATE OPERATOR ## (LEFTARG = int8, PROCEDURE = f, SORT1 = int8lt, LTCMP = int8lt)")
-            .err()
-            .expect("CREATE OPERATOR is not supported");
-        assert_eq!(e.sqlstate, pgarbor_common::SqlState::FEATURE_NOT_SUPPORTED);
+    fn legacy_operator_options_are_not_syntax_errors() {
+        // The obsolete SORT1/LTCMP options parse; the catalog layer rejects them.
+        assert!(parse("CREATE OPERATOR ## (LEFTARG = int8, PROCEDURE = f, SORT1 = int8lt, LTCMP = int8lt)").is_ok());
     }
 
     #[test]

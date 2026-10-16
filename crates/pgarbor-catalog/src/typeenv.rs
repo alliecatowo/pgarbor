@@ -759,7 +759,8 @@ mod tests {
         assert_eq!(env.reg_lookup_impl(RegKind::Role, "nosuchrole")?, None);
         let op = env.reg_lookup_impl(RegKind::Operator, "+(integer,integer)")?.expect("int4pl op");
         assert_eq!(env.reg_name_impl(RegKind::Operator, op)?.as_deref(), Some("+(integer,integer)"));
-        assert_eq!(env.reg_name_impl(RegKind::Oper, op)?.as_deref(), Some("+"));
+        // regoperout: bare only when the name has exactly one candidate (`+` has many).
+        assert_eq!(env.reg_name_impl(RegKind::Oper, op)?.as_deref(), Some("pg_catalog.+"));
         Ok(())
     }
 

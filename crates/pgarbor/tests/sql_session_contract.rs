@@ -201,7 +201,8 @@ fn unsupported_security_and_deferred_constraints_fail_closed() {
     let db = Database::in_memory().expect("database");
     let mut s = db.session("main", SessionOptions::default()).expect("session");
     s.simple_query("CREATE TABLE t(id int primary key)").expect("create");
-    for sql in ["ALTER TABLE t ENABLE ROW LEVEL SECURITY", "ALTER TABLE t FORCE ROW LEVEL SECURITY", "CREATE TABLE d(id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"] {
+    // Row-level security is enforced since the RLS amendment; deferred constraints still fail closed.
+    for sql in ["CREATE TABLE d(id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"] {
         let e = s.simple_query(sql).expect_err("must reject unenforced semantics");
         assert_eq!(e.sqlstate.code(), "0A000", "{sql}: {e:?}");
         assert!(e.is_unimplemented());

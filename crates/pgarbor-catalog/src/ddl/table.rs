@@ -186,6 +186,9 @@ impl<'a> CatalogTxn<'a> {
             RelKind::Table | RelKind::PartitionedTable => {}
             _ => return Err(PgError::internal("CREATE TABLE with a non-table relation kind")),
         }
+        if spec.kind == RelKind::PartitionedTable && spec.extra.partition_key.is_none() {
+            return Err(PgError::internal("partitioned table without a partition key"));
+        }
         if spec.persistence == Persistence::Temp && !self.temp_namespace_allowed(spec.namespace) {
             return Err(PgError::unimplemented("CAT-11", "temporary tables"));
         }
@@ -536,7 +539,8 @@ mod tests {
         let mut s = spec("t", vec![int_col("a")], vec![]);
         s.kind = RelKind::PartitionedTable;
         let r = testing::run(&mut kv, &env, |t| t.create_table(&s).map(|_| ()));
-        assert_eq!(r.err().map(|e| e.sqlstate), Some(SqlState::FEATURE_NOT_SUPPORTED));
+        // A partitioned table needs `extra.partition_key` (the binder always supplies it).
+        assert_eq!(r.err().map(|e| e.sqlstate), Some(SqlState::INTERNAL_ERROR));
     }
 
     #[test]

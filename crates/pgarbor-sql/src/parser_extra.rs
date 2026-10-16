@@ -2545,11 +2545,11 @@ mod tests {
     }
 
     #[test]
-    fn drop_aggregate_is_unsupported() {
-        assert_eq!(
+    fn drop_aggregate_parses() {
+        assert!(matches!(
             ok("DROP AGGREGATE IF EXISTS nosuch(integer)"),
-            ExtraStatement::Unsupported { feature: "DROP AGGREGATE".into() }
-        );
+            ExtraStatement::Ext(crate::ext_stmt::ExtStmt::DropAggregate { .. })
+        ));
     }
 
     fn ok(sql: &str) -> ExtraStatement {
@@ -2743,12 +2743,12 @@ mod tests {
             ok("ALTER TABLE IF EXISTS ONLY a.t SET SCHEMA s"),
             ExtraStatement::AlterTableSetSchema { if_exists: true, name: name(&["a", "t"]), schema: ident("s") }
         );
-        assert_eq!(
+        assert!(matches!(
             ok("CREATE EXTENSION hstore SCHEMA addons"),
-            ExtraStatement::Unsupported { feature: "CREATE EXTENSION".to_string() }
-        );
+            ExtraStatement::Ext(crate::ext_stmt::ExtStmt::CreateExtension { .. })
+        ));
         assert!(is_extra("create extension if not exists x version '1.0' cascade"));
-        assert!(!is_extra("create extension x with schema s"));
+        assert!(is_extra("create extension x with schema s"));
     }
 
     #[test]
@@ -2823,7 +2823,7 @@ mod tests {
         assert!(!is_extra("alter table t add column a int"));
         assert!(!is_extra("drop table t"));
         assert!(!is_extra("commit"));
-        assert!(!is_extra("create extension hstore"));
+        assert!(is_extra("create extension hstore"));
         assert!(!is_extra("set search_path to a"));
     }
 
