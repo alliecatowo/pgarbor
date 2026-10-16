@@ -218,11 +218,10 @@ impl<'a> CatalogTxn<'a> {
         self.require_owner(&ObjectAddress::relation(index))?;
         let new_set = validate_btree_options(set)?;
         let mut opts = idx.options.clone();
+        // RESET names are not validated (PG `ATExecSetRelOptions` drops them as given): a name that
+        // is not a parameter of this index simply matches nothing.
         for r in reset {
             let (name, _) = split_option(r);
-            if btree_option_kind(name).is_none() {
-                return Err(errors::unrecognized_parameter(name));
-            }
             opts.retain(|o| option_name(o) != name);
         }
         for s in new_set {

@@ -303,14 +303,22 @@ impl<'a> CatalogTxn<'a> {
         for &role in roles {
             for dep in depend::role_dependencies(env.snapshot(), role)? {
                 if dep.kind == SharedDepKind::Acl {
-                    acl_addrs.insert(dep.object.whole());
+                    // Column ACLs keep their sub_id: they live in the column row, not the table ACL.
+                    acl_addrs.insert(dep.object);
                 }
             }
         }
         for addr in acl_addrs {
-            let slot = match self.acl_slot(&addr) {
-                Some(s) => s,
-                None => continue,
+            let slot = if addr.is_column() {
+                match self.column_acl_slot(&addr) {
+                    Some(s) => s,
+                    None => continue,
+                }
+            } else {
+                match self.acl_slot(&addr) {
+                    Some(s) => s,
+                    None => continue,
+                }
             };
             let original = match slot.acl.clone() {
                 Some(a) => a,
@@ -344,7 +352,17 @@ impl<'a> CatalogTxn<'a> {
                 working = change.acl;
             }
             if working.as_ref() != Some(&original) {
-                self.store_acl(&slot.addr, working)?;
+                if slot.addr.is_column() {
+                    let attnum = slot.addr.sub_id;
+                    self.update_relation(slot.addr.oid, |r| {
+                        if let Some(c) = r.columns.iter_mut().find(|c| i32::from(c.attnum) == attnum) {
+                            c.acl = working;
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    self.store_acl(&slot.addr, working)?;
+                }
             }
         }
 
@@ -421,6 +439,14 @@ impl<'a> CatalogTxn<'a> {
 
     /// Where the ACL of an address lives (None for objects without ACL storage: indexes, builtins,
     /// constraints, ...). Column addresses resolve to their table.
+    /// ACL slot of a column address (`sub_id` = attnum): the owner is the relation's owner and the ACL
+    /// is the column's own (PG `attacl`). Unknown or dropped columns have no slot.
+    fn column_acl_slot(&self, addr: &ObjectAddress) -> Option<AclSlot> {
+        let r = self.data().relations.get(&addr.oid)?;
+        let c = r.columns.iter().find(|c| i32::from(c.attnum) == addr.sub_id && !c.dropped)?;
+        Some(AclSlot { addr: *addr, owner: r.owner, kind: AclObject::Column, name: c.name.clone(), acl: c.acl.clone() })
+    }
+
     fn acl_slot(&self, addr: &ObjectAddress) -> Option<AclSlot> {
         let d = self.data();
         let whole = addr.whole();
