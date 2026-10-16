@@ -210,6 +210,23 @@ fn unsupported_security_and_deferred_constraints_fail_closed() {
 }
 
 #[test]
+fn sql_function_pseudo_types_are_rejected_at_definition() {
+    let db = Database::in_memory().expect("create");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    let e = s.simple_query("CREATE FUNCTION int_arg(internal) RETURNS int LANGUAGE sql AS 'SELECT 1'").unwrap_err();
+    assert_eq!(e.sqlstate.code(), "42P13");
+    assert_eq!(e.message, "SQL functions cannot have arguments of type internal");
+    let e = s.simple_query("CREATE FUNCTION noargs() RETURNS anyelement LANGUAGE sql AS 'SELECT 1'").unwrap_err();
+    assert_eq!(e.sqlstate.code(), "42P13");
+    assert_eq!(e.message, "cannot determine result data type");
+    let out = s.simple_query("SELECT count(*) FROM pg_proc WHERE proname IN ('int_arg', 'noargs')").expect("count");
+    match &out[0].result {
+        StatementResult::Rows { rows, .. } => assert_eq!(rows, &vec![vec![Datum::Int8(0)]]),
+        other => panic!("expected rows: {other:?}"),
+    }
+}
+
+#[test]
 fn stored_config_settings_and_text_search_config_are_validated() {
     let db = Database::in_memory().expect("create");
     let mut s = db.session("main", SessionOptions::default()).expect("session");

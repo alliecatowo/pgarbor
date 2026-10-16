@@ -40,6 +40,7 @@ use pgarbor_exec::{ExecContext, SessionEnv};
 use pgarbor_plan::plan::ColumnDesc;
 use pgarbor_plan::PlanContext;
 use pgarbor_sql::{BindContext, BindSession};
+use pgarbor_types::registry::base_type_and_typmod;
 use pgarbor_types::{Datum, TypeEnv, TypeId};
 
 use crate::engine_info::SessionServices;
@@ -73,14 +74,15 @@ fn now_pg_us() -> Result<i64> {
 fn columns_to_infos(env: &CatalogEnv, cols: &[ColumnDesc]) -> Result<Vec<ColumnInfo>> {
     let mut out = Vec::with_capacity(cols.len());
     for c in cols {
-        let oid = c.type_id.oid;
+        // PG `SendRowDescriptionMessage`: a domain-typed column is described by its base type and typmod.
+        let (oid, type_mod) = base_type_and_typmod(env, c.type_id.oid, c.type_id.typmod);
         let info = env
             .type_info(oid)
             .ok_or_else(|| PgError::internal(format!("cache lookup failed for type {oid}")))?;
         out.push(ColumnInfo {
             name: c.name.clone(),
             type_oid: oid,
-            type_mod: c.type_id.typmod,
+            type_mod,
             type_len: info.len,
             table_oid: c.table_oid,
             column_attnum: c.column_attnum,
@@ -292,6 +294,19 @@ mod tests {
         assert_eq!(infos[2].table_oid, 0);
         assert_eq!(infos[2].column_attnum, 0);
         assert_eq!(infos[2].type_mod, -1);
+    }
+
+    #[test]
+    fn domain_columns_are_described_by_base_type_and_typmod() {
+        // information_schema.sql_identifier (13312) is a domain over name; yes_or_no (13320) is a
+        // domain over varchar(3), so its typmod is 3 + VARHDRSZ.
+        let (_, env) = pgarbor_catalog::testing::bootstrapped().expect("catalog bootstrap");
+        let cols = vec![col("schema_name", 13312, 13467, 2), col("is_nullable", 13320, 13381, 7)];
+        let infos = columns_to_infos(&env, &cols).expect("column infos");
+        assert_eq!(infos[0].type_oid, 19);
+        assert_eq!(infos[0].type_mod, -1);
+        assert_eq!(infos[1].type_oid, 1043);
+        assert_eq!(infos[1].type_mod, 7);
     }
 
     #[test]
