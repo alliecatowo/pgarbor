@@ -135,6 +135,27 @@ impl CatalogEnv {
         Ok(ns)
     }
 
+    /// CREATE privilege on schema `ns` for the current user (superuser, owner or ACL grant), else 42501
+    /// `permission denied for schema <name>`. Lets the binder raise the error with a source position
+    /// (PG `RangeVarGetAndCheckCreationNamespace`); the catalog transaction re-checks at execution.
+    pub fn check_schema_create(&self, ns: Oid) -> Result<()> {
+        let cur = self.current_user();
+        let snap = self.snapshot();
+        if cur == builtin::BOOTSTRAP_SUPERUSER || snap.role(cur).is_some_and(|r| r.superuser) {
+            return Ok(());
+        }
+        let Some(schema) = snap.namespace(ns) else {
+            return Ok(());
+        };
+        let eff = crate::acl::effective_acl(crate::acl::AclObject::Schema, schema.owner, schema.acl.as_ref())?;
+        let graph = crate::acl::RoleGraph::build(snap, self.database())?;
+        if crate::acl::has_privilege(&graph, cur, schema.owner, &eff, crate::model::acl_mode::CREATE)? {
+            Ok(())
+        } else {
+            Err(crate::errors::permission_denied_for("schema", &schema.name))
+        }
+    }
+
     /// Type OID by catalog typname (builtin or user), honoring the search path (module docs).
     // CONTRACT
     pub fn lookup_type(&self, schema: Option<&str>, typname: &str) -> Result<Option<Oid>> {

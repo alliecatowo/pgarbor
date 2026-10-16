@@ -222,6 +222,12 @@ impl Txn {
     /// implicit transaction the caller rolls back instead.
     pub fn mark_failed(&mut self) {
         self.state = TxnState::Failed;
+        // xact.c AbortTransaction releases every lock when the top-level transaction aborts, even
+        // though the block stays open until ROLLBACK. With savepoints open only the failed
+        // subtransaction's locks go (at ROLLBACK TO), so leave them alone.
+        if self.savepoints.is_empty() {
+            let _ = self.engine.locks().release_txn(self.session.id, self.id);
+        }
     }
     /// Poll interrupts (cancel / terminate / statement_timeout) — executors call this in loops.
     pub fn check_interrupts(&self) -> Result<()> {

@@ -64,7 +64,7 @@ use crate::snapshot::UserTypeRef;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_types::catalog_data::{builtin_operator, builtin_proc, operators_named};
 use pgarbor_types::context::{CompositeField, EnumLabel, RegKind, TypeEnv};
-use pgarbor_types::names::{format_type, parse_type_string};
+use pgarbor_types::names::{display_name, parse_type_string};
 use pgarbor_types::registry::{self, TypeInfo};
 use pgarbor_types::text::format::quote_identifier;
 use std::borrow::Cow;
@@ -592,7 +592,7 @@ impl CatalogEnv {
                 if self.type_info(oid).is_none() {
                     return Ok(None);
                 }
-                Ok(Some(format_type(self, oid, -1)?))
+                Ok(Some(display_name(self, oid)))
             }
             RegKind::Proc => {
                 let Some((name, ns, _)) = self.routine_identity(oid) else {
@@ -612,7 +612,7 @@ impl CatalogEnv {
                     if i > 0 {
                         out.push(',');
                     }
-                    out.push_str(&format_type(self, *a, -1)?);
+                    out.push_str(&display_name(self, *a));
                 }
                 out.push(')');
                 Ok(Some(out))
@@ -625,13 +625,13 @@ impl CatalogEnv {
                 let mut out = String::from(o.name);
                 out.push('(');
                 if o.left != 0 {
-                    out.push_str(&format_type(self, o.left, -1)?);
+                    out.push_str(&display_name(self, o.left));
                 } else {
                     out.push_str("NONE");
                 }
                 out.push(',');
                 if o.right != 0 {
-                    out.push_str(&format_type(self, o.right, -1)?);
+                    out.push_str(&display_name(self, o.right));
                 } else {
                     out.push_str("NONE");
                 }

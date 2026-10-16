@@ -415,6 +415,9 @@ impl<'a> CatalogTxn<'a> {
         let oid = addr.oid;
         let word_and_name = match addr.class {
             ObjClass::Relation => match snap.class_identity(oid) {
+                // A column address (COMMENT ON COLUMN) reports `OBJECT_COLUMN`, which aclcheck_error words
+                // as plain "relation".
+                Some((_, name, _)) if addr.is_column() => ("relation", name.to_string()),
                 Some((_, name, kind)) => (relkind_word(kind), name.to_string()),
                 None => return Err(errors::cache_lookup_failed("relation", oid)),
             },

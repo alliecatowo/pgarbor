@@ -631,6 +631,8 @@ fn format_base(env: &dyn TypeEnv, info: &registry::TypeInfo, typmod_v: i32, typm
         oids::VARBIT => plain("bit varying", "bit varying")?,
         oids::VARCHAR => plain("character varying", "character varying")?,
         oids::CHAR => "\"char\"".to_string(),
+        // format_type.c special-cases JSONOID: the name is never quoted although JSON is a keyword.
+        oids::JSON => "json".to_string(),
         _ => {
             let name: &str = &info.name;
             if env.type_by_name(None, name) == Some(oid) {
