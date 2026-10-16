@@ -37,3 +37,11 @@ its preceding STATUS history. They were not repeated as part of this campaign.
 Taskwarrior became available during wrap-up: the 102-XX000 task is completed,
 and mismatch/acceptance tasks now carry the measured remaining counts. The
 continuation prompt is in [runs/review/claude-cloud-handoff-02.md](runs/review/claude-cloud-handoff-02.md).
+
+Cloud startup follow-up: `scripts/cloud-setup.sh` was already present on every
+published branch. The new `scripts/cloud-bootstrap.sh` handles setup shells
+outside the checkout; use the environment field text in [docs/CLOUD.md](docs/CLOUD.md).
+Published feature branches are already merged. The local factory branches and
+169 worktrees were reconciled against assembly records; the three dirty wire
+files add no implementation missing from main. Inventory and validation:
+[runs/review/branch-reconciliation-02.md](runs/review/branch-reconciliation-02.md).
