@@ -261,6 +261,11 @@ impl<'a> CatalogTxn<'a> {
                 if snap.function(oid).is_some() {
                     return Err(errors::system_catalog_permission("pg_proc"));
                 }
+                // A built-in routine has a pg_proc row PGArbor does not persist, so its ACL cannot be
+                // changed yet. That is unsupported, not a missing object.
+                if pgarbor_types::catalog_data::builtin_proc(oid).is_some() {
+                    return Err(PgError::unimplemented("CAT-21", "GRANT/REVOKE on built-in functions"));
+                }
                 Err(errors::cache_lookup_failed("function", oid))
             }
             ObjClass::Database => {

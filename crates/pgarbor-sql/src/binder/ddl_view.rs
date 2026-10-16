@@ -72,6 +72,8 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
     let qn = b.qual(&cv.name)?;
     check_catalog_qualifier(b, &qn)?;
     reject_query_forms(&cv.query)?;
+    // Views referenced directly by the query are recorded in `b.deps` while it binds (see from.rs).
+    let dep_mark = b.deps.len();
 
     // DefineView runs parse analysis of the query before anything else, so query errors win over
     // name and option errors.
@@ -125,6 +127,11 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
     let sql = deparse_viewdef(b.env, &bq, &names, DeparseOptions::default())?;
 
     let mut deps = query_dependencies(&bq)?;
+    for dep in b.deps.split_off(dep_mark) {
+        if !deps.contains(&dep) {
+            deps.push(dep);
+        }
+    }
     for out in &bq.output {
         if out.ty.oid >= FIRST_NORMAL_OID {
             let dep = ObjectAddress::new(ObjClass::Type, out.ty.oid);

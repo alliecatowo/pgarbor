@@ -90,7 +90,7 @@ fn role_name(snap: &CatalogSnapshot, oid: Oid) -> Result<String> {
 fn ensure_exists(snap: &CatalogSnapshot, addr: &ObjectAddress) -> Result<()> {
     let (found, what) = match addr.class {
         ObjClass::Relation => (snap.class(addr.oid).is_some(), "relation"),
-        ObjClass::Type => (snap.type_obj(addr.oid).is_some() || addr.is_pinned(), "type"),
+        ObjClass::Type => (snap.user_type(addr.oid).is_some() || addr.is_pinned(), "type"),
         ObjClass::Namespace => {
             (snap.namespace(addr.oid).is_some() || builtin::builtin_namespace(addr.oid).is_some(), "namespace")
         }

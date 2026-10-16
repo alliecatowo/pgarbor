@@ -309,6 +309,7 @@ fn hide_earlier_items(b: &mut Binder, hidden: bool) {
         let base = sc.from_depth as usize;
         for ns in sc.namespace.iter_mut().skip(base) {
             ns.lateral_only = hidden;
+            ns.lateral_ok = !hidden;
         }
     }
 }
@@ -405,6 +406,15 @@ fn expand_view(
     };
     let names: Vec<String> = rel.columns.iter().filter(|c| !c.dropped).map(|c| c.name.clone()).collect();
 
+    // A direct reference from the statement being bound (not one made while expanding another
+    // view) is a Normal dependency on the view itself, as PG's rewriter records it. The base
+    // relations the view expands to are reached transitively through that view.
+    if b.expanding_views.is_empty() {
+        let dep = pgarbor_catalog::ObjectAddress::new(pgarbor_catalog::ObjClass::Relation, rel.oid);
+        if !b.deps.contains(&dep) {
+            b.deps.push(dep);
+        }
+    }
     b.expanding_views.push(rel.oid);
     let bound = select::bind_subselect(b, query, &names).map_err(stored_text_error);
     b.expanding_views.pop();

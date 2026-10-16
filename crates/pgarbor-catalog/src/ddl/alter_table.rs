@@ -423,7 +423,7 @@ impl<'a> CatalogTxn<'a> {
         {
             self.follow_up(FollowUp::ValidateNotNull { table, attnum });
         }
-        if composite {
+        if composite || rewrite || column.fast_default.is_some() {
             self.queue_composite_followups(&rel)?;
         }
         Ok(Some(attnum))

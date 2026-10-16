@@ -311,8 +311,14 @@ fn sql_return_body(b: &mut Binder<'_>, fname: &str, specs: &[ParamSpec<'_>], e: 
         .map(|p| (p.name.clone(), TypeId::of(p.type_oid)))
         .collect();
     table_expr_scope(b, fname, &cols)?;
-    let no_names = |_: i16| -> Option<String> { None };
-    let r = bind_ddl_expr(b, e, ExprCtx::check(), Some(TypeId::of(ret)), None, &mut Vec::new(), &no_names)
+    // The parameters are the scope's columns (attnum = 1-based position), so the stored text names them
+    // by their declared names (PG `deparse` of the body shows parameter names).
+    let names: Vec<String> = cols.iter().map(|(n, _)| n.clone()).collect();
+    let column_names = move |attnum: i16| -> Option<String> {
+        let idx = usize::try_from(attnum).ok()?.checked_sub(1)?;
+        names.get(idx).cloned()
+    };
+    let r = bind_ddl_expr(b, e, ExprCtx::check(), Some(TypeId::of(ret)), None, &mut Vec::new(), &column_names)
         .map(|(_, stored)| stored);
     b.scopes.pop();
     r

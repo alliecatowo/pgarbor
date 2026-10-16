@@ -1147,6 +1147,14 @@ impl<'a> CatalogTxn<'a> {
             }
             for c in &r.columns {
                 if !c.dropped && tys.contains(&c.type_id.oid) {
+                    // typecmds.c get_rels_with_domain: constraints cannot be validated through
+                    // an array container, even when the table currently contains no rows.
+                    if let Some(element) = self.data.types.values().find(|t| t.array_type == c.type_id.oid) {
+                        return Err(PgError::new(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            format!("cannot alter type \"{}\" because column \"{}.{}\" uses it", element.name, r.name, c.name),
+                        ));
+                    }
                     out.push((r.oid, c.attnum));
                 }
             }

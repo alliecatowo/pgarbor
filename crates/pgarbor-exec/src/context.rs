@@ -45,6 +45,9 @@ pub trait GucAccess {
     /// `set_config(name, value, is_local)`: apply a SET (validation errors as for `SET`), return the
     /// new value in SHOW form.
     fn set(&self, name: &str, value: &str, is_local: bool) -> Result<String>;
+    /// Validation only (guc.c `ProcessGUCArray` for `ALTER ... SET`): unknown name 42704, a value the
+    /// parameter rejects 22023. Nothing is assigned. Every adapter must provide validation.
+    fn check_setting(&self, name: &str, value: &str) -> Result<()>;
     /// All settings as `pg_settings` rows (for `pg_settings`, `SHOW ALL`, `pg_show_all_settings`).
     fn settings(&self) -> Result<Vec<SettingRow>>;
     /// Boolean GUC helper: `on`/`true`/`yes`/`1` (case-insensitive) = true; unknown/other = false.
@@ -62,6 +65,12 @@ impl GucAccess for NoGuc {
         None
     }
     fn set(&self, name: &str, _value: &str, _is_local: bool) -> Result<String> {
+        Err(PgError::new(
+            pgarbor_common::SqlState::UNDEFINED_OBJECT,
+            format!("unrecognized configuration parameter \"{name}\""),
+        ))
+    }
+    fn check_setting(&self, name: &str, _value: &str) -> Result<()> {
         Err(PgError::new(
             pgarbor_common::SqlState::UNDEFINED_OBJECT,
             format!("unrecognized configuration parameter \"{name}\""),

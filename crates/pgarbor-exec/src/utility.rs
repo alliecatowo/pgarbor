@@ -75,9 +75,26 @@ pub fn exec_maintenance(cx: &mut ExecContext, kind: MaintenanceKind, targets: &[
         MaintenanceKind::Vacuum => Ok(ExecResult::command("VACUUM")),
         MaintenanceKind::Analyze => Ok(ExecResult::command("ANALYZE")),
         MaintenanceKind::Cluster => Ok(ExecResult::command("CLUSTER")),
-        MaintenanceKind::Checkpoint => Ok(ExecResult::command("CHECKPOINT")),
+        MaintenanceKind::Checkpoint => {
+            require_checkpoint_privilege(cx)?;
+            Ok(ExecResult::command("CHECKPOINT"))
+        }
         MaintenanceKind::Reindex => reindex(cx, targets),
     }
+}
+
+/// `pg_checkpoint` predefined role (builtin oid 4544, catalog `builtin::objects`).
+const PG_CHECKPOINT_ROLE: Oid = 4544;
+
+/// utility.c `CHECKPOINT`: only superusers and roles with the privileges of `pg_checkpoint` may run it.
+fn require_checkpoint_privilege(cx: &ExecContext) -> Result<()> {
+    let user = cx.se.env.current_user();
+    let graph = pgarbor_catalog::acl::RoleGraph::build(cx.se.env.snapshot(), cx.se.env.database())?;
+    if graph.has_privs_of_role(user, PG_CHECKPOINT_ROLE)? {
+        return Ok(());
+    }
+    Err(PgError::new(SqlState::INSUFFICIENT_PRIVILEGE, "permission denied to execute CHECKPOINT command")
+        .with_detail("Only roles with privileges of the \"pg_checkpoint\" role may execute this command."))
 }
 
 /// Map the SQL lock mode onto the core lock manager's mode (one-to-one).

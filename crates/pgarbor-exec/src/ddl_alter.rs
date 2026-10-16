@@ -159,6 +159,11 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
         }
         AlterAction::FunctionAttrs { func, changes } => {
             let func = *func;
+            for item in &changes.set_config {
+                if let Some((guc, value)) = item.split_once('=') {
+                    cx.se.guc.check_setting(guc, value)?;
+                }
+            }
             run_plain(cx, |d| d.alter_function_attrs(func, changes))?;
         }
         AlterAction::RenameFunction { func, new_name } => {
@@ -183,6 +188,9 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
         }
         AlterAction::RoleConfig { role, guc, value } => {
             let role = *role;
+            if let Some(v) = value {
+                cx.se.guc.check_setting(guc, v)?;
+            }
             run_plain(cx, |d| d.set_role_config(role, guc, value.as_deref()))?;
         }
         AlterAction::RenameDatabase { name, new_name } => {
@@ -193,6 +201,9 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
             run_plain(cx, |d| d.alter_database_owner(name, new_owner))?;
         }
         AlterAction::DatabaseConfig { name, guc, value } => {
+            if let Some(v) = value {
+                cx.se.guc.check_setting(guc, v)?;
+            }
             run_plain(cx, |d| d.set_database_config(name, guc, value.as_deref()))?;
         }
         AlterAction::DatabaseOptions { name, allow_conn, conn_limit, is_template } => {

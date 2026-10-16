@@ -213,6 +213,9 @@ fn bind_key(b: &mut Binder, rel: &Relation, ic: &IndexColumn) -> Result<IndexKey
         if col.is_none() && !is_system_column(&name) {
             return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
         }
+        if col.is_none() {
+            return Err(system_column_index_error());
+        }
         let key_type: Option<Oid> = col.map(|c| c.type_id.oid);
         let collation_oid = match collation {
             Some(c) => Some(resolve_collation(b, c)?),
@@ -238,6 +241,7 @@ fn bind_key(b: &mut Binder, rel: &Relation, ic: &IndexColumn) -> Result<IndexKey
     let _ = collation;
     let names = |a: i16| column_name_for_attnum(rel, a);
     let mut refs: Vec<i16> = Vec::new();
+    reject_system_expr(b, &ic.column.expr, ExprCtx::index_expr())?;
     let (bound, stored_expr) =
         stored::bind_ddl_expr(b, &ic.column.expr, ExprCtx::index_expr(), None, Some(rel.oid), &mut refs, &names)?;
     ensure_immutable(b, &ic.column.expr, &bound, "index expression")?;
@@ -338,8 +342,11 @@ fn bind_include(b: &mut Binder, rel: &Relation, names: &[Ident]) -> Result<Vec<S
     let mut out = Vec::with_capacity(names.len());
     for id in names {
         let name = b.ident(id);
-        if rel.column_by_name(&name).is_none() && !is_system_column(&name) {
-            return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
+        if rel.column_by_name(&name).is_none() {
+            if !is_system_column(&name) {
+                return Err(diag::undefined_column(None, &name, b.pos_span(id.span)));
+            }
+            return Err(system_column_index_error());
         }
         out.push(name);
     }
@@ -351,6 +358,7 @@ fn bind_predicate(b: &mut Binder, rel: &Relation, e: &Expr) -> Result<StoredExpr
     let ec = ExprCtx { clause: ExprClause::IndexPredicate, ..ExprCtx::index_expr() };
     let names = |a: i16| column_name_for_attnum(rel, a);
     let mut refs: Vec<i16> = Vec::new();
+    reject_system_expr(b, e, ec)?;
     let (bound, stored_expr) = stored::bind_ddl_expr(b, e, ec, None, Some(rel.oid), &mut refs, &names)?;
     if bound.ty.oid != oids::BOOL {
         let actual = b.type_name(bound.ty);
@@ -461,6 +469,21 @@ fn column_name_for_attnum(rel: &Relation, a: i16) -> Option<String> {
 }
 
 /// System column names that the catalog resolves (its own 42704 applies to them).
+/// indexcmds.c `DefineIndex`: system attributes (attnum < 0) cannot be index keys, INCLUDE columns or
+/// referenced by index expressions and predicates.
+fn system_column_index_error() -> PgError {
+    PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "index creation on system columns is not supported")
+}
+
+fn reject_system_expr(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<()> {
+    // Reject before storing/deparsing; the stored-expression namer only accepts user attributes.
+    let bound = super::expr::bind_expr(b, e, ec)?;
+    if bound.any(&mut |n| matches!(&n.kind, ExprKind::Column(c) if c.levels_up == 0 && c.attnum < 0)) {
+        return Err(system_column_index_error());
+    }
+    Ok(())
+}
+
 fn is_system_column(name: &str) -> bool {
     matches!(name, "ctid" | "xmin" | "xmax" | "cmin" | "cmax" | "tableoid")
 }

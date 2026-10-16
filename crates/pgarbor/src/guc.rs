@@ -416,6 +416,15 @@ impl pgarbor_exec::GucAccess for GucTable {
     fn settings(&self) -> Result<Vec<SettingRow>> {
         self.setting_rows()
     }
+    fn check_setting(&self, name: &str, value: &str) -> Result<()> {
+        let guard = self.inner.borrow();
+        let inner: &GucInner = &guard;
+        let idx = lookup(inner, name)?;
+        let def = inner.slots[idx].def;
+        let text = guc_value::join_set_values(def, &[value.to_string()])?;
+        validate_value(def, &inner.slots[idx].value, &text)?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -475,6 +484,60 @@ fn check_settable(inner: &GucInner, def: &GucDef, startup: bool) -> Result<()> {
     }
 }
 
+/// `default_text_search_config` hook (ts_cat.c `check_default_text_search_config`). Only the builtin
+/// `pg_catalog` configurations exist (CREATE TEXT SEARCH CONFIGURATION is unsupported), and PostgreSQL
+/// stores the canonical `pg_catalog.<name>` form. Unquoted names fold to lower case; quoted
+/// identifiers retain their case, including quoted schema names.
+fn text_search_config_value(text: &str) -> Result<String> {
+    // Sorted (binary search): the `pg_catalog` text search configurations of PostgreSQL 18.
+    const BUILTIN_CONFIGS: &[&str] = &[
+        "arabic", "armenian", "basque", "catalan", "danish", "dutch", "english", "estonian", "finnish", "french",
+        "german", "greek", "hindi", "hungarian", "indonesian", "irish", "italian", "lithuanian", "nepali",
+        "norwegian", "portuguese", "romanian", "russian", "serbian", "simple", "spanish", "swedish", "tamil",
+        "turkish", "yiddish",
+    ];
+    fn identifiers(text: &str) -> Option<Vec<String>> {
+        let mut chars = text.chars().peekable();
+        let mut out = Vec::new();
+        loop {
+            while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) { chars.next(); }
+            let mut name = String::new();
+            if chars.peek() == Some(&'"') {
+                chars.next();
+                loop {
+                    match chars.next()? {
+                        '"' if chars.peek() == Some(&'"') => { chars.next(); name.push('"'); }
+                        '"' => break,
+                        c => name.push(c),
+                    }
+                }
+            } else {
+                while chars.peek().is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$' || !c.is_ascii()) {
+                    name.push(chars.next()?.to_ascii_lowercase());
+                }
+            }
+            if name.is_empty() { return None; }
+            out.push(name);
+            while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) { chars.next(); }
+            match chars.next() {
+                None => return Some(out),
+                Some('.') if out.len() == 1 => {}
+                _ => return None,
+            }
+        }
+    }
+    if let Some(parts) = identifiers(text) {
+        let name = parts.last().map(String::as_str).unwrap_or("");
+        if (parts.len() == 1 || parts[0] == "pg_catalog") && BUILTIN_CONFIGS.binary_search(&name).is_ok() {
+            return Ok(format!("pg_catalog.{name}"));
+        }
+    }
+    Err(PgError::new(
+        SqlState::INVALID_PARAMETER_VALUE,
+        format!("invalid value for parameter \"default_text_search_config\": \"{text}\""),
+    ))
+}
+
 /// Validate and canonicalize a value for `def` (hooks by name, else `guc_value::normalize`).
 /// `current` is the present SHOW-form value (`DateStyle` keeps the parts not mentioned).
 fn validate_value(def: &GucDef, current: &str, text: &str) -> Result<String> {
@@ -487,6 +550,9 @@ fn validate_value(def: &GucDef, current: &str, text: &str) -> Result<String> {
     }
     if name.eq_ignore_ascii_case("client_encoding") {
         return client_encoding_value(text);
+    }
+    if name.eq_ignore_ascii_case("default_text_search_config") {
+        return text_search_config_value(text);
     }
     if name.eq_ignore_ascii_case("transaction_isolation") || name.eq_ignore_ascii_case("default_transaction_isolation") {
         return isolation_value(def, text);

@@ -141,6 +141,14 @@ fn text_arg(args: &[Datum], i: usize) -> Result<&str> {
     }
 }
 
+/// Text argument of a non-strict function: NULL (or absent) reads as the empty string.
+fn text_or_empty(args: &[Datum], i: usize) -> Result<&str> {
+    match args.get(i) {
+        None | Some(Datum::Null) => Ok(""),
+        Some(d) => d.as_str().ok_or_else(|| bad_arg(i)),
+    }
+}
+
 /// Optional boolean argument: absent or NULL gives `default`.
 fn bool_or(args: &[Datum], i: usize, default: bool) -> bool {
     args.get(i).and_then(Datum::as_bool).unwrap_or(default)
@@ -366,8 +374,9 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         )
         .with_hint("Make sure the configuration parameter \"track_commit_timestamp\" is set.")),
         "pg_notify" => {
-            let channel = text_arg(args, 0)?;
-            let payload = text_arg(args, 1)?;
+            // pg_proc marks pg_notify non-strict: PG reads a NULL channel or payload as ''.
+            let channel = text_or_empty(args, 0)?;
+            let payload = text_or_empty(args, 1)?;
             if channel.is_empty() {
                 return Err(PgError::new(SqlState::INVALID_PARAMETER_VALUE, "channel name cannot be empty"));
             }

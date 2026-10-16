@@ -206,6 +206,9 @@ mod tests {
         fn set(&self, _name: &str, value: &str, _is_local: bool) -> Result<String> {
             Ok(value.to_string())
         }
+        fn check_setting(&self, name: &str, value: &str) -> Result<()> {
+            crate::context::GucAccess::check_setting(&NoGuc, name, value)
+        }
         fn settings(&self) -> Result<Vec<SettingRow>> {
             Ok(vec![SettingRow { name: "datestyle".to_string(), setting: Some("ISO, MDY".to_string()), ..Default::default() }])
         }

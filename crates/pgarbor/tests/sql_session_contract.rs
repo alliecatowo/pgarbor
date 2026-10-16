@@ -208,3 +208,26 @@ fn unsupported_security_and_deferred_constraints_fail_closed() {
     }
     s.simple_query("INSERT INTO t VALUES (1)").expect("transaction recovers");
 }
+
+#[test]
+fn stored_config_settings_and_text_search_config_are_validated() {
+    let db = Database::in_memory().expect("create");
+    let mut s = db.session("main", SessionOptions::default()).expect("session");
+    s.simple_query("CREATE FUNCTION cfg1(text) RETURNS text LANGUAGE sql AS 'SELECT $1'").expect("create");
+    s.simple_query("CREATE ROLE cfg_role").expect("role");
+    assert_eq!(s.simple_query("ALTER FUNCTION cfg1(text) SET nosuchparam = 1").unwrap_err().sqlstate.code(), "42704");
+    assert_eq!(s.simple_query("ALTER FUNCTION cfg1(text) SET work_mem = 'bogus'").unwrap_err().sqlstate.code(), "22023");
+    assert_eq!(s.simple_query("ALTER ROLE cfg_role SET no_such_param = 1").unwrap_err().sqlstate.code(), "42704");
+    assert_eq!(s.simple_query("ALTER ROLE cfg_role SET maintenance_work_mem = 'abc'").unwrap_err().sqlstate.code(), "22023");
+    s.simple_query("ALTER ROLE cfg_role SET maintenance_work_mem = '64MB'").expect("valid role setting");
+    s.simple_query("ALTER FUNCTION cfg1(text) SET search_path = admin, pg_temp").expect("valid function setting");
+    assert_eq!(s.simple_query("SET default_text_search_config = 'nosuch'").unwrap_err().sqlstate.code(), "22023");
+    s.simple_query("SET default_text_search_config = 'English'").expect("builtin config");
+    s.simple_query("SET default_text_search_config = '\"pg_catalog\".\"english\"'").expect("quoted lowercase");
+    assert_eq!(s.simple_query("SET default_text_search_config = '\"English\"'").expect_err("quoted mixed case").sqlstate.code(), "22023");
+    let out = s.simple_query("SHOW default_text_search_config").expect("show");
+    match &out[0].result {
+        StatementResult::Rows { rows, .. } => assert_eq!(rows, &vec![vec![Datum::Text("pg_catalog.english".to_string())]]),
+        other => panic!("expected rows: {other:?}"),
+    }
+}

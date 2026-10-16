@@ -708,7 +708,11 @@ fn index_oid(b: &mut Binder, name: &ObjectName) -> Result<Oid> {
 }
 
 /// REINDEX {INDEX|TABLE|SCHEMA|DATABASE|SYSTEM}. Accepted with no physical effect.
-fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, _concurrently: bool) -> Result<BoundStatement> {
+fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, concurrently: bool) -> Result<BoundStatement> {
+    // indexcmds.c `ExecReindex`: system catalogs cannot be rebuilt concurrently.
+    if kind == ReindexKind::System && concurrently {
+        return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "cannot reindex system catalogs concurrently"));
+    }
     let targets: Vec<Oid> = match kind {
         ReindexKind::Index => {
             let name = name.ok_or_else(|| diag::syntax_error_near(";", None))?;
@@ -729,7 +733,22 @@ fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, _c
         ReindexKind::Schema => {
             let name = name.ok_or_else(|| diag::syntax_error_near(";", None))?;
             let qn = b.qual(name)?;
-            vec![b.env.namespace_oid(&qn.name)?]
+            // The executor takes relation OIDs (an empty list means every user table), so expand the
+            // schema here to its tables and materialized views, in OID order (indexcmds.c
+            // `ReindexMultipleTables`). A schema without any such relation is a no-op.
+            let ns = b.env.namespace_oid(&qn.name)?;
+            let mut tables: Vec<Oid> = b
+                .env
+                .snapshot()
+                .user_relations()
+                .filter(|r| r.namespace == ns && matches!(r.kind, RelKind::Table | RelKind::MatView))
+                .map(|r| r.oid)
+                .collect();
+            tables.sort_unstable();
+            if tables.is_empty() {
+                return Ok(BoundStatement::Noop { tag: "REINDEX".to_string(), notices: Vec::new() });
+            }
+            tables
         }
         ReindexKind::Database | ReindexKind::System => {
             if let Some(name) = name {
