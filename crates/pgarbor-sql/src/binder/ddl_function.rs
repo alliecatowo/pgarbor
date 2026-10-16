@@ -1171,7 +1171,25 @@ fn check_plpgsql_body(
         return Ok(());
     }
     let Some(open) = plpgsql_unterminated_comment(text) else {
-        return check_plpgsql_compile(b, e, text, lang, params);
+        check_plpgsql_compile(b, e, text, lang, params)?;
+        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+    // The real parser has the last word (EXIT / CONTINUE label rules and whatever the scans above miss).
+    let parsed = crate::plpgsql::parse_body(text);
+    if let Ok(f) = &parsed {
+        check_plpgsql_type_anchors(b, &f.block, &names)?;
+    }
+    if let Err(pe) = parsed {
+        let mut err = pe.error;
+        err.position = None;
+        err.internal_position = None;
+        err.internal_query = None;
+        if let Some(off) = pe.offset {
+            let idx = text.get(..off.min(text.len())).map_or(0, |s| s.chars().count());
+            err.position = plpgsql_body_position(b, e, text, idx);
+        }
+        return Err(err);
+    }
+        return Ok(());
     };
     let before: String = text.chars().take(open).collect();
     check_plpgsql_compile(b, e, &before, lang, params)?;
@@ -1278,22 +1296,6 @@ fn check_plpgsql_compile(
         };
         let mut err = PgError::new(SqlState::SYNTAX_ERROR, msg);
         err.position = plpgsql_body_position(b, e, text, idx);
-        return Err(err);
-    }
-    // The real parser has the last word (EXIT / CONTINUE label rules and whatever the scans above miss).
-    let parsed = crate::plpgsql::parse_body(text);
-    if let Ok(f) = &parsed {
-        check_plpgsql_type_anchors(b, &f.block, &names)?;
-    }
-    if let Err(pe) = parsed {
-        let mut err = pe.error;
-        err.position = None;
-        err.internal_position = None;
-        err.internal_query = None;
-        if let Some(off) = pe.offset {
-            let idx = text.get(..off.min(text.len())).map_or(0, |s| s.chars().count());
-            err.position = plpgsql_body_position(b, e, text, idx);
-        }
         return Err(err);
     }
     Ok(())
