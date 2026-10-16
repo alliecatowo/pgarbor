@@ -206,6 +206,12 @@ pub struct Binder<'a> {
     /// Identity option lists of the statement (`identity_opts`), consumed front to back by each
     /// identity column the binder processes.
     pub identity_groups: VecDeque<crate::identity_opts::IdentityGroup>,
+    /// `ON DELETE SET NULL|SET DEFAULT` groups of the statement (`fk_set_opts`), consumed by each foreign key
+    /// the binder processes with that action.
+    pub fk_set_groups: Vec<crate::fk_set_opts::FkSetGroup>,
+    /// Trailing `WITH [NO] DATA` / `WITH [CASCADED|LOCAL] CHECK OPTION` of a CREATE [MATERIALIZED] VIEW
+    /// (`view_trailer_opts`), read by `ddl_view::bind_create_view`.
+    pub view_trailer: Option<crate::view_trailer_opts::ViewTrailer>,
 }
 
 /// Maximum recursion depth of expression/query binding before 54001 `stack depth limit exceeded`.
@@ -228,6 +234,8 @@ impl<'a> Binder<'a> {
             deps: Vec::new(),
             scratch: HashMap::new(),
             identity_groups: VecDeque::new(),
+            fk_set_groups: Vec::new(),
+            view_trailer: None,
         }
     }
 

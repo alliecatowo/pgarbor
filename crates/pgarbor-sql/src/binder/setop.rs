@@ -77,7 +77,7 @@ fn first_column_pos(b: &Binder, set: &SetExpr) -> Option<u32> {
 /// Source positions of the `width` output columns of a query expression, read from the AST. Only
 /// an unexpanded select list (no `*`) or the first VALUES row gives per-column positions; anything
 /// else reports `None` rather than a wrong position.
-fn column_positions(b: &Binder, set: &SetExpr, width: usize) -> Vec<Option<u32>> {
+pub(super) fn column_positions(b: &Binder, set: &SetExpr, width: usize) -> Vec<Option<u32>> {
     match set {
         SetExpr::Select(sel) if sel.projection.len() == width => {
             sel.projection.iter().map(|item| b.pos(item)).collect()

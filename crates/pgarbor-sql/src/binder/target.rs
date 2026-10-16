@@ -55,8 +55,10 @@ use crate::names::{fold_ident, truncate_ident};
 /// 1 = second-best (overridden by a cast's type name), 0 = no name.
 type Fig = (u8, Option<String>);
 
-/// Bind a SELECT list (or RETURNING list when `ec` = `ExprCtx::returning()`).
-pub fn bind_target_list(b: &mut Binder, items: &[SelectItem], ec: ExprCtx) -> Result<Vec<TargetEntry>> {
+/// Bind a SELECT list (or RETURNING list when `ec` = `ExprCtx::returning()`). Unknown-typed
+/// outputs become text unless `keep_unknown` (a set-operation arm or INSERT source keeps them so the
+/// consumer can type them, PG `p_resolve_unknowns = false`).
+pub fn bind_target_list(b: &mut Binder, items: &[SelectItem], ec: ExprCtx, keep_unknown: bool) -> Result<Vec<TargetEntry>> {
     let mut out: Vec<TargetEntry> = Vec::with_capacity(items.len());
     for item in items {
         match item {
@@ -64,7 +66,7 @@ pub fn bind_target_list(b: &mut Binder, items: &[SelectItem], ec: ExprCtx) -> Re
                 let pos = b.pos(e);
                 let bound = expr::bind_expr(b, e, ec)?;
                 let name = figure_inner(b, e, Some(&bound))?.1.unwrap_or_else(|| "?column?".to_string());
-                let bound = finish_output(b, bound, pos)?;
+                let bound = if keep_unknown { bound } else { finish_output(b, bound, pos)? };
                 note_srf(b, &bound)?;
                 push_target(b, &mut out, bound, name)?;
             }
@@ -72,7 +74,7 @@ pub fn bind_target_list(b: &mut Binder, items: &[SelectItem], ec: ExprCtx) -> Re
                 let pos = b.pos(e);
                 let bound = expr::bind_expr(b, e, ec)?;
                 let name = b.ident(alias);
-                let bound = finish_output(b, bound, pos)?;
+                let bound = if keep_unknown { bound } else { finish_output(b, bound, pos)? };
                 note_srf(b, &bound)?;
                 push_target(b, &mut out, bound, name)?;
             }

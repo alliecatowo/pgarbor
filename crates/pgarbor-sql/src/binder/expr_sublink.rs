@@ -35,7 +35,7 @@
 
 use pgarbor_common::{PgError, Result, SqlState};
 use pgarbor_types::catalog_data::CastContext;
-use pgarbor_types::registry::array_type_of;
+use pgarbor_types::registry::{array_type_of, is_array_type};
 use pgarbor_types::{oids, TypeEnv, TypeId};
 use sqlparser::ast::{BinaryOperator, Expr, Query};
 
@@ -69,7 +69,7 @@ pub fn bind_scalar_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<Bo
     check_sublinks_allowed(ec, pos)?;
     let mut sub = bind_nested_query(b, q)?;
     if sub.width() != 1 {
-        return Err(diag::subquery_one_column(pos));
+        return Err(diag::subquery_one_column(open_paren_pos(b, pos)));
     }
     if sub.output[0].ty.oid == oids::UNKNOWN {
         coerce_output_column(b, &mut sub, 0, TypeId::TEXT, pos)?;
@@ -103,6 +103,22 @@ pub fn bind_any_all_subquery(b: &mut Binder, left: &Expr, op: &BinaryOperator, q
     Ok(sub_link_expr(kind, Some(test), ops, sub, TypeId::BOOL))
 }
 
+/// Position of the `(` that opens a parenthesized sub-select whose query starts at `pos` (PG
+/// `SubLink.location` is the opening parenthesis). Falls back to `pos` when no `(` precedes it.
+fn open_paren_pos(b: &Binder, pos: Option<u32>) -> Option<u32> {
+    let start = pos?;
+    let chars: Vec<char> = b.src.text().chars().collect();
+    // `start` is a 1-based character position: the character before the query is at index `start - 2`.
+    let mut idx = (start as usize).checked_sub(2)?;
+    loop {
+        match chars.get(idx) {
+            Some(c) if c.is_whitespace() => idx = idx.checked_sub(1)?,
+            Some('(') => return Some(idx as u32 + 1),
+            _ => return pos,
+        }
+    }
+}
+
 /// `ARRAY(select ...)`.
 pub fn bind_array_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<BoundExpr> {
     let pos = b.pos(q);
@@ -116,7 +132,9 @@ pub fn bind_array_subquery(b: &mut Binder, q: &Query, ec: ExprCtx) -> Result<Bou
     }
     let elem = sub.output[0].ty;
     let env: &dyn TypeEnv = b.env;
-    let array_oid = match array_type_of(env, elem.oid) {
+    // PG get_promoted_array_type: an array-valued column makes the (multidimensional) array type itself.
+    let promoted = if is_array_type(env, elem.oid) { Some(elem.oid) } else { array_type_of(env, elem.oid) };
+    let array_oid = match promoted {
         Some(oid) => oid,
         None => {
             let mut e = PgError::new(

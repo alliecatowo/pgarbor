@@ -21,9 +21,14 @@
 //!   14) and `plpgsql` (13647?? use `builtin::LANGUAGES` lookup by name) accepted; others 42704 `language
 //!   "x" does not exist` (or 0A000 for `c`/`internal` user functions); `BEGIN ATOMIC ... END` bodies and
 //!   `RETURN expr` -> `sql_body: Some(StoredExpr)` (deparsed) when binding succeeds.
-//!   SQL-language bodies are syntax-checked lazily (`check_function_bodies` is `on` in PG: a SQL body is
-//!   parsed/analyzed at creation; PGArbor v1 parses it with `parser::parse` and reports 42601 syntax errors,
-//!   but does not bind it).
+//!   SQL-language `AS` bodies are checked at creation (`check_function_bodies` is `on` in PG): the text is
+//!   parsed with `parser::parse` (42601 syntax errors) and each query statement is bound with the input
+//!   parameters in scope (`check_sql_body`). Non-query statements are not bound yet. The final statement
+//!   must match a scalar declared result (`check_sql_result`: 42P13 `return type mismatch ...` with
+//!   DETAIL `Final statement must return exactly one column.` / `Actual return type is X.` / the empty-body
+//!   detail); the check is skipped for void, composite and polymorphic-argument functions.
+//!   The check runs after the duplicate / `OR REPLACE` checks, as PG's validator does. `check_function_bodies
+//!   = off` is not visible to the binder yet, so the check always runs (known gap).
 //! * Attributes: `IMMUTABLE|STABLE|VOLATILE` (default volatile), `[NOT] LEAKPROOF`, `STRICT|RETURNS NULL
 //!   ON NULL INPUT|CALLED ON NULL INPUT`, `SECURITY DEFINER|INVOKER`, `PARALLEL UNSAFE|RESTRICTED|SAFE`,
 //!   `COST n`, `ROWS n` (SRFs only), `SET guc = v` -> `config`, `WINDOW`, `TRANSFORM`: 0A000.
@@ -54,7 +59,8 @@ use pgarbor_catalog::{CatalogEnv, StoredExpr};
 use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_types::catalog_data::{CastContext, ProcKind};
 use pgarbor_types::oids;
-use pgarbor_types::registry::is_array_type;
+use pgarbor_types::registry::{is_array_type, is_polymorphic};
+use pgarbor_types::resolve::coerce::can_coerce_type;
 use pgarbor_types::resolve::func::{resolve_function, signature_string, FuncCall, FuncCandidate, ResolvedFunc};
 use pgarbor_types::TypeId;
 use sqlparser::ast::{
@@ -65,13 +71,16 @@ use sqlparser::ast::{
 };
 
 use super::coerce::{coerce_strict, coerce_to_specific};
+use super::dispatch::CREATE_PROCEDURE_KEY;
 use super::context::{Binder, BoundArg, ExprCtx};
 use super::expr::{bind_arg, bind_expr};
+use super::params::ParamTable;
+use super::select::{bind_query, QueryCtx};
 use super::stored::{bind_ddl_expr, store_expr, table_expr_scope};
 use super::types::resolve_data_type;
 use crate::diag::{syntax_error_near, ExprClause};
 use crate::ir::{BoundCall, BoundCreateFunction, BoundDo, BoundExpr, BoundStatement, CoercionForm};
-use crate::parser::{parse, parse_expr_text};
+use crate::parser::{parse, parse_expr_text, Parsed, RawStatement, UNNAMED_PARAM_MARKER};
 
 /// `pg_language` OIDs (builtin::LANGUAGES).
 const LANG_INTERNAL: Oid = 12;
@@ -282,6 +291,69 @@ fn bind_stored_default(b: &mut Binder<'_>, sd: &StoredExpr, ty: Oid) -> Result<B
     })
 }
 
+/// PG `check_valid_polymorphic_signature` (ProcedureCreate): a polymorphic result type needs an input
+/// of a family that can deduce it. 42P13 `cannot determine result data type` with the PG DETAIL text.
+fn check_polymorphic_result(b: &Binder<'_>, ret: Oid, in_types: &[Oid]) -> Result<()> {
+    let has = |list: &[Oid]| in_types.iter().any(|t| list.contains(t));
+    let (ok, want) = match ret {
+        oids::ANYRANGE | oids::ANYMULTIRANGE => (
+            has(&[oids::ANYRANGE, oids::ANYMULTIRANGE]),
+            "anyrange or anymultirange",
+        ),
+        oids::ANYCOMPATIBLERANGE | oids::ANYCOMPATIBLEMULTIRANGE => (
+            has(&[oids::ANYCOMPATIBLERANGE, oids::ANYCOMPATIBLEMULTIRANGE]),
+            "anycompatiblerange or anycompatiblemultirange",
+        ),
+        oids::ANYELEMENT | oids::ANYARRAY | oids::ANYNONARRAY | oids::ANYENUM => (
+            has(&[
+                oids::ANYELEMENT,
+                oids::ANYARRAY,
+                oids::ANYNONARRAY,
+                oids::ANYENUM,
+                oids::ANYRANGE,
+                oids::ANYMULTIRANGE,
+            ]),
+            "anyelement, anyarray, anynonarray, anyenum, anyrange, or anymultirange",
+        ),
+        oids::ANYCOMPATIBLE | oids::ANYCOMPATIBLEARRAY | oids::ANYCOMPATIBLENONARRAY => (
+            has(&[
+                oids::ANYCOMPATIBLE,
+                oids::ANYCOMPATIBLEARRAY,
+                oids::ANYCOMPATIBLENONARRAY,
+                oids::ANYCOMPATIBLERANGE,
+                oids::ANYCOMPATIBLEMULTIRANGE,
+            ]),
+            "anycompatible, anycompatiblearray, anycompatiblenonarray, anycompatiblerange, or anycompatiblemultirange",
+        ),
+        _ => return Ok(()),
+    };
+    if ok {
+        return Ok(());
+    }
+    Err(PgError::new(INVALID_FUNCTION_DEFINITION, "cannot determine result data type").with_detail(format!(
+        "A result of type {} requires at least one input of type {want}.",
+        b.type_name(TypeId::of(ret))
+    )))
+}
+
+/// PG `ProcedureCreate` / `sql_validator`: a SQL-language function cannot take a pseudo-type argument,
+/// except the polymorphic ones (42P13 `SQL functions cannot have arguments of type X`).
+fn check_sql_arg_types(b: &Binder<'_>, specs: &[ParamSpec<'_>]) -> Result<()> {
+    for p in specs.iter().filter(|p| p.is_input()) {
+        if is_polymorphic(p.type_oid) {
+            continue;
+        }
+        let typtype = pgarbor_types::registry::type_info(b.env, p.type_oid)?.typtype;
+        if typtype == b'p' {
+            return Err(PgError::new(
+                INVALID_FUNCTION_DEFINITION,
+                format!("SQL functions cannot have arguments of type {}", b.type_name(TypeId::of(p.type_oid))),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Text of an `AS` item: `'...'` or `$$...$$`. A second item (C link symbol) is 42P13 for SQL / PL/pgSQL.
 fn as_string_body(b: &Binder<'_>, e: &Expr, has_link: bool, lang: &BuiltinLanguage) -> Result<String> {
     if has_link {
@@ -295,11 +367,949 @@ fn as_string_body(b: &Binder<'_>, e: &Expr, has_link: bool, lang: &BuiltinLangua
         },
         _ => return Err(syntax_error_near(&e.to_string(), b.pos(e))),
     };
-    if lang.oid == LANG_SQL {
-        // check_function_bodies: the SQL text must at least parse (binding is deferred).
-        let _ = parse(&text)?;
-    }
     Ok(text)
+}
+
+/// One token of a PL/pgSQL body, as far as the FETCH check needs it. Comments are dropped; quoted strings
+/// and quoted identifiers are reduced to their opening character.
+#[derive(Debug, PartialEq)]
+enum PlTok {
+    /// Lower-cased unquoted word.
+    Word(String),
+    /// Any other character.
+    Other(char),
+}
+
+fn is_pl_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Index of the closing `$` of a dollar-quote opening tag starting at `i` (`$$` or `$tag$`, the tag not
+/// starting with a digit and not preceded by an identifier character).
+fn dollar_tag_end(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) != Some(&'$') || (i > 0 && is_pl_ident_char(chars[i - 1])) {
+        return None;
+    }
+    let mut j = i + 1;
+    while j < chars.len() && is_pl_ident_char(chars[j]) {
+        j += 1;
+    }
+    let digit_start = chars.get(i + 1).is_some_and(|d| d.is_ascii_digit());
+    (chars.get(j) == Some(&'$') && !digit_start).then_some(j)
+}
+
+fn tok_is_word(tok: &PlTok, word: &str) -> bool {
+    matches!(tok, PlTok::Word(w) if w.as_str() == word)
+}
+
+/// Tokens of a PL/pgSQL body, each with the char index of its first character.
+fn plpgsql_tokens(text: &str) -> Vec<(usize, PlTok)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '-' && next == Some('-') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            // Block comments nest (scan.l `xcdepth`).
+            let mut depth = 1usize;
+            i += 2;
+            while depth > 0 && i < chars.len() {
+                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        } else if c == '\'' || c == '"' {
+            out.push((i, PlTok::Other(c)));
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == c {
+                    if chars.get(i + 1) == Some(&c) {
+                        i += 2;
+                        continue;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+        } else if let Some(tag_end) = dollar_tag_end(&chars, i) {
+            // Dollar-quoted string `$tag$ ... $tag$` (`$$ ... $$` when the tag is empty).
+            let tag: Vec<char> = chars[i..=tag_end].to_vec();
+            out.push((i, PlTok::Other('$')));
+            let mut k = tag_end + 1;
+            while k < chars.len() && !chars[k..].starts_with(&tag) {
+                k += 1;
+            }
+            i = (k + tag.len()).min(chars.len());
+        } else if c.is_alphabetic() || c == '_' {
+            let start = i;
+            while i < chars.len() && is_pl_ident_char(chars[i]) {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect::<String>().to_lowercase();
+            out.push((start, PlTok::Word(word)));
+        } else {
+            out.push((i, PlTok::Other(c)));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Whether the tokens after a FETCH keyword name a direction that can return several rows (pl_gram.y
+/// `read_fetch_direction` / `complete_direction`: ALL, FORWARD|BACKWARD with anything but FROM|IN after
+/// it, or a bare count expression). A bare word is not decided here: it may be a variable or a cursor.
+fn fetch_direction_is_multi(after: &[(usize, PlTok)]) -> bool {
+    let word_at = |i: usize| match after.get(i) {
+        Some((_, PlTok::Word(w))) => Some(w.as_str()),
+        _ => None,
+    };
+    match after.first() {
+        Some((_, PlTok::Word(w))) => match w.as_str() {
+            "all" => true,
+            "forward" | "backward" => !matches!(word_at(1), Some("from" | "in")),
+            _ => false,
+        },
+        Some((_, PlTok::Other(c))) => c.is_ascii_digit() || matches!(*c, '(' | '$' | '\'' | '-' | '+'),
+        None => false,
+    }
+}
+
+/// Char index (in `text`) of the first FETCH statement whose direction can return several rows: the
+/// compile-time check of pl_gram.y `stmt_fetch` ("FETCH statement cannot return multiple rows").
+/// Only FETCH at a statement start is considered (after `;`, `BEGIN`, `THEN`, `ELSE` or `LOOP`).
+fn plpgsql_multi_row_fetch(text: &str) -> Option<usize> {
+    let toks = plpgsql_tokens(text);
+    for (k, (at, tok)) in toks.iter().enumerate() {
+        if !tok_is_word(tok, "fetch") {
+            continue;
+        }
+        let stmt_start = match k.checked_sub(1).map(|p| &toks[p].1) {
+            None => true,
+            Some(PlTok::Other(';')) => true,
+            Some(PlTok::Word(w)) => matches!(w.as_str(), "begin" | "then" | "else" | "loop"),
+            Some(PlTok::Other(_)) => false,
+        };
+        if stmt_start && fetch_direction_is_multi(&toks[k + 1..]) {
+            return Some(*at);
+        }
+    }
+    None
+}
+
+/// Statement position of char `idx` of the body `text` of the `AS` item `e`. The body starts after the
+/// opening quote or `$tag$`; a single-quoted body with any quote in it is not mapped (doubled quotes).
+fn plpgsql_body_position(b: &Binder<'_>, e: &Expr, text: &str, idx: usize) -> Option<u32> {
+    let prefix: u32 = match e {
+        Expr::Value(v) => match &v.value {
+            Value::DollarQuotedString(d) => 2 + d.tag.as_ref().map_or(0, |t| t.chars().count() as u32),
+            Value::SingleQuotedString(_) if !text.contains('\'') => 1,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let start = b.pos(e)? + prefix;
+    Some(start + idx as u32)
+}
+
+/// Name of a top-level DECLARE item `name CONSTANT ...` (pl_gram.y `decl_statement`), if it is one.
+fn constant_decl_name(decl: &[(usize, PlTok)]) -> Option<&str> {
+    match decl {
+        [(_, PlTok::Word(name)), (_, second), ..] if tok_is_word(second, "constant") => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Char index and name of the first assignment to a `CONSTANT` variable of the top-level DECLARE section:
+/// PG `check_assignable` (pl_gram.y), raised while the body is compiled. Only a plain name at a statement
+/// start (after `;`, `BEGIN`, `THEN`, `ELSE` or `LOOP`) followed by `:=` or `=` is an assignment, so a named
+/// argument `f(c := 1)` is not matched. A body with a nested DECLARE is not checked, because a nested block
+/// may redeclare the name (known gap).
+fn plpgsql_constant_assignment(text: &str) -> Option<(usize, String)> {
+    let toks = plpgsql_tokens(text);
+    if !toks.first().is_some_and(|(_, t)| tok_is_word(t, "declare")) {
+        return None;
+    }
+    let begin = toks.iter().position(|(_, t)| tok_is_word(t, "begin"))?;
+    if toks[begin + 1..].iter().any(|(_, t)| tok_is_word(t, "declare")) {
+        return None;
+    }
+    // A duplicate declaration is an earlier compile error, so the body is not reached.
+    if plpgsql_duplicate_declaration(text).is_some() {
+        return None;
+    }
+    // Declarations up to BEGIN, split at `;` outside parentheses.
+    let mut consts: Vec<&str> = Vec::new();
+    let mut depth = 0i32;
+    let mut decl_start = 1;
+    for k in 1..begin {
+        match &toks[k].1 {
+            PlTok::Other('(') => depth += 1,
+            PlTok::Other(')') => depth -= 1,
+            PlTok::Other(';') if depth == 0 => {
+                let mut first = decl_start;
+                while first < k && tok_is_word(&toks[first].1, "declare") {
+                    first += 1;
+                }
+                consts.extend(constant_decl_name(&toks[first..k]));
+                decl_start = k + 1;
+            }
+            _ => {}
+        }
+    }
+    if consts.is_empty() {
+        return None;
+    }
+    for k in begin + 1..toks.len() {
+        let (at, tok) = &toks[k];
+        let PlTok::Word(name) = tok else { continue };
+        if !consts.contains(&name.as_str()) {
+            continue;
+        }
+        let stmt_start = match k.checked_sub(1).map(|p| &toks[p].1) {
+            Some(PlTok::Other(';')) => true,
+            Some(PlTok::Word(w)) => matches!(w.as_str(), "begin" | "then" | "else" | "loop"),
+            _ => false,
+        };
+        let assigns = match toks.get(k + 1) {
+            Some((_, PlTok::Other('='))) => true,
+            Some((colon, PlTok::Other(':'))) => {
+                matches!(toks.get(k + 2), Some((eq, PlTok::Other('='))) if *eq == colon + 1)
+            }
+            _ => false,
+        };
+        if stmt_start && assigns {
+            return Some((*at, name.clone()));
+        }
+    }
+    None
+}
+
+/// Char index (of the `NOT` keyword) and name of a declaration in `decl` (the tokens of one DECLARE item, without
+/// its `;`) that is `NOT NULL` with no default: PG pl_gram.y `decl_statement` rejects it at compile time. The
+/// `NOT NULL` of a declaration follows its type, so it is default-less when nothing follows it. A `NOT NULL`
+/// after `=`, `:=` or `DEFAULT` belongs to the default expression. Aliases and cursors are skipped.
+fn not_null_without_default(decl: &[(usize, PlTok)]) -> Option<(usize, String)> {
+    let [(_, PlTok::Word(name)), rest @ ..] = decl else {
+        return None;
+    };
+    if rest.iter().any(|(_, t)| tok_is_word(t, "alias") || tok_is_word(t, "cursor")) {
+        return None;
+    }
+    for (j, (at, tok)) in rest.iter().enumerate() {
+        if matches!(tok, PlTok::Other('=')) || tok_is_word(tok, "default") {
+            return None;
+        }
+        if tok_is_word(tok, "not") && rest.get(j + 1).is_some_and(|(_, t)| tok_is_word(t, "null")) {
+            return (j + 2 == rest.len()).then(|| (*at, name.clone()));
+        }
+    }
+    None
+}
+
+/// First top-level DECLARE item (in order) that is `NOT NULL` without a default, see [`not_null_without_default`].
+/// A DECLARE section with a leading label or a nested block is not checked (known gap).
+fn plpgsql_not_null_without_default(text: &str) -> Option<(usize, String)> {
+    let toks = plpgsql_tokens(text);
+    if !toks.first().is_some_and(|(_, t)| tok_is_word(t, "declare")) {
+        return None;
+    }
+    let begin = toks.iter().position(|(_, t)| tok_is_word(t, "begin")).unwrap_or(toks.len());
+    let mut item_start = 1;
+    for k in 1..begin {
+        if matches!(toks[k].1, PlTok::Other(';')) {
+            if let Some(hit) = not_null_without_default(&toks[item_start..k]) {
+                return Some(hit);
+            }
+            item_start = k + 1;
+        }
+    }
+    None
+}
+
+/// Char index and length of the first top-level `UNION`, `INTERSECT` or `EXCEPT` in a PL/pgSQL expression. pl_gram.y
+/// reads an expression with the `PLpgSQL_Expr` grammar (gram.y), a simple SELECT without set operations, so such a
+/// keyword is a syntax error at that keyword. The expressions checked are the right side of an assignment
+/// (`x := ...`, `x = ...`), `RETURN expr` (not `RETURN QUERY` / `RETURN NEXT`) and the condition of `IF`, `ELSIF`
+/// or `WHILE`. A keyword inside parentheses (a subquery) or inside a CASE expression is not reported.
+fn plpgsql_expr_set_op(text: &str) -> Option<(usize, usize)> {
+    let toks = plpgsql_tokens(text);
+    for (k, (_, tok)) in toks.iter().enumerate() {
+        let stmt_start = match k.checked_sub(1).map(|p| &toks[p].1) {
+            None => true,
+            Some(PlTok::Other(';')) => true,
+            Some(PlTok::Word(w)) => matches!(w.as_str(), "begin" | "then" | "else" | "loop"),
+            Some(PlTok::Other(_)) => false,
+        };
+        if !stmt_start {
+            continue;
+        }
+        // First token of the expression, and a keyword that ends it besides `;`.
+        let (first, stop) = match tok {
+            PlTok::Word(w) if matches!(w.as_str(), "if" | "elsif") => (k + 1, Some("then")),
+            PlTok::Word(w) if w.as_str() == "while" => (k + 1, Some("loop")),
+            PlTok::Word(w) if w.as_str() == "return" => {
+                if matches!(toks.get(k + 1), Some((_, PlTok::Word(n))) if matches!(n.as_str(), "query" | "next")) {
+                    continue;
+                }
+                (k + 1, None)
+            }
+            PlTok::Word(_) => match (toks.get(k + 1), toks.get(k + 2)) {
+                (Some((_, PlTok::Other('='))), _) => (k + 2, None),
+                (Some((colon, PlTok::Other(':'))), Some((eq, PlTok::Other('=')))) if *eq == colon + 1 => (k + 3, None),
+                _ => continue,
+            },
+            PlTok::Other(_) => continue,
+        };
+        let mut depth = 0i32;
+        let mut case_depth = 0u32;
+        for (at, t) in &toks[first..] {
+            match t {
+                PlTok::Other('(') => depth += 1,
+                PlTok::Other(')') => depth -= 1,
+                PlTok::Other(';') => break,
+                PlTok::Word(w) if depth == 0 => match w.as_str() {
+                    "case" => case_depth += 1,
+                    "end" => case_depth = case_depth.saturating_sub(1),
+                    "union" | "intersect" | "except" if case_depth == 0 => return Some((*at, w.chars().count())),
+                    s if case_depth == 0 && Some(s) == stop => break,
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// Char index of the `;` when a PL/pgSQL body starts with `BEGIN` directly followed by `;` (pl_gram.y `pl_block`
+/// expects a declaration or a statement after BEGIN, so the `;` is the syntax error). Labels are not stripped.
+fn plpgsql_begin_semicolon(text: &str) -> Option<usize> {
+    let toks = plpgsql_tokens(text);
+    match (toks.first(), toks.get(1)) {
+        (Some((_, first)), Some((at, PlTok::Other(';')))) if tok_is_word(first, "begin") => Some(*at),
+        _ => None,
+    }
+}
+
+/// Block labels of a top-level PL/pgSQL body (pl_gram.y `pl_block` -> `check_labels`): the leading `<< label >>` and
+/// the label after the final `END`. Returns the char index and name of the END label, and the block's label, when
+/// the END label differs from it (or the block has no label). A quoted label is not checked (known gap), and a
+/// nested block is not checked.
+fn plpgsql_end_label_mismatch(text: &str) -> Option<(usize, String, Option<String>)> {
+    let toks = plpgsql_tokens(text);
+    let start_label = match toks.as_slice() {
+        [(_, PlTok::Other('<')), (_, PlTok::Other('<')), (_, PlTok::Word(l)), (_, PlTok::Other('>')), (_, PlTok::Other('>')), ..] => {
+            Some(l.clone())
+        }
+        [(_, PlTok::Other('<')), (_, PlTok::Other('<')), ..] => return None,
+        _ => None,
+    };
+    let mut end = toks.len();
+    if matches!(toks.last(), Some((_, PlTok::Other(';')))) {
+        end -= 1;
+    }
+    let [.., (_, PlTok::Word(end_kw)), (at, PlTok::Word(label))] = &toks[..end] else {
+        return None;
+    };
+    if end_kw.as_str() != "end" || matches!(label.as_str(), "if" | "loop" | "case") {
+        return None;
+    }
+    if start_label.as_deref() == Some(label.as_str()) {
+        return None;
+    }
+    Some((*at, label.clone(), start_label))
+}
+
+/// Words that cannot be a block end label (PG pl_reserved_kwlist.h): after a subblock's END, one of these is not a label.
+const PLPGSQL_RESERVED_WORDS: &[&str] = &[
+    "all", "begin", "by", "case", "declare", "else", "end", "execute", "for", "foreach", "from", "if", "in", "into", "loop",
+    "not", "null", "or", "strict", "then", "to", "using", "when", "while",
+];
+
+/// Label of the block whose first token (`BEGIN`, or `DECLARE` of its section) is `toks[k]`: a `<< label >>` just before it.
+fn plpgsql_block_label_before(toks: &[(usize, PlTok)], k: usize) -> Option<String> {
+    match k.checked_sub(5).and_then(|s| toks.get(s..k)) {
+        Some([(_, PlTok::Other('<')), (_, PlTok::Other('<')), (_, PlTok::Word(l)), (_, PlTok::Other('>')), (_, PlTok::Other('>'))]) => {
+            Some(l.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Char index and error of a subblock END whose end label is wrong (pl_gram.y `pl_block` -> `check_labels`, run when the
+/// subblock's END is parsed). After the END of a subblock, a word that is not reserved is its end label: it must be the
+/// subblock's own label, else PG reports it (`RETURN` after an unterminated subblock END is taken as a label). The
+/// outermost block is checked by `plpgsql_end_label_mismatch`. Open IF, LOOP and CASE constructs are tracked on the
+/// stack so an END that closes them (`END IF`, `END LOOP`, `END CASE`) or a CASE expression's END is not a block END.
+fn plpgsql_nested_end_label(text: &str) -> Option<(usize, PgError)> {
+    let toks = plpgsql_tokens(text);
+    // One entry per open construct: `Some((label, outermost))` for a block, `None` for IF, LOOP and CASE.
+    let mut open: Vec<Option<(Option<String>, bool)>> = Vec::new();
+    let mut declare_label: Option<String> = None;
+    for (k, (_, tok)) in toks.iter().enumerate() {
+        let PlTok::Word(word) = tok else { continue };
+        let prev = k.checked_sub(1).map(|p| &toks[p].1);
+        let after_end = matches!(prev, Some(PlTok::Word(w)) if w.as_str() == "end");
+        let stmt_start = match prev {
+            None | Some(PlTok::Other(';')) => true,
+            Some(PlTok::Word(w)) => matches!(w.as_str(), "begin" | "then" | "else" | "loop"),
+            Some(PlTok::Other(_)) => false,
+        };
+        match word.as_str() {
+            "declare" => declare_label = plpgsql_block_label_before(&toks, k),
+            "begin" => {
+                let label = declare_label.take().or_else(|| plpgsql_block_label_before(&toks, k));
+                let outermost = open.is_empty();
+                open.push(Some((label, outermost)));
+            }
+            "loop" | "case" if !after_end => open.push(None),
+            "if" if !after_end && stmt_start => open.push(None),
+            "end" => {
+                let popped = open.pop().flatten();
+                let closes_statement = match toks.get(k + 1) {
+                    Some((_, PlTok::Word(w))) => matches!(w.as_str(), "if" | "loop" | "case"),
+                    _ => false,
+                };
+                if closes_statement {
+                    continue;
+                }
+                let Some((label, false)) = popped else { continue };
+                let Some((name_at, PlTok::Word(name))) = toks.get(k + 1) else { continue };
+                if PLPGSQL_RESERVED_WORDS.contains(&name.as_str()) {
+                    continue;
+                }
+                let msg = match &label {
+                    Some(start) if start == name => continue,
+                    Some(start) => format!("end label \"{name}\" differs from block's label \"{start}\""),
+                    None => format!("end label \"{name}\" specified for unlabeled block"),
+                };
+                return Some((*name_at, PgError::new(SqlState::SYNTAX_ERROR, msg)));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Name (lower-cased) and char index of each top-level DECLARE item of `toks[..begin]`, in order. The first
+/// token of an item is its name; items are split at `;` outside parentheses. Expects `toks[0]` to be DECLARE.
+fn declared_names(toks: &[(usize, PlTok)], begin: usize) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut item_start = 1;
+    for k in 1..begin {
+        match &toks[k].1 {
+            PlTok::Other('(') => depth += 1,
+            PlTok::Other(')') => depth -= 1,
+            PlTok::Other(';') if depth == 0 => {
+                // pl_gram.y `decl_stmt` accepts useless extra `DECLARE` keywords before an item.
+                let mut first = item_start;
+                while first < k && tok_is_word(&toks[first].1, "declare") {
+                    first += 1;
+                }
+                if let Some((at, PlTok::Word(name))) = toks.get(first).filter(|_| first < k) {
+                    out.push((*at, name.as_str()));
+                }
+                item_start = k + 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Char index (of the name) and name of the first top-level DECLARE item whose name an earlier item of the same
+/// section already declared. PG pl_gram.y reports it while the declarations compile ("duplicate declaration").
+/// Names are compared as unquoted identifiers (lower-cased); a nested block is not checked.
+fn plpgsql_duplicate_declaration(text: &str) -> Option<(usize, String)> {
+    let toks = plpgsql_tokens(text);
+    if !toks.first().is_some_and(|(_, t)| tok_is_word(t, "declare")) {
+        return None;
+    }
+    let begin = toks.iter().position(|(_, t)| tok_is_word(t, "begin")).unwrap_or(toks.len());
+    let mut seen: Vec<&str> = Vec::new();
+    for (at, name) in declared_names(&toks, begin) {
+        if seen.contains(&name) {
+            return Some((at, name.to_string()));
+        }
+        seen.push(name);
+    }
+    None
+}
+
+/// Whether the token at `k` starts a statement: it follows `;`, `BEGIN`, `THEN`, `ELSE` or `LOOP`.
+fn plpgsql_stmt_start(toks: &[(usize, PlTok)], k: usize) -> bool {
+    match k.checked_sub(1).map(|p| &toks[p].1) {
+        Some(PlTok::Other(';')) => true,
+        Some(PlTok::Word(w)) => matches!(w.as_str(), "begin" | "then" | "else" | "loop"),
+        _ => false,
+    }
+}
+
+/// Whether the tokens after `toks[k]` are the assignment operator `:=`. A bare `=` is not used: after THEN or
+/// ELSE it may be a SQL comparison inside a CASE expression.
+fn plpgsql_assign_op_after(toks: &[(usize, PlTok)], k: usize) -> bool {
+    match (toks.get(k + 1), toks.get(k + 2)) {
+        (Some((colon, PlTok::Other(':'))), Some((eq, PlTok::Other('=')))) => *eq == colon + 1,
+        _ => false,
+    }
+}
+
+/// Special variables of the PL/pgSQL namespace (FOUND, SQLSTATE, SQLERRM, NEW/OLD, TG_* and PG_* names); they are
+/// never reported as undeclared, so the check stays on the ordinary variables.
+fn plpgsql_builtin_var(name: &str) -> bool {
+    matches!(name, "found" | "sqlstate" | "sqlerrm" | "new" | "old") || name.starts_with("pg_") || name.starts_with("tg_")
+}
+
+/// Char index and name of the first assignment `name := ...` (or `name = ...`) at a statement start of the body
+/// whose name is not a known variable: PG pl_gram.y `plpgsql_parse_word` reports it while the body compiles
+/// ("\"name\" is not a known variable"). Known variables are the parameters (`params`, lower-cased here), the
+/// top-level DECLARE names, FOR/FOREACH loop variables and the special variables. A body with a labelled DECLARE
+/// section or a nested DECLARE is not checked, because its block structure is not tracked (known gap).
+fn plpgsql_undeclared_assignment(text: &str, params: &[&str]) -> Option<(usize, String)> {
+    let toks = plpgsql_tokens(text);
+    let begin = toks.iter().position(|(_, t)| tok_is_word(t, "begin"))?;
+    if toks[begin + 1..].iter().any(|(_, t)| tok_is_word(t, "declare")) {
+        return None;
+    }
+    let declares = toks[..begin].iter().any(|(_, t)| tok_is_word(t, "declare"));
+    if declares && !toks.first().is_some_and(|(_, t)| tok_is_word(t, "declare")) {
+        return None;
+    }
+    let mut known: Vec<String> = params.iter().map(|p| p.to_lowercase()).collect();
+    if declares {
+        known.extend(declared_names(&toks, begin).into_iter().map(|(_, n)| n.to_string()));
+    }
+    for k in 0..toks.len() {
+        if tok_is_word(&toks[k].1, "for") || tok_is_word(&toks[k].1, "foreach") {
+            if let Some((_, PlTok::Word(w))) = toks.get(k + 1) {
+                known.push(w.clone());
+            }
+        }
+    }
+    for k in begin + 1..toks.len() {
+        let (at, tok) = &toks[k];
+        let PlTok::Word(name) = tok else { continue };
+        if !plpgsql_stmt_start(&toks, k) || !plpgsql_assign_op_after(&toks, k) {
+            continue;
+        }
+        if known.iter().any(|n| n == name) || plpgsql_builtin_var(name) {
+            continue;
+        }
+        return Some((*at, name.clone()));
+    }
+    None
+}
+
+/// Words that can start a PL/pgSQL statement: its own keywords and the SQL command keywords a statement may begin with.
+const PLPGSQL_STMT_WORDS: &[&str] = &[
+    "abort", "alter", "analyse", "analyze", "assert", "begin", "call", "case", "checkpoint", "close", "cluster",
+    "comment", "commit", "continue", "copy", "create", "deallocate", "declare", "delete", "discard", "do", "drop",
+    "else", "elseif", "elsif", "end", "exception", "exit", "execute", "explain", "fetch", "for", "foreach", "get", "grant", "if",
+    "import", "insert", "listen", "load", "lock", "loop", "merge", "move", "notify", "null", "open", "perform",
+    "prepare", "raise", "reassign", "refresh", "reindex", "release", "reset", "return", "revoke", "rollback",
+    "savepoint", "security", "select", "set", "show", "start", "table", "truncate", "unlisten", "update", "vacuum",
+    "values", "when", "while", "with",
+];
+
+/// Char index and error of the first statement of a PL/pgSQL body that the statement grammar rejects without the SQL
+/// parser: a statement word that is neither a PL/pgSQL nor a SQL command keyword (`SELEC 1;`) is a syntax error at that
+/// word. Only the words after `;`, `BEGIN` or `LOOP` are statement starts (a word after `THEN` or `ELSE` may be a CASE
+/// expression), and DECLARE sections are skipped. The error's position is not set.
+fn plpgsql_statement_syntax(text: &str) -> Option<(usize, PgError)> {
+    let toks = plpgsql_tokens(text);
+    let chars: Vec<char> = text.chars().collect();
+    let mut in_declare = false;
+    for (k, (at, tok)) in toks.iter().enumerate() {
+        let PlTok::Word(word) = tok else { continue };
+        match word.as_str() {
+            "declare" => in_declare = true,
+            "begin" => in_declare = false,
+            _ => {}
+        }
+        if in_declare {
+            continue;
+        }
+        if word.as_str() == "return" {
+            if let Some(found) = return_expr_syntax(&chars, &toks, k) {
+                return Some(found);
+            }
+            continue;
+        }
+        let stmt_start = match k.checked_sub(1).map(|p| &toks[p].1) {
+            Some(PlTok::Other(';')) => true,
+            Some(PlTok::Word(w)) => matches!(w.as_str(), "begin" | "loop"),
+            _ => false,
+        };
+        if !stmt_start || PLPGSQL_STMT_WORDS.contains(&word.as_str()) {
+            continue;
+        }
+        // A plain name followed by an assignment target part (`:=`, `=`, `.field`, `[subscript]`) is an assignment.
+        let assigned = match toks.get(k + 1) {
+            Some((_, PlTok::Other(c))) => matches!(*c, ':' | '=' | '.' | '['),
+            _ => false,
+        };
+        if assigned {
+            continue;
+        }
+        let token: String = chars.iter().skip(*at).take_while(|c| is_pl_ident_char(**c)).collect();
+        return Some((*at, syntax_error_near(&token, None)));
+    }
+    None
+}
+
+/// Syntax error of the RETURN statement at `toks[k]`. PL/pgSQL reads the expression up to the `;` and parses it as
+/// `SELECT <expr>`, so the SQL parser's 42601 error is reported. The char index is the body token at the error, or the
+/// `;` when the expression ends early (`syntax error at end of input`). `RETURN QUERY` and `RETURN NEXT` are not
+/// expressions, and an empty `RETURN;` has none.
+fn return_expr_syntax(chars: &[char], toks: &[(usize, PlTok)], k: usize) -> Option<(usize, PgError)> {
+    if matches!(toks.get(k + 1), Some((_, PlTok::Word(w))) if matches!(w.as_str(), "query" | "next")) {
+        return None;
+    }
+    let after = toks[k].0 + "return".len();
+    let semi = toks[k + 1..].iter().find(|(_, t)| matches!(t, PlTok::Other(';')))?.0;
+    let expr: String = chars.iter().skip(after).take(semi.saturating_sub(after)).collect();
+    if expr.trim().is_empty() {
+        return None;
+    }
+    let err = parse(&format!("SELECT {expr}")).err()?;
+    if err.sqlstate != SqlState::SYNTAX_ERROR {
+        return None;
+    }
+    // "SELECT " is 7 characters and positions are 1-based, so the offset in the expression is `position - 8`.
+    let idx = match err.position {
+        Some(p) => (after + (p as usize).saturating_sub(8)).min(semi),
+        None => semi,
+    };
+    Some((idx, err))
+}
+
+/// SQLSTATE 22005 `error_in_assignment`.
+const ERROR_IN_ASSIGNMENT: SqlState = SqlState(*b"22005");
+
+/// Char index of the `/*` that opens a block comment left unterminated in a PL/pgSQL body (PG scan.l). Block comments
+/// nest, so an unmatched opener swallows the rest of the body. Quoted strings, dollar-quoted strings and `--` line
+/// comments are skipped the way the scanner skips them, so an opener inside them is not a comment.
+fn plpgsql_unterminated_comment(text: &str) -> Option<usize> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '-' && chars.get(i + 1) == Some(&'-') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
+            let start = i;
+            let mut depth = 1usize;
+            i += 2;
+            while depth > 0 && i < chars.len() {
+                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if depth > 0 {
+                return Some(start);
+            }
+        } else if c == '\'' || c == '"' {
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == c {
+                    if chars.get(i + 1) == Some(&c) {
+                        i += 2;
+                        continue;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+        } else if let Some(tag_end) = dollar_tag_end(&chars, i) {
+            let tag: Vec<char> = chars[i..=tag_end].to_vec();
+            let mut k = tag_end + 1;
+            while k < chars.len() && !chars[k..].starts_with(&tag) {
+                k += 1;
+            }
+            i = k + tag.len();
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// PL/pgSQL compile of a body (`check_plpgsql_compile`), after the lexical check of PG scan.l: an unterminated block
+/// comment is raised when the scanner reaches it, so only the text before it is compiled first, and the comment's
+/// `unterminated /* comment` 42601 error follows if none of those checks fail.
+fn check_plpgsql_body(
+    b: &Binder<'_>,
+    e: &Expr,
+    text: &str,
+    lang: &BuiltinLanguage,
+    params: &[ParamSpec<'_>],
+) -> Result<()> {
+    if lang.name != "plpgsql" {
+        return Ok(());
+    }
+    let Some(open) = plpgsql_unterminated_comment(text) else {
+        return check_plpgsql_compile(b, e, text, lang, params);
+    };
+    let before: String = text.chars().take(open).collect();
+    check_plpgsql_compile(b, e, &before, lang, params)?;
+    let near: String = text.chars().skip(open).collect();
+    Err(PgError::syntax(
+        format!("unterminated /* comment at or near \"{near}\""),
+        plpgsql_body_position(b, e, text, open),
+    ))
+}
+
+/// PL/pgSQL compile-time checks made without a PL/pgSQL parser (the PL/pgSQL interpreter is not
+/// implemented, so only the duplicate declaration rule, the NOT NULL default rule, the undeclared assignment rule,
+/// the statement syntax and RETURN expression rules, the FETCH direction rule, the CONSTANT assignment rule and the
+/// top-level set-operation rule are enforced; other
+/// bodies are stored unchecked). The earliest error in the body is reported, as PG compiles in order.
+fn check_plpgsql_compile(
+    b: &Binder<'_>,
+    e: &Expr,
+    text: &str,
+    lang: &BuiltinLanguage,
+    params: &[ParamSpec<'_>],
+) -> Result<()> {
+    if lang.name != "plpgsql" {
+        return Ok(());
+    }
+    // pl_gram.y `pl_block`: a `;` right after the opening BEGIN is a syntax error. No earlier token can fail, so
+    // this is the first body error whenever it is present.
+    if let Some(idx) = plpgsql_begin_semicolon(text) {
+        return Err(syntax_error_near(";", plpgsql_body_position(b, e, text, idx)));
+    }
+    // Declarations compile before the body, so the NOT NULL and duplicate rules are checked first, in order.
+    let not_null = plpgsql_not_null_without_default(text);
+    if let Some((idx, name)) = plpgsql_duplicate_declaration(text).filter(|(d, _)| not_null.as_ref().map_or(true, |(n, _)| d < n)) {
+        let mut err = PgError::new(SqlState::SYNTAX_ERROR, format!("duplicate declaration at or near \"{name}\""));
+        err.position = plpgsql_body_position(b, e, text, idx);
+        return Err(err);
+    }
+    if let Some((idx, name)) = not_null {
+        let msg = format!("variable \"{name}\" must have a default value, since it's declared NOT NULL");
+        let mut err = PgError::new(SqlState::NULL_VALUE_NOT_ALLOWED, msg);
+        err.position = plpgsql_body_position(b, e, text, idx);
+        return Err(err);
+    }
+    let fetch = plpgsql_multi_row_fetch(text);
+    let before_fetch = |idx: usize| fetch.map_or(true, |f| idx < f);
+    // An undeclared assignment is raised when its statement compiles, so it is the earliest body error when it
+    // comes first (the other checks below are filtered against it).
+    let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+    let undeclared = plpgsql_undeclared_assignment(text, &names);
+    let before_undeclared = |idx: usize| undeclared.as_ref().map_or(true, |(u, _)| idx < *u);
+    // A statement syntax error, or a wrong subblock END label, is raised when its statement is parsed, so the checks
+    // after it are not reported.
+    let syntax = match (plpgsql_statement_syntax(text), plpgsql_nested_end_label(text)) {
+        (Some(s), Some(n)) => Some(if n.0 < s.0 { n } else { s }),
+        (s, n) => s.or(n),
+    };
+    let before_syntax = |idx: usize| syntax.as_ref().map_or(true, |(s, _)| idx < *s);
+    let constant = plpgsql_constant_assignment(text)
+        .filter(|(idx, _)| before_fetch(*idx) && before_undeclared(*idx) && before_syntax(*idx));
+    // A top-level set operation is a syntax error at compile time, in statement order with the other checks.
+    let set_op = plpgsql_expr_set_op(text).filter(|&(idx, _)| {
+        before_fetch(idx)
+            && before_undeclared(idx)
+            && before_syntax(idx)
+            && constant.as_ref().map_or(true, |(c, _)| idx < *c)
+    });
+    if let Some((idx, len)) = set_op {
+        let token: String = text.chars().skip(idx).take(len).collect();
+        return Err(syntax_error_near(&token, plpgsql_body_position(b, e, text, idx)));
+    }
+    if let Some((idx, name)) = undeclared.filter(|(u, _)| {
+        before_fetch(*u)
+            && before_syntax(*u)
+            && constant.as_ref().map_or(true, |(c, _)| u < c)
+            && set_op.map_or(true, |(s, _)| *u < s)
+    }) {
+        let mut err = PgError::new(SqlState::SYNTAX_ERROR, format!("\"{name}\" is not a known variable"));
+        err.position = plpgsql_body_position(b, e, text, idx);
+        return Err(err);
+    }
+    if let Some((idx, name)) = constant {
+        let mut err = PgError::new(ERROR_IN_ASSIGNMENT, format!("variable \"{name}\" is declared CONSTANT"));
+        err.position = plpgsql_body_position(b, e, text, idx);
+        return Err(err);
+    }
+    if let Some(idx) = fetch.filter(|f| before_syntax(*f)) {
+        let mut err = PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "FETCH statement cannot return multiple rows");
+        err.position = plpgsql_body_position(b, e, text, idx);
+        return Err(err);
+    }
+    if let Some((idx, mut err)) = syntax {
+        err.position = plpgsql_body_position(b, e, text, idx);
+        return Err(err);
+    }
+    // check_labels runs when the outermost block's END is parsed, after every statement of the body.
+    if let Some((idx, label, block)) = plpgsql_end_label_mismatch(text) {
+        let msg = match block {
+            Some(start) => format!("end label \"{label}\" differs from block's label \"{start}\""),
+            None => format!("end label \"{label}\" specified for unlabeled block"),
+        };
+        let mut err = PgError::new(SqlState::SYNTAX_ERROR, msg);
+        err.position = plpgsql_body_position(b, e, text, idx);
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// `check_function_bodies` for a SQL-language `AS` body (PG `prosqlvalidator` -> `check_sql_fn_statements`
+/// and `check_sql_fn_retval`). Errors are repositioned from the body text to the statement text
+/// (single-line bodies; the literal's first character is `e`'s position, plus the opening delimiter).
+fn check_sql_body(
+    b: &mut Binder<'_>,
+    fname: &str,
+    specs: &[ParamSpec<'_>],
+    e: &Expr,
+    text: &str,
+    lang: &BuiltinLanguage,
+    ret: Oid,
+) -> Result<()> {
+    if lang.oid != LANG_SQL {
+        return Ok(());
+    }
+    let prefix: u32 = match e {
+        Expr::Value(v) => match &v.value {
+            Value::DollarQuotedString(d) => 2 + d.tag.as_ref().map_or(0, |t| t.chars().count() as u32),
+            _ => 1,
+        },
+        _ => 1,
+    };
+    let body_start = b.pos(e).map(|q| q + prefix);
+    check_sql_statements(b, fname, specs, text, ret).map_err(|mut err| {
+        err.position = match (err.position, body_start) {
+            (Some(p), Some(start)) if p >= 1 && !text.contains('\n') => Some(start + (p - 1)),
+            _ => None,
+        };
+        err
+    })
+}
+
+/// Parse the body text and bind its query statements in a scope of the input parameters (by name and
+/// as `$n`). The outer statement's dependencies and parameter table are restored afterwards.
+fn check_sql_statements(
+    b: &mut Binder<'_>,
+    fname: &str,
+    specs: &[ParamSpec<'_>],
+    text: &str,
+    ret: Oid,
+) -> Result<()> {
+    let stmts = parse(text)?;
+    // PG `haspolyarg`: with a polymorphic input the body is only parsed, never analyzed or checked.
+    if specs.iter().any(|p| p.is_input() && is_polymorphic(p.type_oid)) {
+        return Ok(());
+    }
+    let cols: Vec<(String, TypeId)> = specs
+        .iter()
+        .filter(|p| p.is_input() && !p.name.is_empty())
+        .map(|p| (p.name.clone(), TypeId::of(p.type_oid)))
+        .collect();
+    let in_types: Vec<TypeId> = specs.iter().filter(|p| p.is_input()).map(|p| TypeId::of(p.type_oid)).collect();
+    let saved_params = std::mem::replace(&mut b.params, ParamTable::new(&in_types));
+    let deps_mark = b.deps.len();
+    let r = match table_expr_scope(b, fname, &cols) {
+        Ok(()) => {
+            let r = bind_body_statements(b, &stmts);
+            b.scopes.pop();
+            r
+        }
+        Err(e) => Err(e),
+    };
+    b.params = saved_params;
+    b.deps.truncate(deps_mark);
+    check_sql_result(b, ret, &r?)
+}
+
+/// The last statement of a SQL function body, as far as the binder checks it (PG looks only at the
+/// last statement: `check_sql_fn_retval`).
+enum BodyTail {
+    /// No statement at all (`AS ''`).
+    Empty,
+    /// A query; the output column type OIDs in order.
+    Query(Vec<Oid>),
+    /// Any other statement kind (not checked yet).
+    Other,
+}
+
+/// Bind each query statement of a SQL function body and report the shape of the last statement.
+/// Other statement kinds are not bound yet.
+fn bind_body_statements(b: &mut Binder<'_>, stmts: &[RawStatement]) -> Result<BodyTail> {
+    let mut tail = BodyTail::Empty;
+    for raw in stmts {
+        tail = BodyTail::Other;
+        if let Parsed::Ast(stmt) = &raw.parsed {
+            if let Statement::Query(q) = &**stmt {
+                let ctx = QueryCtx { column_aliases: Vec::new(), top_level: true, keep_unknown_outputs: false };
+                let bound = bind_query(b, q, &ctx)?;
+                tail = BodyTail::Query(bound.output.iter().map(|c| c.ty.oid).collect());
+            }
+        }
+    }
+    Ok(tail)
+}
+
+/// PG `check_sql_fn_retval` for a scalar declared result (base, domain, enum, range, multirange):
+/// the final statement must be a query returning exactly one column that is assignment-coercible
+/// to `ret`. Void, composite, pseudo-type and other statement results are not checked yet.
+fn check_sql_result(b: &Binder<'_>, ret: Oid, tail: &BodyTail) -> Result<()> {
+    if ret == oids::VOID {
+        return Ok(());
+    }
+    let typtype = pgarbor_types::registry::type_info(b.env, ret)?.typtype;
+    if !matches!(typtype, b'b' | b'd' | b'e' | b'r' | b'm') {
+        return Ok(());
+    }
+    let mismatch = |detail: String| {
+        PgError::new(
+            INVALID_FUNCTION_DEFINITION,
+            format!("return type mismatch in function declared to return {}", b.type_name(TypeId::of(ret))),
+        )
+        .with_detail(detail)
+    };
+    let cols = match tail {
+        BodyTail::Other => return Ok(()),
+        BodyTail::Empty => {
+            return Err(mismatch(
+                "Function's final statement must be SELECT or INSERT/UPDATE/DELETE/MERGE RETURNING.".to_string(),
+            ))
+        }
+        BodyTail::Query(cols) => cols,
+    };
+    if cols.len() != 1 {
+        return Err(mismatch("Final statement must return exactly one column.".to_string()));
+    }
+    let actual = cols[0];
+    if !can_coerce_type(b.env, &[actual], &[ret], CastContext::Assignment)? {
+        return Err(mismatch(format!("Actual return type is {}.", b.type_name(TypeId::of(actual)))));
+    }
+    Ok(())
 }
 
 /// `RETURN expr` / `AS RETURN expr`: bind in a scope of the named input parameters, coerce to the
@@ -435,6 +1445,12 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
     if cf.determinism_specifier.is_some() {
         return Err(unsupported("DETERMINISTIC / NOT DETERMINISTIC"));
     }
+    // CREATE PROCEDURE (`CREATE_PROCEDURE_KEY`) takes the function grammar without RETURNS (PG gram.y
+    // `CreateProcedureStmt`); its result is VOID, or RECORD with OUT parameters.
+    let is_procedure = b.scratch.contains_key(CREATE_PROCEDURE_KEY);
+    if is_procedure && cf.return_type.is_some() {
+        return Err(syntax_error_near("RETURNS", None));
+    }
     let env: &CatalogEnv = b.env;
     let qn = b.qual(&cf.name)?;
 
@@ -443,13 +1459,16 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
     for a in cf.args.as_deref().unwrap_or(&[]) {
         specs.push(operate_arg_spec(b, a)?);
     }
-    let required = check_param_list(&specs, false, &|oid: Oid| is_array_type(env, oid))?;
+    let required = check_param_list(&specs, is_procedure, &|oid: Oid| is_array_type(env, oid))?;
 
     // LANGUAGE (RETURN bodies default to SQL).
     let inline_body = matches!(
         cf.function_body,
         Some(CreateFunctionBody::Return(_)) | Some(CreateFunctionBody::AsReturnExpr(_))
     );
+    if is_procedure && inline_body {
+        return Err(syntax_error_near("RETURN", None));
+    }
     let lang_name = match &cf.language {
         Some(id) => b.ident(id),
         None if inline_body => "sql".to_string(),
@@ -475,16 +1494,25 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
         }
         (Some(req), None) => (req, false),
         (None, Some((r, set))) => (r, set),
+        (None, None) if is_procedure => (oids::VOID, false),
         (None, None) => return Err(invalid_fn_def("function result type must be specified")),
     };
 
-    // Body.
+    // Body. A SQL-language `AS` body is validated after the name/replace checks (PG runs the validator
+    // after `ProcedureCreate`), so a duplicate function still reports 42723 first.
+    let mut sql_check: Option<(&Expr, String)> = None;
     let (body, sql_body) = match &cf.function_body {
         None => return Err(invalid_fn_def("no function body specified")),
         Some(CreateFunctionBody::AsBeforeOptions { body: e, link_symbol }) => {
-            (as_string_body(b, e, link_symbol.is_some(), lang)?, None)
+            let text = as_string_body(b, e, link_symbol.is_some(), lang)?;
+            sql_check = Some((e, text.clone()));
+            (text, None)
         }
-        Some(CreateFunctionBody::AsAfterOptions(e)) => (as_string_body(b, e, false, lang)?, None),
+        Some(CreateFunctionBody::AsAfterOptions(e)) => {
+            let text = as_string_body(b, e, false, lang)?;
+            sql_check = Some((e, text.clone()));
+            (text, None)
+        }
         Some(CreateFunctionBody::Return(e)) | Some(CreateFunctionBody::AsReturnExpr(e)) => {
             if lang.oid != LANG_SQL {
                 return Err(invalid_fn_def("inline SQL function body only valid for language SQL"));
@@ -500,7 +1528,11 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
         }
     };
 
-    // Attributes (compute_function_attributes).
+    // Attributes (compute_function_attributes). A procedure takes none of the volatility, null-input or
+    // parallel attributes (PG `compute_common_attribute`).
+    if is_procedure && (cf.behavior.is_some() || cf.called_on_null.is_some() || cf.parallel.is_some()) {
+        return Err(invalid_fn_def("invalid attribute in procedure definition"));
+    }
     let volatility = match cf.behavior {
         None | Some(FunctionBehavior::Volatile) => FuncVolatility::Volatile,
         Some(FunctionBehavior::Immutable) => FuncVolatility::Immutable,
@@ -535,9 +1567,11 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
 
     // Identity: (namespace, name, IN argument types).
     let ns = env.creation_namespace_for(qn.schema.as_deref(), &qn.name)?;
-    let kind = FuncKind::Function;
+    let kind = if is_procedure { FuncKind::Procedure } else { FuncKind::Function };
     let in_types: Vec<Oid> = specs.iter().filter(|p| p.is_input()).map(|p| p.type_oid).collect();
     let n_defaults = specs.iter().filter(|p| p.default.is_some()).count();
+    // PG ProcedureCreate: a polymorphic result must be deducible from the inputs (before the duplicate check).
+    check_polymorphic_result(b, ret, &in_types)?;
     let existing = env
         .snapshot()
         .functions_in_namespace(ns, &qn.name)
@@ -550,7 +1584,15 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
                 format!("function \"{}\" already exists with same argument types", qn.name),
             ));
         }
-        check_replace(env, old, kind, ret, retset, &specs, &in_types, n_defaults, &qn.name, false)?;
+        check_replace(env, old, kind, ret, retset, &specs, &in_types, n_defaults, &qn.name, is_procedure)?;
+    }
+    // PG sql_validator: pseudo-type arguments are rejected before the body is checked.
+    if lang.oid == LANG_SQL {
+        check_sql_arg_types(b, &specs)?;
+    }
+    if let Some((e, text)) = &sql_check {
+        check_sql_body(b, &qn.name, &specs, e, text, lang, ret)?;
+        check_plpgsql_body(b, e, text, lang, &specs)?;
     }
 
     let function = Function {
@@ -580,9 +1622,10 @@ fn create_function(b: &mut Binder<'_>, cf: &CreateFunction) -> Result<BoundState
 }
 
 fn operate_arg_spec<'a>(b: &mut Binder<'_>, a: &'a OperateFunctionArg) -> Result<ParamSpec<'a>> {
+    // An unnamed CREATE PROCEDURE parameter carries the parser's marker name (`parser::UNNAMED_PARAM_MARKER`).
     let name = match &a.name {
-        Some(id) => b.ident(id),
-        None => String::new(),
+        Some(id) if id.value != UNNAMED_PARAM_MARKER => b.ident(id),
+        _ => String::new(),
     };
     let type_oid = arg_type(b, &a.data_type)?;
     Ok(ParamSpec { name, mode: map_mode(a.mode.as_ref()), type_oid, pos: None, default: a.default_expr.as_ref() })
@@ -607,7 +1650,8 @@ fn create_procedure(
     let _ = b.qual(name)?;
     let mut specs: Vec<ParamSpec<'_>> = Vec::new();
     for p in params.unwrap_or(&[]) {
-        let pname = b.ident(&p.name);
+        // An unnamed parameter carries the parser's marker name (`parser::UNNAMED_PARAM_MARKER`).
+        let pname = if p.name.value == UNNAMED_PARAM_MARKER { String::new() } else { b.ident(&p.name) };
         let type_oid = arg_type(b, &p.data_type)?;
         let pos = b.pos_span(p.name.span);
         specs.push(ParamSpec {
@@ -678,7 +1722,8 @@ fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Re
     }
     let named = names.iter().any(|n| n.is_some());
     let arg_oids: Vec<Oid> = args.iter().map(|a| a.ty().oid).collect();
-    let sig = signature_string(env, &qn.name, &arg_oids)?;
+    // PG `func_signature_string` keeps the written qualifier: `procedure s1.p(integer) does not exist`.
+    let sig = signature_string(env, &qn.display(), &arg_oids)?;
     let call = FuncCall {
         name: qn.name.clone(),
         arg_types: arg_oids.clone(),
@@ -885,10 +1930,183 @@ mod tests {
     }
 
     #[test]
+    fn plpgsql_statement_and_return_syntax() {
+        let misspelled = "\nBEGIN\n  SELEC 1;\n  RETURN 1;\nEND;\n";
+        let (idx, err) = plpgsql_statement_syntax(misspelled).unwrap();
+        assert_eq!(idx, misspelled.find("SELEC").unwrap());
+        assert_eq!(err.message, "syntax error at or near \"SELEC\"");
+
+        let dangling = "\nBEGIN\n  RETURN 1 +;\nEND;\n";
+        let (idx, err) = plpgsql_statement_syntax(dangling).unwrap();
+        assert_eq!(idx, dangling.find(';').unwrap());
+        assert_eq!(err.message, "syntax error at end of input");
+
+        let ok = "\nDECLARE\n  n int := 0;\nBEGIN\n  n := n + 1;\n  PERFORM f(n);\n  RETURN QUERY SELECT 1;\n  \
+                  RETURN NEXT;\n  CASE n WHEN 1 THEN n := 2; ELSE n := 3; END CASE;\n  RETURN CASE WHEN n > 1 THEN 1 ELSE 0 END;\nEND;\n";
+        assert!(plpgsql_statement_syntax(ok).is_none());
+    }
+
+    #[test]
+    fn plpgsql_fetch_multi_row_directions() {
+        let at_fetch = |t: &str| t.find("FETCH");
+        let multi = "BEGIN FETCH FORWARD 2 FROM c INTO r; END";
+        assert_eq!(plpgsql_multi_row_fetch(multi), at_fetch(multi));
+        let all = "BEGIN FETCH ALL FROM c INTO r; END";
+        assert_eq!(plpgsql_multi_row_fetch(all), at_fetch(all));
+        let count = "BEGIN FETCH 2 FROM c INTO r; END";
+        assert_eq!(plpgsql_multi_row_fetch(count), at_fetch(count));
+        for single in [
+            "BEGIN FETCH FORWARD FROM c INTO r; END",
+            "BEGIN FETCH BACKWARD FROM c INTO r; END",
+            "BEGIN FETCH RELATIVE n FROM c INTO r; END",
+            "BEGIN FETCH NEXT FROM c INTO r; END",
+            "BEGIN -- FETCH ALL FROM c\n MOVE ALL FROM c; END",
+            "BEGIN RETURN 'fetch all'; END",
+        ] {
+            assert_eq!(plpgsql_multi_row_fetch(single), None, "{single}");
+        }
+    }
+
+    #[test]
+    fn plpgsql_not_null_needs_default() {
+        let text = "\nDECLARE n int NOT NULL;\nBEGIN RETURN 1; END ";
+        assert_eq!(plpgsql_not_null_without_default(text), Some((text.find("NOT").unwrap(), "n".to_string())));
+        for ok in [
+            "DECLARE n int NOT NULL DEFAULT NULL; BEGIN RETURN 1; END",
+            "DECLARE n int NOT NULL := 1; BEGIN RETURN 1; END",
+            "DECLARE b boolean := x IS NOT NULL; BEGIN RETURN 1; END",
+            "DECLARE c CURSOR FOR SELECT 1 WHERE x IS NOT NULL; BEGIN RETURN 1; END",
+            "DECLARE n int; BEGIN n := 1; IF n IS NOT NULL THEN RETURN 1; END IF; END",
+        ] {
+            assert_eq!(plpgsql_not_null_without_default(ok), None, "{ok}");
+        }
+    }
+
+    #[test]
     fn mode_mapping_defaults_to_in() {
         assert_eq!(map_mode(None), ArgMode::In);
         assert_eq!(map_mode(Some(&SqlArgMode::Out)), ArgMode::Out);
         assert_eq!(map_mode(Some(&SqlArgMode::InOut)), ArgMode::InOut);
+    }
+
+    #[test]
+    fn constant_assignment_is_found_at_statement_start() {
+        let text = "\nDECLARE c CONSTANT int := 5;\nBEGIN c := 6; RETURN c; END ";
+        assert_eq!(plpgsql_constant_assignment(text), Some((text.find("c := 6").unwrap(), "c".to_string())));
+        assert!(plpgsql_constant_assignment("DECLARE c CONSTANT int := 5; BEGIN c = 6; END").is_some());
+        for single in [
+            "DECLARE c CONSTANT int := 5; BEGIN RETURN c * 2; END",
+            "DECLARE c CONSTANT int := 5; BEGIN f(c := 6); END",
+            "DECLARE x int := 5; BEGIN x := 6; END",
+            "BEGIN c := 6; END",
+            "DECLARE c CONSTANT int := 5; BEGIN -- c := 6\n RETURN c; END",
+            "DECLARE c CONSTANT int := 5; DECLARE c int; BEGIN c := 6; END",
+        ] {
+            assert_eq!(plpgsql_constant_assignment(single), None, "{single}");
+        }
+    }
+
+    #[test]
+    fn plpgsql_top_level_set_operation_in_expression() {
+        let assign = "DECLARE v int; BEGIN v := 1 UNION SELECT 2; RETURN v; END";
+        assert_eq!(plpgsql_expr_set_op(assign), Some((assign.find("UNION").unwrap(), 5)));
+        let cond = "BEGIN IF id > 0 FROM t WHERE id = 1 UNION SELECT id FROM t THEN NULL; END IF; END";
+        assert_eq!(plpgsql_expr_set_op(cond), Some((cond.find("UNION").unwrap(), 5)));
+        for ok in [
+            "BEGIN RETURN QUERY SELECT 1 UNION SELECT 2; END",
+            "BEGIN SELECT 1 UNION SELECT 2 INTO x; END",
+            "BEGIN v := (SELECT 1 UNION SELECT 2); END",
+            "BEGIN IF CASE WHEN a THEN 1 ELSE 2 END = 1 THEN NULL; END IF; END",
+        ] {
+            assert_eq!(plpgsql_expr_set_op(ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn plpgsql_undeclared_assignment_is_found() {
+        let text = "BEGIN zzz := 1; RETURN 1; END";
+        assert_eq!(plpgsql_undeclared_assignment(text, &[]), Some((text.find("zzz").unwrap(), "zzz".to_string())));
+        for ok in [
+            "BEGIN RETURN CASE WHEN a THEN b = c ELSE false END; END",
+            "DECLARE x int; BEGIN x := 1; RETURN x; END",
+            "BEGIN p := 1; RETURN p; END",
+            "BEGIN PERFORM f(c := 1); RETURN 1; END",
+            "BEGIN rec.f := 1; RETURN 1; END",
+            "BEGIN FOUND := true; RETURN 1; END",
+            "BEGIN FOR i IN 1..3 LOOP i := i; END LOOP; RETURN 1; END",
+            "BEGIN -- zzz := 1\n RETURN 1; END",
+            "DECLARE x int; BEGIN BEGIN DECLARE y int; END; zzz := 1; RETURN 1; END",
+        ] {
+            assert_eq!(plpgsql_undeclared_assignment(ok, &["p"]), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn plpgsql_duplicate_declaration_is_found() {
+        let text = "\nDECLARE x int; x int;\nBEGIN RETURN 1; END ";
+        let second = text.rfind('x').unwrap();
+        assert_eq!(plpgsql_duplicate_declaration(text), Some((second, "x".to_string())));
+        for ok in [
+            "DECLARE x int; y int; BEGIN RETURN 1; END",
+            "DECLARE x int; BEGIN DECLARE x int; RETURN 1; END",
+            "BEGIN RETURN 1; END",
+        ] {
+            assert_eq!(plpgsql_duplicate_declaration(ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn plpgsql_begin_semicolon_is_found() {
+        let text = "\nBEGIN;\n  RETURN 1;\nEND ";
+        assert_eq!(plpgsql_begin_semicolon(text), Some(text.find(';').unwrap()));
+        for ok in ["BEGIN RETURN 1; END", "DECLARE x int; BEGIN; END", "BEGIN -- ;\n RETURN 1; END"] {
+            assert_eq!(plpgsql_begin_semicolon(ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn plpgsql_unterminated_nested_comment_is_found() {
+        // Block comments nest, so the inner `*/` only closes the nested comment and the outer one stays open.
+        let text = "\n/* unterminated /* nested */\nBEGIN RETURN 1; END ";
+        assert_eq!(plpgsql_unterminated_comment(text), Some(1));
+        assert_eq!(plpgsql_unterminated_comment("BEGIN /* a /* b */ c */ RETURN 1; END"), None);
+        assert_eq!(plpgsql_unterminated_comment("BEGIN RETURN '/*' ; END"), None);
+        assert_eq!(plpgsql_unterminated_comment("BEGIN -- /*\n RETURN 1; END"), None);
+        assert_eq!(plpgsql_unterminated_comment("BEGIN RETURN $$/*$$; END"), None);
+    }
+
+    #[test]
+    fn plpgsql_end_label_mismatch_is_found() {
+        let text = "\n<< a >>\nBEGIN\n  RETURN 1;\nEND b ";
+        assert_eq!(plpgsql_end_label_mismatch(text), Some((text.rfind('b').unwrap(), "b".to_string(), Some("a".to_string()))));
+        let unlabeled = "\nBEGIN RETURN 1; END b ";
+        assert_eq!(plpgsql_end_label_mismatch(unlabeled), Some((unlabeled.rfind('b').unwrap(), "b".to_string(), None)));
+        for ok in ["<< a >>\nBEGIN RETURN 1; END a", "<< a >>\nBEGIN RETURN 1; END a;", "BEGIN RETURN 1; END;", "BEGIN RETURN 1; END"] {
+            assert_eq!(plpgsql_end_label_mismatch(ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn plpgsql_nested_end_label_is_found() {
+        let text = "BEGIN BEGIN RETURN 1; END RETURN 0; END";
+        let (idx, err) = plpgsql_nested_end_label(text).unwrap();
+        assert_eq!(idx, text.find("RETURN 0").unwrap());
+        assert_eq!(err.message, "end label \"return\" specified for unlabeled block");
+        let labeled = "BEGIN << a >> BEGIN RETURN 1; END b; END";
+        let (idx, err) = plpgsql_nested_end_label(labeled).unwrap();
+        assert_eq!(idx, labeled.find('b').unwrap());
+        assert_eq!(err.message, "end label \"b\" differs from block's label \"a\"");
+        for ok in [
+            "BEGIN BEGIN RETURN 1; END; RETURN 0; END",
+            "BEGIN << a >> BEGIN RETURN 1; END a; END",
+            "BEGIN << a >> DECLARE x int := 1; BEGIN RETURN x; END a; END",
+            "BEGIN IF true THEN BEGIN RETURN 1; END; END IF; RETURN 0; END",
+            "BEGIN RETURN CASE WHEN true THEN 1 END; END",
+            "BEGIN BEGIN RETURN CASE WHEN true THEN 1 ELSE 2 END; END; END",
+            "BEGIN BEGIN RETURN 1; END; END",
+        ] {
+            assert_eq!(plpgsql_nested_end_label(ok).map(|(i, _)| i), None, "{ok}");
+        }
     }
 
     #[test]

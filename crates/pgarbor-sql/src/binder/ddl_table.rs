@@ -62,7 +62,7 @@ use pgarbor_types::catalog_data::Volatility;
 use pgarbor_types::{oids, TypeEnv, TypeId};
 use sqlparser::ast::{
     ArrayElemTypeDef, ColumnDef, ColumnOption, CreateTable, CreateTableOptions, DataType, Expr, GeneratedAs,
-    GeneratedExpressionMode, Ident, ObjectNamePart, Query, SelectInto, SequenceOptions as AstSequenceOption, SqlOption,
+    GeneratedExpressionMode, Ident, ObjectNamePart, Query, SelectInto, SetExpr, SequenceOptions as AstSequenceOption, SqlOption,
 };
 
 use super::context::{Binder, ExprCtx};
@@ -183,6 +183,25 @@ pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundSta
     Ok(BoundStatement::CreateTableAs(Box::new(BoundCreateTableAs { table, query: Box::new(bq), with_data })))
 }
 
+/// A copy of `q` whose top SELECT block no longer carries its `INTO` clause. The statement-level
+/// `INTO` names the new table and is taken by [`bind_select_into`]; the block itself must bind as a
+/// plain query, otherwise `reject_select_extensions` would refuse it. Nested `INTO` still fails there.
+fn query_without_into(q: &Query) -> Query {
+    let mut inner = q.clone();
+    clear_leftmost_into(&mut inner.body);
+    inner
+}
+
+/// Clears the `INTO` of the leftmost SELECT leaf of a set-operation body (see
+/// `select::leftmost_select_into`); other leaves keep theirs so they are still rejected.
+fn clear_leftmost_into(body: &mut SetExpr) {
+    match body {
+        SetExpr::Select(sel) => sel.into = None,
+        SetExpr::SetOperation { left, .. } => clear_leftmost_into(&mut **left),
+        _ => {}
+    }
+}
+
 /// `SELECT ... INTO [TEMP] t FROM ...` (statement-level; `into` taken from the top SELECT block).
 pub fn bind_select_into(b: &mut Binder, q: &Query, into: &SelectInto) -> Result<BoundStatement> {
     let target = match into.targets.as_slice() {
@@ -196,9 +215,10 @@ pub fn bind_select_into(b: &mut Binder, q: &Query, into: &SelectInto) -> Result<
     let qn = into_name(b, target, pos)?;
     check_catalog(b, &qn)?;
     let namespace = creation_namespace(b, &qn)?;
+    let inner = query_without_into(q);
     let bq = select::bind_query(
         b,
-        q,
+        &inner,
         &QueryCtx { column_aliases: Vec::new(), top_level: false, keep_unknown_outputs: false },
     )?;
     let columns = ctas_columns(&bq, &[])?;
@@ -448,8 +468,9 @@ fn bind_column_clauses(
                     saw_default = true;
                     let mut refs: Vec<i16> = Vec::new();
                     let ty = columns[i].type_id.clone();
-                    let (_bound, stored_default) =
+                    let (bound_default, stored_default) =
                         stored::bind_ddl_expr(b, expr, ExprCtx::column_default(), Some(ty), None, &mut refs, &names_fn)?;
+                    stored::reject_regrole_constants(&bound_default)?;
                     columns[i].default = Some(stored_default);
                 }
                 ColumnOption::Collation(name) => {
@@ -474,12 +495,15 @@ fn bind_column_clauses(
                             saw_generated = true;
                             let ty = columns[i].type_id.clone();
                             let mut refs: Vec<i16> = Vec::new();
+                            // The table does not exist yet: column references are recorded against the
+                            // SELF_REL placeholder, rewritten to the new OID by the catalog (PG records
+                            // the generation expression's column dependencies as Normal edges).
                             let (bound, stored_gen) = stored::bind_ddl_expr(
                                 b,
                                 gen_expr,
                                 ExprCtx::generated(),
                                 Some(ty),
-                                None,
+                                Some(pgarbor_catalog::ddl::spec::SELF_REL),
                                 &mut refs,
                                 &names_fn,
                             )?;
@@ -711,5 +735,27 @@ mod tests {
         assert_eq!(attnum_index(3), Some(2));
         assert!(flag_at(&[false, true], 2));
         assert!(!flag_at(&[false, true], 1));
+    }
+
+    #[test]
+    fn query_without_into_drops_only_the_statement_target() {
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let mut p = sqlparser::parser::Parser::new(&dialect).try_with_sql("SELECT DISTINCT 1 AS z INTO t FROM generate_series(1, 2) n ORDER BY z LIMIT 1").expect("tokenizes");
+        let q = p.parse_query().expect("parses");
+        let inner = query_without_into(&q);
+        assert!(matches!(&*inner.body, SetExpr::Select(sel) if sel.into.is_none() && sel.distinct.is_some()));
+        assert!(matches!(&*q.body, SetExpr::Select(sel) if sel.into.is_some()));
+        assert_eq!(inner.limit_clause, q.limit_clause);
+    }
+
+    #[test]
+    fn query_without_into_drops_the_leftmost_set_operation_target() {
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let mut p = sqlparser::parser::Parser::new(&dialect).try_with_sql("SELECT 1 AS x INTO su UNION SELECT 2").expect("tokenizes");
+        let q = p.parse_query().expect("parses");
+        let inner = query_without_into(&q);
+        assert!(select::leftmost_select_into(&inner.body).is_none());
+        assert!(select::leftmost_select_into(&q.body).is_some());
+        assert!(matches!(&*inner.body, SetExpr::SetOperation { right, .. } if matches!(&**right, SetExpr::Select(sel) if sel.into.is_none())));
     }
 }

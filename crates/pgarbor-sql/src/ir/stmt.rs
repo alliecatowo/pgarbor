@@ -365,8 +365,11 @@ pub enum AlterAction {
     SchemaOwner { name: String, new_owner: Oid },
     /// `rename_type(ty, new_name, rewriter)` (enum, domain).
     RenameType { ty: Oid, new_name: String },
-    /// `set_type_schema(ty, new_schema, rewriter)`.
+    /// `set_type_schema(ty, new_schema, rewriter)`: `ALTER TYPE ... SET SCHEMA` (enum, composite).
     SetTypeSchema { ty: Oid, new_schema: Oid },
+    /// `set_type_schema(ty, new_schema, rewriter)` for `ALTER DOMAIN ... SET SCHEMA` (same effect,
+    /// command tag `ALTER DOMAIN`).
+    SetDomainSchema { ty: Oid, new_schema: Oid },
     /// `alter_type_owner(ty, new_owner)`.
     TypeOwner { ty: Oid, new_owner: Oid },
     /// `add_enum_value(ty, label, &position, if_not_exists)`.
@@ -443,7 +446,8 @@ impl AlterAction {
             | AlterAction::AddDomainConstraint { .. }
             | AlterAction::DropDomainConstraint { .. }
             | AlterAction::RenameDomainConstraint { .. }
-            | AlterAction::ValidateDomainConstraint { .. } => "ALTER DOMAIN",
+            | AlterAction::ValidateDomainConstraint { .. }
+            | AlterAction::SetDomainSchema { .. } => "ALTER DOMAIN",
             AlterAction::FunctionAttrs { .. }
             | AlterAction::RenameFunction { .. }
             | AlterAction::SetFunctionSchema { .. }

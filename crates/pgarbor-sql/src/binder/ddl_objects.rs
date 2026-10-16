@@ -73,6 +73,26 @@ fn obj_pos(b: &Binder, name: &ObjectName) -> Option<u32> {
     }
 }
 
+/// Position of the base type of `CREATE DOMAIN name [AS] type ...`: the first token after the domain
+/// name and an optional `AS` (PG's `typeName->location`). `None` when the name has no source span.
+fn domain_type_pos(b: &Binder, name: &ObjectName) -> Option<u32> {
+    let Some(ObjectNamePart::Identifier(last)) = name.0.last() else {
+        return None;
+    };
+    let bytes = b.src.text().as_bytes();
+    let skip_blanks = |mut i: usize| {
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        i
+    };
+    let mut i = skip_blanks(b.src.byte_offset(last.span.end)?);
+    if bytes.get(i..i + 2).is_some_and(|w| w.eq_ignore_ascii_case(b"AS")) && bytes.get(i + 2).is_some_and(u8::is_ascii_whitespace) {
+        i = skip_blanks(i + 2);
+    }
+    Some(b.src.pos_of_byte(i))
+}
+
 /// `Binder::pos` of an expression, falling back to `fallback`.
 fn expr_pos(b: &Binder, e: &Expr, fallback: Option<u32>) -> Option<u32> {
     b.pos(e).or(fallback)
@@ -601,12 +621,13 @@ pub fn bind_create_type(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
 }
 
 /// CHECK expression of a domain: bound in a one-column scope `VALUE` of the base type (module docs).
-/// The stored text spells the column `VALUE`, as PG prints the domain value.
+/// The stored text names the column `value` (unquoted, so it re-parses to the same column; a quoted
+/// `"VALUE"` would not match the folded `value` scope column), as `ALTER DOMAIN ... ADD CHECK` does.
 fn bind_domain_check(b: &mut Binder, e: &Expr, base: TypeId, domain_name: &str) -> Result<StoredExpr> {
     let columns = [("value".to_string(), base)];
     stored::table_expr_scope(b, domain_name, &columns)?;
     let mut refs: Vec<i16> = Vec::new();
-    let names = |_: i16| -> Option<String> { Some("VALUE".to_string()) };
+    let names = |_: i16| -> Option<String> { Some("value".to_string()) };
     let result = stored::bind_ddl_expr(b, e, ExprCtx::check(), None, None, &mut refs, &names);
     b.scopes.pop();
     let (bound, stored_expr) = result?;
@@ -634,7 +655,20 @@ pub fn bind_create_domain(b: &mut Binder, stmt: &Statement) -> Result<BoundState
     let pos = obj_pos(b, &dom.name);
     let (schema, name, qpos) = target_name(b, &dom.name)?;
     let namespace = creation_namespace(b, schema.as_deref(), &name, qpos)?;
-    let base = types::resolve_data_type(b, &dom.data_type, pos)?;
+    // PG reports type errors of CREATE DOMAIN at the base type name, not at the domain name.
+    let type_pos = domain_type_pos(b, &dom.name).or(pos);
+    let base = types::resolve_data_type(b, &dom.data_type, type_pos)?;
+    // PG DefineDomain: only base, composite, domain, enum, range and multirange types may be the base
+    // type; a pseudo-type (void, record, ...) is 42804 at the base type name.
+    let base_is_valid = pgarbor_types::TypeEnv::type_info(b.env, base.id.oid)
+        .is_some_and(|t| matches!(t.typtype, b'b' | b'c' | b'd' | b'e' | b'r' | b'm'));
+    if !base_is_valid {
+        let shown = pgarbor_types::names::display_name(b.env, base.id.oid);
+        return Err(diag::with_position(
+            PgError::new(SqlState::DATATYPE_MISMATCH, format!("\"{shown}\" is not a valid base type for a domain")),
+            type_pos,
+        ));
+    }
     let env = b.env;
     let collation = match &dom.collation {
         Some(id) => {
@@ -643,6 +677,14 @@ pub fn bind_create_domain(b: &mut Binder, stmt: &Statement) -> Result<BoundState
         }
         None => None,
     };
+    // PG DefineDomain: COLLATE over a base type that cannot collate is 42804, at the base type name.
+    if collation.is_some() && !pgarbor_types::TypeEnv::type_info(env, base.id.oid).is_some_and(|t| t.is_collatable()) {
+        let shown = b.type_name(base.id);
+        return Err(diag::with_position(
+            PgError::new(SqlState::DATATYPE_MISMATCH, format!("collations are not supported by type {shown}")),
+            type_pos,
+        ));
+    }
     let default = match &dom.default {
         Some(e) => Some(bind_domain_default(b, e, base.id)?),
         None => None,
@@ -850,6 +892,11 @@ mod tests {
 
     /// Run `f` with a binder over the bootstrapped catalog (search path pg_catalog, public).
     fn with_binder<T>(f: impl FnOnce(&mut Binder) -> T) -> T {
+        with_binder_on("", f)
+    }
+
+    /// [`with_binder`] over the source text `sql`, so error positions resolve against it.
+    fn with_binder_on<T>(sql: &str, f: impl FnOnce(&mut Binder) -> T) -> T {
         let (_kv, env) = testing::bootstrapped().expect("bootstrap");
         let ctx = BindContext {
             env: &env,
@@ -858,7 +905,7 @@ mod tests {
             statement_timestamp: 0,
             declared_params: Vec::new(),
         };
-        let src = SourceMap::new("");
+        let src = SourceMap::new(sql);
         let mut b = Binder::new(&ctx, &src);
         f(&mut b)
     }
@@ -866,7 +913,7 @@ mod tests {
     /// Bind one DDL statement of the families this file owns.
     fn bind_sql(sql: &str) -> Result<BoundStatement> {
         let parsed = parse_one(sql);
-        with_binder(|b| match &parsed {
+        with_binder_on(sql, |b| match &parsed {
             Parsed::Extra(ExtraStatement::CreateSequence { temporary, unlogged, if_not_exists, name, options }) => {
                 bind_create_sequence(b, *temporary, *unlogged, *if_not_exists, name, options)
             }
@@ -1046,6 +1093,14 @@ mod tests {
             }
             _ => panic!("expected CreateDomain"),
         }
+    }
+
+    #[test]
+    fn domain_pseudo_base_type_is_42804_at_type_name() {
+        let e = err_of(bind_sql("create domain dpseudo as record"));
+        assert_eq!(e.sqlstate, SqlState::DATATYPE_MISMATCH);
+        assert_eq!(e.message, "\"record\" is not a valid base type for a domain");
+        assert_eq!(e.position, Some(26));
     }
 
     #[test]

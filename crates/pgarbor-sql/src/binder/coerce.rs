@@ -37,14 +37,14 @@ use pgarbor_types::cast::plan_cast;
 use pgarbor_types::catalog_data::CastContext;
 use pgarbor_types::io;
 use pgarbor_types::oids;
-use pgarbor_types::registry::{base_type_and_typmod, is_polymorphic};
+use pgarbor_types::registry::{array_type_of, base_type_and_typmod, element_type_of, is_polymorphic};
 use pgarbor_types::resolve::coerce::{select_common_type, select_common_typmod, verify_common_type};
 use pgarbor_types::{Datum, TypeEnv, TypeId};
 
 use super::context::{Binder, BoundArg};
 use super::params;
 use crate::diag;
-use crate::ir::{BoundExpr, CoerceToDomain, CoercionForm, ExprKind};
+use crate::ir::{BoundExpr, CoerceToDomain, CoercionForm, CollateExpr, ExprKind};
 
 /// Coerce `arg` to `target` in context `cctx`. `Ok(Some(expr))` on success; `Ok(None)` when no cast
 /// path exists in that context (the caller builds the context-specific error); `Err` for conversion
@@ -225,6 +225,9 @@ fn coerce_unknown(
     // PG passes typmod -1 to the input function, except INTERVAL which must see its typmod (parse_coerce.c
     // `coerce_type`); the length/precision rule is then applied as a separate coercion step.
     let input_ty = if base.oid == oids::INTERVAL { base } else { TypeId::of(base.oid) };
+    // An array of domains is read as an array of the base element type; the element domain checks
+    // then run as the element `DomainCheck` steps of the array coercion (`coerce_plain`), not at bind.
+    let input_ty = unchecked_array_input(env, base).unwrap_or(input_ty);
     let node = match &arg.expr.kind {
         ExprKind::Param(n) => {
             // The parameter is pinned to the type itself, unmodified; a typmod is applied afterwards.
@@ -240,6 +243,20 @@ fn coerce_unknown(
             let datum = io::input(&ctx, input_ty, s).map_err(|e| diag::with_position(e, arg.pos))?;
             BoundExpr::constant(datum, input_ty)
         }
+        // PG `coerce_type` on a CollateExpr: the coercion is pushed under the COLLATE clause, so
+        // `'a' COLLATE "C"` takes the target type, and the collation is reinstalled on top.
+        ExprKind::Collate(c) => {
+            let inner = BoundArg::new(c.arg.clone(), arg.pos);
+            let Some(coerced) = try_coerce(b, &inner, target, cctx, form)? else {
+                return Ok(None);
+            };
+            let collatable = env.type_info(target.oid).map(|t| t.is_collatable()).unwrap_or(false);
+            if !collatable {
+                return Ok(Some(coerced));
+            }
+            let collate = CollateExpr { arg: coerced, collation: c.collation };
+            return Ok(Some(BoundExpr::new(ExprKind::Collate(Box::new(collate)), target)));
+        }
         _ => return coerce_expr_to(b, &arg.expr, target, cctx, form),
     };
     let node = match coerce_plain(env, &node, base, cctx, form)? {
@@ -247,6 +264,17 @@ fn coerce_unknown(
         None => return Ok(None),
     };
     Ok(Some(if domain { wrap_domain(node, target, form) } else { node }))
+}
+
+/// For an array type whose element is a domain (`posint[]`), the array type of the element's base
+/// type (`int4[]`); `None` for every other type.
+fn unchecked_array_input(env: &dyn TypeEnv, array: TypeId) -> Option<TypeId> {
+    let elem = element_type_of(env, array.oid)?;
+    if !is_domain(env, elem) {
+        return None;
+    }
+    let (base_elem, _) = base_type_and_typmod(env, elem, -1);
+    array_type_of(env, base_elem).map(TypeId::of)
 }
 
 /// Coerce a typed expression to `target`, going through the base type first for domains (rule 5).
@@ -378,6 +406,23 @@ mod tests {
     }
 
     #[test]
+    fn collated_unknown_literal_takes_target_type() -> Result<()> {
+        let (_kv, env) = testing::bootstrapped()?;
+        with_binder(&env, |b: &mut Binder<'_>| -> Result<()> {
+            // `'a' COLLATE "default"`: the unknown literal under the COLLATE clause is typed by the
+            // coercion, and the COLLATE is reinstalled on top (PG coerce_type, CollateExpr case).
+            let collated = CollateExpr { arg: unknown_text("a"), collation: 100 };
+            let expr = BoundExpr::new(ExprKind::Collate(Box::new(collated)), TypeId::UNKNOWN);
+            let arg = BoundArg::new(expr, None);
+            let out = try_coerce(b, &arg, TypeId::TEXT, CastContext::Implicit, CoercionForm::Implicit)?
+                .expect("unknown literal under COLLATE coerces to text");
+            assert_eq!(out.ty.oid, TypeId::TEXT.oid);
+            assert!(matches!(out.kind, ExprKind::Collate(_)));
+            Ok(())
+        })
+    }
+
+    #[test]
     fn unknown_null_becomes_typed_null() -> Result<()> {
         let (_kv, env) = testing::bootstrapped()?;
         with_binder(&env, |b: &mut Binder<'_>| -> Result<()> {
@@ -435,6 +480,20 @@ mod tests {
             ];
             let (_exprs, ty) = coerce_to_common(b, args, "UNION")?;
             assert_eq!(ty, TypeId::TEXT);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn unknown_literal_in_common_type_takes_the_other_type() -> Result<()> {
+        let (_kv, env) = testing::bootstrapped()?;
+        with_binder(&env, |b: &mut Binder<'_>| -> Result<()> {
+            // `SELECT 'x' INTERSECT SELECT 1`: the unknown literal is typed integer and fails there.
+            let args = vec![BoundArg::new(unknown_text("x"), Some(8)), BoundArg::new(BoundExpr::null(TypeId::INT4), None)];
+            let e = coerce_to_common(b, args, "INTERSECT").err().expect("invalid integer literal");
+            assert_eq!(e.sqlstate, SqlState::INVALID_TEXT_REPRESENTATION);
+            assert_eq!(e.message, "invalid input syntax for type integer: \"x\"");
+            assert_eq!(e.position, Some(8));
             Ok(())
         })
     }

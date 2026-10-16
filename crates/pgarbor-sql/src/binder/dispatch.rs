@@ -57,19 +57,81 @@ use crate::classify::{self, StmtClass, StmtFamily};
 use crate::diag;
 use crate::extra_stmt::ExtraStatement;
 use crate::ir::BoundStatement;
-use crate::parser::{Parsed, RawStatement};
+use crate::parser::{
+    grant_routine_text, is_alter_procedure_text, is_alter_routine_text, is_create_procedure_text, is_drop_domain_text,
+    is_drop_routine_text, Parsed, RawStatement,
+};
 
 /// Key under which [`bind_statement`] stores the statement text in `Binder::scratch` (read by PREPARE).
 const STMT_TEXT_KEY: &str = "statement text";
+
+/// `Binder::scratch` key set for `EXPLAIN` by [`bind_statement`]: the 1-based character position of the
+/// first token after the EXPLAIN option header (decimal text). sqlparser gives some inner statements
+/// (e.g. `DROP`) no span, so `utility::bind_explain` reads the position from here for its 42601.
+pub(super) const EXPLAIN_BODY_POS_KEY: &str = "explain body pos";
+
+/// `Binder::scratch` key set for `ALTER PROCEDURE` (the parser turns it into `Statement::AlterFunction`,
+/// see `parser::alter_procedure_as_function`); read by `ddl_alter_other::bind_alter_function`.
+pub(super) const ALTER_PROCEDURE_KEY: &str = "alter procedure";
+
+/// `Binder::scratch` key set for `ALTER ROUTINE` (same parser rewrite as `ALTER PROCEDURE`); the name
+/// then resolves to a function, procedure or aggregate. Read by `ddl_alter_other::bind_alter_function`.
+pub(super) const ALTER_ROUTINE_KEY: &str = "alter routine";
+
+/// `Binder::scratch` key set for `CREATE [OR REPLACE] PROCEDURE` (the parser turns it into
+/// `Statement::CreateFunction`, see `parser::create_procedure_as_function`); read by
+/// `ddl_function::create_function`.
+pub(super) const CREATE_PROCEDURE_KEY: &str = "create procedure";
+
+/// `Binder::scratch` key set for a GRANT/REVOKE whose object keyword is `ROUTINE` (`"routine"`) or
+/// `ALL ROUTINES IN SCHEMA` (`"all routines"`); the parser rewrites both to the sqlparser FUNCTION forms
+/// (`parser::routine_grant_as_function`). Read by `ddl_grant::resolve_objects`.
+pub(super) const GRANT_ROUTINE_KEY: &str = "grant routine";
+
+/// `Binder::scratch` key set for `DROP ROUTINE` (the parser turns it into `Statement::DropFunction`, see
+/// `parser::drop_routine_as_function`); the name then resolves to a function or a procedure (PG
+/// `OBJECT_ROUTINE`). Read by `ddl_drop::bind_drop`.
+pub(super) const DROP_ROUTINE_KEY: &str = "drop routine";
+
+/// `Binder::scratch` key set for a multi-name `DROP DOMAIN` (the parser turns it into `Statement::Drop` with
+/// `DROP TYPE`, see `parser::drop_domain_list_as_type`). Read by `ddl_drop::bind_drop`.
+pub(super) const DROP_DOMAIN_KEY: &str = "drop domain";
 
 /// Bind one statement (module docs).
 pub fn bind_statement(stmt: &RawStatement, ctx: &BindContext) -> Result<BindOutput> {
     let mut b = Binder::new(ctx, &stmt.source);
     b.identity_groups = stmt.identity_groups.iter().cloned().collect();
+    b.fk_set_groups = stmt.fk_set_groups.clone();
+    b.view_trailer = stmt.view_trailer.clone();
     classify::check_supported(&stmt.parsed, first_token(&stmt.text), Some(stmt.pos))?;
     if let Parsed::Ast(ast) = &stmt.parsed {
         if matches!(&**ast, Statement::Prepare { .. }) {
             b.scratch.insert(STMT_TEXT_KEY, stmt.text.clone());
+        }
+        if matches!(&**ast, Statement::Explain { .. }) {
+            if let Some(pos) = utility::explain_body_pos(&stmt.text, stmt.pos) {
+                b.scratch.insert(EXPLAIN_BODY_POS_KEY, pos.to_string());
+            }
+        }
+        if matches!(&**ast, Statement::AlterFunction(_)) && is_alter_procedure_text(&stmt.text) {
+            b.scratch.insert(ALTER_PROCEDURE_KEY, "procedure".to_string());
+        }
+        if matches!(&**ast, Statement::AlterFunction(_)) && is_alter_routine_text(&stmt.text) {
+            b.scratch.insert(ALTER_ROUTINE_KEY, "routine".to_string());
+        }
+        if matches!(&**ast, Statement::DropFunction(_)) && is_drop_routine_text(&stmt.text) {
+            b.scratch.insert(DROP_ROUTINE_KEY, "routine".to_string());
+        }
+        if matches!(&**ast, Statement::Drop { .. }) && is_drop_domain_text(&stmt.text) {
+            b.scratch.insert(DROP_DOMAIN_KEY, "domain".to_string());
+        }
+        if matches!(&**ast, Statement::CreateFunction(_)) && is_create_procedure_text(&stmt.text) {
+            b.scratch.insert(CREATE_PROCEDURE_KEY, "procedure".to_string());
+        }
+        if matches!(&**ast, Statement::Grant(_) | Statement::Revoke(_)) {
+            if let Some(kind) = grant_routine_text(&stmt.text) {
+                b.scratch.insert(GRANT_ROUTINE_KEY, kind.to_string());
+            }
         }
     }
     let statement = match &stmt.parsed {
@@ -187,7 +249,26 @@ pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<Bou
         ExtraStatement::AlterMaterializedView { if_exists, name, action } => {
             ddl_alter_other::bind_alter_matview(b, *if_exists, name, action)
         }
+        ExtraStatement::AlterIndex { if_exists, name, actions } => {
+            ddl_alter::bind_alter_index_options(b, *if_exists, name, actions)
+        }
+        ExtraStatement::AlterIndexAllInTablespace { from, to } => ddl_alter::bind_alter_index_all_tablespace(b, from, to),
+        ExtraStatement::AlterView { if_exists, name, actions } => {
+            ddl_alter::bind_alter_view_options(b, *if_exists, name, actions)
+        }
+        ExtraStatement::AlterViewColumnDefault { if_exists, name, column, default } => {
+            ddl_alter::bind_alter_view_column_default(b, *if_exists, name, column, default.as_ref())
+        }
+        ExtraStatement::AlterTypeSetSchema { name, schema } => {
+            ddl_alter_other::bind_alter_type_set_schema(b, name, schema)
+        }
         ExtraStatement::DropOwned { .. } | ExtraStatement::ReassignOwned { .. } => ddl_drop::bind_owned(b, stmt),
+        ExtraStatement::Maintenance { vacuum, options, table, columns } => {
+            utility::bind_maintenance_options(b, *vacuum, options, table.as_ref(), columns)
+        }
+        ExtraStatement::CommentRoutine { kind, name, args, comment } => {
+            ddl_drop::bind_comment_routine(b, *kind, name, args.as_deref(), comment.as_deref())
+        }
         ExtraStatement::Unsupported { feature } => Err(diag::unsupported_construct(feature, None)),
     }
 }
@@ -259,6 +340,8 @@ mod tests {
         RawStatement {
             parsed: Parsed::Ast(Box::new(parse_one_ast(sql))),
             identity_groups: Vec::new(),
+            fk_set_groups: Vec::new(),
+            view_trailer: None,
             text: sql.to_string(),
             byte_start: 0,
             byte_end: sql.len(),

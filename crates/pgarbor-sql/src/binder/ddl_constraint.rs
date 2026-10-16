@@ -291,6 +291,21 @@ fn fk_action(a: Option<&ReferentialAction>) -> FkAction {
     }
 }
 
+/// Column list of a foreign key's `ON DELETE SET NULL|SET DEFAULT` action (`Binder::fk_set_groups`, from
+/// `fk_set_opts`). The first unused group that names the same referenced table and action belongs to this
+/// key; groups are in source order. An action without a list has a group with no columns.
+fn take_delete_set_columns(b: &mut Binder, ref_name: &str, on_delete: Option<&ReferentialAction>) -> Vec<String> {
+    let set_default = match on_delete {
+        Some(ReferentialAction::SetNull) => false,
+        Some(ReferentialAction::SetDefault) => true,
+        _ => return Vec::new(),
+    };
+    match b.fk_set_groups.iter().position(|g| g.ref_table == ref_name && g.set_default == set_default) {
+        Some(i) => b.fk_set_groups.remove(i).columns,
+        None => Vec::new(),
+    }
+}
+
 /// `MATCH SIMPLE|FULL|PARTIAL` (absent = SIMPLE). PARTIAL is rejected exactly as gram.y does.
 fn fk_match(kind: Option<&ConstraintReferenceMatchKind>) -> Result<FkMatch> {
     match kind {
@@ -357,8 +372,9 @@ fn fk_spec(
     let (deferrable, initially_deferred) = key_deferrability(fk.characteristics.as_ref())?;
     let enforced = fk.characteristics.as_ref().and_then(|c| c.enforced).unwrap_or(true);
 
-    // `ON DELETE SET NULL (a, b)` column lists are not representable in sqlparser 0.63
-    // (`ReferentialAction` carries no column list), so `delete_set_columns` stays empty.
+    // `ON DELETE SET NULL (a, b)` lists are removed before sqlparser runs (`fk_set_opts`); the binder takes
+    // the list that belongs to this key.
+    let delete_set_columns = take_delete_set_columns(b, &qn.name, fk.on_delete.as_ref());
     let kind = ConstraintSpecKind::ForeignKey {
         columns,
         ref_table,
@@ -366,7 +382,7 @@ fn fk_spec(
         on_update: fk_action(fk.on_update.as_ref()),
         on_delete: fk_action(fk.on_delete.as_ref()),
         match_type,
-        delete_set_columns: Vec::new(),
+        delete_set_columns,
     };
     let mut spec = ConstraintSpec::new(kind);
     spec.name = name;

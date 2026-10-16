@@ -32,11 +32,12 @@
 //! (`find_expr_references_walker`, `recordDependencyOnSingleRelExpr`), `src/backend/catalog/heap.c`
 //! (`StoreRelCheck`, `StoreAttrDefault`), `src/backend/parser/parse_expr.c`.
 use pgarbor_catalog::model::common::ObjClass;
-use pgarbor_catalog::model::RelKind;
+use pgarbor_catalog::model::{GeneratedKind, RelKind};
 use pgarbor_catalog::{ObjectAddress, StoredExpr};
 use pgarbor_common::{Oid, PgError, Result, FIRST_NORMAL_OID};
 use pgarbor_types::text::format::quote_identifier;
 use pgarbor_types::{Datum, TypeEnv, TypeId};
+use sqlparser::ast::Expr;
 
 use super::coerce::coerce_assignment;
 use super::context::{Binder, BoundArg, ExprCtx};
@@ -52,6 +53,18 @@ use crate::parser::parse_expr_text;
 /// text with `ec`, pops the scope. The caller applies the final coercion to the column type
 /// (`coerce::coerce_assignment`).
 pub fn bind_stored_expr(b: &mut Binder, sql: &str, rel_oid: Oid, ec: ExprCtx) -> Result<BoundExpr> {
+    with_relation_scope(b, rel_oid, |b| bind_text_in_scope(b, sql, ec))
+}
+
+/// Bind an already parsed user expression (ON CONFLICT inference elements) in the scope of relation
+/// `rel_oid`, as [`bind_stored_expr`] does for catalog text. Unlike stored text, its errors belong to the
+/// user and are returned unchanged.
+pub fn bind_relation_expr(b: &mut Binder, ast: &Expr, rel_oid: Oid, ec: ExprCtx) -> Result<BoundExpr> {
+    with_relation_scope(b, rel_oid, |b| bind_expr(b, ast, ec))
+}
+
+/// Open a `TableExpr` scope over the columns of relation `rel_oid`, run `f` in it, pop the scope.
+fn with_relation_scope<T>(b: &mut Binder, rel_oid: Oid, f: impl FnOnce(&mut Binder) -> Result<T>) -> Result<T> {
     // Copy the catalog reference out first so no borrow of `b` survives into the scope push.
     let env = b.env;
     let (name, kind, columns) = {
@@ -75,9 +88,43 @@ pub fn bind_stored_expr(b: &mut Binder, sql: &str, rel_oid: Oid, ec: ExprCtx) ->
         (rel.name.clone(), kind, columns)
     };
     push_table_scope(b, &name, kind, columns)?;
-    let res = bind_text_in_scope(b, sql, ec);
+    let res = f(b);
     let _ = b.scopes.pop();
     res
+}
+
+/// Generation expressions of the VIRTUAL generated columns of relation `rel_oid`, bound once and moved
+/// to range entry `rt_index` of the current scope (PG `expand_generated_columns_in_expr`): a reference
+/// to such a column reads its expression instead of storage. Returns `(column slot, expression)` pairs
+/// in attnum order. Called only for ordinary query scopes (`scope::add_namespace_for_range`), never for
+/// a table expression scope, which is where the generation expressions themselves are bound.
+pub fn virtual_generation_exprs(b: &mut Binder, rel_oid: Oid, rt_index: u32) -> Result<Vec<(usize, BoundExpr)>> {
+    let env = b.env;
+    let virtual_cols: Vec<(usize, String, TypeId, String)> = match env.snapshot().relation(rel_oid) {
+        Some(rel) => rel
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.dropped && c.generated == Some(GeneratedKind::Virtual))
+            .filter_map(|(slot, c)| c.default.as_ref().map(|d| (slot, c.name.clone(), c.type_id, d.expr.sql.clone())))
+            .collect(),
+        None => return Ok(Vec::new()),
+    };
+    let mut out = Vec::with_capacity(virtual_cols.len());
+    for (slot, name, ty, sql) in virtual_cols {
+        let bound = bind_stored_expr(b, &sql, rel_oid, ExprCtx::generated())?;
+        let coerced = coerce_assignment(b, &BoundArg::new(bound, None), &name, ty)?;
+        let relocated = coerced.transform(&mut |mut e: BoundExpr| -> Result<BoundExpr> {
+            if let ExprKind::Column(c) = &mut e.kind {
+                if c.levels_up == 0 && c.rt_index == 1 {
+                    c.rt_index = rt_index;
+                }
+            }
+            Ok(e)
+        })?;
+        out.push((slot, relocated));
+    }
+    Ok(out)
 }
 
 /// Push a `TableExpr` scope over a synthetic relation (module docs). `columns` = (name, type) in attnum
@@ -111,6 +158,26 @@ pub fn store_expr(b: &mut Binder, bound: &BoundExpr, table: Option<Oid>, column_
     let sql = deparse_expr(&ctx, bound)?;
     let depends_on = collect_dependencies(b, bound, table)?;
     Ok(StoredExpr { sql, bound: None, depends_on })
+}
+
+/// PG records no dependency on a `regrole` constant (`find_expr_references_walker` in dependency.c
+/// refuses it), so a stored column default containing one is rejected at DDL time (0A000). A non-null
+/// `regrole` constant anywhere in the tree (casts included) is enough to fail.
+pub fn reject_regrole_constants(e: &BoundExpr) -> Result<()> {
+    let mut found = false;
+    e.walk(&mut |x: &BoundExpr| -> bool {
+        if matches!(x.kind, ExprKind::Const(Datum::Oid(_))) && x.ty.oid == pgarbor_types::oids::REGROLE {
+            found = true;
+        }
+        !found
+    });
+    if found {
+        return Err(PgError::new(
+            pgarbor_common::SqlState::FEATURE_NOT_SUPPORTED,
+            "constant of the type regrole cannot be used here",
+        ));
+    }
+    Ok(())
 }
 
 /// Dependency list of a bound expression (module docs).
@@ -200,7 +267,15 @@ struct StoredColumnNamer<'n> {
 
 impl ColumnNamer for StoredColumnNamer<'_> {
     fn column(&self, col: &ColumnRef) -> Option<String> {
-        if col.levels_up != 0 || col.rt_index != 1 || col.attnum < 1 {
+        if col.levels_up != 0 || col.rt_index != 1 {
+            return None;
+        }
+        // `tableoid` (PG `TableOidAttributeNumber`) is the one system column a generation
+        // expression may name; ruleutils prints it by its name.
+        if col.attnum == -6 {
+            return Some("tableoid".to_string());
+        }
+        if col.attnum < 1 {
             return None;
         }
         let name = (self.names)(col.attnum)?;
@@ -400,6 +475,19 @@ mod tests {
     fn rebind_round_trip_matches_original_bind() -> Result<()> {
         // bind("a > 0") -> store -> bind_stored_expr(store.sql) must yield an equal BoundExpr tree.
         Ok(())
+    }
+
+    #[test]
+    fn regrole_constant_in_stored_expr_is_rejected() -> Result<()> {
+        let c = BoundExpr::constant(Datum::Oid(10), TypeId::of(pgarbor_types::oids::REGROLE));
+        match reject_regrole_constants(&c) {
+            Err(e) => {
+                assert!(e.sqlstate == pgarbor_common::SqlState::FEATURE_NOT_SUPPORTED);
+                assert!(e.message == "constant of the type regrole cannot be used here");
+                Ok(())
+            }
+            Ok(()) => Err(PgError::internal("regrole constant was accepted in a stored expression")),
+        }
     }
 
     #[test]

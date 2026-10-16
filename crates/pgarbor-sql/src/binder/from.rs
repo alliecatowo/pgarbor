@@ -69,7 +69,7 @@ use sqlparser::ast::{
 use super::context::{Binder, ExprCtx};
 use super::{cte, expr_func, join, scope, select, types, values};
 use crate::diag;
-use crate::ir::{AccessNeeded, ExprKind, FromItem, OutputColumn, RangeColumn, RangeEntry, RangeFunction, RangeKind};
+use crate::ir::{AccessNeeded, BoundExpr, ExprKind, FromItem, OutputColumn, RangeColumn, RangeEntry, RangeFunction, RangeKind};
 use crate::names::QualName;
 use crate::parser;
 
@@ -418,7 +418,13 @@ fn expand_view(
     b.expanding_views.push(rel.oid);
     let bound = select::bind_subselect(b, query, &names).map_err(stored_text_error);
     b.expanding_views.pop();
-    let bound = bound?;
+    let mut bound = bound?;
+    // PG reports a view as the owner of its columns: `markTargetListOrigin` takes the view relation
+    // at parse time and does not drill down into it, so the origin is the view itself, not the
+    // base column its definition reads.
+    for (i, col) in bound.output.iter_mut().enumerate() {
+        col.origin = Some(crate::ir::ColumnOrigin { table: rel.oid, attnum: i16::try_from(i + 1).unwrap_or(i16::MAX) });
+    }
 
     let columns = range_columns(&bound.output);
     let mut entry = RangeEntry {
@@ -492,6 +498,9 @@ fn bind_function_factor(
     let qn = b.qual(name)?;
     check_database(b, &qn)?;
     let table_alias: Option<String> = alias.map(|a| b.ident(&a.name));
+    if args.len() > 1 && qn.name == "unnest" {
+        return bind_multi_unnest(b, name, args, with_ordinality, table_alias, alias);
+    }
 
     let func = Function {
         name: name.clone(),
@@ -587,6 +596,62 @@ fn bind_function_factor(
         funcs: vec![RangeFunction { expr: call, columns: fn_part }],
         with_ordinality,
     };
+    register_entry(b, entry)
+}
+
+/// `unnest(a, b, ...)` in FROM (PG: the arrays expand side by side, as with `ROWS FROM`): one unnest call
+/// per argument. The function scan zips them and pads the shorter ones with NULL.
+fn bind_multi_unnest(
+    b: &mut Binder,
+    name: &ObjectName,
+    args: Vec<FunctionArg>,
+    with_ordinality: bool,
+    table_alias: Option<String>,
+    alias: Option<&TableAlias>,
+) -> Result<FromItem> {
+    let mut calls: Vec<BoundExpr> = Vec::with_capacity(args.len());
+    for arg in args {
+        let func = Function {
+            name: name.clone(),
+            uses_odbc_syntax: false,
+            parameters: FunctionArguments::None,
+            args: FunctionArguments::List(FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![arg],
+                clauses: Vec::new(),
+            }),
+            within_group: Vec::new(),
+            filter: None,
+            null_treatment: None,
+            over: None,
+        };
+        calls.push(expr_func::bind_function_call(b, &func, ExprCtx::function_in_from())?);
+    }
+    let fn_count = calls.len();
+    let mut columns: Vec<RangeColumn> = calls
+        .iter()
+        .map(|c| RangeColumn { name: "unnest".to_string(), ty: c.ty.clone(), dropped: false })
+        .collect();
+    if with_ordinality {
+        columns.push(RangeColumn { name: "ordinality".to_string(), ty: TypeId::of(oids::INT8), dropped: false });
+    }
+    let mut entry = RangeEntry {
+        kind: RangeKind::Function { funcs: Vec::new(), with_ordinality },
+        alias: table_alias.unwrap_or_else(|| "unnest".to_string()),
+        columns,
+        lateral: true,
+        visible: true,
+        access: AccessNeeded::default(),
+    };
+    if let Some(a) = alias {
+        apply_column_aliases(b, &mut entry, a)?;
+    }
+    let funcs: Vec<RangeFunction> = calls
+        .into_iter()
+        .zip(entry.columns[..fn_count].iter())
+        .map(|(expr, col)| RangeFunction { expr, columns: vec![col.clone()] })
+        .collect();
+    entry.kind = RangeKind::Function { funcs, with_ordinality };
     register_entry(b, entry)
 }
 

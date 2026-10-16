@@ -54,6 +54,49 @@ const VIEW_OPTIONS: [&str; 3] = ["security_barrier", "security_invoker", "check_
 const NOT_SINGLE_TABLE: &str =
     "Views that do not select from a single table or view are not automatically updatable.";
 
+/// `ALTER VIEW v SET (check_option = local|cascaded)` on an existing view (PG `ATExecSetRelOptions`,
+/// tablecmds.c: `view_query_is_auto_updatable` over the stored query). The stored definition is
+/// re-bound the way FROM expansion binds it; the dependencies that binding records are discarded
+/// because an ALTER records none. Other `check_option` values are left to the catalog, which reports
+/// them (22023) before this check in PG as well.
+pub fn check_alter_view_check_option(b: &mut Binder, view: pgarbor_common::Oid, set: &[String]) -> Result<()> {
+    let wants_check = set.iter().any(|opt| match opt.split_once('=') {
+        Some((name, value)) => {
+            name == "check_option" && matches!(value.to_ascii_lowercase().as_str(), "local" | "cascaded")
+        }
+        None => false,
+    });
+    if !wants_check {
+        return Ok(());
+    }
+    let env = b.env;
+    let snapshot = env.snapshot();
+    let sql = match snapshot.relation(view) {
+        Some(rel) => match rel.view.as_ref() {
+            Some(def) => def.query.sql.clone(),
+            None => return Err(PgError::internal(format!("view \"{}\" has no definition", rel.name))),
+        },
+        None => return Err(PgError::internal(format!("relation {view} missing from catalog snapshot"))),
+    };
+    let parsed = crate::parser::parse_one(&sql)?;
+    let query: &Query = match parsed.as_ast() {
+        Some(Statement::Query(q)) => &**q,
+        _ => return Err(PgError::internal("stored definition of a view is not a query")),
+    };
+    let mark = b.deps.len();
+    let bound = bind_subselect(b, query, &[]);
+    b.deps.truncate(mark);
+    let bq = bound?;
+    match auto_updatable_error(&bq) {
+        None => Ok(()),
+        Some(reason) => Err(PgError::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "WITH CHECK OPTION is supported only on automatically updatable views",
+        )
+        .with_hint(reason)),
+    }
+}
+
 /// `Statement::CreateView`.
 ///
 /// PG reference: `commands/view.c` `DefineView` (parse analysis first, then the WITH CHECK OPTION
@@ -83,7 +126,11 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
         return Err(diag::no_such_parameter(b.params.max_referenced, None));
     }
 
-    let (options, check_option) = bind_view_options(b, &cv.options, cv.materialized)?;
+    let (options, option_check) = bind_view_options(b, &cv.options, cv.materialized)?;
+    // The trailing `WITH [CASCADED|LOCAL] CHECK OPTION` (`view_trailer_opts`) sets the same option.
+    let check_option = b.view_trailer.as_ref().and_then(|t| t.check_option.clone()).or(option_check);
+    // The trailing `WITH [NO] DATA` of a materialized view; absent means WITH DATA.
+    let with_data = b.view_trailer.as_ref().and_then(|t| t.with_data).unwrap_or(true);
     if check_option.is_some() {
         if let Some(reason) = auto_updatable_error(&bq) {
             return Err(PgError::new(
@@ -150,9 +197,8 @@ pub fn bind_create_view(b: &mut Binder, stmt: &Statement) -> Result<BoundStateme
         query: StoredExpr::new(sql).with_deps(deps),
         or_replace: cv.or_replace,
         materialized: cv.materialized,
-        // WITH [NO] DATA is not represented by sqlparser's CreateView (see the lease notes); a
-        // materialized view is always populated at creation until the parser carries the clause.
-        populated: true,
+        // `WITH NO DATA` leaves the matview unpopulated (scans fail 55000 until a plain REFRESH).
+        populated: with_data,
         options,
         check_option,
         if_not_exists: cv.if_not_exists,
@@ -555,9 +601,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs SQL-16 (query binding) and SQL-44 (view deparse)"]
     fn materialized_view_with_no_data_is_not_populated() {
-        // Blocked until the parser carries WITH [NO] DATA for CREATE MATERIALIZED VIEW.
         match bind_sql("create materialized view m as select 1 with no data") {
             Ok(BoundStatement::CreateView(v)) => {
                 assert!(v.spec.materialized);

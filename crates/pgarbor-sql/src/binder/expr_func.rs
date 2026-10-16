@@ -79,7 +79,7 @@ use sqlparser::ast::{
 
 use super::context::{Binder, BoundArg, ExprCtx};
 use super::coerce;
-use super::expr::{bind_arg, bind_expr};
+use super::expr::{bind_arg, bind_expr, collate_keyword_pos};
 use super::expr_agg;
 use super::expr_misc;
 use super::expr_sublink;
@@ -274,17 +274,24 @@ pub fn bind_function_call(b: &mut Binder, f: &Function, ec: ExprCtx) -> Result<B
 
     // Step 4: resolve.
     let arg_oids: Vec<Oid> = args.iter().map(|a| a.ty().oid).collect();
+    // PG `func_get_detail`: a one-argument call whose name is a type, and that matches no candidate
+    // exactly, is a type coercion (`int4('12')`), tried before overload resolution.
+    if args.len() == 1 && names.iter().all(|n| n.is_none()) && !cands.iter().any(|c| c.arg_types == arg_oids) {
+        if let Some(cast) = function_style_cast(b, schema, &name, &args[0])? {
+            return Ok(cast);
+        }
+    }
     let resolved = match resolve_with(b, &cands, &name, arg_oids.clone(), names.clone(), variadic_kw, pos) {
         Ok(r) => r,
-        Err(e) => {
-            if e.sqlstate == SqlState::UNDEFINED_FUNCTION && args.len() == 1 && names.iter().all(|n| n.is_none()) {
-                if let Some(cast) = function_style_cast(b, schema, &name, &args[0])? {
-                    return Ok(cast);
-                }
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(misplaced_order_by(e, f)),
     };
+
+    // PG `assign_collations_walker`: the arguments of one call merge their collations, and two
+    // different explicit collations conflict (42P21). Ordered-set aggregates (WITHIN GROUP) merge
+    // their aggregated arguments differently, so only plain calls are checked here.
+    if f.within_group.is_empty() {
+        check_argument_collations(b, f, &args)?;
+    }
 
     // Step 5: kind dispatch.
     if variadic_kw && matches!(resolved.kind, ProcKind::Aggregate | ProcKind::Window) {
@@ -781,6 +788,14 @@ fn bind_special_function(b: &mut Binder, name: &str, f: &Function, pos: Option<u
             }
             bind_sql_value_function(b, op, None, pos)?
         }
+        // `COLLATION FOR (expr)` reaches here as the call `pg_collation_for(expr)` (parser::collation_for_as_function).
+        "pg_collation_for" => {
+            let exprs = plain_exprs(f, pos)?;
+            let [arg] = exprs.as_slice() else {
+                return Err(diag::syntax("syntax error", pos));
+            };
+            expr_misc::bind_collation_for(b, arg, pos, ec)?
+        }
         "grouping" => expr_agg::bind_grouping(b, f, ec)?,
         "row" => {
             let exprs = plain_exprs(f, pos)?;
@@ -925,6 +940,72 @@ fn bind_call_args(b: &mut Binder, f: &Function, ec: ExprCtx, pos: Option<u32>) -
     Ok((args, names))
 }
 
+/// Explicit collation of a call argument (PG `COLLATE_EXPLICIT` strength): the `COLLATE` clause
+/// itself. Explicit collations flowing out of other operators and functions are not tracked yet.
+fn explicit_collation(e: &BoundExpr) -> Option<Oid> {
+    match &e.kind {
+        ExprKind::Collate(c) => Some(c.collation),
+        _ => None,
+    }
+}
+
+/// PG `merge_collation_state` over the arguments of one call: two different explicit collations
+/// conflict (42P21 `collation mismatch between explicit collations "a" and "b"`), reported at the
+/// `COLLATE` clause of the second one.
+fn check_argument_collations(b: &Binder, f: &Function, args: &[BoundArg]) -> Result<()> {
+    let mut first: Option<Oid> = None;
+    for (i, arg) in args.iter().enumerate() {
+        let Some(coll) = explicit_collation(&arg.expr) else {
+            continue;
+        };
+        let Some(prev) = first else {
+            first = Some(coll);
+            continue;
+        };
+        if prev == coll {
+            continue;
+        }
+        let msg = format!(
+            "collation mismatch between explicit collations \"{}\" and \"{}\"",
+            builtin_collation_name(prev)?,
+            builtin_collation_name(coll)?
+        );
+        let pos = collate_clause_pos(b, f, i).or(arg.pos);
+        return Err(diag::with_position(PgError::new(SqlState::COLLATION_MISMATCH, msg), pos));
+    }
+    Ok(())
+}
+
+/// Name of a builtin collation OID for diagnostics.
+pub(super) fn builtin_collation_name(oid: Oid) -> Result<&'static str> {
+    pgarbor_catalog::builtin::builtin_collation(oid)
+        .map(|c| c.name)
+        .ok_or_else(|| PgError::unimplemented("SQL-43", "collation name display for this collation"))
+}
+
+/// Position of the `COLLATE` clause of call argument `index`, when that argument is written
+/// `expr COLLATE name` (arguments past the positional list, such as WITHIN GROUP keys, have none).
+fn collate_clause_pos(b: &Binder, f: &Function, index: usize) -> Option<u32> {
+    let FunctionArguments::List(list) = &f.args else {
+        return None;
+    };
+    let arg = list.args.get(index)?;
+    let e = match arg {
+        FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => e,
+        FunctionArg::Named { arg: FunctionArgExpr::Expr(e), .. } => e,
+        FunctionArg::ExprNamed { arg: FunctionArgExpr::Expr(e), .. } => e,
+        _ => return None,
+    };
+    let mut inner: &Expr = e;
+    while let Expr::Nested(x) = inner {
+        inner = &**x;
+    }
+    match inner {
+        Expr::Collate { expr, .. } => collate_keyword_pos(b.src, expr),
+        _ => None,
+    }
+}
+
 /// Overload resolution against an already listed candidate set.
 fn resolve_with(
     b: &Binder,
@@ -953,6 +1034,28 @@ fn function_style_cast(b: &mut Binder, schema: Option<&str>, name: &str, arg: &B
         return Ok(None);
     };
     coerce::try_coerce(b, arg, TypeId::of(oid), CastContext::Explicit, CoercionForm::ExplicitCall)
+}
+
+/// PG `ParseFuncOrColumn`: an undefined aggregate call with more than one ORDER BY item is a
+/// misplaced ORDER BY (`string_agg(k ORDER BY k, ',')`), reported with its own HINT.
+fn misplaced_order_by(e: PgError, f: &Function) -> PgError {
+    let FunctionArguments::List(list) = &f.args else {
+        return e;
+    };
+    let order_items: usize = list
+        .clauses
+        .iter()
+        .map(|c| match c {
+            FunctionArgumentClause::OrderBy(items) => items.len(),
+            _ => 0,
+        })
+        .sum();
+    if e.sqlstate == SqlState::UNDEFINED_FUNCTION && order_items > 1 && f.within_group.is_empty() {
+        return e.with_hint(
+            "No aggregate function matches the given name and argument types. Perhaps you misplaced ORDER BY; ORDER BY must appear after all regular arguments of the aggregate.",
+        );
+    }
+    e
 }
 
 /// PG `check_srf_call_placement` for a call that returns a set.

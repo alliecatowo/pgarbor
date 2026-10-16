@@ -43,6 +43,7 @@ use sqlparser::ast::{
 };
 
 use super::context::Binder;
+use super::dispatch::GRANT_ROUTINE_KEY;
 use super::types;
 use crate::diag;
 use crate::ir::BoundStatement;
@@ -50,6 +51,15 @@ use crate::names::QualName;
 
 /// SQLSTATE 0LP01 `invalid_grant_operation` (also the SQLSTATE of the privilege WARNINGs).
 const INVALID_GRANT_OPERATION: SqlState = SqlState(*b"0LP01");
+
+/// Routine kinds a `ON FUNCTION|PROCEDURE|ROUTINE` object names: `Function` (not procedures),
+/// `Procedure` (procedures only), `Any` (`ROUTINE`, PG `OBJECT_ROUTINE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoutineWant {
+    Function,
+    Procedure,
+    Any,
+}
 
 /// The statement's `objtype` (PG `GrantStmt.objtype`): decides the top-level privilege check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -421,6 +431,8 @@ fn role_from_ident(b: &mut Binder, id: &Ident) -> Result<Oid> {
 fn resolve_objects(b: &mut Binder, objects: &GrantObjects) -> Result<(ObjType, Vec<Resolved>)> {
     let env: &CatalogEnv = b.env;
     let mut out: Vec<Resolved> = Vec::new();
+    // `ROUTINE` / `ALL ROUTINES IN SCHEMA` keyword of the statement text (dispatch::GRANT_ROUTINE_KEY).
+    let routine_keyword: Option<String> = b.scratch.get(GRANT_ROUTINE_KEY).cloned();
     let kind = match objects {
         GrantObjects::Tables(names) => {
             for name in names {
@@ -464,11 +476,12 @@ fn resolve_objects(b: &mut Binder, objects: &GrantObjects) -> Result<(ObjType, V
             ObjType::Database
         }
         GrantObjects::Function { name, arg_types } => {
-            out.push(resolve_routine(b, name, arg_types, false)?);
+            let want = if routine_keyword.as_deref() == Some("routine") { RoutineWant::Any } else { RoutineWant::Function };
+            out.push(resolve_routine(b, name, arg_types, want)?);
             ObjType::Function
         }
         GrantObjects::Procedure { name, arg_types } => {
-            out.push(resolve_routine(b, name, arg_types, true)?);
+            out.push(resolve_routine(b, name, arg_types, RoutineWant::Procedure)?);
             ObjType::Procedure
         }
         GrantObjects::AllTablesInSchema { schemas } => {
@@ -497,6 +510,10 @@ fn resolve_objects(b: &mut Binder, objects: &GrantObjects) -> Result<(ObjType, V
         }
         GrantObjects::AllFunctionsInSchema { schemas } => {
             for schema in schemas {
+                if routine_keyword.as_deref() == Some("all routines") {
+                    all_routines_in_schema(b, env, schema, &mut out)?;
+                    continue;
+                }
                 let (name, oid) = schema_target(b, env, schema)?;
                 out.push(Resolved {
                     target: GrantTarget::AllFunctionsInSchema(oid),
@@ -558,9 +575,10 @@ fn resolve_relation_target(b: &mut Binder, name: &ObjectName, want_sequence: boo
 /// No argument list: the name must be unique (42725). With arguments: an exact match on the IN
 /// argument types (42883 when none). sqlparser cannot tell `f()` from `f`, so an empty list means
 /// "no argument list".
-fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], procedure: bool) -> Result<Resolved> {
+fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], want: RoutineWant) -> Result<Resolved> {
     let env: &CatalogEnv = b.env;
-    let word = if procedure { "procedure" } else { "function" };
+    // PG reports a missing ROUTINE as "function ... does not exist" (parse_func.c).
+    let word = if want == RoutineWant::Procedure { "procedure" } else { "function" };
     let qn = qualify(b, name)?;
     let schema = qn.schema.as_deref();
     let candidates = env.function_candidates(schema, &qn.name)?;
@@ -587,11 +605,11 @@ fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], pr
             }
         }
     };
-    if !procedure && kind == ProcKind::Procedure {
+    if want == RoutineWant::Function && kind == ProcKind::Procedure {
         let sig = routine_signature(b, &qn, &arg_oids);
         return Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("{sig} is not a function")));
     }
-    if procedure && kind != ProcKind::Procedure {
+    if want == RoutineWant::Procedure && kind != ProcKind::Procedure {
         let sig = routine_signature(b, &qn, &arg_oids);
         return Err(PgError::new(SqlState::WRONG_OBJECT_TYPE, format!("{sig} is not a procedure")));
     }
@@ -607,6 +625,27 @@ fn resolve_routine(b: &mut Binder, name: &ObjectName, arg_types: &[DataType], pr
 fn routine_signature(b: &Binder, qn: &QualName, arg_oids: &[Oid]) -> String {
     let names: Vec<String> = arg_oids.iter().map(|oid| b.type_name(TypeId { oid: *oid, typmod: -1 })).collect();
     format!("{}({})", qn.display(), names.join(", "))
+}
+
+/// `ALL ROUTINES IN SCHEMA s` (PG `objectsInSchemaToOids`, OBJECT_ROUTINE): one object target per
+/// function, aggregate and procedure of the schema, in OID order. Builtin schemas are system catalogs
+/// (42501 like `ALL FUNCTIONS`), checked here because the catalog's schema-wide targets exclude
+/// procedures.
+fn all_routines_in_schema(b: &mut Binder, env: &CatalogEnv, schema: &ObjectName, out: &mut Vec<Resolved>) -> Result<()> {
+    let (name, oid) = schema_target(b, env, schema)?;
+    let data = env.snapshot().data();
+    if !data.namespaces.contains_key(&oid) {
+        return Err(cat_errors::system_catalog_permission(&name));
+    }
+    for f in data.functions.values().filter(|f| f.namespace == oid) {
+        out.push(Resolved {
+            target: GrantTarget::Object(ObjectAddress::proc(f.oid)),
+            name: f.name.clone(),
+            is_sequence: false,
+            relation: None,
+        });
+    }
+    Ok(())
 }
 
 /// Schema for an `ALL ... IN SCHEMA` target: (name, OID), 3F000 when missing.

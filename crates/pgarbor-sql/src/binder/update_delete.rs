@@ -137,6 +137,7 @@ pub fn bind_assignments(b: &mut Binder, assignments: &[Assignment], target: &Tar
     for a in assignments {
         match &a.target {
             AssignmentTarget::ColumnName(name) => {
+                reject_indirected_target(name)?;
                 let col = resolve_set_column(b, target, target_rt, name)?;
                 claim(&mut seen, &col)?;
                 let is_default = is_default_keyword(&a.value);
@@ -170,11 +171,24 @@ pub fn bind_returning(b: &mut Binder, items: Option<&[SelectItem]>) -> Result<Ve
         None => return Ok(Vec::new()),
     };
     let srf_before = b.scope()?.has_target_srfs;
-    let entries = bind_target_list(b, items, ExprCtx::returning())?;
+    let entries = bind_target_list(b, items, ExprCtx::returning(), false).map_err(returning_old_new)?;
     if !srf_before && b.scope()?.has_target_srfs {
         return Err(diag::srf_not_allowed(ExprClause::Other("RETURNING"), None));
     }
     Ok(entries)
+}
+
+/// PG 18 RETURNING may name the OLD and NEW row versions, which this binder does not provide yet
+/// (no such range entries). Their missing-FROM-entry error becomes a leased 0A000 instead.
+fn returning_old_new(e: PgError) -> PgError {
+    let named = e.sqlstate == SqlState::UNDEFINED_TABLE
+        && (e.message == "missing FROM-clause entry for table \"old\""
+            || e.message == "missing FROM-clause entry for table \"new\"");
+    if named {
+        PgError::unimplemented("SQL-28", "RETURNING OLD and NEW row references")
+    } else {
+        e
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -260,6 +274,20 @@ impl SetCol {
     fn assign_target(&self) -> AssignTarget {
         AssignTarget { attnum: self.attnum, name: self.name.clone(), ty: self.ty }
     }
+}
+
+/// `SET a[2] = ..` / `SET c.f = ..`: the parser rewrites the indirection of a SET target into a trailing
+/// [`crate::parser::SUBSCRIPT_TARGET_MARKER`] part. Assigning into a subscript or field is not executed yet
+/// (amendment pgarbor-sql-01), so it fails here with 0A000 instead of resolving a qualified column name.
+fn reject_indirected_target(name: &ObjectName) -> Result<()> {
+    let marked = matches!(
+        name.0.last(),
+        Some(ObjectNamePart::Identifier(id)) if id.value == crate::parser::SUBSCRIPT_TARGET_MARKER
+    );
+    if marked {
+        return Err(PgError::unimplemented("SQL-14", "subscript or field assignment in UPDATE"));
+    }
+    Ok(())
 }
 
 /// Resolve one SET target name against the DML target (PG `transformUpdateTargetList`).

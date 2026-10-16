@@ -261,6 +261,16 @@ fn resolve_name(b: &mut Binder, qualifier: &[String], name: &str, pos: Option<u3
 /// `CAST(e AS t)` / `e::t` (module docs). The operand is bound first (as PG `transformTypeCast`
 /// does), then the type is resolved, then the explicit coercion is applied.
 pub fn bind_cast(b: &mut Binder, operand: &Expr, data_type: &DataType, pos: Option<u32>, ec: ExprCtx) -> Result<BoundExpr> {
+    // `ARRAY[]::T[]`: the empty array takes the cast's type (see `expr_misc::cast_empty_array`).
+    if let Expr::Array(arr) = operand {
+        if !arr.named && arr.elem.is_empty() {
+            let type_pos = type_pos_after(b.src, operand).or(pos);
+            let target = types::resolve_data_type(b, data_type, type_pos)?.id;
+            if let Some(empty) = expr_misc::cast_empty_array(b, target) {
+                return Ok(empty);
+            }
+        }
+    }
     let operand_expr = bind_expr(b, operand, ec)?;
     let arg = BoundArg::new(operand_expr, arg_pos(b, operand));
     let type_pos = type_pos_after(b.src, operand).or(pos);
@@ -361,6 +371,19 @@ fn unary_op_pos(src: &SourceMap, operand: &Expr) -> Option<u32> {
         None
     } else {
         Some(src.pos_of_byte(i))
+    }
+}
+
+/// Position of the `COLLATE` keyword of `operand COLLATE name`: the first token after the operand's
+/// text (PG reports collation conflicts at the COLLATE clause, `CollateClause.location`).
+pub(super) fn collate_keyword_pos(src: &SourceMap, operand: &Expr) -> Option<u32> {
+    let text = src.text();
+    let i = skip_blank(text, byte_after_end(src, operand)?);
+    let tok = text.get(i..i + "COLLATE".len())?;
+    if tok.eq_ignore_ascii_case("COLLATE") {
+        Some(src.pos_of_byte(i))
+    } else {
+        None
     }
 }
 

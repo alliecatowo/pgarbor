@@ -1616,6 +1616,13 @@ fn collect_expr<'q>(
                     return false;
                 }
             }
+            // `nextval('s')` and other `regclass` literals reference the relation (PG
+            // `find_expr_references_walker`: a REGCLASS Const records its relation).
+            ExprKind::Const(pgarbor_types::Datum::Oid(o)) => {
+                if node.ty.oid == pgarbor_types::oids::REGCLASS && *o >= FIRST_NORMAL_OBJECT_ID {
+                    d.add(ObjAddr::new(ObjClass::Relation, *o));
+                }
+            }
             _ => {}
         }
         true
@@ -1815,6 +1822,20 @@ mod tests {
         assert!(deps.contains(&rel));
         assert!(deps.contains(&col));
         assert_eq!(deps.len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn dependencies_regclass_constant_names_relation() -> Result<()> {
+        // `nextval('s')` binds the sequence as a REGCLASS constant; the view must depend on it
+        // (DROP SEQUENCE under RESTRICT is refused by a view using it).
+        let mut sel = BoundSelect::empty();
+        sel.range_table.push(rel_entry(16390, "t", &["a"]));
+        sel.from.push(FromItem::Range(1));
+        sel.target_list.push(target(BoundExpr::constant(Datum::Oid(16401), TypeId::REGCLASS), "s"));
+        let q = query_of(sel, &["s"]);
+        let deps = query_dependencies(&q)?;
+        assert!(deps.contains(&ObjAddr::new(ObjClass::Relation, 16401)));
         Ok(())
     }
 

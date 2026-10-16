@@ -174,10 +174,29 @@ pub fn bind_array(b: &mut Binder, elems: &[Expr], pos: Option<u32>, ec: ExprCtx)
     if elems.is_empty() {
         return Err(empty_array_error(pos));
     }
-    let bound = bind_args(b, elems, ec)?;
+    let bound = bind_array_elems(b, elems, ec)?;
     // PG transformArrayExpr: the element type is the common type of the elements (context ARRAY).
     let (exprs, common) = coerce::coerce_to_common(b, bound, "ARRAY")?;
     build_array(b, exprs, common, pos)
+}
+
+/// Elements of `ARRAY[..]`. A nested `[..]` element (`ARRAY[[1,2],[3,4]]`) is an array constructor without
+/// the keyword: sqlparser yields it as an unnamed array expression, which only an element list may hold
+/// (a bare `[` anywhere else is a syntax error, as in PG gram.y).
+fn bind_array_elems(b: &mut Binder, elems: &[Expr], ec: ExprCtx) -> Result<Vec<BoundArg>> {
+    let mut out: Vec<BoundArg> = Vec::with_capacity(elems.len());
+    for e in elems {
+        let arg = match e {
+            Expr::Array(inner) if !inner.named => {
+                let inner_pos = b.pos(e);
+                let nested = bind_array(b, &inner.elem, inner_pos, ec)?;
+                BoundArg::new(nested, inner_pos)
+            }
+            _ => bind_arg(b, e, ec)?,
+        };
+        out.push(arg);
+    }
+    Ok(out)
 }
 
 /// `ROW(..)` / `Expr::Tuple`.
@@ -298,10 +317,12 @@ pub fn bind_collate(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundExpr> 
         }
     }
     // PG transformCollateClause: the collation is looked up first, then the operand type is checked.
+    // Both errors are reported at the COLLATE keyword (`CollateClause.location`).
+    let clause_pos = super::expr::collate_keyword_pos(b.src, expr).or(name_pos);
     let oid = b
         .env
         .collation_oid(name.schema.as_deref(), &name.name)
-        .map_err(|err| diag::with_position(err, name_pos))?;
+        .map_err(|err| diag::with_position(err, clause_pos))?;
     let arg_ty = arg.ty();
     let collatable = arg_ty.oid == oids::UNKNOWN || {
         let env: &dyn TypeEnv = b.env;
@@ -309,9 +330,38 @@ pub fn bind_collate(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundExpr> 
     };
     if !collatable {
         let msg = format!("collations are not supported by type {}", b.type_name(arg_ty));
-        return Err(diag::with_position(PgError::new(SqlState::DATATYPE_MISMATCH, msg), name_pos));
+        return Err(diag::with_position(PgError::new(SqlState::DATATYPE_MISMATCH, msg), clause_pos));
     }
     Ok(BoundExpr::new(ExprKind::Collate(Box::new(CollateExpr { arg: arg.expr, collation: oid })), arg_ty))
+}
+
+/// `COLLATION FOR (expr)` and `pg_collation_for(expr)` (PG `transformCollationFor`): the name of the collation
+/// of `expr`, as text. The argument's type must be collatable (42804 otherwise). An argument written
+/// `x COLLATE c` gives `c`. An expression with no collation-bearing node has the default collation, named
+/// `default`. The collation of a column, or of a collation inside a larger expression, is not tracked by the
+/// expression binder, so those are 0A000.
+pub fn bind_collation_for(b: &mut Binder, e: &Expr, pos: Option<u32>, ec: ExprCtx) -> Result<BoundExpr> {
+    let arg = bind_arg(b, e, ec)?;
+    let arg_ty = arg.ty();
+    let collatable = arg_ty.oid == oids::UNKNOWN || {
+        let env: &dyn TypeEnv = b.env;
+        env.type_info(arg_ty.oid).map(|t| t.is_collatable()).unwrap_or(false)
+    };
+    if !collatable {
+        let msg = format!("collations are not supported by type {}", b.type_name(arg_ty));
+        return Err(diag::with_position(PgError::new(SqlState::DATATYPE_MISMATCH, msg), pos));
+    }
+    let name = match &arg.expr.kind {
+        ExprKind::Collate(c) => match pgarbor_catalog::builtin::builtin_collation(c.collation) {
+            Some(coll) => coll.name.to_string(),
+            None => return Err(PgError::unimplemented("SQL-14", "collation name of a non-builtin collation")),
+        },
+        _ if arg.expr.any(&mut |x| matches!(x.kind, ExprKind::Collate(_) | ExprKind::Column(_))) => {
+            return Err(PgError::unimplemented("SQL-14", "COLLATION FOR of a column or of an expression with a collation"));
+        }
+        _ => "default".to_string(),
+    };
+    Ok(BoundExpr::constant(Datum::Text(name), TypeId::TEXT))
 }
 
 /// `Expr::Interval`.
@@ -323,7 +373,14 @@ pub fn bind_interval(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundExpr>
     };
     let pos = b.pos(e);
     let Expr::Value(value) = &*iv.value else {
-        return Err(diag::unsupported_construct("INTERVAL with a non-literal value", pos));
+        // PG grammar: INTERVAL takes a string constant (`ConstInterval Sconst`), so `interval(...)` is a
+        // syntax error at the first token of the argument (`interval('1 day')` -> near "'1 day'").
+        let mut first = &*iv.value;
+        while let Expr::Nested(inner) = first {
+            first = &**inner;
+        }
+        let token = first.to_string();
+        return Err(diag::syntax_error_near(&token, b.pos(first)));
     };
     if iv.leading_precision.is_some() {
         return Err(diag::unsupported_construct("INTERVAL leading field precision", pos));
@@ -387,6 +444,17 @@ fn build_array(b: &mut Binder, elements: Vec<BoundExpr>, common: TypeId, pos: Op
     Ok(BoundExpr::new(
         ExprKind::Array(Box::new(ArrayExpr { elements, elem_type: common.oid, multidims: false })),
         TypeId::of(array_oid),
+    ))
+}
+
+/// `ARRAY[]::T[]` (PG transformTypeCast: an empty A_ArrayExpr takes the cast's array type, since it has no
+/// element to infer one from). `Some` when `target` is an array type, `None` otherwise.
+pub fn cast_empty_array(b: &Binder, target: TypeId) -> Option<BoundExpr> {
+    let env: &dyn TypeEnv = b.env;
+    let elem_type = registry::element_type_of(env, target.oid)?;
+    Some(BoundExpr::new(
+        ExprKind::Array(Box::new(ArrayExpr { elements: Vec::new(), elem_type, multidims: false })),
+        target,
     ))
 }
 

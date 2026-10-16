@@ -374,7 +374,7 @@ pub fn bind_window_call(b: &mut Binder, f: &Function, resolved: &ResolvedFunc, a
         None
     };
 
-    let window = bind_window_spec(b, over)?;
+    let window = bind_window_spec(b, over, pos)?;
     b.scope_mut()?.has_windows = true;
 
     let wf = WindowFunc {

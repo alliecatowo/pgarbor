@@ -46,6 +46,7 @@ use pgarbor_common::{PgError, Result, SqlState};
 use pgarbor_types::TypeId;
 
 use super::context::Binder;
+use super::stored::virtual_generation_exprs;
 use crate::diag;
 use crate::ir::{AccessNeeded, BoundExpr, ColumnRef, ExprKind, RangeEntry, RangeKind, WindowDef};
 use crate::names::QualName;
@@ -180,7 +181,17 @@ pub fn add_range_entry(b: &mut Binder, entry: RangeEntry) -> Result<u32> {
 /// alias uniqueness within the current FROM list: 42712 `table name "t" specified more than once`
 /// (`diag::duplicate_alias`; items hidden by a join alias do not count).
 pub fn add_namespace_for_range(b: &mut Binder, rt_index: u32, rel_visible: bool, cols_visible: bool) -> Result<()> {
-    let item = range_nsitem(b.scope()?, rt_index, rel_visible, cols_visible)?;
+    let mut item = range_nsitem(b.scope()?, rt_index, rel_visible, cols_visible)?;
+    // PG expand_generated_columns_in_expr: a VIRTUAL generated column of a stored relation reads as its
+    // generation expression (table expression scopes keep the stored slots: that is where the
+    // expressions themselves are bound).
+    if let Some(rel_oid) = expandable_relation(b, rt_index)? {
+        for (slot, expr) in virtual_generation_exprs(b, rel_oid, rt_index)? {
+            if let Some(col) = item.columns.get_mut(slot) {
+                col.expr = expr;
+            }
+        }
+    }
     if rel_visible {
         if let Some(alias) = item.alias.as_deref() {
             // PG checkNameSpaceConflicts: two visible relation items with the same name in one FROM list.
@@ -404,6 +415,19 @@ fn attnum_of(index: usize) -> Result<i16> {
 /// LATERAL-only items are invisible unless the referencing item is itself LATERAL-visible.
 fn lateral_hidden(item: &NsItem) -> bool {
     item.lateral_only && !item.lateral_ok
+}
+
+/// OID of the stored relation behind range entry `rt_index`, when its columns may need the VIRTUAL
+/// generation expansion (`add_namespace_for_range`). `None` inside a table expression scope.
+fn expandable_relation(b: &Binder, rt_index: u32) -> Result<Option<pgarbor_common::Oid>> {
+    let scope = b.scope()?;
+    if scope.kind == ScopeKind::TableExpr {
+        return Ok(None);
+    }
+    Ok(match entry_at(scope, rt_index).map(|e| &e.kind) {
+        Some(RangeKind::Relation { oid, .. }) => Some(*oid),
+        _ => None,
+    })
 }
 
 /// Namespace item for range entry `rt_index`.
@@ -677,6 +701,22 @@ fn whole_row(b: &mut Binder, name: &str, pos: Option<u32>) -> Result<Option<Reso
 /// PG `errorMissingRTE`: a table name that exists but is not visible here is 42P01 "invalid
 /// reference"; otherwise "missing FROM-clause entry".
 fn error_missing_rte(b: &Binder, name: &str, pos: Option<u32>) -> PgError {
+    // PG `errorMissingRTE`: a relation written by its real name while it is in FROM under a visible
+    // alias (`FROM colref AS c ... colref.y`) gets the alias hint.
+    let aliased = b
+        .scopes
+        .iter()
+        .flat_map(|scope| scope.range_table.iter())
+        .find(|entry| matches!(&entry.kind, RangeKind::Relation { name: rel, .. } if rel.as_str() == name) && entry.alias != name);
+    if let Some(entry) = aliased {
+        let alias_visible = b
+            .scopes
+            .iter()
+            .any(|scope| scope.namespace.iter().any(|item| item.alias.as_deref() == Some(entry.alias.as_str())));
+        if alias_visible {
+            return diag::invalid_from_reference_alias(name, &entry.alias, pos);
+        }
+    }
     let exists = b.scopes.iter().any(|scope| scope.range_table.iter().any(|entry| entry.alias == name));
     if exists {
         diag::invalid_from_reference(name, pos)

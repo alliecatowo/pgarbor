@@ -95,6 +95,9 @@ pub fn data_type_to_type_name(b: &mut Binder, dt: &DataType, pos: Option<u32>) -
         DataType::JSON => named("json", Vec::new()),
         DataType::JSONB => named("jsonb", Vec::new()),
         DataType::Regclass => named("regclass", Vec::new()),
+        // sqlparser has dedicated variants for these; PG resolves them as ordinary catalog names.
+        DataType::TsVector => named("tsvector", Vec::new()),
+        DataType::TsQuery => named("tsquery", Vec::new()),
         DataType::Date => named("date", Vec::new()),
         DataType::Time(p, tz) => named(&time_name("time", tz), opt_mods(*p)),
         DataType::Timestamp(p, tz) => named(&time_name("timestamp", tz), opt_mods(*p)),
@@ -416,6 +419,14 @@ mod tests {
         assert_eq!(name_of("decimal(7)").unwrap().typmods, vec![7]);
         assert_eq!(name_of("dec").unwrap().name, "numeric");
         assert_eq!(resolve("numeric").unwrap().id.typmod, -1);
+    }
+
+    #[test]
+    fn text_search_types() {
+        // sqlparser parses these as dedicated DataType variants, not as custom names.
+        assert_eq!(resolve("tsvector").unwrap().id.oid, oids::TSVECTOR);
+        assert_eq!(resolve("tsquery").unwrap().id.oid, oids::TSQUERY);
+        assert_eq!(resolve("tsquery[]").unwrap().id.oid, oids::TSQUERY_ARRAY);
     }
 
     #[test]

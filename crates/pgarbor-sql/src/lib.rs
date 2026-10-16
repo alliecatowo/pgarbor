@@ -25,6 +25,7 @@ pub mod classify;
 pub mod deparse;
 pub mod diag;
 pub mod extra_stmt;
+pub mod fk_set_opts;
 pub mod identity_opts;
 pub mod ir;
 pub mod names;
@@ -34,6 +35,7 @@ pub mod rewrite;
 pub mod source;
 pub mod strict_check;
 pub mod syntax_error;
+pub mod view_trailer_opts;
 
 pub use binder::{bind, BindContext, BindOutput, BindSession};
 pub use ir::{BoundExpr, BoundQuery, BoundStatement, ExprKind};

@@ -175,14 +175,26 @@ pub fn check_grouping(
         }
     }
 
-    let mut checker = Checker { env, rtable, group_exprs, common_cols, fd_proven: Vec::new() };
+    let mut checker = Checker { env, rtable, group_exprs, common_cols, fd_proven: Vec::new(), pk_deps: Vec::new() };
     for entry in target_list {
         checker.expr(&entry.expr, 0)?;
     }
     if let Some(having) = having {
         checker.expr(having, 0)?;
     }
-    checker.windows(windows, 0)
+    let result = checker.windows(windows, 0);
+    let pk_deps = std::mem::take(&mut checker.pk_deps);
+    result?;
+    // Only the statement's own references are recorded: a view expanded into another view's definition
+    // is reached through that view's dependency, as with relations (from.rs).
+    if b.expanding_views.is_empty() {
+        for dep in pk_deps {
+            if !b.deps.contains(&dep) {
+                b.deps.push(dep);
+            }
+        }
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -495,6 +507,8 @@ struct Checker<'a> {
     common_cols: Vec<(u32, i16)>,
     /// Range entries already proven functionally dependent.
     fd_proven: Vec<u32>,
+    /// PRIMARY KEY constraints the check relied on (recorded as Normal dependencies of the view).
+    pk_deps: Vec<pgarbor_catalog::ObjectAddress>,
 }
 
 impl<'a> Checker<'a> {
@@ -570,6 +584,12 @@ impl<'a> Checker<'a> {
         let ok = !pk.columns.is_empty() && pk.columns.iter().all(|k| self.common_cols.contains(&(rt, *k)));
         if ok {
             self.fd_proven.push(rt);
+            // PG `check_functional_grouping` records a Normal dependency on the PRIMARY KEY constraint, so
+            // dropping it while a view relies on it is refused (2BP01).
+            let dep = pgarbor_catalog::ObjectAddress::constraint(pk.oid);
+            if !self.pk_deps.contains(&dep) {
+                self.pk_deps.push(dep);
+            }
         }
         ok
     }

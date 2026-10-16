@@ -54,6 +54,17 @@ pub fn invalid_from_reference(table: &str, pos: Option<u32>) -> PgError {
     )
 }
 
+/// 42P01 `invalid reference to FROM-clause entry for table "t"` + HINT
+/// `Perhaps you meant to reference the table alias "a".` (the table is in FROM under an alias that is
+/// visible here: `FROM colref AS c ... colref.y`).
+pub fn invalid_from_reference_alias(table: &str, alias: &str, pos: Option<u32>) -> PgError {
+    at(
+        PgError::new(SqlState::UNDEFINED_TABLE, format!("invalid reference to FROM-clause entry for table \"{table}\""))
+            .with_hint(format!("Perhaps you meant to reference the table alias \"{alias}\".")),
+        pos,
+    )
+}
+
 /// 42712 `table name "a" specified more than once`.
 pub fn duplicate_alias(name: &str, pos: Option<u32>) -> PgError {
     at(PgError::new(SqlState::DUPLICATE_ALIAS, format!("table name \"{name}\" specified more than once")), pos)

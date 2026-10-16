@@ -12,7 +12,7 @@
 //! `ColId` is an identifier, an unreserved keyword or a column-name keyword; reserved and
 //! type-or-function-name keywords (`kwlist.h`) must be quoted.
 use pgarbor_common::Result;
-use sqlparser::tokenizer::{Token, TokenWithSpan};
+use sqlparser::tokenizer::{Location, Token, TokenWithSpan};
 
 use crate::diag;
 use crate::source::SourceMap;
@@ -37,6 +37,7 @@ const NON_COLID_KEYWORDS: &[&str] = &[
 
 /// Run the checks for one statement chunk (`toks` ends with `Token::EOF`).
 pub fn check(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
+    numeric_junk(toks, src)?;
     let sig: Vec<&TokenWithSpan> = toks.iter().filter(|t| !matches!(t.token, Token::Whitespace(_))).collect();
     let word = |i: usize| -> String {
         match sig.get(i).map(|t| &t.token) {
@@ -71,7 +72,8 @@ pub fn check(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
                         Token::LParen => depth += 1,
                         Token::RParen => { depth = depth.saturating_sub(1); if depth == 0 { break; } }
                         Token::DoubleColon | Token::StringConcat | Token::Plus | Token::Minus | Token::Mul | Token::Div
-                        | Token::Mod | Token::Eq | Token::Neq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq if depth == 1 => {
+                        | Token::Mod | Token::Eq | Token::Neq | Token::Lt | Token::Gt | Token::LtEq | Token::GtEq
+                        | Token::CustomBinaryOperator(_) if depth == 1 => {
                             return Err(at_token(t, src));
                         }
                         _ => {}
@@ -139,6 +141,108 @@ pub fn check(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// PostgreSQL's scanner (`scan.l`: `integer_junk`, `numeric_junk`, `real_junk`, `hexfail`, `octfail`,
+/// `binfail`) reads a numeric literal that runs straight into identifier characters as one bad token,
+/// and rejects a bare `0x` / `0o` / `0b` prefix. sqlparser splits `123abc` into a number and a word,
+/// so this runs on the raw token stream (whitespace and comments are tokens, so "directly followed by"
+/// means the next token). The longest scanner match wins: a junk match always covers the whole
+/// identifier run, so it beats `hexfail` / `octfail` / `binfail` except when the run is exactly the
+/// prefix (`0b`, `0b_`, `0o`, `0x`), where the earlier prefix rule wins.
+fn numeric_junk(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
+    for (k, t) in toks.iter().enumerate() {
+        let word = match toks.get(k + 1).map(|n| &n.token) {
+            Some(Token::Word(w)) if w.quote_style.is_none() && w.value.starts_with(is_ident_start) => Some(w),
+            _ => None,
+        };
+        let junk = |end: Location| -> pgarbor_common::PgError {
+            let text = token_text(src, t.span.start, end);
+            diag::syntax(format!("trailing junk after numeric literal at or near \"{text}\""), src.char_pos(t.span.start))
+        };
+        match &t.token {
+            // `0b` / `0o` reach the tokenizer as `0` + word. A well-formed digit run (`0b101`) falls
+            // through unchanged; a bare prefix (optionally with one `_`) is `binfail` / `octfail`;
+            // anything else is trailing junk.
+            Token::Number(n, _) if n == "0" && word.is_some_and(|w| is_radix_word(&w.value)) => {
+                let w = match word {
+                    Some(w) => w,
+                    None => continue,
+                };
+                if radix_digits_ok(&w.value[1..], radix_of(&w.value)) {
+                    continue;
+                }
+                if matches!(w.value.as_str(), "b" | "B" | "o" | "O" | "b_" | "B_" | "o_" | "O_") {
+                    let what = if radix_of(&w.value) == 2 { "binary" } else { "octal" };
+                    let text = token_text(src, t.span.start, toks[k + 1].span.end);
+                    return Err(diag::syntax(format!("invalid {what} integer at or near \"{text}\""), src.char_pos(t.span.start)));
+                }
+                return Err(junk(toks[k + 1].span.end));
+            }
+            // `123L`: the tokenizer keeps the `L` suffix on the number, which PostgreSQL scans as junk.
+            Token::Number(_, true) => return Err(junk(t.span.end)),
+            Token::Number(..) if word.is_some() => return Err(junk(toks[k + 1].span.end)),
+            Token::HexStringLiteral(digits) if is_hex_prefix(src, &t.span) => {
+                if word.is_some() {
+                    return Err(junk(toks[k + 1].span.end));
+                }
+                if digits.is_empty() {
+                    let text = token_text(src, t.span.start, t.span.end);
+                    return Err(diag::syntax(format!("invalid hexadecimal integer at or near \"{text}\""), src.char_pos(t.span.start)));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Identifier start characters of PostgreSQL's scanner (`ident_start`).
+fn is_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
+}
+
+/// `b` / `o` (either case) followed by the rest of an identifier run: a candidate radix literal.
+fn is_radix_word(value: &str) -> bool {
+    matches!(value.as_bytes().first(), Some(b'b' | b'B' | b'o' | b'O'))
+}
+
+/// Radix of a `is_radix_word` value.
+fn radix_of(value: &str) -> u32 {
+    if matches!(value.as_bytes().first(), Some(b'b' | b'B')) { 2 } else { 8 }
+}
+
+/// Digits of a `0b` / `0o` literal: `(_?digit)+` in `scan.l`, so underscores only sit between digits.
+fn radix_digits_ok(body: &str, radix: u32) -> bool {
+    let mut digits = 0usize;
+    let mut chars = body.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '_' {
+            match chars.peek() {
+                Some(n) if n.is_digit(radix) => continue,
+                _ => return false,
+            }
+        }
+        if !c.is_digit(radix) {
+            return false;
+        }
+        digits += 1;
+    }
+    digits > 0
+}
+
+/// Is the token a `0x` / `0X` hexadecimal integer (rather than a bit string `X'..'`)?
+fn is_hex_prefix(src: &SourceMap, span: &sqlparser::tokenizer::Span) -> bool {
+    let raw = token_text(src, span.start, span.end);
+    raw.len() >= 2 && raw.as_bytes()[0] == b'0' && matches!(raw.as_bytes()[1], b'x' | b'X')
+}
+
+/// Source text between two locations (exclusive end, as `syntax_error::token_source`).
+fn token_text(src: &SourceMap, start: Location, end: Location) -> &str {
+    match (src.byte_offset(start), src.byte_offset(end)) {
+        (Some(s), Some(e)) => src.slice(s, e),
+        _ => "",
+    }
 }
 
 /// Check a `ColId` at `sig[i]` and any `'.' ColId` continuation after it when `dotted` is set by the
@@ -229,5 +333,18 @@ mod tests {
     fn alter_schema_if_exists_is_syntax_error() {
         assert_eq!(reject("ALTER SCHEMA IF EXISTS s RENAME TO t"), ("syntax error at or near \"EXISTS\"".into(), Some(17)));
         assert!(parse("ALTER SCHEMA s RENAME TO t").is_ok());
+    }
+
+    #[test]
+    fn numeric_literal_trailing_junk_is_syntax_error() {
+        assert_eq!(reject("SELECT 123abc"), ("trailing junk after numeric literal at or near \"123abc\"".into(), Some(8)));
+        assert_eq!(reject("SELECT 1b"), ("trailing junk after numeric literal at or near \"1b\"".into(), Some(8)));
+        assert_eq!(reject("SELECT 0b0x"), ("trailing junk after numeric literal at or near \"0b0x\"".into(), Some(8)));
+        assert_eq!(reject("SELECT 0x0y"), ("trailing junk after numeric literal at or near \"0x0y\"".into(), Some(8)));
+        assert_eq!(reject("SELECT 0b"), ("invalid binary integer at or near \"0b\"".into(), Some(8)));
+        assert_eq!(reject("SELECT 0o"), ("invalid octal integer at or near \"0o\"".into(), Some(8)));
+        assert_eq!(reject("SELECT 0x"), ("invalid hexadecimal integer at or near \"0x\"".into(), Some(8)));
+        assert!(parse("SELECT 1 AS abc, 1.5e3, 0 AS b, 1 abc").is_ok());
+        assert!(parse("SELECT X'1F', 0x1F").is_ok());
     }
 }

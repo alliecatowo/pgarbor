@@ -58,7 +58,7 @@ use super::context::{BindContext, Binder, BoundArg, ExprCtx};
 use super::params::ParamTable;
 use super::{coerce, dispatch, expr, params, types};
 use crate::diag;
-use crate::extra_stmt::{ExtraStatement, ReindexKind};
+use crate::extra_stmt::{ExtraStatement, MaintenanceOption, ReindexKind};
 use crate::ir::{
     BoundExecute, BoundExplain, BoundExpr, BoundLock, BoundPrepare, BoundStatement, CoercionForm, ExplainFormat,
     ExplainOptions, ExprKind, LockMode, MaintenanceKind,
@@ -145,8 +145,12 @@ fn kind_plural(kind: RelKind) -> &'static str {
 
 /// PG's skip WARNING for a maintenance command that names a relation it cannot process.
 fn skip_warning(b: &mut Binder, rel_name: &str, verb: &str) {
-    let w = PgError::notice(format!("skipping \"{rel_name}\" --- cannot {verb} non-tables or special system tables"))
-        .with_severity(Severity::Warning);
+    // PG `ereport(WARNING)` without an errcode: SQLSTATE 01000 (ERRCODE_WARNING), not 00000.
+    let w = PgError::new(
+        SqlState::WARNING,
+        format!("skipping \"{rel_name}\" --- cannot {verb} non-tables or special system tables"),
+    )
+    .with_severity(Severity::Warning);
     b.notice(w);
 }
 
@@ -486,6 +490,57 @@ fn parse_explain_options(b: &Binder, list: &[UtilityOption]) -> Result<ExplainOp
     Ok(o)
 }
 
+/// 1-based character position of the first token after the EXPLAIN option header of `text` (the
+/// statement text, which starts at character `start`). The header is `EXPLAIN`, an optional
+/// parenthesized option list, then the legacy words ANALYZE / ANALYSE / VERBOSE (PG `gram.y`
+/// `ExplainStmt`). Byte scanning only stops at ASCII bytes, so the cut point is a char boundary.
+pub(super) fn explain_body_pos(text: &str, start: u32) -> Option<u32> {
+    fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        i
+    }
+    fn skip_word(bytes: &[u8], mut i: usize) -> usize {
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        i
+    }
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    // The leading EXPLAIN keyword.
+    let mut i = skip_word(bytes, skip_ws(bytes, 0));
+    loop {
+        i = skip_ws(bytes, i);
+        if i < n && bytes[i] == b'(' {
+            let mut depth = 0usize;
+            while i < n {
+                match bytes[i] {
+                    b'(' => depth += 1,
+                    b')' => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                i += 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            continue;
+        }
+        let end = skip_word(bytes, i);
+        let word = text.get(i..end).unwrap_or("");
+        if !word.is_empty() && ["ANALYZE", "ANALYSE", "VERBOSE"].iter().any(|w| word.eq_ignore_ascii_case(w)) {
+            i = end;
+            continue;
+        }
+        break;
+    }
+    let i = skip_ws(bytes, i);
+    let chars = text.get(..i)?.chars().count();
+    Some(start.checked_add(u32::try_from(chars).ok()?)?)
+}
+
 /// EXPLAIN.
 pub fn bind_explain(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> {
     let Statement::Explain { describe_alias, analyze, verbose, query_plan, estimate, statement, format, options } =
@@ -508,7 +563,10 @@ pub fn bind_explain(b: &mut Binder, stmt: &Statement) -> Result<BoundStatement> 
     }
     let inner: &Statement = statement.as_ref();
     if !is_explainable(inner) {
-        return Err(syntax_error_at(b, b.pos(inner)));
+        // Statements without a span (e.g. DROP) fall back to the token after the EXPLAIN header.
+        let body_pos = b.scratch.get(dispatch::EXPLAIN_BODY_POS_KEY).and_then(|p| p.parse::<u32>().ok());
+        let pos = b.pos(inner).or(body_pos);
+        return Err(syntax_error_at(b, pos));
     }
     let explain_options = match options {
         Some(list) => parse_explain_options(b, list)?,
@@ -675,13 +733,16 @@ fn bind_analyze(b: &mut Binder, a: &Analyze) -> Result<BoundStatement> {
     }
     let mut targets: Vec<Oid> = Vec::new();
     if let Some(name) = &a.table_name {
-        let (rel, _pos) = resolve_relation(b, name)?;
+        // PG ExecVacuum reports a missing relation or column without a cursor position.
+        let (rel, _pos) = resolve_relation(b, name).map_err(|mut e| {
+            e.position = None;
+            e
+        })?;
         if is_table_like(rel.kind) {
             for id in &a.columns {
                 let col = b.ident(id);
                 if !rel.columns.iter().any(|c| c.name == col) {
-                    let pos = ident_pos(b, id);
-                    return Err(diag::column_of_relation_missing(&col, &rel.name, pos));
+                    return Err(diag::column_of_relation_missing(&col, &rel.name, None));
                 }
             }
             targets.push(rel.oid);
@@ -690,6 +751,239 @@ fn bind_analyze(b: &mut Binder, a: &Analyze) -> Result<BoundStatement> {
         }
     }
     Ok(BoundStatement::Maintenance { kind: MaintenanceKind::Analyze, targets })
+}
+
+/// Options of `ANALYZE (...)` and `VACUUM (...)` accepted by PG's `ExecVacuum` (names are upper-cased).
+const ANALYZE_OPTIONS: &[&str] = &["VERBOSE", "SKIP_LOCKED", "BUFFER_USAGE_LIMIT"];
+const VACUUM_OPTIONS: &[&str] = &[
+    "ANALYZE",
+    "FULL",
+    "FREEZE",
+    "VERBOSE",
+    "SKIP_LOCKED",
+    "DISABLE_PAGE_SKIPPING",
+    "INDEX_CLEANUP",
+    "PROCESS_MAIN",
+    "PROCESS_TOAST",
+    "TRUNCATE",
+    "PARALLEL",
+    "SKIP_DATABASE_STATS",
+    "ONLY_DATABASE_STATS",
+    "BUFFER_USAGE_LIMIT",
+];
+
+/// `VACUUM` / `ANALYZE` with an option list or legacy keywords (`ExtraStatement::Maintenance`). Checked the
+/// way PG's `ExecVacuum` checks them: option names (42601), `BUFFER_USAGE_LIMIT` (22023), boolean values
+/// (42601), then the column list. Maintenance has no physical effect in PGArbor, so an option changes the
+/// result only where it would change what the statement does: statistics collection (`ANALYZE` of VACUUM),
+/// `VERBOSE` output and `SKIP_LOCKED` are not implemented and are 0A000 (EXE-39).
+pub fn bind_maintenance_options(
+    b: &mut Binder,
+    vacuum: bool,
+    options: &[MaintenanceOption],
+    table: Option<&ObjectName>,
+    columns: &[Ident],
+) -> Result<BoundStatement> {
+    let word = if vacuum { "VACUUM" } else { "ANALYZE" };
+    let allowed = if vacuum { VACUUM_OPTIONS } else { ANALYZE_OPTIONS };
+    let mut analyze = !vacuum;
+    let mut verbose = false;
+    let mut skip_locked = false;
+    let mut full = false;
+    let mut buffer_set = false;
+    let mut freeze = false;
+    let mut disable_page_skipping = false;
+    let mut process_toast = true;
+    let mut only_database_stats = false;
+    let mut skip_database_stats = false;
+    let mut nworkers: i64 = 0;
+    for opt in options {
+        let name = opt.name.as_str();
+        if !allowed.contains(&name) {
+            let shown = opt.name.to_ascii_lowercase();
+            return Err(diag::syntax(format!("unrecognized {word} option \"{shown}\""), opt.pos));
+        }
+        match name {
+            "BUFFER_USAGE_LIMIT" => {
+                check_buffer_usage_limit(opt)?;
+                buffer_set = true;
+            }
+            "VERBOSE" => verbose = def_get_boolean(opt)?,
+            "SKIP_LOCKED" => skip_locked = def_get_boolean(opt)?,
+            "ANALYZE" => analyze = def_get_boolean(opt)?,
+            "FULL" => full = def_get_boolean(opt)?,
+            "FREEZE" => freeze = def_get_boolean(opt)?,
+            "DISABLE_PAGE_SKIPPING" => disable_page_skipping = def_get_boolean(opt)?,
+            "PROCESS_TOAST" => process_toast = def_get_boolean(opt)?,
+            "SKIP_DATABASE_STATS" => skip_database_stats = def_get_boolean(opt)?,
+            "ONLY_DATABASE_STATS" => only_database_stats = def_get_boolean(opt)?,
+            "PROCESS_MAIN" | "TRUNCATE" => {
+                def_get_boolean(opt)?;
+            }
+            // INDEX_CLEANUP: no value, or AUTO in any case, is auto; any other value is a boolean (vacuum.c
+            // ExecVacuum, `get_vacoptval_from_boolean`).
+            "INDEX_CLEANUP" => {
+                if opt.value.as_deref().is_some_and(|v| !v.eq_ignore_ascii_case("auto")) {
+                    def_get_boolean(opt)?;
+                }
+            }
+            // PARALLEL changes no observable result here; the worker count is still validated and kept for the
+            // FULL check below.
+            "PARALLEL" => nworkers = parallel_workers(opt)?,
+            _ => {}
+        }
+    }
+    // PG ExecVacuum: FULL with workers, then FULL with DISABLE_PAGE_SKIPPING or without PROCESS_TOAST.
+    if full && nworkers > 0 {
+        return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "VACUUM FULL cannot be performed in parallel"));
+    }
+    if buffer_set && full && !analyze {
+        return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "BUFFER_USAGE_LIMIT cannot be specified for VACUUM FULL"));
+    }
+    if full && disable_page_skipping {
+        return Err(PgError::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL",
+        ));
+    }
+    if full && !process_toast {
+        return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "PROCESS_TOAST required with VACUUM FULL"));
+    }
+    // PG ExecVacuum, ONLY_DATABASE_STATS: no table work, so no table list and no option that changes the
+    // table work (ANALYZE, FULL, FREEZE, SKIP_LOCKED, SKIP_DATABASE_STATS). VERBOSE and PROCESS_MAIN/TOAST pass.
+    if only_database_stats {
+        if table.is_some() {
+            return Err(PgError::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "ONLY_DATABASE_STATS cannot be specified with a list of tables",
+            ));
+        }
+        if analyze || full || freeze || skip_locked || skip_database_stats {
+            return Err(PgError::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "ONLY_DATABASE_STATS cannot be specified with other VACUUM options",
+            ));
+        }
+    }
+    if !analyze && !columns.is_empty() {
+        return Err(PgError::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "ANALYZE option must be specified when a column list is provided",
+        ));
+    }
+    let mut targets: Vec<Oid> = Vec::new();
+    if let Some(name) = table {
+        // PG ExecVacuum reports a missing relation or column without a cursor position.
+        let (rel, _pos) = resolve_relation(b, name).map_err(|mut e| {
+            e.position = None;
+            e
+        })?;
+        if is_table_like(rel.kind) {
+            for id in columns {
+                let col = b.ident(id);
+                if !rel.columns.iter().any(|c| c.name == col) {
+                    return Err(diag::column_of_relation_missing(&col, &rel.name, None));
+                }
+            }
+            targets.push(rel.oid);
+        } else {
+            skip_warning(b, &rel.name, if vacuum { "vacuum" } else { "analyze" });
+        }
+    }
+    // Unimplemented output and locking options come after the table and column lookups, as PG's vacuum() does
+    // them after ExecVacuum has checked the option values; a missing relation is still reported as 42P01.
+    if verbose && !only_database_stats {
+        return Err(PgError::unimplemented("EXE-39", "VERBOSE output of VACUUM / ANALYZE"));
+    }
+    if skip_locked {
+        return Err(PgError::unimplemented("EXE-39", "SKIP_LOCKED"));
+    }
+    if vacuum && analyze {
+        return Err(PgError::unimplemented("EXE-39", "VACUUM ANALYZE (column statistics collection)"));
+    }
+    let kind = if vacuum { MaintenanceKind::Vacuum } else { MaintenanceKind::Analyze };
+    Ok(BoundStatement::Maintenance { kind, targets })
+}
+
+/// `PARALLEL n` (PG `ExecVacuum`): a value is required, read as an integer (`defGetInt32`) and must lie in
+/// 0 through `MAX_PARALLEL_WORKER_LIMIT` (1024). All failures are 42601.
+fn parallel_workers(opt: &MaintenanceOption) -> Result<i64> {
+    let Some(text) = opt.value.as_deref() else {
+        return Err(diag::syntax("parallel option requires a value between 0 and 1024", opt.pos));
+    };
+    let Ok(n) = text.parse::<i64>() else {
+        return Err(diag::syntax("parallel requires an integer value", opt.pos));
+    };
+    if !(0..=1024).contains(&n) {
+        return Err(diag::syntax("parallel workers for vacuum must be between 0 and 1024", opt.pos));
+    }
+    Ok(n)
+}
+
+/// PG `defGetBoolean` (commands/define.c): no value means true; otherwise the integers 1 and 0, or the
+/// strings TRUE/FALSE and ON/OFF in any case. Any other value is 42601 `<option> requires a Boolean value`.
+fn def_get_boolean(opt: &MaintenanceOption) -> Result<bool> {
+    let Some(text) = opt.value.as_deref() else {
+        return Ok(true);
+    };
+    match text.to_ascii_lowercase().as_str() {
+        "true" | "on" | "1" => Ok(true),
+        "false" | "off" | "0" => Ok(false),
+        // PG defGetBoolean: a plain 42601 with no cursor position.
+        _ => Err(PgError::new(
+            SqlState::SYNTAX_ERROR,
+            format!("{} requires a Boolean value", opt.name.to_ascii_lowercase()),
+        )),
+    }
+}
+
+/// `BUFFER_USAGE_LIMIT` (PG `parse_int` with `GUC_UNIT_KB`, then the range check of `ExecVacuum`): 0, or
+/// 128 kB through 16 GB (16777216 kB).
+fn check_buffer_usage_limit(opt: &MaintenanceOption) -> Result<()> {
+    let Some(text) = opt.value.as_deref() else {
+        return Err(diag::syntax("BUFFER_USAGE_LIMIT requires a parameter", opt.pos));
+    };
+    // PG `parse_int` sets a HINT only for an out-of-int-range value (`Value exceeds integer range.`) and for a
+    // number followed by an unknown unit (the memory units hint). Text without a number gets none.
+    let hint = match buffer_usage_limit_kb(text) {
+        Some(0) => return Ok(()),
+        Some(kb) if (128..=16_777_216).contains(&kb) => return Ok(()),
+        Some(kb) => (kb < i64::from(i32::MIN) || kb > i64::from(i32::MAX)).then_some("Value exceeds integer range."),
+        None => {
+            let s = text.trim();
+            let end = s.find(|c: char| !(c.is_ascii_digit() || matches!(c, '+' | '-' | '.'))).unwrap_or(s.len());
+            s[..end].parse::<f64>().is_ok().then_some(MEMORY_UNITS_HINT)
+        }
+    };
+    let err = PgError::new(
+        SqlState::INVALID_PARAMETER_VALUE,
+        "BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB",
+    );
+    Err(match hint {
+        Some(h) => err.with_hint(h),
+        None => err,
+    })
+}
+
+/// PG `memory_units_hint` (guc.c): the HINT for a memory size with an unknown unit.
+const MEMORY_UNITS_HINT: &str = "Valid units for this parameter are \"B\", \"kB\", \"MB\", \"GB\", and \"TB\".";
+
+/// Size in kB of a `parse_int` memory string (a decimal number, then B, kB, MB, GB or TB; no unit means
+/// kB), rounded as PG rounds it. None when the text does not parse.
+fn buffer_usage_limit_kb(text: &str) -> Option<i64> {
+    let s = text.trim();
+    let end = s.find(|c: char| !(c.is_ascii_digit() || matches!(c, '+' | '-' | '.'))).unwrap_or(s.len());
+    let value: f64 = s[..end].parse().ok()?;
+    let factor = match s[end..].trim() {
+        "" | "kB" => 1.0,
+        "B" => 1.0 / 1024.0,
+        "MB" => 1024.0,
+        "GB" => 1024.0 * 1024.0,
+        "TB" => 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    let kb = (value * factor).round();
+    if kb.is_finite() { Some(kb as i64) } else { None }
 }
 
 /// Index named by `REINDEX INDEX` (42809 when the name is not an index).
@@ -766,7 +1060,8 @@ fn bind_reindex(b: &mut Binder, kind: ReindexKind, name: Option<&ObjectName>, co
     Ok(BoundStatement::Maintenance { kind: MaintenanceKind::Reindex, targets })
 }
 
-/// CLUSTER [table [USING index]].
+/// CLUSTER [table [USING index]]. Plain `CLUSTER table` needs a previously clustered index
+/// (indisclustered), else 42704; `targets` = `[table]` or `[table, index]`.
 fn bind_cluster(b: &mut Binder, table: Option<&ObjectName>, index: Option<&Ident>) -> Result<BoundStatement> {
     let mut targets: Vec<Oid> = Vec::new();
     match table {
@@ -779,21 +1074,39 @@ fn bind_cluster(b: &mut Binder, table: Option<&ObjectName>, index: Option<&Ident
                 );
                 return Err(diag::with_position(err, pos));
             }
-            if let Some(idx) = index {
-                // Looked up on the search path only; PostgreSQL also checks that it indexes this table.
-                let idx_name = b.ident(idx);
-                let env: &CatalogEnv = b.env;
-                match env.lookup_class(None, &idx_name)? {
-                    Some(ClassRef::Index(_)) | Some(ClassRef::SystemIndex(_)) => {}
-                    _ => {
+            let env: &CatalogEnv = b.env;
+            targets.push(rel.oid);
+            match index {
+                Some(idx) => {
+                    // Looked up on the search path; the index must index this table (cluster.c).
+                    let idx_name = b.ident(idx);
+                    match env.lookup_class(None, &idx_name)? {
+                        Some(ClassRef::Index(oid))
+                            if env.snapshot().index(oid).is_some_and(|i| i.table == rel.oid) =>
+                        {
+                            // `targets[1]` is the index that becomes indisclustered (exec records it).
+                            targets.push(oid);
+                        }
+                        Some(ClassRef::SystemIndex(_)) => {}
+                        _ => {
+                            return Err(PgError::new(
+                                SqlState::UNDEFINED_OBJECT,
+                                format!("index \"{idx_name}\" for table \"{}\" does not exist", rel.name),
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    // Plain `CLUSTER table` reuses the index that an earlier CLUSTER / ALTER TABLE
+                    // CLUSTER ON marked indisclustered; none means error 42704 (cluster.c).
+                    if !env.snapshot().indexes_of(rel.oid).iter().any(|i| i.clustered) {
                         return Err(PgError::new(
                             SqlState::UNDEFINED_OBJECT,
-                            format!("index \"{idx_name}\" for table \"{}\" does not exist", rel.name),
+                            format!("there is no previously clustered index for table \"{}\"", rel.name),
                         ));
                     }
                 }
             }
-            targets.push(rel.oid);
         }
         None => {
             if let Some(idx) = index {
@@ -832,6 +1145,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn explain_body_pos_skips_the_option_header() {
+        // `DROP` starts at character 8 (0-based) after `EXPLAIN `, so its 1-based position is 9.
+        assert_eq!(explain_body_pos("EXPLAIN DROP TABLE foo", 1), Some(9));
+        // Parenthesized options: 8 + 20 characters of `(ANALYZE, COSTS OFF)` + a space.
+        assert_eq!(explain_body_pos("EXPLAIN (ANALYZE, COSTS OFF) DROP TABLE foo", 1), Some(30));
+        // Legacy words are skipped too, and the start offset is added.
+        assert_eq!(explain_body_pos("explain analyze verbose drop table foo", 3), Some(27));
+    }
+
     fn explain_options_of(sql: &str) -> Vec<UtilityOption> {
         match parse_one(sql) {
             Statement::Explain { options: Some(list), .. } => list,
@@ -863,6 +1186,15 @@ mod tests {
         assert_eq!(o.format, ExplainFormat::Json);
         assert!(o.timing, "TIMING follows ANALYZE");
         Ok(())
+    }
+
+    #[test]
+    fn maintenance_boolean_error_has_no_position() {
+        let opt = MaintenanceOption { name: "VERBOSE".to_string(), value: Some("maybe".to_string()), pos: Some(10) };
+        let err = def_get_boolean(&opt).err().expect("boolean error");
+        assert_eq!(err.sqlstate.0, *b"42601");
+        assert_eq!(err.message, "verbose requires a Boolean value");
+        assert_eq!(err.position, None);
     }
 
     #[test]
@@ -940,6 +1272,28 @@ mod tests {
         let err = bind_maintenance(&mut b, Some(&stmt), None).err().expect("missing table");
         assert_eq!(err.sqlstate.0, *b"42P01");
         Ok(())
+    }
+
+    #[test]
+    fn maintenance_option_values_follow_def_get_boolean_and_parse_int() {
+        let opt = |v: Option<&str>| MaintenanceOption { name: "TRUNCATE".to_string(), value: v.map(str::to_string), pos: None };
+        assert_eq!(def_get_boolean(&opt(None)).ok(), Some(true));
+        assert_eq!(def_get_boolean(&opt(Some("OFF"))).ok(), Some(false));
+        assert_eq!(def_get_boolean(&opt(Some("1"))).ok(), Some(true));
+        assert!(def_get_boolean(&opt(Some("yes"))).is_err());
+        assert!(def_get_boolean(&opt(Some("2"))).is_err());
+        assert_eq!(buffer_usage_limit_kb("16 GB"), Some(16_777_216));
+        assert_eq!(buffer_usage_limit_kb("127 kB"), Some(127));
+        assert_eq!(buffer_usage_limit_kb("1 TB"), Some(1_073_741_824));
+        assert_eq!(buffer_usage_limit_kb("abc"), None);
+
+        let bul = |v: &str| MaintenanceOption { name: "BUFFER_USAGE_LIMIT".to_string(), value: Some(v.to_string()), pos: None };
+        let hint = |v: &str| check_buffer_usage_limit(&bul(v)).err().and_then(|e| e.hint);
+        assert!(check_buffer_usage_limit(&bul("128 kB")).is_ok());
+        assert_eq!(hint("2 TB").as_deref(), Some("Value exceeds integer range."));
+        assert_eq!(hint("1 XB").as_deref(), Some(MEMORY_UNITS_HINT));
+        assert_eq!(hint("16777217 kB"), None);
+        assert_eq!(hint("abc"), None);
     }
 
     #[test]

@@ -55,6 +55,7 @@ use super::coerce;
 use super::on_conflict;
 use super::scope::{mark_access, AccessKind, QueryScope, ScopeKind};
 use super::select::{self, QueryCtx};
+use super::setop;
 use super::target_table::{self, DmlKind};
 use super::update_delete;
 use super::values::{self, InsertTargetCol};
@@ -194,8 +195,14 @@ fn bind_insert_in_scope(b: &mut Binder, ins: &Insert) -> Result<BoundInsert> {
     };
     if let Some(bound_oc) = &on_conflict {
         if bound_oc.excluded_rt != 0 {
-            // `excluded` is visible in ON CONFLICT only, not in RETURNING.
+            // `excluded` is visible in ON CONFLICT only, not in RETURNING (PG drops it from the
+            // namespace after transformOnConflictClause): hide the entry and its namespace item.
             set_entry_visible(b, bound_oc.excluded_rt, false)?;
+            let excluded_rt = bound_oc.excluded_rt;
+            for item in b.scope_mut()?.namespace.iter_mut().filter(|ns| ns.rt_index == Some(excluded_rt)) {
+                item.rel_visible = false;
+                item.cols_visible = false;
+            }
         }
     }
 
@@ -220,7 +227,7 @@ fn resolve_column_list(b: &mut Binder, names: &[ObjectName], target: &TargetTabl
     for obj in names {
         let pos = b.pos(obj);
         let name: String = match obj.0.as_slice() {
-            [ObjectNamePart::Identifier(id)] => b.ident(id),
+            [ObjectNamePart::Identifier(id)] if id.value != crate::parser::SUBSCRIPT_TARGET_MARKER => b.ident(id),
             _ => {
                 return Err(diag::unsupported_construct(
                     "assignment to a field or subscript of a column in INSERT",
@@ -327,6 +334,8 @@ fn bind_query_source(
     }
     let used: &[(i16, Option<u32>)] = &cols[..width];
     let attnums: Vec<i16> = used.iter().map(|(a, _)| *a).collect();
+    // Source positions of the output columns, for errors raised by the per-column coercions.
+    let positions = setop::column_positions(b, &*query.body, width);
     for &attnum in &attnums {
         // Query rows cannot say DEFAULT: identity ALWAYS / generated columns are errors unless
         // overridden (with OVERRIDING USER VALUE the executor ignores the supplied value).
@@ -348,7 +357,7 @@ fn bind_query_source(
                 };
                 if te.expr.ty.oid == pgarbor_types::oids::UNKNOWN {
                     let col = col_of(target, attnum)?;
-                    let arg = BoundArg::new(te.expr.clone(), None);
+                    let arg = BoundArg::new(te.expr.clone(), positions.get(k).copied().flatten());
                     te.expr = coerce::coerce_assignment(b, &arg, &col.name, col.ty)?;
                     if let Some(o) = output.get_mut(k) {
                         o.ty = te.expr.ty;
@@ -366,13 +375,19 @@ fn bind_query_source(
             needs_wrap = true;
         }
     }
-    let q = if needs_wrap { coercing_projection(b, q, target, &attnums)? } else { q };
+    let q = if needs_wrap { coercing_projection(b, q, target, &attnums, &positions)? } else { q };
     Ok((InsertSource::Query(Box::new(q)), attnums))
 }
 
 /// Wrap `inner` in `SELECT <col1 cast>, <col2 cast>, ... FROM (inner)` so that each output has its
 /// target column type (assignment casts). The wrapper's range entry is the only one.
-fn coercing_projection(b: &mut Binder, inner: BoundQuery, target: &TargetTable, attnums: &[i16]) -> Result<BoundQuery> {
+fn coercing_projection(
+    b: &mut Binder,
+    inner: BoundQuery,
+    target: &TargetTable,
+    attnums: &[i16],
+    positions: &[Option<u32>],
+) -> Result<BoundQuery> {
     let mut range_columns: Vec<RangeColumn> = Vec::with_capacity(inner.output.len());
     for o in &inner.output {
         range_columns.push(RangeColumn { name: o.name.clone(), ty: o.ty, dropped: false });
@@ -386,7 +401,8 @@ fn coercing_projection(b: &mut Binder, inner: BoundQuery, target: &TargetTable, 
         let expr = if src_out.ty == col.ty {
             src
         } else {
-            coerce::coerce_assignment(b, &BoundArg::new(src, None), &col.name, col.ty)?
+            let pos = positions.get(i).copied().flatten();
+            coerce::coerce_assignment(b, &BoundArg::new(src, pos), &col.name, col.ty)?
         };
         output.push(OutputColumn { name: src_out.name.clone(), ty: expr.ty, origin: None });
         target_list.push(TargetEntry { expr, name: src_out.name.clone(), junk: false, origin: None });

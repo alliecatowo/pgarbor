@@ -78,7 +78,7 @@ use sqlparser::ast::{BinaryOperator, Expr, UnaryOperator, Value, ValueWithSpan};
 
 use super::coerce;
 use super::context::{Binder, BoundArg, ExprCtx};
-use super::expr::bind_arg;
+use super::expr::{bind_arg, collate_keyword_pos};
 use super::expr_func;
 use super::literal;
 use crate::diag;
@@ -371,6 +371,8 @@ pub fn bind_binary_op(
             let name = custom_operator_name(parts);
             bind_plain_binary(b, &name, left, right, op_pos, ec)
         }
+        // An unqualified user operator token such as `===` (see `parser::spell_operator_runs`).
+        BinaryOperator::Custom(name) => bind_plain_binary(b, name.as_str(), left, right, op_pos, ec),
         other => match binary_op_name(other) {
             Some(name) => bind_plain_binary(b, name, left, right, op_pos, ec),
             None => Err(diag::syntax_error_near(&other.to_string(), op_pos)),
@@ -420,7 +422,32 @@ fn bind_plain_binary(
             _ => {}
         }
     }
+    check_operator_collations(b, &l, &r, right)?;
     make_op(b, name, Some(l), r, op_pos)
+}
+
+/// PG `assign_collations` for a binary operator: two different explicit collations on the operands
+/// conflict (42P21 `collation mismatch between explicit collations "a" and "b"`), reported at the
+/// `COLLATE` clause of the right operand. Only operands written `x COLLATE c` carry an explicit
+/// collation here.
+fn check_operator_collations(b: &Binder, l: &BoundArg, r: &BoundArg, right: &Expr) -> Result<()> {
+    let (ExprKind::Collate(lc), ExprKind::Collate(rc)) = (&l.expr.kind, &r.expr.kind) else {
+        return Ok(());
+    };
+    if lc.collation == rc.collation {
+        return Ok(());
+    }
+    let msg = format!(
+        "collation mismatch between explicit collations \"{}\" and \"{}\"",
+        expr_func::builtin_collation_name(lc.collation)?,
+        expr_func::builtin_collation_name(rc.collation)?
+    );
+    let pos = match strip_nested(right) {
+        Expr::Collate { expr, .. } => collate_keyword_pos(b.src, expr),
+        _ => None,
+    }
+    .or(r.pos);
+    Err(diag::with_position(PgError::new(SqlState::COLLATION_MISMATCH, msg), pos))
 }
 
 /// `(a1,..,an) = (b1,..,bn)` is the AND of pairwise `=`; `<>` the OR of pairwise `<>`. Operands that

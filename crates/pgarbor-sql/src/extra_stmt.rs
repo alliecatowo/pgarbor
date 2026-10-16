@@ -18,7 +18,28 @@
 //! `SECURITY LABEL`, `PREPARE TRANSACTION`, `COMMIT PREPARED`, `ROLLBACK PREPARED`, `LOAD`,
 //! `START`-less `DECLARE`...) become [`ExtraStatement::Unsupported`] so the binder reports 0A000
 //! instead of a bogus 42601.
-use sqlparser::ast::{Ident, ObjectName};
+use sqlparser::ast::{Ident, ObjectName, OperateFunctionArg};
+
+/// One option of `VACUUM` / `ANALYZE` (PG `DefElem` in `VacuumStmt.options`). `name` is upper-cased.
+/// `value` is the value as written (a boolean word, a number with its sign, or a string's contents);
+/// `None` when the option has no value.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaintenanceOption {
+    pub name: String,
+    pub value: Option<String>,
+    /// 1-based character position of the option name (for 42601 errors).
+    pub pos: Option<u32>,
+}
+
+/// Object kind named by `COMMENT ON FUNCTION`, `PROCEDURE` or `ROUTINE`.
+// CONTRACT
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoutineKind {
+    Function,
+    Procedure,
+    Routine,
+}
 
 /// What `REINDEX` targets.
 // CONTRACT
@@ -161,6 +182,14 @@ pub enum ExtraStatement {
     Cluster { table: Option<ObjectName>, index: Option<Ident> },
     /// `CHECKPOINT`.
     Checkpoint,
+    /// `VACUUM` (`vacuum` true) or `ANALYZE` written with an option list `(...)` or a legacy option
+    /// keyword (`VACUUM FULL|FREEZE|VERBOSE|ANALYZE`, `ANALYZE VERBOSE`), then `[table [(column, ...)]]`.
+    /// Legacy keywords become options without a value, as PG's grammar does.
+    Maintenance { vacuum: bool, options: Vec<MaintenanceOption>, table: Option<ObjectName>, columns: Vec<Ident> },
+    /// `COMMENT ON {FUNCTION|PROCEDURE|ROUTINE} name [(argument list)] IS {'text' | NULL}`. `args` is
+    /// `None` when the argument list was omitted; argument modes and names are kept (the binder ignores
+    /// them for identity).
+    CommentRoutine { kind: RoutineKind, name: ObjectName, args: Option<Vec<OperateFunctionArg>>, comment: Option<String> },
     /// `SET CONSTRAINTS { ALL | name, ... } { DEFERRED | IMMEDIATE }` (`names` None = ALL).
     SetConstraints { names: Option<Vec<ObjectName>>, deferred: bool },
     /// `DO [LANGUAGE lang] 'code'` (code = the string literal contents, dollar-quotes removed).
@@ -185,6 +214,18 @@ pub enum ExtraStatement {
     /// `ALTER MATERIALIZED VIEW [IF EXISTS] name RENAME TO new` / `SET SCHEMA` / `OWNER TO` (the only
     /// forms bound in v1); other actions are `Unsupported`.
     AlterMaterializedView { if_exists: bool, name: ObjectName, action: AlterMatViewAction },
+    /// `ALTER INDEX [IF EXISTS] name action [, action ...]` for the storage-parameter and tablespace
+    /// subcommands (`SET (..)`, `RESET (..)`, `SET TABLESPACE`). `RENAME TO` stays with sqlparser.
+    AlterIndex { if_exists: bool, name: ObjectName, actions: Vec<RelOptionAction> },
+    /// `ALTER INDEX ALL IN TABLESPACE from SET TABLESPACE to [NOWAIT]`.
+    AlterIndexAllInTablespace { from: Ident, to: Ident },
+    /// `ALTER VIEW [IF EXISTS] name action [, action ...]` with `SET (..)` / `RESET (..)`.
+    AlterView { if_exists: bool, name: ObjectName, actions: Vec<RelOptionAction> },
+    /// `ALTER VIEW [IF EXISTS] name ALTER [COLUMN] c SET DEFAULT e | DROP DEFAULT` (PG `AT_ColumnDefault`
+    /// on a view; `default` is `None` for DROP DEFAULT). sqlparser 0.63 parses only `ALTER VIEW .. AS`.
+    AlterViewColumnDefault { if_exists: bool, name: ObjectName, column: Ident, default: Option<sqlparser::ast::Expr> },
+    /// `ALTER TYPE name SET SCHEMA new` (`RENAME TO` stays with sqlparser).
+    AlterTypeSetSchema { name: ObjectName, schema: Ident },
     /// A PostgreSQL command PGArbor recognizes but does not implement: reported as 0A000
     /// `<feature> is not supported by PGArbor yet`. Examples of `feature`: `CREATE RULE`,
     /// `CREATE CAST`, `ALTER SYSTEM`, `ALTER DEFAULT PRIVILEGES`, `SECURITY LABEL`.
@@ -200,4 +241,18 @@ pub enum AlterMatViewAction {
     OwnerTo(Ident),
     /// `RENAME [COLUMN] old TO new`.
     RenameColumn { old: Ident, new: Ident },
+}
+
+/// One subcommand of `ALTER INDEX` / `ALTER VIEW` (PG `alter_table_cmds` subset), in source order.
+// CONTRACT
+#[derive(Clone, Debug, PartialEq)]
+pub enum RelOptionAction {
+    /// `SET (name [= value], ...)` as `name=value` strings; a bare name is kept as `name` (PG reads
+    /// it as the boolean `true`). Values follow PG `def_arg`: strings as written, numbers with sign,
+    /// unquoted words case-folded.
+    SetOptions(Vec<String>),
+    /// `RESET (name, ...)`.
+    ResetOptions(Vec<String>),
+    /// `SET TABLESPACE name` (indexes only).
+    SetTablespace(Ident),
 }
