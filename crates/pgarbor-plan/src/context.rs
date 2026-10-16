@@ -89,6 +89,8 @@ pub struct PlannerState<'a> {
     /// Range table names of EVERY query level seen so far, indexed by level id (never popped):
     /// (alias, column names by attnum-1). Registered by `build::build_query` via [`PlannerState::enter_level`].
     pub range_names: Vec<Vec<(String, Vec<String>)>>,
+    /// Parent query level for resolving correlated references across derived-table boundaries.
+    pub level_parents: Vec<Option<u32>>,
     /// Level ids of the query blocks currently being built (innermost last).
     pub level_stack: Vec<u32>,
     /// Level id stamped on nodes created by [`PlannerState::new_node`]; `planner::plan_logical` sets it to
@@ -110,6 +112,7 @@ impl<'a> PlannerState<'a> {
             dep_types: Vec::new(),
             dep_functions: Vec::new(),
             range_names: Vec::new(),
+            level_parents: Vec::new(),
             level_stack: Vec::new(),
             cur_level: 0,
             scratch: HashMap::new(),
@@ -120,6 +123,7 @@ impl<'a> PlannerState<'a> {
     pub fn enter_level(&mut self, names: Vec<(String, Vec<String>)>) -> u32 {
         let id = self.range_names.len() as u32;
         self.range_names.push(names);
+        self.level_parents.push(self.level_stack.last().copied());
         self.level_cte_scopes.push(self.cte_scopes.clone());
         self.level_stack.push(id);
         id

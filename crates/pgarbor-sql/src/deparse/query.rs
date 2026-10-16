@@ -199,6 +199,21 @@ impl ColumnNamer for ScopeNamer<'_> {
             return self.outer?.column(&up);
         }
         let idx = (col.rt_index as usize).checked_sub(1)?;
+        if col.attnum <= 0 {
+            // PG `get_variable`: system columns by name, a whole-row reference as `alias.*`.
+            let alias = quote_identifier(self.names.get(idx)?).ok()?;
+            let sys = match col.attnum {
+                0 => return Some(format!("{alias}.*")),
+                -1 => "ctid",
+                -2 => "xmin",
+                -3 => "cmin",
+                -4 => "xmax",
+                -5 => "cmax",
+                -6 => "tableoid",
+                _ => return None,
+            };
+            return Some(if self.qualify { format!("{alias}.{sys}") } else { sys.to_string() });
+        }
         let name = self.attname(col)?;
         let quoted = quote_identifier(&name).ok()?;
         if self.qualify {

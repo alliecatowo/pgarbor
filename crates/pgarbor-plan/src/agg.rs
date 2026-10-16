@@ -89,6 +89,36 @@ pub fn build_aggregate(st: &mut PlannerState, input: LogicalPlan, sel: &BoundSel
     }
     let aggrefs = collect_aggrefs(&exprs)?;
 
+    // Columns referenced outside aggregates that are not grouping expressions were accepted by the
+    // binder because they are functionally dependent on the grouping columns (primary key). PG
+    // carries them through the Agg node; here they become extra grouping keys, which yields the
+    // same value (one distinct value per group). Binder validation requires the determining
+    // primary key in every grouping set, so dependent columns belong to every set as well.
+    let mut grouping_sets = sel.group_by.sets.clone();
+    {
+        let mut extra: Vec<BoundExpr> = Vec::new();
+        for e in &exprs {
+            let root: &BoundExpr = e;
+            root.walk(&mut |n: &BoundExpr| {
+                if matches!(n.kind, ExprKind::Aggref(_)) || group_exprs.contains(n) {
+                    return false;
+                }
+                if let ExprKind::Column(c) = &n.kind {
+                    if c.levels_up == 0 && !extra.contains(n) {
+                        extra.push(n.clone());
+                    }
+                }
+                true
+            });
+        }
+        if let Some(sets) = &mut grouping_sets {
+            for set in sets {
+                set.extend(group_exprs.len()..group_exprs.len() + extra.len());
+            }
+        }
+        group_exprs.extend(extra);
+    }
+
     // HAVING: split into conjuncts and move the aggregate-free ones below the aggregate.
     let plain_group = sel.group_by.sets.is_none();
     let having_conjuncts: Vec<BoundExpr> = match &sel.having {
@@ -140,7 +170,7 @@ pub fn build_aggregate(st: &mut PlannerState, input: LogicalPlan, sel: &BoundSel
     let agg = LogicalAggregate {
         input,
         group_exprs,
-        grouping_sets: sel.group_by.sets.clone(),
+        grouping_sets,
         aggrefs,
         having,
     };

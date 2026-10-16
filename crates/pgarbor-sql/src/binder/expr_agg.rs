@@ -248,6 +248,9 @@ pub fn bind_aggregate(b: &mut Binder, f: &Function, resolved: &ResolvedFunc, arg
         });
     }
 
+    if level > 0 {
+        return Err(PgError::unimplemented("SQL-13", "aggregate evaluated by an enclosing query level"));
+    }
     let owner = b
         .scopes
         .len()

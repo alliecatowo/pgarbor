@@ -51,7 +51,7 @@
 //! Postconditions asserted in debug builds: no `Column`/`SubLink`/`Aggref`/`WindowFunc` anywhere in
 //! `Plan` (use `BoundExpr::any`); `Grouping` only with `mask_slot: Some`.
 use pgarbor_common::{Oid, PgError, Result, SqlState};
-use pgarbor_sql::ir::{BoundExpr, ColumnRef, ExprKind, FrameBound, GroupingExpr, RowExpr};
+use pgarbor_sql::ir::{BoundExpr, CaseArm, CaseExpr, ColumnRef, ExprKind, FrameBound, GroupingExpr, NullTest, RowExpr};
 use pgarbor_types::{Datum, TypeId};
 
 use crate::plan::{
@@ -140,7 +140,9 @@ impl ScanInfo {
         let mut names = Vec::with_capacity(self.cols.len());
         for (i, col) in self.cols.iter().enumerate() {
             if col.ty.oid == 0 {
-                // dropped column: TypeId::of(0) by the TableRef convention
+                // Composite Datum fields keep physical attribute positions, including dropped slots.
+                args.push(BoundExpr::null(TypeId::TEXT));
+                names.push(col.name.clone());
                 continue;
             }
             args.push(BoundExpr::input_ref(i as u32, col.ty));
@@ -313,7 +315,54 @@ fn resolve_column(c: ColumnRef, ty: TypeId, ctx: &Ctx<'_>) -> Result<BoundExpr> 
             }
         }
     }
+    if c.levels_up == 0 && c.attnum == 0 {
+        if let Some(row) = whole_row_from_sides(c, ty, ctx) {
+            return Ok(row);
+        }
+    }
     Err(PgError::internal("variable not found in subplan target list"))
+}
+
+/// Whole-row reference above the scan: `ROW(col1, ..)` over the slots of the row source that
+/// produce `Column{rt_index, 1..n}` (PG expands whole-row vars into a `RowExpr` of the base vars
+/// during planning). Dropped columns (type oid 0) are skipped. `None` if no column of the
+/// range entry is present.
+fn whole_row_from_sides(c: ColumnRef, ty: TypeId, ctx: &Ctx<'_>) -> Option<BoundExpr> {
+    let mut cols: Vec<(i16, u32, TypeId)> = Vec::new();
+    let mut identity = None;
+    for side in &ctx.sides {
+        for (i, v) in side.vars.iter().enumerate() {
+            if let ExprKind::Column(vc) = &v.kind {
+                if vc.levels_up == 0 && vc.rt_index == c.rt_index && vc.attnum == -6 {
+                    identity = Some(BoundExpr::input_ref(side.offset + i as u32, v.ty));
+                }
+                if vc.levels_up == 0 && vc.rt_index == c.rt_index && vc.attnum > 0 {
+                    cols.push((vc.attnum, side.offset + i as u32, v.ty));
+                }
+            }
+        }
+    }
+    if cols.is_empty() && identity.is_none() {
+        return None;
+    }
+    cols.sort_by_key(|(attnum, _, _)| *attnum);
+    cols.dedup_by_key(|(attnum, _, _)| *attnum);
+    let args: Vec<BoundExpr> = cols.iter().map(|(_, slot, cty)| {
+        if cty.oid == 0 { BoundExpr::null(TypeId::TEXT) } else { BoundExpr::input_ref(*slot, *cty) }
+    }).collect();
+    let names: Vec<String> = (1..=args.len()).map(|i| format!("f{i}")).collect();
+    let row = BoundExpr::new(ExprKind::Row(Box::new(RowExpr { args, names })), ty);
+    Some(match identity {
+        Some(arg) => BoundExpr::new(ExprKind::Case(Box::new(CaseExpr {
+            arg: None,
+            arms: vec![CaseArm {
+                cond: BoundExpr::new(ExprKind::NullTest(Box::new(NullTest { arg, is_null: true, row_semantics: false })), TypeId::BOOL),
+                result: BoundExpr::null(ty),
+            }],
+            default: Some(Box::new(row)),
+        })), ty),
+        None => row,
+    })
 }
 
 fn system_column_name(attnum: i16) -> &'static str {

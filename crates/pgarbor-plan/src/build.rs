@@ -97,19 +97,103 @@ pub fn build_query(st: &mut PlannerState, q: &BoundQuery) -> Result<LogicalPlan>
 pub fn build_select(st: &mut PlannerState, sel: &BoundSelect, q: &BoundQuery) -> Result<LogicalPlan> {
     let with_rowid = rowid_range_indexes(sel, q);
     let mut plan = build_from_clause(st, sel, &with_rowid)?;
+    add_table_identity(&mut plan, sel)?;
     if let Some(where_expr) = &sel.where_ {
         let quals = simplify::simplify_quals(st, simplify::split_conjuncts(where_expr.clone()))?;
         if !quals.is_empty() {
             plan = pushdown::push_down_quals(st, plan, quals)?;
         }
     }
-    if sel.has_aggs || sel.having.is_some() || !sel.group_by.exprs.is_empty() || sel.group_by.sets.is_some() {
-        plan = agg::build_aggregate(st, plan, sel)?;
-    }
-    if !sel.windows.is_empty() {
-        plan = window::build_windows(st, plan, sel)?;
+    let grouped = sel.has_aggs || sel.having.is_some() || !sel.group_by.exprs.is_empty() || sel.group_by.sets.is_some();
+    if grouped || !sel.windows.is_empty() {
+        // Aggregate and window calls are collected from the target list and matched structurally
+        // against the final projection, so both must see the same (simplified) expressions.
+        let simplified = simplify_select_exprs(st, sel)?;
+        let sel = &simplified;
+        if grouped {
+            plan = agg::build_aggregate(st, plan, sel)?;
+        }
+        if !sel.windows.is_empty() {
+            plan = window::build_windows(st, plan, sel)?;
+        }
+        return project_targets(st, plan, sel);
     }
     project_targets(st, plan, sel)
+}
+
+/// Every expression slot of `sel` that `resolve_tableoid` rewrites.
+fn select_exprs(sel: &BoundSelect) -> Vec<&BoundExpr> {
+    fn from_quals<'a>(item: &'a FromItem, out: &mut Vec<&'a BoundExpr>) {
+        if let FromItem::Join(j) = item {
+            if let Some(on) = &j.quals {
+                out.push(on);
+            }
+            from_quals(&j.left, out);
+            from_quals(&j.right, out);
+        }
+    }
+    let mut out: Vec<&BoundExpr> = sel.target_list.iter().map(|t| &t.expr).collect();
+    out.extend(sel.where_.iter());
+    out.extend(sel.having.iter());
+    for w in &sel.windows {
+        out.extend(w.partition_by.iter());
+        out.extend(w.order_by.iter().map(|k| &k.expr));
+    }
+    for item in &sel.from {
+        from_quals(item, &mut out);
+    }
+    out
+}
+
+/// Carry table identity through joins as a real slot, so outer joins null-extend it too.
+/// Whole-row references use the same slot to distinguish an absent tuple from an all-NULL tuple.
+fn add_table_identity(plan: &mut LogicalPlan, sel: &BoundSelect) -> Result<()> {
+    match &mut plan.node {
+        LogicalNode::Scan(scan) => {
+            if !matches!(scan.source, ScanSource::Table { is_virtual: false, .. }) {
+                return Ok(());
+            }
+            let rt = scan.rt_index;
+            let needed = select_exprs(sel).into_iter().any(|e| e.any(&mut |n| {
+                matches!(&n.kind, ExprKind::Column(c) if c.levels_up == 0 && c.rt_index == rt && matches!(c.attnum, 0 | -6))
+            }));
+            if needed {
+                if scan.with_rowid {
+                    return Err(PgError::unimplemented("PLN-01", "whole-row/tableoid references with row locking"));
+                }
+                plan.vars.push(BoundExpr::column(0, rt, -6, TypeId::OID));
+                plan.out.push(OutCol { name: "tableoid".into(), ty: TypeId::OID });
+            }
+        }
+        LogicalNode::Join(j) => {
+            add_table_identity(&mut j.left, sel)?;
+            add_table_identity(&mut j.right, sel)?;
+            plan.vars = j.left.vars.iter().chain(&j.right.vars).cloned().collect();
+            plan.out = j.left.out.iter().chain(&j.right.out).cloned().collect();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Copy of `sel` whose target list, HAVING and window expressions are constant-folded.
+fn simplify_select_exprs(st: &mut PlannerState, sel: &BoundSelect) -> Result<BoundSelect> {
+    let mut out = sel.clone();
+    for t in out.target_list.iter_mut() {
+        t.expr = simplify::simplify_expr(st, t.expr.clone())?;
+    }
+    if let Some(h) = out.having.take() {
+        out.having = Some(simplify::simplify_expr(st, h)?);
+    }
+    for w in out.windows.iter_mut() {
+        for e in w.partition_by.iter_mut() {
+            *e = simplify::simplify_expr(st, e.clone())?;
+        }
+        for k in w.order_by.iter_mut() {
+            k.expr = simplify::simplify_expr(st, k.expr.clone())?;
+        }
+    }
+    Ok(out)
 }
 
 /// Leaf scan for range entry `rt_index` (1-based) of `sel.range_table`.

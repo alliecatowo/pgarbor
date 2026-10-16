@@ -164,8 +164,8 @@ pub fn plan_limit(st: &mut PlannerState, l: &LogicalLimit) -> Result<PlanNode> {
     let est = child.est;
     let kind = NodeKind::Limit(Box::new(LimitNode {
         input: child,
-        count: l.count.clone(),
-        offset: l.offset.clone(),
+        count: l.count.clone().map(|e| crate::subplan::process_sublinks(st, e)).transpose()?,
+        offset: l.offset.clone().map(|e| crate::subplan::process_sublinks(st, e)).transpose()?,
         with_ties: l.with_ties,
         ties_keys: l.ties_keys.clone(),
     }));

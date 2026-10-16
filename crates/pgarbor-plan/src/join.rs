@@ -175,6 +175,9 @@ pub fn extract_equi_keys(st: &PlannerState, quals: &[BoundExpr], left_rels: &[u3
 
 /// Physical plan of a logical join (module docs step 1-5).
 pub fn plan_join(st: &mut PlannerState, j: &LogicalJoin) -> Result<PlanNode> {
+    let mut lowered = j.clone();
+    lowered.quals = crate::subplan::process_sublinks_in(st, lowered.quals)?;
+    let j = &lowered;
     if j.lateral {
         return plan_lateral_join(st, j);
     }
@@ -668,11 +671,7 @@ fn plan_lateral_join(st: &mut PlannerState, j: &LogicalJoin) -> Result<PlanNode>
     let left = planner::plan_logical(st, &j.left)?;
     let mut right = planner::plan_logical(st, &j.right)?;
     let mut params: Vec<(ColumnRef, TypeId)> = Vec::new();
-    {
-        let left_rels: &[u32] = &j.left.rels;
-        let mut rewrite = |x: BoundExpr| -> Result<BoundExpr> { Ok(lateral_rewrite(x, left_rels, &mut params)) };
-        map_exprs_in_node(&mut right, &mut rewrite)?;
-    }
+    rewrite_lateral_tree(&mut right, j.right.level, &st.level_parents, &j.left.rels, &mut params)?;
     let param_exprs: Vec<BoundExpr> = params
         .iter()
         .map(|(c, ty)| BoundExpr::new(ExprKind::Column(*c), *ty))
@@ -682,6 +681,32 @@ fn plan_lateral_join(st: &mut PlannerState, j: &LogicalJoin) -> Result<PlanNode>
     let inner = if param_exprs.is_empty() { maybe_materialize(st, right)? } else { right };
     let node = build_nested_loop(st, j.join_type, left, inner, qual, param_exprs, 0, nother)?;
     Ok(node)
+}
+
+/// A derived table starts a query level: its local Column(0, ...) variables must remain local.
+/// Only references to the owning FROM level are parameters of this nested loop.
+fn rewrite_lateral_tree(node: &mut PlanNode, owner: u32, parents: &[Option<u32>], rels: &[u32], params: &mut Vec<(ColumnRef, TypeId)>) -> Result<()> {
+    let level = node.level;
+    {
+        let mut rewrite = |x: BoundExpr| -> Result<BoundExpr> {
+            match &x.kind {
+                ExprKind::Column(c) if column_owner(level, c.levels_up, parents) == Some(owner) && rels.contains(&c.rt_index) => {
+                    let local = BoundExpr::new(ExprKind::Column(ColumnRef { levels_up: 0, ..*c }), x.ty);
+                    Ok(lateral_rewrite(local, rels, params))
+                }
+                _ => Ok(x),
+            }
+        };
+        for v in &mut node.vars { map_in_place(v, &mut rewrite)?; }
+        map_kind_exprs(&mut node.kind, &mut rewrite)?;
+    }
+    for c in node.children_mut() { rewrite_lateral_tree(c, owner, parents, rels, params)?; }
+    Ok(())
+}
+
+fn column_owner(mut level: u32, levels_up: u32, parents: &[Option<u32>]) -> Option<u32> {
+    for _ in 0..levels_up { level = parents.get(level as usize).copied().flatten()?; }
+    Some(level)
 }
 
 /// Rewrite one outer column reference of a LATERAL right side into `OuterRef`, registering it as a

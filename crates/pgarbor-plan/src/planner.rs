@@ -135,7 +135,13 @@ pub fn plan_project(st: &mut PlannerState, p: &LogicalProject) -> Result<PlanNod
     let child = plan_logical(st, &p.input)?;
     let mut simplified = Vec::with_capacity(p.exprs.len());
     for e in &p.exprs {
-        simplified.push(simplify::simplify_expr(st, e.clone())?);
+        // Junk-column removal and other upper projections reuse computed expressions. In
+        // particular, do not plan a second SubLink above a projection that consumed its inputs.
+        if let Some(slot) = child.vars.iter().position(|v| v == e) {
+            simplified.push(BoundExpr::input_ref(slot as u32, e.ty));
+        } else {
+            simplified.push(simplify::simplify_expr(st, e.clone())?);
+        }
     }
     let exprs = subplan::process_sublinks_in(st, simplified)?;
     // Output names are fixed by the caller (`set_names`); the types are the expression types.
@@ -288,8 +294,19 @@ fn plan_scan(st: &mut PlannerState, lp: &LogicalPlan, scan: &LogicalScan) -> Res
             let mut node = index::choose_scan(st, &scan_with_quals, None, false)?;
             // The scan's layout is the table row (bind-time `Column`s of the range entry) plus the
             // trailing rowid slot when requested. The planner owns this layout (setrefs matches it).
-            node.vars = lp.vars.clone();
-            node.out = lp.out.clone();
+            let identity = lp.vars.last().is_some_and(|e| matches!(&e.kind, ExprKind::Column(c) if c.attnum == -6));
+            let width = lp.vars.len() - usize::from(identity);
+            node.vars = lp.vars[..width].to_vec();
+            node.out = lp.out[..width].to_vec();
+            if identity {
+                let mut exprs = node.vars.clone();
+                exprs.push(BoundExpr::constant(pgarbor_types::Datum::Oid(table.oid), TypeId::OID));
+                let est = node.est;
+                let mut projected = st.new_node(NodeKind::Project(Box::new(ProjectNode { input: node, exprs })), lp.out.clone());
+                projected.vars = lp.vars.clone();
+                projected.est = est;
+                node = projected;
+            }
             if scan.with_rowid {
                 node.vars.push(BoundExpr::column(0, scan.rt_index, CTID_ATTNUM, TypeId::INT8));
                 node.out.push(OutCol { name: "ctid".to_string(), ty: TypeId::INT8 });

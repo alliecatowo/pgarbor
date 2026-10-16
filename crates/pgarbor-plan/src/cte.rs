@@ -483,10 +483,10 @@ mod tests {
     }
 
     #[test]
-    fn scope_keys_are_bounded() {
-        assert!(scope_key(0).is_ok());
-        assert!(scope_key(31).is_ok());
-        assert!(scope_key(32).is_err());
+    fn rank_handles_more_than_thirty_two_scopes() {
+        // CTE scope snapshots replaced the old fixed 32-key scratch map.
+        let decisions = vec![Decision::Materialize; 64];
+        assert_eq!(rank_before(&decisions, 64).expect("rank"), 64);
     }
 
     #[test]
