@@ -24,11 +24,11 @@
 use pgarbor_plan::plan::{FunctionItem, FunctionScan, PlanNode, ProjectSetNode};
 use pgarbor_common::Result;
 use pgarbor_sql::ir::{BoundExpr, ExprKind};
-use pgarbor_types::Datum;
+use pgarbor_types::{Datum, TypeEnv};
 
 use crate::build::BuildCtx;
 use crate::eval::{eval, eval_opt_qual};
-use crate::eval_srf::{expand_record, open_srf, SrfIter};
+use crate::eval_srf::{contains_srf, expand_record, open_srf, SrfIter};
 use crate::runtime::{Executor, Row, RowSource};
 
 /// `FunctionScan` operator. Owns copies of the function items and the filter (runtime docs).
@@ -86,7 +86,15 @@ impl FunctionScanOp {
                 Some(value) => {
                     live = true;
                     let value = value?;
-                    if width > 1 {
+                    let composite = item.expr.ty.oid == pgarbor_types::oids::RECORD
+                        || ex.se().env.composite_fields(item.expr.ty.oid).is_some();
+                    if composite {
+                        match value {
+                            Datum::Record(fields) if fields.len() == width => row.extend(fields),
+                            Datum::Null => row.extend(vec![Datum::Null; width]),
+                            _ => return Err(pgarbor_common::PgError::internal("function composite result does not match its declared columns")),
+                        }
+                    } else if width > 1 {
                         row.extend(expand_record(value, width)?);
                     } else if width == 1 {
                         row.push(value);
@@ -146,30 +154,99 @@ enum Slot {
     Fixed(Datum),
     /// Set expression: its iterator (`None` once exhausted).
     Srf(Option<SrfIter>),
+    /// Expression with set-returning calls nested inside it (`prepare_items`): the calls advance in
+    /// lock step with the other slots, and the expression is evaluated over the input row extended
+    /// with their current values (NULL once a call is exhausted).
+    Nested { expr: BoundExpr, srfs: Vec<Option<SrfIter>>, values: Vec<Datum>, row: Row },
 }
 
-/// Evaluate every expression of `exprs` over `row`, opening the set expressions (module docs).
-fn open_slots(ex: &mut Executor, exprs: &[BoundExpr], row: &[Datum]) -> Result<Vec<Slot>> {
-    let mut slots: Vec<Slot> = Vec::with_capacity(exprs.len());
+/// A target-list item of `ProjectSet`, prepared once at build time.
+enum ProjItem {
+    /// No set-returning call, or a top-level one (`Slot::Fixed` / `Slot::Srf`).
+    Plain(BoundExpr),
+    /// `expr` reads each set-returning call (`calls`, in order) from slot `width + j` of the extended row.
+    Nested { expr: BoundExpr, calls: Vec<BoundExpr> },
+}
+
+/// Split each target expression into plain items and items with nested set-returning calls. Calls are
+/// replaced by `InputRef(width + j)` and are not descended into (their arguments are evaluated when the
+/// call is opened). Sub-plans are left alone: their own operator tree handles any set-returning call.
+fn prepare_items(exprs: &[BoundExpr], width: usize) -> Result<Vec<ProjItem>> {
+    let mut items = Vec::with_capacity(exprs.len());
     for e in exprs {
-        match &e.kind {
-            ExprKind::FuncCall(call) if call.retset => {
-                let it = open_srf(ex, call, e.ty, row)?;
-                slots.push(Slot::Srf(Some(it)));
+        let top_level_srf = matches!(&e.kind, ExprKind::FuncCall(c) if c.retset);
+        if top_level_srf || !contains_srf(e)? {
+            items.push(ProjItem::Plain(e.clone()));
+            continue;
+        }
+        let mut calls: Vec<BoundExpr> = Vec::new();
+        let expr = e.clone().transform_down(&mut |node: BoundExpr| {
+            let is_srf = matches!(&node.kind, ExprKind::FuncCall(c) if c.retset);
+            if is_srf {
+                let idx = width + calls.len();
+                let ty = node.ty;
+                calls.push(node);
+                Ok((BoundExpr { kind: ExprKind::InputRef(idx as u32), ty }, false))
+            } else {
+                let stop = matches!(&node.kind, ExprKind::SubPlan(_));
+                Ok((node, !stop))
             }
-            _ => {
-                let v = eval(ex, e, row)?;
-                slots.push(Slot::Fixed(v));
+        })?;
+        items.push(ProjItem::Nested { expr, calls });
+    }
+    Ok(items)
+}
+
+/// Open the slots of one input row.
+fn open_slots(ex: &mut Executor, items: &[ProjItem], row: &[Datum]) -> Result<Vec<Slot>> {
+    let mut slots: Vec<Slot> = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            ProjItem::Plain(e) => match &e.kind {
+                ExprKind::FuncCall(call) if call.retset => {
+                    let it = open_srf(ex, call, e.ty, row)?;
+                    slots.push(Slot::Srf(Some(it)));
+                }
+                _ => {
+                    let v = eval(ex, e, row)?;
+                    slots.push(Slot::Fixed(v));
+                }
+            },
+            ProjItem::Nested { expr, calls, .. } => {
+                let mut srfs: Vec<Option<SrfIter>> = Vec::with_capacity(calls.len());
+                for c in calls {
+                    match &c.kind {
+                        ExprKind::FuncCall(call) => srfs.push(Some(open_srf(ex, call, c.ty, row)?)),
+                        _ => return Err(pgarbor_common::PgError::internal("ProjectSet nested call is not a function")),
+                    }
+                }
+                let values = vec![Datum::Null; calls.len()];
+                slots.push(Slot::Nested { expr: expr.clone(), srfs, values, row: row.to_vec() });
             }
         }
     }
     Ok(slots)
 }
 
+/// Next value of one set-returning iterator (`None` once exhausted; the iterator is then dropped).
+fn advance(it: &mut Option<SrfIter>) -> Result<Option<Datum>> {
+    let got = match it.as_mut() {
+        Some(i) => i.next(),
+        None => None,
+    };
+    match got {
+        Some(v) => Ok(Some(v?)),
+        None => {
+            *it = None;
+            Ok(None)
+        }
+    }
+}
+
 /// `ProjectSet` operator (module docs).
 struct ProjectSetOp {
     input: Box<dyn RowSource>,
-    exprs: Vec<BoundExpr>,
+    exprs: Vec<ProjItem>,
     /// Slots of the current input row; `None` when the next input row must be fetched.
     slots: Option<Vec<Slot>>,
     done: bool,
@@ -193,33 +270,46 @@ impl RowSource for ProjectSetOp {
                     }
                 },
             };
-            let any_srf = slots.iter().any(|s| matches!(s, Slot::Srf(_)));
+            let any_srf = slots.iter().any(|s| !matches!(s, Slot::Fixed(_)));
             let mut out: Row = Vec::with_capacity(slots.len());
+            // Output positions of nested items, evaluated once every set has been advanced.
+            let mut pending: Vec<(usize, usize)> = Vec::new();
             let mut live = false;
-            for slot in slots.iter_mut() {
+            for (si, slot) in slots.iter_mut().enumerate() {
                 match slot {
                     Slot::Fixed(v) => out.push(v.clone()),
-                    Slot::Srf(it) => {
-                        let got = match it.as_mut() {
-                            Some(i) => i.next(),
-                            None => None,
-                        };
-                        match got {
-                            Some(v) => {
-                                out.push(v?);
-                                live = true;
-                            }
-                            None => {
-                                *it = None;
-                                out.push(Datum::Null);
+                    Slot::Srf(it) => match advance(it)? {
+                        Some(v) => {
+                            out.push(v);
+                            live = true;
+                        }
+                        None => out.push(Datum::Null),
+                    },
+                    Slot::Nested { srfs, values, .. } => {
+                        for (j, it) in srfs.iter_mut().enumerate() {
+                            match advance(it)? {
+                                Some(v) => {
+                                    values[j] = v;
+                                    live = true;
+                                }
+                                None => values[j] = Datum::Null,
                             }
                         }
+                        pending.push((si, out.len()));
+                        out.push(Datum::Null);
                     }
                 }
             }
             // Without any SRF the input row produces exactly one output row; with SRFs, the input
             // row is finished once every one of them is exhausted (the loop then fetches the next).
             if live || !any_srf {
+                for (si, oi) in pending {
+                    if let Slot::Nested { expr, values, row, .. } = &slots[si] {
+                        let mut extended: Row = row.clone();
+                        extended.extend(values.iter().cloned());
+                        out[oi] = eval(ex, expr, &extended)?;
+                    }
+                }
                 if any_srf {
                     self.slots = Some(slots);
                 }
@@ -254,7 +344,8 @@ pub fn build_function_scan(node: &PlanNode, n: &FunctionScan, b: &mut BuildCtx) 
 pub fn build_project_set(node: &PlanNode, n: &ProjectSetNode, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
     let _ = node;
     let input = b.child(&n.input)?;
-    Ok(Box::new(ProjectSetOp { input, exprs: n.exprs.clone(), slots: None, done: false, ticks: 0 }))
+    let exprs = prepare_items(&n.exprs, n.input.out.len())?;
+    Ok(Box::new(ProjectSetOp { input, exprs, slots: None, done: false, ticks: 0 }))
 }
 
 #[cfg(test)]
@@ -364,7 +455,7 @@ mod tests {
         with_ex(|ex| {
             let mut op = ProjectSetOp {
                 input: Box::new(OneRow { done: false }),
-                exprs: vec![gen_series(1, 3), gen_series(1, 2)],
+                exprs: prepare_items(&[gen_series(1, 3), gen_series(1, 2)], 0).expect("items"),
                 slots: None,
                 done: false,
                 ticks: 0,
@@ -387,7 +478,7 @@ mod tests {
         with_ex(|ex| {
             let mut op = ProjectSetOp {
                 input: Box::new(OneRow { done: false }),
-                exprs: vec![int4(7), gen_series(1, 2)],
+                exprs: prepare_items(&[int4(7), gen_series(1, 2)], 0).expect("items"),
                 slots: None,
                 done: false,
                 ticks: 0,
@@ -404,7 +495,7 @@ mod tests {
             let arr_ty = TypeId::INT4_ARRAY;
             let mut op = ProjectSetOp {
                 input: Box::new(OneRow { done: false }),
-                exprs: vec![srf(UNNEST_ANYARRAY, "unnest", vec![null_of(arr_ty)], TypeId::INT4)],
+                exprs: prepare_items(&[srf(UNNEST_ANYARRAY, "unnest", vec![null_of(arr_ty)], TypeId::INT4)], 0).expect("items"),
                 slots: None,
                 done: false,
                 ticks: 0,
