@@ -62,7 +62,7 @@ use pgarbor_sql::{parse_expr_text, SourceMap};
 use pgarbor_types::array::subscript::{self, Subscript};
 use pgarbor_types::cast::{apply_cast, cast_datum, CastContext};
 use pgarbor_types::datum::type_mismatch;
-use pgarbor_types::{Datum, TypeId};
+use pgarbor_types::{Datum, TypeEnv, TypeId};
 
 use crate::context::{EngineServices, SessionEnv};
 use crate::eval::eval;
@@ -134,10 +134,16 @@ pub fn eval_field_select(ex: &mut Executor, f: &FieldSelect, row: &[Datum]) -> R
         Datum::Null => Ok(Datum::Null),
         Datum::Record(fields) => {
             let idx = i64::from(f.field) - 1;
-            usize::try_from(idx)
-                .ok()
-                .and_then(|i| fields.into_iter().nth(i))
-                .ok_or_else(|| PgError::internal(format!("record has no field {}", f.field)))
+            let index = usize::try_from(idx).map_err(|_| PgError::internal("invalid composite field number"))?;
+            if let Some(value) = fields.get(index) {
+                return Ok(value.clone());
+            }
+            // Metadata-only ADD ATTRIBUTE can leave stored tuples physically shorter than the
+            // current descriptor. PostgreSQL reads such trailing attributes as NULL.
+            if ex.se().env.composite_fields(f.arg.ty.oid).is_some_and(|desc| index < desc.len()) {
+                return Ok(Datum::Null);
+            }
+            Err(PgError::internal(format!("record has no field {}", f.field)))
         }
         other => Err(type_mismatch("record", &other)),
     }

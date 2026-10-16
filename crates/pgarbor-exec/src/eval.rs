@@ -52,7 +52,7 @@ use pgarbor_sql::ir::{
     MinMaxExpr, NullIfExpr, NullTest, SqlValueOp, SubPlanRef,
 };
 use pgarbor_types::cast::{cast_datum, CastContext};
-use pgarbor_types::compare::{cmp_datums, not_distinct};
+use pgarbor_types::compare::cmp_datums;
 use pgarbor_types::logic::{and3, bool3_to_datum, datum_to_bool3, is_false, is_true, is_unknown, not3, or3, qualifies};
 use pgarbor_types::{Datum, TypeId};
 
@@ -194,7 +194,12 @@ fn eval_boolean_test(ex: &mut Executor, t: &BooleanTest, row: &[Datum]) -> Resul
 fn eval_distinct_from(ex: &mut Executor, d: &DistinctFrom, row: &[Datum]) -> Result<Datum> {
     let l = eval(ex, &d.left, row)?;
     let r = eval(ex, &d.right, row)?;
-    let same = not_distinct(&ex.se().env, d.left.ty, &l, &r)?;
+    let same = match (l.is_null(), r.is_null()) {
+        (true, true) => true,
+        (true, false) | (false, true) => false,
+        (false, false) => eval_call::call_operator(ex, &d.eq, &[l, r], &[d.left.ty, d.right.ty], TypeId::BOOL)?
+            .as_bool().ok_or_else(|| PgError::internal("DISTINCT equality did not return boolean"))?,
+    };
     Ok(Datum::Bool(same == d.negated))
 }
 

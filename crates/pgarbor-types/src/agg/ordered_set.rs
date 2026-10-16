@@ -79,7 +79,7 @@ pub(crate) fn make(agg: &BuiltinAggregate, spec: &AggSpec, ctx: &FuncCtx) -> Res
                 return Err(arity_error(agg, "sort-column count", 0));
             }
             if spec.direct_args.len() != spec.arg_types.len() {
-                return Err(arity_error(agg, "hypothetical-row width", spec.direct_args.len()));
+                return Err(PgError::unimplemented("TYP-48", "multi-column hypothetical-set aggregate"));
             }
             Ok(Box::new(HypoState {
                 kind,

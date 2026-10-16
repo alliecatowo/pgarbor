@@ -154,7 +154,19 @@ pub fn output(ctx: &IoCtx, ty: TypeId, d: &Datum) -> Result<String> {
             "output of anonymous composite types requires field types",
         ));
     }
-    let vals = record_values(d)?;
+    let stored = record_values(d)?;
+    let mut expanded;
+    let fields = ctx.env.composite_fields(ty.oid);
+    // A metadata-only ADD ATTRIBUTE leaves older stored tuples physically shorter. PostgreSQL
+    // heap_getattr reads the missing trailing attributes as NULL; output follows the current type.
+    let vals = match fields {
+        Some(fields) if stored.len() < fields.iter().filter(|f| !f.dropped).count() => {
+            expanded = stored.to_vec();
+            expanded.resize(fields.len(), Datum::Null);
+            expanded.as_slice()
+        }
+        _ => stored,
+    };
     let mut parts = Vec::with_capacity(vals.len());
     for (idx, tid) in named_fields(ctx.env, ty.oid, vals.len())? {
         parts.push(io::output_opt(ctx, tid, &vals[idx])?);

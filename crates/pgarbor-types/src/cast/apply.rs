@@ -26,6 +26,7 @@ use crate::datum::{type_mismatch, Datum, TypeId};
 use crate::func;
 use crate::io;
 use crate::names::display_name;
+use crate::registry::base_type;
 use crate::oids;
 use crate::typmod;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
@@ -53,10 +54,38 @@ pub fn cast_datum(value: Datum, from: TypeId, to: TypeId, context: CastContext, 
     apply_cast(&plan, value, ctx)
 }
 
+/// Binary-coercible (relabel) casts keep the bits but may change the Datum variant: `int4 -> oid`,
+/// `oid -> int4` and the `reg*` family (pg_cast castmethod 'b'). Every other relabel keeps its variant.
+fn relabel_variant(target: Oid, value: Datum) -> Datum {
+    match value {
+        Datum::Int4(v) if OID_DATUM_TYPES.contains(&target) => Datum::Oid(v as u32),
+        Datum::Oid(v) if target == oids::INT4 => Datum::Int4(v as i32),
+        other => other,
+    }
+}
+
+/// Types whose Datum variant is `Datum::Oid` (see the `datum` module table).
+const OID_DATUM_TYPES: &[Oid] = &[
+    oids::OID,
+    24,   // regproc
+    2202, // regprocedure
+    2203, // regoper
+    2204, // regoperator
+    2205, // regclass
+    2206, // regtype
+    3734, // regconfig
+    3769, // regdictionary
+    4089, // regnamespace
+    4096, // regrole
+    4191, // regcollation
+    28,   // xid
+    29,   // cid
+];
+
 /// Run one step of `plan` on a non-NULL value.
 fn apply_step(plan: &CastPlan, step: &CastStep, value: Datum, ctx: &FuncCtx) -> Result<Datum> {
     match step {
-        CastStep::Relabel => Ok(value),
+        CastStep::Relabel => Ok(relabel_variant(base_type(ctx.env, plan.to.oid), value)),
         CastStep::DomainCheck { .. } => Ok(value),
         CastStep::Func { proc, nargs } => apply_func(plan, *proc, *nargs, value, ctx),
         CastStep::ViaIo { from, to } => {
@@ -123,6 +152,10 @@ fn apply_record(plan: &CastPlan, to: TypeId, value: Datum, ctx: &FuncCtx) -> Res
         Datum::Record(v) => v,
         other => return Err(type_mismatch("Record", &other)),
     };
+    if to.oid == oids::RECORD {
+        // Datum::Record does not retain a tuple descriptor for an anonymous result.
+        return Err(PgError::unimplemented("TYP-53", "coercion to anonymous record without a tuple descriptor"));
+    }
     let to_fields = ctx.env.composite_fields(to.oid).ok_or_else(|| {
         PgError::internal(format!("composite fields unknown for type {}", to.oid))
     })?;
