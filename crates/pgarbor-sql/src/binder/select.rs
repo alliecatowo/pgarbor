@@ -135,13 +135,12 @@ pub(super) fn leftmost_select_into(body: &SetExpr) -> Option<&sqlparser::ast::Se
 /// Top-level `Statement::Query`: query or `SELECT INTO` (also `SELECT INTO ... UNION SELECT ...`).
 pub fn bind_query_statement(b: &mut Binder, q: &Query) -> Result<BoundStatement> {
     if let SetExpr::Merge(_) = &*q.body {
-        // `WITH ... MERGE` (PG `transformMergeStmt`): WITH RECURSIVE is rejected; MERGE itself is not executed yet.
+        // `WITH ... MERGE` (PG `transformMergeStmt`): WITH RECURSIVE is rejected.
         if q.with.as_ref().is_some_and(|w| w.recursive) {
             return Err(PgError::new(SqlState::SYNTAX_ERROR, "WITH RECURSIVE is not supported for MERGE statement"));
         }
-        return Err(diag::unsupported_construct("MERGE", None));
     }
-    if let SetExpr::Insert(st) | SetExpr::Update(st) | SetExpr::Delete(st) = &*q.body {
+    if let SetExpr::Insert(st) | SetExpr::Update(st) | SetExpr::Delete(st) | SetExpr::Merge(st) = &*q.body {
         return bind_with_dml(b, q, st);
     }
     if let Some(into) = leftmost_select_into(&q.body) {
@@ -184,6 +183,7 @@ fn bind_with_dml_levels(b: &mut Binder, q: &Query, st: &sqlparser::ast::Statemen
         BoundStatement::Insert(x) => x.ctes = ctes,
         BoundStatement::Update(x) => x.ctes = ctes,
         BoundStatement::Delete(x) => x.ctes = ctes,
+        BoundStatement::Merge(x) => x.ctes = ctes,
         _ => return Err(PgError::internal("binder: WITH on a statement that is not INSERT/UPDATE/DELETE")),
     }
     Ok(bound)

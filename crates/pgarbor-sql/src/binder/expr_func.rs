@@ -872,6 +872,7 @@ fn bind_special_function(b: &mut Binder, name: &str, f: &Function, pos: Option<u
             expr_misc::bind_collation_for(b, arg, pos, ec)?
         }
         "grouping" => expr_agg::bind_grouping(b, f, ec)?,
+        "merge_action" => super::merge::bind_merge_action(b, f, pos)?,
         "row" => bind_row_call(b, f, pos, ec)?,
         "array" => match &f.args {
             FunctionArguments::Subquery(q) => expr_sublink::bind_array_subquery(b, q, ec)?,

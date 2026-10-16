@@ -156,7 +156,8 @@ fn is_live_setting(lower: &str) -> bool {
 }
 
 fn check_known(name: &str) -> Result<()> {
-    if guc_def::find_def(name).is_some() {
+    // Custom placeholder parameters (`app.uid`) are validated by `GucTable::set` (`check_custom_name`).
+    if guc_def::find_def(name).is_some() || name.contains('.') {
         Ok(())
     } else {
         Err(unrecognized(name))
@@ -199,7 +200,9 @@ impl Session {
     /// on the current user). `base` supplies the snapshot.
     fn rebuild_env(&mut self, base: &CatalogEnv, current: Oid, session: Oid) -> Result<()> {
         let path = SearchPath::parse(&self.guc.show("search_path")?)?;
-        let env = CatalogEnv::new(base.snapshot().clone(), &path, current)?.with_session(session, self.database_oid);
+        let env = CatalogEnv::new(base.snapshot().clone(), &path, current)?
+            .with_session(session, self.database_oid)
+            .with_row_security(crate::guc_derive::row_security(&self.guc)?);
         self.env = Some(env);
         Ok(())
     }

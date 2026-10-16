@@ -36,6 +36,8 @@ pub struct MemTxn {
     advisory: HashMap<(AdvisoryKey, bool), u32>,
     /// Number of `lock_and_read_latest` calls (tests assert the hook is used).
     pub lock_reads: u64,
+    /// Open internal subtransactions: the key/value state at their start.
+    subxacts: Vec<MemKv>,
 }
 
 impl MemTxn {
@@ -199,6 +201,26 @@ impl ExecTxn for MemTxn {
     }
     fn seq_drop(&mut self, relid: RelId) -> Result<()> {
         self.kv.delete(&seqstate::seq_key(relid)).map(|_| ())
+    }
+    fn subxact_begin(&mut self) -> Result<usize> {
+        self.subxacts.push(self.kv.clone());
+        Ok(self.subxacts.len())
+    }
+    fn subxact_release(&mut self, token: usize) -> Result<()> {
+        if token == 0 || token != self.subxacts.len() {
+            return Err(PgError::internal("subtransaction released out of order"));
+        }
+        self.subxacts.pop();
+        Ok(())
+    }
+    fn subxact_rollback(&mut self, token: usize) -> Result<()> {
+        if token == 0 || token != self.subxacts.len() {
+            return Err(PgError::internal("subtransaction rolled back out of order"));
+        }
+        if let Some(kv) = self.subxacts.pop() {
+            self.kv = kv;
+        }
+        Ok(())
     }
 }
 

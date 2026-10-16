@@ -714,6 +714,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_, env) = testing::run(&mut kv, &env, |t| t.create_table(&spec).map(|_| ()))?;
         Ok(env)

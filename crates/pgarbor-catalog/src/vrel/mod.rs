@@ -50,6 +50,7 @@
 //! | [`pg_depend`] | pg_depend, pg_description, pg_shdescription, pg_shdepend |
 //! | [`pg_proc`] | pg_proc, pg_aggregate, pg_operator, pg_cast, pg_language |
 //! | [`pg_roles`] | pg_authid, pg_auth_members, pg_database, pg_db_role_setting, pg_tablespace, pg_roles, pg_shadow, pg_group, pg_user |
+//! | [`pg_ext`] | pg_amop, pg_amproc, pg_conversion (+ user rows of the extensibility catalogs) |
 //! | [`pg_builtin`] | pg_collation, pg_am, pg_opclass, pg_opfamily, pg_extension, pg_available_extensions, pg_available_extension_versions |
 //! | [`pg_views`] | pg_tables, pg_views, pg_matviews, pg_indexes, pg_sequences |
 //! | [`runtime`] | pg_settings, pg_stat_activity, pg_locks, pg_prepared_statements, pg_cursors, pg_stat_ssl, pg_stat_gssapi |
@@ -67,6 +68,8 @@ pub mod pg_builtin;
 pub mod pg_class;
 pub mod pg_constraint;
 pub mod pg_depend;
+pub mod pg_ext;
+pub mod pg_policy;
 pub mod pg_proc;
 pub mod pg_roles;
 pub mod pg_type;
@@ -157,7 +160,9 @@ fn registry() -> &'static HashMap<Oid, &'static dyn VirtualRelation> {
         for r in unsupported::UNSUPPORTED_RELATIONS {
             m.insert(r.0, r as &'static dyn VirtualRelation);
         }
-        let groups: [&'static [&'static dyn VirtualRelation]; 16] = [
+        let groups: [&'static [&'static dyn VirtualRelation]; 18] = [
+            pg_ext::RELATIONS,
+            pg_policy::RELATIONS,
             pg_class::RELATIONS,
             pg_attribute::RELATIONS,
             pg_type::RELATIONS,
@@ -233,6 +238,8 @@ mod tests {
     fn producers_have_unique_oids() {
         let mut seen = std::collections::HashSet::new();
         for g in [
+            pg_ext::RELATIONS,
+            pg_policy::RELATIONS,
             pg_class::RELATIONS,
             pg_attribute::RELATIONS,
             pg_type::RELATIONS,

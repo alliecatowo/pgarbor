@@ -54,7 +54,6 @@ use crate::model::{ObjClass, ObjectAddress, RelKind};
 use pgarbor_common::{Oid, Result};
 use pgarbor_types::catalog_data::{self, ProcKind};
 use pgarbor_types::names::format_type;
-use pgarbor_types::text::format::quote_identifier;
 
 /// PG `getObjectDescription` (module docs). `Ok(None)` if the object does not exist.
 // CONTRACT
@@ -96,39 +95,10 @@ pub fn describe(env: &CatalogEnv, addr: &ObjectAddress) -> Result<Option<String>
         },
         ObjClass::Role => Ok(snap.role(addr.oid).map(|r| format!("role {}", r.name))),
         ObjClass::Database => Ok(snap.database(addr.oid).map(|d| format!("database {}", d.name))),
-        ObjClass::Collation => match builtin::builtin_collation(addr.oid) {
-            Some(coll) => {
-                let visible = env.search_path().contains(&coll.namespace);
-                let name = quote_identifier(coll.name)?;
-                if visible {
-                    Ok(Some(format!("collation {name}")))
-                } else {
-                    let ns = snap.namespace(coll.namespace).ok_or_else(|| {
-                        crate::errors::cache_lookup_failed("namespace", coll.namespace)
-                    })?;
-                    Ok(Some(format!("collation {}.{name}", quote_identifier(&ns.name)?)))
-                }
-            }
-            None => Ok(None),
-        },
-        ObjClass::Operator => match catalog_data::builtin_operator(addr.oid) {
-            Some(op) => {
-                let left = if op.left == 0 { "NONE".to_string() } else { format_type(env, op.left, -1)? };
-                let right = if op.right == 0 { "NONE".to_string() } else { format_type(env, op.right, -1)? };
-                // Operators are visible through pg_catalog only (no user operators in PGArbor).
-                let prefix = if env.search_path().contains(&builtin::PG_CATALOG_NAMESPACE) { "" } else { "pg_catalog." };
-                Ok(Some(format!("operator {prefix}{}({left},{right})", op.name)))
-            }
-            None => Ok(None),
-        },
-        ObjClass::Cast => match catalog_data::CASTS.iter().find(|c| c.oid == addr.oid) {
-            Some(cast) => Ok(Some(format!(
-                "cast from {} to {}",
-                format_type(env, cast.source, -1)?,
-                format_type(env, cast.target, -1)?
-            ))),
-            None => Ok(None),
-        },
+        ObjClass::Collation | ObjClass::Operator | ObjClass::Cast | ObjClass::OpClass | ObjClass::OpFamily
+        | ObjClass::AmOp | ObjClass::AmProc | ObjClass::Conversion => {
+            Ok(crate::ext::describe_ext(env, addr)?.flatten())
+        }
         ObjClass::Language => {
             Ok(builtin::LANGUAGES.iter().find(|l| l.oid == addr.oid).map(|l| format!("language {}", l.name)))
         }
@@ -136,9 +106,7 @@ pub fn describe(env: &CatalogEnv, addr: &ObjectAddress) -> Result<Option<String>
             .iter()
             .find(|a| a.oid == addr.oid)
             .map(|a| format!("access method {}", a.name))),
-        ObjClass::Extension => {
-            Ok(builtin::EXTENSIONS.iter().find(|e| e.oid == addr.oid).map(|e| format!("extension {}", e.name)))
-        }
+        ObjClass::Extension => Ok(crate::ext::describe_ext(env, addr)?.flatten()),
         ObjClass::Rewrite => {
             // The `_RETURN` rule of a view or materialized view; its OID is the relation's OID.
             match snap.relation(addr.oid) {
@@ -188,12 +156,17 @@ pub fn type_description(env: &CatalogEnv, addr: &ObjectAddress) -> Result<Option
         }),
         ObjClass::Role => snap.role(addr.oid).map(|_| "role"),
         ObjClass::Database => snap.database(addr.oid).map(|_| "database"),
-        ObjClass::Collation => builtin::builtin_collation(addr.oid).map(|_| "collation"),
-        ObjClass::Operator => catalog_data::builtin_operator(addr.oid).map(|_| "operator"),
-        ObjClass::Cast => catalog_data::CASTS.iter().find(|c| c.oid == addr.oid).map(|_| "cast"),
+        ObjClass::Collation
+        | ObjClass::Operator
+        | ObjClass::Cast
+        | ObjClass::Extension
+        | ObjClass::OpClass
+        | ObjClass::OpFamily
+        | ObjClass::AmOp
+        | ObjClass::AmProc
+        | ObjClass::Conversion => crate::ext::type_description_ext(env, addr).flatten(),
         ObjClass::Language => builtin::LANGUAGES.iter().find(|l| l.oid == addr.oid).map(|_| "language"),
         ObjClass::AccessMethod => builtin::ACCESS_METHODS.iter().find(|a| a.oid == addr.oid).map(|_| "access method"),
-        ObjClass::Extension => builtin::EXTENSIONS.iter().find(|e| e.oid == addr.oid).map(|_| "extension"),
         ObjClass::Rewrite => snap.relation(addr.oid).filter(|r| r.view.is_some()).map(|_| "rule"),
         ObjClass::Trigger => None,
         ObjClass::Tablespace => builtin::TABLESPACES.iter().find(|t| t.oid == addr.oid).map(|_| "tablespace"),
@@ -374,6 +347,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let mut created = None;
         let (_res, next) = testing::run(kv, env, |t| {

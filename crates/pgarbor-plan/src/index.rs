@@ -853,6 +853,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let mut tbl: Option<Oid> = None;
         let (_r, mut env) = testing::run(&mut kv, &env, |t| {

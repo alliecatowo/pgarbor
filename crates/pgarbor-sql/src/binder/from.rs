@@ -58,7 +58,7 @@
 //! targets and `INSERT ... ON CONFLICT excluded`). [`apply_column_aliases`] applies alias lists.
 use pgarbor_catalog::model::RelKind;
 use pgarbor_catalog::{CatalogEnv, Relation};
-use pgarbor_common::{PgError, Result, SqlState};
+use pgarbor_common::{Oid, PgError, Result, SqlState};
 use pgarbor_types::catalog_data::builtin_proc;
 use pgarbor_types::{oids, TypeEnv, TypeId};
 use sqlparser::ast::{
@@ -404,10 +404,13 @@ fn bind_named_table(b: &mut Binder, name: &ObjectName, alias: Option<&TableAlias
             .with_detail("This operation is not supported for composite types.");
         return Err(at(e, pos));
     }
-    let mut entry = relation_range_entry(b, rel, alias_name.as_deref(), false)?;
+    let only = crate::names::is_only_marked(name);
+    let mut entry = relation_range_entry(b, rel, alias_name.as_deref(), only)?;
     if let Some(a) = alias {
         apply_column_aliases(b, &mut entry, a)?;
     }
+    // Row-level security: the table reads through its SELECT policies (binder::rls).
+    let entry = super::rls::wrap_select(b, rel, entry)?;
     register_entry(b, entry)
 }
 
@@ -558,10 +561,7 @@ fn bind_function_factor(
 
     let any_typed = alias.map_or(false, |a| a.columns.iter().any(|c| c.data_type.is_some()));
     let all_typed = alias.map_or(false, |a| !a.columns.is_empty() && a.columns.iter().all(|c| c.data_type.is_some()));
-    let outs = match func_oid {
-        Some(oid) if oid < 16384 => builtin_proc(oid).map(|p| p.out_columns()).unwrap_or_default(),
-        _ => Vec::new(),
-    };
+    let outs = function_out_columns(b, func_oid, &call);
     let is_record = ret.oid == oids::RECORD;
     let composite = !is_record && b.env.type_info(ret.oid).map_or(false, |t| t.is_composite());
 
@@ -571,7 +571,7 @@ fn bind_function_factor(
             return Err(only_record_error());
         }
         outs.iter()
-            .map(|(n, t)| RangeColumn { name: (*n).to_string(), ty: TypeId::of(*t), dropped: false })
+            .map(|(n, t)| RangeColumn { name: n.clone(), ty: TypeId::of(*t), dropped: false })
             .collect()
     } else if is_record {
         let defs = match alias {
@@ -764,10 +764,7 @@ fn bind_rows_from(
             _ => None,
         };
         let ret = call.ty.clone();
-        let outs = match func_oid {
-            Some(oid) if oid < 16384 => builtin_proc(oid).map(|p| p.out_columns()).unwrap_or_default(),
-            _ => Vec::new(),
-        };
+        let outs = function_out_columns(b, func_oid, &call);
         let is_record = ret.oid == oids::RECORD;
         let composite = !is_record && b.env.type_info(ret.oid).map_or(false, |t| t.is_composite());
         let columns: Vec<RangeColumn> = if !outs.is_empty() {
@@ -775,7 +772,7 @@ fn bind_rows_from(
                 return Err(only_record_error());
             }
             outs.iter()
-                .map(|(n, t)| RangeColumn { name: (*n).to_string(), ty: TypeId::of(*t), dropped: false })
+                .map(|(n, t)| RangeColumn { name: n.clone(), ty: TypeId::of(*t), dropped: false })
                 .collect()
         } else if is_record {
             if defs.is_empty() {
@@ -836,6 +833,48 @@ fn bind_rows_from(
     }
     entry.kind = RangeKind::Function { funcs, with_ordinality };
     register_entry(b, entry)
+}
+
+/// Result columns of a function with OUT parameters (builtin `proallargtypes` or a user function's
+/// OUT / INOUT / TABLE parameters; PG `build_function_result_tupdesc_t`). Empty when the function has
+/// fewer than two output parameters (a single OUT parameter is a scalar result). Polymorphic output
+/// types are resolved from the call's actual argument types; unnamed outputs are `columnN`.
+fn function_out_columns(b: &Binder, func_oid: Option<Oid>, call: &BoundExpr) -> Vec<(String, Oid)> {
+    let Some(oid) = func_oid else { return Vec::new() };
+    if oid < 16384 {
+        return builtin_proc(oid)
+            .map(|p| p.out_columns().into_iter().map(|(n, t)| (n.to_string(), t)).collect())
+            .unwrap_or_default();
+    }
+    let Some(f) = b.env.snapshot().function(oid) else { return Vec::new() };
+    use pgarbor_catalog::model::ArgMode;
+    let outs: Vec<(usize, &pgarbor_catalog::model::FuncArg)> = f
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| matches!(a.mode, ArgMode::Out | ArgMode::InOut | ArgMode::Table))
+        .collect();
+    if outs.len() < 2 {
+        return Vec::new();
+    }
+    let declared_in: Vec<Oid> = f.in_arg_types();
+    let actual: Vec<Oid> = match &call.kind {
+        ExprKind::FuncCall(fc) => fc.args.iter().map(|a| a.ty.oid).collect(),
+        _ => Vec::new(),
+    };
+    outs.iter()
+        .enumerate()
+        .map(|(i, (_, a))| {
+            let mut ty = a.type_oid;
+            if pgarbor_types::registry::is_polymorphic(ty) && actual.len() == declared_in.len() {
+                if let Ok(t) = pgarbor_types::resolve::polymorphic::enforce_generic_type_consistency(b.env, &actual, &declared_in, ty) {
+                    ty = t.1;
+                }
+            }
+            let name = if a.name.is_empty() { format!("column{}", i + 1) } else { a.name.clone() };
+            (name, ty)
+        })
+        .collect()
 }
 
 fn only_record_error() -> PgError {

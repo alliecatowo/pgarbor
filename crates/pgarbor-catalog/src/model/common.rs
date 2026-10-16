@@ -35,6 +35,9 @@ pub mod class_oid {
     pub const PG_COLLATION: Oid = 3456;
     pub const PG_ENUM: Oid = 3501;
     pub const PG_SEQUENCE: Oid = 2224;
+    pub const PG_AMOP: Oid = 2602;
+    pub const PG_AMPROC: Oid = 2603;
+    pub const PG_CONVERSION: Oid = 2607;
 }
 
 /// The class of a catalog object (which catalog its OID lives in).
@@ -65,6 +68,12 @@ pub enum ObjClass {
     Rewrite,
     Trigger,
     Tablespace,
+    /// pg_opclass / pg_opfamily / pg_amop / pg_amproc / pg_conversion (amendment pgarbor-catalog-09).
+    OpClass,
+    OpFamily,
+    AmOp,
+    AmProc,
+    Conversion,
 }
 
 impl ObjClass {
@@ -89,6 +98,11 @@ impl ObjClass {
             ObjClass::Rewrite => PG_REWRITE,
             ObjClass::Trigger => PG_TRIGGER,
             ObjClass::Tablespace => PG_TABLESPACE,
+            ObjClass::OpClass => PG_OPCLASS,
+            ObjClass::OpFamily => PG_OPFAMILY,
+            ObjClass::AmOp => PG_AMOP,
+            ObjClass::AmProc => PG_AMPROC,
+            ObjClass::Conversion => PG_CONVERSION,
         }
     }
 
@@ -113,6 +127,11 @@ impl ObjClass {
             PG_REWRITE => ObjClass::Rewrite,
             PG_TRIGGER => ObjClass::Trigger,
             PG_TABLESPACE => ObjClass::Tablespace,
+            PG_OPCLASS => ObjClass::OpClass,
+            PG_OPFAMILY => ObjClass::OpFamily,
+            PG_AMOP => ObjClass::AmOp,
+            PG_AMPROC => ObjClass::AmProc,
+            PG_CONVERSION => ObjClass::Conversion,
             _ => return None,
         })
     }

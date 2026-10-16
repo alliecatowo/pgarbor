@@ -119,6 +119,7 @@ impl VirtualRelation for PgAggregate {
         for a in by_oid(catalog_data::AGGREGATES, oid, |a| a.oid) {
             rows.push(aggregate_row(schema, a)?);
         }
+        rows.extend(super::pg_ext::aggregate_user_rows(_ctx, schema, req)?);
         Ok(rows)
     }
 }
@@ -142,6 +143,7 @@ impl VirtualRelation for PgOperator {
             }
             rows.push(operator_row(schema, o)?);
         }
+        rows.extend(super::pg_ext::operator_user_rows(_ctx, schema, req)?);
         Ok(rows)
     }
 }
@@ -166,6 +168,7 @@ impl VirtualRelation for PgCast {
             }
             rows.push(cast_row(schema, c)?);
         }
+        rows.extend(super::pg_ext::cast_user_rows(_ctx, schema, req)?);
         Ok(rows)
     }
 }

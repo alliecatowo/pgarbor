@@ -134,6 +134,7 @@ impl VirtualRelation for PgCollation {
                 .set("collversion", d::opt_text(c.version));
             rows.push(b.finish()?);
         }
+        rows.extend(super::pg_ext::collation_user_rows(_ctx, schema, req)?);
         Ok(rows)
     }
 }
@@ -180,7 +181,9 @@ impl VirtualRelation for PgOpclass {
         relid::PG_OPCLASS
     }
     fn scan(&self, ctx: &ScanContext, req: &ScanRequest) -> Result<Vec<Row>> {
-        text_rows(ctx, &builtin::OPCLASSES, req)
+        let mut rows = text_rows(ctx, &builtin::OPCLASSES, req)?;
+        rows.extend(super::pg_ext::opclass_user_rows(ctx, req)?);
+        Ok(rows)
     }
 }
 
@@ -193,7 +196,9 @@ impl VirtualRelation for PgOpfamily {
         relid::PG_OPFAMILY
     }
     fn scan(&self, ctx: &ScanContext, req: &ScanRequest) -> Result<Vec<Row>> {
-        text_rows(ctx, &builtin::OPFAMILIES, req)
+        let mut rows = text_rows(ctx, &builtin::OPFAMILIES, req)?;
+        rows.extend(super::pg_ext::opfamily_user_rows(ctx, req)?);
+        Ok(rows)
     }
 }
 
@@ -222,6 +227,7 @@ impl VirtualRelation for PgExtension {
                 .set("extversion", d::text(e.version));
             rows.push(b.finish()?);
         }
+        rows.extend(super::pg_ext::extension_user_rows(_ctx, schema, req)?);
         Ok(rows)
     }
 }

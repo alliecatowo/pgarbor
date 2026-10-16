@@ -98,6 +98,9 @@ pub struct PlannerState<'a> {
     pub cur_level: u32,
     /// Planner scratch by key (module-private bookkeeping).
     pub scratch: HashMap<&'static str, i64>,
+    /// `(level, rt_index)` of table scans that include inheritance children / partitions
+    /// (`inherit.rs`, amendment pgarbor-plan-05).
+    pub inherit_scans: Vec<(u32, u32)>,
 }
 
 impl<'a> PlannerState<'a> {
@@ -116,7 +119,12 @@ impl<'a> PlannerState<'a> {
             level_stack: Vec::new(),
             cur_level: 0,
             scratch: HashMap::new(),
+            inherit_scans: Vec::new(),
         }
+    }
+    /// The scan of range entry `rt_index` at query level `level` expands to its inheritance tree.
+    pub fn is_inherit_scan(&self, level: u32, rt_index: u32) -> bool {
+        self.inherit_scans.contains(&(level, rt_index))
     }
     /// Register a new query level with its range table names; returns the level id (also pushed on
     /// `level_stack`; pop with [`PlannerState::leave_level`]).

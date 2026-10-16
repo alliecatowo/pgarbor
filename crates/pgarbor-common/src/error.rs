@@ -188,6 +188,13 @@ pub struct PgError {
     pub column: Option<String>,
     pub datatype: Option<String>,
     pub constraint: Option<String>,
+    /// `CONTEXT` lines (innermost first, joined by `\n`), e.g. `PL/pgSQL function f() line 3 at RAISE`
+    /// (amendment common-01).
+    pub context: Option<String>,
+    /// Text of the internally generated query an error position refers to (`internal_query`).
+    pub internal_query: Option<String>,
+    /// 1-based character position in [`PgError::internal_query`] (`internal_position`).
+    pub internal_position: Option<u32>,
 }
 
 pub type Result<T> = std::result::Result<T, PgError>;
@@ -206,6 +213,9 @@ impl PgError {
             column: None,
             datatype: None,
             constraint: None,
+            context: None,
+            internal_query: None,
+            internal_position: None,
         }
     }
     /// Feature not implemented yet. `lease` names the owning task/lease so the factory can inventory it.
@@ -259,6 +269,15 @@ impl PgError {
     }
     pub fn with_datatype(mut self, d: impl Into<String>) -> Self {
         self.datatype = Some(d.into());
+        self
+    }
+    /// Append one CONTEXT line (outer frames are appended after inner ones, like PG's error context stack).
+    pub fn with_context_line(mut self, line: impl Into<String>) -> Self {
+        let line = line.into();
+        self.context = Some(match self.context.take() {
+            Some(c) if !c.is_empty() => format!("{c}\n{line}"),
+            _ => line,
+        });
         self
     }
     pub fn with_severity(mut self, s: Severity) -> Self {

@@ -78,6 +78,19 @@ pub fn bind_insert(b: &mut Binder, ins: &Insert) -> Result<BoundStatement> {
     let mut bound = bound?;
     let scope = scope.ok_or_else(|| PgError::internal("binder: INSERT scope missing"))?;
     bound.range_table = scope.range_table;
+    if bound.target.kind == pgarbor_catalog::model::RelKind::View {
+        super::view_dml::rewrite_insert(b, &mut bound)?;
+    } else {
+        let env = b.env;
+        if let Some(rel) = env.snapshot().relation(bound.target.oid) {
+            let reads = bound.range_table.first().is_some_and(|e| e.access.select || !e.access.select_cols.is_empty());
+            let wco = super::rls::target_wcos(b, rel, super::rls::RlsCmd::Insert, reads)?;
+            if !wco.is_empty() && matches!(&bound.on_conflict, Some(oc) if matches!(oc.action, crate::ir::ConflictAction::DoUpdate { .. })) {
+                return Err(PgError::unimplemented("SQL-27", "INSERT ... ON CONFLICT DO UPDATE on a table with row-level security"));
+            }
+            bound.target.wco.extend(wco);
+        }
+    }
     Ok(BoundStatement::Insert(Box::new(bound)))
 }
 
@@ -222,7 +235,7 @@ fn bind_insert_in_scope(b: &mut Binder, ins: &Insert) -> Result<BoundInsert> {
 
 /// Explicit INSERT column list (PG `checkInsertTargets`): each name must be a live column (42703),
 /// no duplicates (42701), and no subscript/field forms (0A000).
-fn resolve_column_list(b: &mut Binder, names: &[ObjectName], target: &TargetTable) -> Result<Vec<(i16, Option<u32>)>> {
+pub(super) fn resolve_column_list(b: &mut Binder, names: &[ObjectName], target: &TargetTable) -> Result<Vec<(i16, Option<u32>)>> {
     let mut out: Vec<(i16, Option<u32>)> = Vec::with_capacity(names.len());
     for obj in names {
         let pos = b.pos(obj);
@@ -250,7 +263,7 @@ fn resolve_column_list(b: &mut Binder, names: &[ObjectName], target: &TargetTabl
 /// Implicit column list: all live columns in attnum order, generated ones included (PG
 /// `checkInsertTargets`); `insert into g values (1)` works because fewer expressions than columns
 /// fill only the leading ones, and `values (1, DEFAULT)` addresses the generated column.
-fn implicit_column_list(target: &TargetTable) -> Vec<i16> {
+pub(super) fn implicit_column_list(target: &TargetTable) -> Vec<i16> {
     target.live_columns().map(|c| c.attnum).collect()
 }
 
@@ -273,7 +286,29 @@ fn bind_source(
         && query.fetch.is_none()
         && query.locks.is_empty();
     if let (true, SetExpr::Values(vals)) = (plain, &*query.body) {
-        return bind_values_source(b, vals, target, cols, explicit, overriding);
+        // PG: the target relation is not in the namespace of the VALUES expressions.
+        let saved: Vec<(usize, bool, bool)> = b
+            .scope()?
+            .namespace
+            .iter()
+            .enumerate()
+            .filter(|(_, ns)| ns.rt_index == Some(target_rt))
+            .map(|(i, ns)| (i, ns.rel_visible, ns.cols_visible))
+            .collect();
+        for (i, _, _) in &saved {
+            if let Some(ns) = b.scope_mut()?.namespace.get_mut(*i) {
+                ns.rel_visible = false;
+                ns.cols_visible = false;
+            }
+        }
+        let r = bind_values_source(b, vals, target, cols, explicit, overriding);
+        for (i, rv, cv) in saved {
+            if let Some(ns) = b.scope_mut()?.namespace.get_mut(i) {
+                ns.rel_visible = rv;
+                ns.cols_visible = cv;
+            }
+        }
+        return r;
     }
     bind_query_source(b, query, target, target_rt, cols, explicit, overriding)
 }
@@ -466,7 +501,7 @@ fn supplied_fate(col: &TargetColumn, overriding: Option<Overriding>) -> Result<S
 }
 
 /// Apply [`supplied_fate`] to one bound VALUES cell.
-fn bind_value_cell(target: &TargetTable, attnum: i16, cell: BoundExpr, overriding: Option<Overriding>) -> Result<BoundExpr> {
+pub(super) fn bind_value_cell(target: &TargetTable, attnum: i16, cell: BoundExpr, overriding: Option<Overriding>) -> Result<BoundExpr> {
     if matches!(cell.kind, ExprKind::SetToDefault { .. }) {
         return Ok(cell);
     }
@@ -488,7 +523,7 @@ fn generated_column_error(name: &str) -> PgError {
         .with_detail(format!("Column \"{name}\" is a generated column."))
 }
 
-fn col_of(target: &TargetTable, attnum: i16) -> Result<&TargetColumn> {
+pub(super) fn col_of(target: &TargetTable, attnum: i16) -> Result<&TargetColumn> {
     target.column(attnum).ok_or_else(|| PgError::internal(format!("INSERT: no target column with attnum {attnum}")))
 }
 
@@ -497,7 +532,7 @@ fn range_index(rt: u32) -> Result<usize> {
     (rt as usize).checked_sub(1).ok_or_else(|| PgError::internal("INSERT: range-table index 0"))
 }
 
-fn set_entry_visible(b: &mut Binder, rt: u32, visible: bool) -> Result<()> {
+pub(super) fn set_entry_visible(b: &mut Binder, rt: u32, visible: bool) -> Result<()> {
     let idx = range_index(rt)?;
     let scope = b.scope_mut()?;
     match scope.range_table.get_mut(idx) {
@@ -509,7 +544,7 @@ fn set_entry_visible(b: &mut Binder, rt: u32, visible: bool) -> Result<()> {
     }
 }
 
-fn mark_insert_columns(b: &mut Binder, target_rt: u32, columns: &[i16]) -> Result<()> {
+pub(super) fn mark_insert_columns(b: &mut Binder, target_rt: u32, columns: &[i16]) -> Result<()> {
     let idx = range_index(target_rt)?;
     let scope = b.scope_mut()?;
     let entry = scope.range_table.get_mut(idx).ok_or_else(|| PgError::internal("INSERT: missing target entry"))?;
@@ -552,6 +587,7 @@ mod tests {
             kind: pgarbor_catalog::model::RelKind::Table,
             columns,
             checks: Vec::new(),
+            wco: Vec::new(),
         }
     }
 

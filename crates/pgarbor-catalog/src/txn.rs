@@ -273,6 +273,11 @@ impl<'a> CatalogTxn<'a> {
     }
 
     /// Queue a NOTICE for the client.
+    /// Take the NOTICEs queued so far (the DDL driver forwards them even when the statement fails,
+    /// like PG which sends each NOTICE as it is raised).
+    pub fn take_notices(&mut self) -> Vec<PgError> {
+        std::mem::take(&mut self.outcome.notices)
+    }
     pub fn notice(&mut self, n: PgError) {
         self.outcome.notices.push(n);
     }

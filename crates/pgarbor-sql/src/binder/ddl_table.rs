@@ -68,6 +68,7 @@ use sqlparser::ast::{
 use super::context::{Binder, ExprCtx};
 use super::ddl_constraint::{self, ConstraintTableCtx};
 use super::ddl_objects::bind_sequence_options;
+use super::ddl_partition;
 use super::select::{self, QueryCtx};
 use super::stored;
 use super::types;
@@ -144,29 +145,58 @@ pub fn bind_create_table(b: &mut Binder, ct: &CreateTable) -> Result<BoundStatem
         return Err(PgError::new(TOO_MANY_COLUMNS, format!("tables can have at most {MAX_TABLE_COLUMNS} columns")));
     }
     let table = qn.name.clone();
-    let mut columns = bind_column_defs(b, &ct.columns)?;
-    let scope: Vec<(String, TypeId)> = columns.iter().map(|c| (c.name.clone(), c.type_id.clone())).collect();
+    let hierarchy = ddl_partition::bind_hierarchy(b, ct)?;
+    let mut columns = bind_column_defs(b, &ct.columns, hierarchy.partition_parent)?;
+    let scope: Vec<(String, TypeId)> = hierarchy.scope(&columns);
     let tctx = ConstraintTableCtx { table_name: table.clone(), table_oid: None, columns: scope.clone() };
     // Every column is declared before any clause is bound (generated expressions may reference later
     // columns). The scope is popped on every path, success or error.
     stored::table_expr_scope(b, &table, &scope)?;
     let outcome = bind_table_level(b, ct, &mut columns, &table, &tctx);
+    let key = match (&outcome, &ct.partition_by) {
+        (Ok(_), Some(by)) => Some(ddl_partition::bind_partition_by(b, by, &scope)),
+        _ => None,
+    };
     b.scopes.pop();
     let constraints = outcome?;
-    let persistence = if ct.unlogged { Persistence::Unlogged } else { Persistence::Permanent };
+    let partition_key = key.transpose()?;
+    let temporary = is_temporary(ct);
+    let persistence = if temporary {
+        Persistence::Temp
+    } else if ct.unlogged {
+        Persistence::Unlogged
+    } else {
+        Persistence::Permanent
+    };
+    let on_commit = ddl_partition::bind_on_commit(ct, temporary)?;
+    let partition_of = match (hierarchy.partition_parent, &ct.for_values) {
+        (Some(parent), Some(fv)) => {
+            let after = ct.partition_of.as_ref().and_then(|n| ddl_partition::after_parent_name(b, n));
+            Some(ddl_partition::bind_partition_bound(b, parent, fv, after)?)
+        }
+        (Some(_), None) => return Err(diag::syntax_error_near("FOR", pos)),
+        _ => None,
+    };
+    let kind = if partition_key.is_some() { RelKind::PartitionedTable } else { RelKind::Table };
     let spec = CreateTableSpec {
         namespace,
         name: table,
         owner: b.env.current_user(),
-        kind: RelKind::Table,
+        kind,
         persistence,
         columns,
         constraints,
         options,
         if_not_exists: ct.if_not_exists,
-        inherits: Vec::new(),
+        inherits: hierarchy.parent_oids(),
+        extra: pgarbor_catalog::ddl::spec::CreateTableExtra { partition_key, partition_of, on_commit },
     };
     Ok(BoundStatement::CreateTable(Box::new(spec)))
+}
+
+/// `CREATE TEMP|TEMPORARY|LOCAL TEMP TABLE` (GLOBAL TEMP is accepted with PG's warning elsewhere).
+fn is_temporary(ct: &CreateTable) -> bool {
+    ct.temporary
 }
 
 /// `CREATE TABLE name [(cols)] AS query [WITH [NO] DATA]` (called by `bind_create_table` when
@@ -195,6 +225,15 @@ pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundSta
     };
     let pos = b.pos(&ct.name);
     reject_unsupported_table(ct, pos)?;
+    for (set, what) in [
+        (ct.inherits.is_some(), "INHERITS"),
+        (ct.partition_by.is_some(), "PARTITION BY"),
+        (ct.partition_of.is_some(), "PARTITION OF"),
+    ] {
+        if set {
+            return Err(diag::syntax_error_near(what, pos));
+        }
+    }
     if let Some(tc) = ct.constraints.first() {
         return Err(syntax_near(&tc.to_string(), pos));
     }
@@ -228,6 +267,7 @@ pub fn bind_create_table_as(b: &mut Binder, ct: &CreateTable) -> Result<BoundSta
         options,
         if_not_exists: ct.if_not_exists,
         inherits: Vec::new(),
+        extra: Default::default(),
     };
     Ok(BoundStatement::CreateTableAs(Box::new(BoundCreateTableAs { table, query: Box::new(bq), with_data })))
 }
@@ -283,6 +323,7 @@ pub fn bind_select_into(b: &mut Binder, q: &Query, into: &SelectInto) -> Result<
         options: Vec::new(),
         if_not_exists: false,
         inherits: Vec::new(),
+        extra: Default::default(),
     };
     Ok(BoundStatement::CreateTableAs(Box::new(BoundCreateTableAs { table, query: Box::new(bq), with_data: true })))
 }
@@ -335,10 +376,7 @@ fn reject_unsupported_table(ct: &CreateTable, pos: Option<u32>) -> Result<()> {
         (ct.snapshot, "SNAPSHOT TABLE"),
         (ct.like.is_some(), "CREATE TABLE ... LIKE"),
         (ct.clone.is_some(), "CREATE TABLE ... CLONE"),
-        (ct.inherits.is_some(), "INHERITS"),
-        (ct.partition_by.is_some(), "PARTITION BY"),
-        (ct.partition_of.is_some() || ct.for_values.is_some(), "PARTITION OF"),
-        (ct.on_commit.is_some(), "ON COMMIT"),
+        (ct.for_values.is_some() && ct.partition_of.is_none(), "FOR VALUES"),
         (ct.comment.is_some(), "COMMENT"),
         (ct.on_cluster.is_some(), "ON CLUSTER"),
         (ct.order_by.is_some(), "ORDER BY"),
@@ -447,13 +485,19 @@ fn into_name(b: &mut Binder, target: &Expr, pos: Option<u32>) -> Result<QualName
 // ---------------------------------------------------------------------------------------------
 
 /// Pass 1: fold and check names (42701), resolve types (serial pseudo-types, pseudo-types 42P16).
-fn bind_column_defs(b: &mut Binder, defs: &[ColumnDef]) -> Result<Vec<ColumnSpec>> {
+fn bind_column_defs(b: &mut Binder, defs: &[ColumnDef], partition_parent: Option<&pgarbor_catalog::Relation>) -> Result<Vec<ColumnSpec>> {
     let mut columns: Vec<ColumnSpec> = Vec::with_capacity(defs.len());
     let mut seen: HashSet<String> = HashSet::with_capacity(defs.len());
     for def in defs {
         let name = b.ident(&def.name);
         if !seen.insert(name.clone()) {
             return Err(PgError::new(SqlState::DUPLICATE_COLUMN, format!("column \"{name}\" specified more than once")));
+        }
+        if let Some(parent) = partition_parent {
+            // `PARTITION OF` column entries carry no type (parser_hier marker): the parent's type.
+            let ty = ddl_partition::partition_column_type(parent, &name)?;
+            columns.push(ColumnSpec::new(name, ty));
+            continue;
         }
         if is_serial_array(&def.data_type) {
             return Err(PgError::new(SqlState::FEATURE_NOT_SUPPORTED, "array of serial is not implemented"));
@@ -495,7 +539,9 @@ fn bind_column_clauses(
         .iter()
         .map(|d| d.options.iter().any(|o| matches!(o.option, ColumnOption::Generated { generation_expr: Some(_), .. })))
         .collect();
-    let names_fn = |attnum: i16| -> Option<String> { attnum_index(attnum).and_then(|i| names.get(i)).cloned() };
+    // Dependencies use binder positions in the table scope (inherited columns follow the local ones).
+    let scope_names: Vec<String> = tctx.columns.iter().map(|(n, _)| n.clone()).collect();
+    let names_fn = |attnum: i16| -> Option<String> { attnum_index(attnum).and_then(|i| scope_names.get(i)).cloned() };
 
     let mut out: Vec<ConstraintSpec> = Vec::new();
     for (i, def) in defs.iter().enumerate() {

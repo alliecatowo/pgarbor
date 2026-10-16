@@ -8,8 +8,8 @@
 //!   (`AccessShare`... `AccessExclusive`) and `WaitPolicy::NoWait` if `nowait` else `Block`; not
 //!   acquired -> `error::relation_lock_not_available(name)` (55P03 `could not obtain lock on relation
 //!   "t"`). Tag `LOCK TABLE`. (The "can only be used in transaction blocks" check is the session's.)
-//! * [`exec_do`] / [`exec_call`]: PGArbor does not execute procedural code in v1: 0A000
-//!   (`PgError::unimplemented("EXE-39", ...)`), tags would be `DO` / `CALL`.
+//! * [`exec_do`] / [`exec_call`]: run PL/pgSQL blocks and procedures (`crate::plpgsql`,
+//!   `crate::plfunc`); tags `DO` / `CALL` (CALL with OUT / INOUT parameters returns one row).
 //! * [`exec_maintenance`] (`MaintenanceKind`, `targets` = table OIDs, empty = all):
 //!   - `Reindex`: for each target table (or the table of each target index) delete the entry data of
 //!     its btree indexes (`rowstore::delete_relation_data(index)`) and rebuild them
@@ -21,6 +21,7 @@
 use pgarbor_catalog::model::{acl_mode, IndexMethod, RelKind};
 use pgarbor_catalog::snapshot::{CatalogSnapshot, ClassRef};
 use pgarbor_common::{Oid, PgError, Result, Severity, SqlState};
+use pgarbor_types::{Datum, TypeId};
 use pgarbor_core::{LockMode as CoreLockMode, WaitPolicy};
 use pgarbor_sql::ir::{BoundCall, BoundDo, BoundLock, LockMode, MaintenanceKind};
 
@@ -63,14 +64,93 @@ pub fn exec_lock(cx: &mut ExecContext, l: &BoundLock) -> Result<ExecResult> {
     Ok(ExecResult::command("LOCK TABLE"))
 }
 
-#[allow(unused_variables)]
+/// `DO` (PG `ExecuteDoStmt`): run the block with the PL/pgSQL interpreter. Transaction control is
+/// allowed when the session marked the statement non-atomic (`cx.stmt.nonatomic`).
 pub fn exec_do(cx: &mut ExecContext, d: &BoundDo) -> Result<ExecResult> {
-    Err(PgError::unimplemented("EXE-39", "DO blocks (utility::exec_do)"))
+    if d.language != "plpgsql" {
+        return Err(PgError::unimplemented("EXE-39", format!("DO blocks in language {}", d.language)));
+    }
+    let nonatomic = std::mem::take(&mut cx.stmt.nonatomic);
+    crate::plpgsql::run_inline(cx, &d.code, nonatomic)?;
+    Ok(ExecResult::command("DO"))
 }
 
-#[allow(unused_variables)]
+/// `CALL proc(args)` (PG `ExecuteCallStmt`): evaluate the arguments (OUT positions are NULL
+/// placeholders), run the procedure, and return one row of its OUT / INOUT parameters when it has
+/// any.
 pub fn exec_call(cx: &mut ExecContext, c: &BoundCall) -> Result<ExecResult> {
-    Err(PgError::unimplemented("EXE-39", "CALL (utility::exec_call)"))
+    let nonatomic = std::mem::take(&mut cx.stmt.nonatomic);
+    let f = crate::plfunc::lookup(cx, c.procedure)?;
+    let mut args = Vec::with_capacity(c.args.len());
+    let mut arg_types = Vec::with_capacity(c.args.len());
+    for a in &c.args {
+        args.push(crate::eval::eval_standalone(cx, a, &[])?);
+        arg_types.push(a.ty);
+    }
+    let _guard = crate::plfunc::DepthGuard::enter()?;
+    let outs: Vec<(String, TypeId)> = f
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| matches!(a.mode, pgarbor_catalog::model::ArgMode::Out | pgarbor_catalog::model::ArgMode::InOut))
+        .map(|(i, a)| {
+            let ty = if pgarbor_types::registry::is_polymorphic(a.type_oid) {
+                arg_types.get(i).copied().unwrap_or(TypeId::of(a.type_oid))
+            } else {
+                TypeId::of(a.type_oid)
+            };
+            (if a.name.is_empty() { format!("column{}", i + 1) } else { a.name.clone() }, ty)
+        })
+        .collect();
+    let values: Vec<Datum> = match f.language {
+        crate::plfunc::LANG_PLPGSQL => crate::plpgsql::call_procedure(cx, &f, args, arg_types.clone(), nonatomic)?,
+        crate::plfunc::LANG_SQL => {
+            let in_args: Vec<Datum> = f
+                .args
+                .iter()
+                .zip(args.iter())
+                .filter(|(a, _)| !matches!(a.mode, pgarbor_catalog::model::ArgMode::Out | pgarbor_catalog::model::ArgMode::Table))
+                .map(|(_, v)| v.clone())
+                .collect();
+            let in_types: Vec<TypeId> = f
+                .args
+                .iter()
+                .zip(arg_types.iter())
+                .filter(|(a, _)| !matches!(a.mode, pgarbor_catalog::model::ArgMode::Out | pgarbor_catalog::model::ArgMode::Table))
+                .map(|(_, t)| *t)
+                .collect();
+            let rt = if outs.is_empty() { TypeId::of(pgarbor_types::oids::VOID) } else { TypeId::of(pgarbor_types::oids::RECORD) };
+            let out = crate::plfunc::call_sql_function_for_call(cx, &f, &in_args, &in_types, rt)?;
+            if outs.is_empty() {
+                Vec::new()
+            } else if outs.len() == 1 {
+                match out {
+                    Datum::Record(mut v) if v.len() == 1 => vec![v.pop().unwrap_or(Datum::Null)],
+                    other => vec![other],
+                }
+            } else {
+                match out {
+                    Datum::Record(v) => v,
+                    _ => vec![Datum::Null; outs.len()],
+                }
+            }
+        }
+        _ => return Err(PgError::unimplemented("EXE-39", "CALL of a procedure in this language")),
+    };
+    if outs.is_empty() {
+        return Ok(ExecResult::command("CALL"));
+    }
+    let desc: Vec<pgarbor_plan::plan::ColumnDesc> = outs
+        .iter()
+        .map(|(n, t)| pgarbor_plan::plan::ColumnDesc { name: n.clone(), type_id: *t, table_oid: 0, column_attnum: 0 })
+        .collect();
+    Ok(ExecResult::Rows { desc, rows: vec![values], tag: "CALL".to_string() })
+}
+
+/// COMMIT / ROLLBACK inside a non-atomic procedure or DO block.
+pub fn procedure_txn_control(cx: &mut ExecContext, commit: bool, chain: bool) -> Result<()> {
+    let _ = (cx, commit, chain);
+    Err(PgError::unimplemented("EXE-39", "transaction control inside procedures"))
 }
 
 pub fn exec_maintenance(cx: &mut ExecContext, kind: MaintenanceKind, targets: &[Oid]) -> Result<ExecResult> {
@@ -427,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn do_is_unsupported() {
+    fn do_runs_plpgsql() {
         let mut txn = MemTxn::new();
         let cell = Cell::new(1u64);
         let (_kv, env) = pgarbor_catalog::testing::bootstrapped().unwrap();
@@ -435,7 +515,9 @@ mod tests {
         let s = NoServices;
         let se = SessionEnv::new(env, IoConfig::default(), &g, &s, &cell, 0, 0);
         let mut cx = ExecContext::new(&mut txn, se);
-        let d = BoundDo { language: "plpgsql".to_string(), code: "BEGIN END".to_string() };
-        assert!(exec_do(&mut cx, &d).is_err());
+        let d = BoundDo { language: "plpgsql".to_string(), code: "BEGIN NULL; END".to_string() };
+        assert_eq!(exec_do(&mut cx, &d).map(|r| r.tag().to_string()).ok().as_deref(), Some("DO"));
+        let bad = BoundDo { language: "plpgsql".to_string(), code: "BEGIN RAISE EXCEPTION 'boom'; END".to_string() };
+        assert_eq!(exec_do(&mut cx, &bad).err().map(|e| e.message), Some("boom".to_string()));
     }
 }

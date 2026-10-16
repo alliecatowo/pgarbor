@@ -261,6 +261,7 @@ fn label_of(node: &PlanNode, verbose: bool) -> Result<String> {
                 ModifyOp::Insert => "Insert on",
                 ModifyOp::Update => "Update on",
                 ModifyOp::Delete => "Delete on",
+                ModifyOp::Merge => "Merge on",
             };
             format!("{head} {}", rel_display(&m.target.table, verbose)?)
         }

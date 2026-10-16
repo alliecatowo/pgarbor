@@ -112,7 +112,9 @@ impl Session {
             // short read-only look at the branch head (no transaction snapshot is taken).
             let (_, snap) = crate::bootstrap::read_catalog(&self.db, &self.branch_name())?;
             let sp = guc_derive::search_path(&self.guc)?;
-            let env = CatalogEnv::new(snap, &sp, self.user_oid)?.with_session(self.session_user_oid, self.database_oid);
+            let env = CatalogEnv::new(snap, &sp, self.user_oid)?
+                .with_session(self.session_user_oid, self.database_oid)
+                .with_row_security(guc_derive::row_security(&self.guc)?);
             self.env = Some(env.clone());
             return Ok(env);
         }
@@ -130,6 +132,7 @@ impl Session {
         };
 
         let sp = guc_derive::search_path(&self.guc)?;
+        let row_security = guc_derive::row_security(&self.guc)?;
         let user = self.user_oid;
         let session_user = self.session_user_oid;
         let database = self.database_oid;
@@ -142,6 +145,7 @@ impl Session {
                 && old.current_user() == user
                 && old.session_user() == session_user
                 && old.database() == database
+                && old.row_security() == row_security
             {
                 let candidate = CatalogEnv::new(snap.clone(), &sp, user)?;
                 if candidate.search_path() == old.search_path()
@@ -161,7 +165,7 @@ impl Session {
                 }
             }
         }
-        let env = CatalogEnv::new(snap, &sp, user)?.with_session(session_user, database);
+        let env = CatalogEnv::new(snap, &sp, user)?.with_session(session_user, database).with_row_security(row_security);
         self.env = Some(env.clone());
         Ok(env)
     }
@@ -225,7 +229,7 @@ impl Session {
         let database_name = self.database_name().to_string();
 
         let (result, notices, catalog_changed, new_env) = {
-            let Session { txn, guc, rng, prepared, db, handle, listen, .. } = self;
+            let Session { txn, guc, rng, prepared, db, handle, listen, pending_notices, .. } = self;
             let txn = txn
                 .as_mut()
                 .ok_or_else(|| PgError::internal("statement execution requested without a transaction"))?;
@@ -244,7 +248,14 @@ impl Session {
             se.param_types = param_types;
 
             let mut cx = ExecContext::new(&mut kv, se);
-            let result = f(&mut cx)?;
+            let result = match f(&mut cx) {
+                Ok(r) => r,
+                Err(e) => {
+                    // Notices raised before the error (e.g. RAISE NOTICE in a function) are still sent.
+                    pending_notices.extend(cx.se.take_notices());
+                    return Err(e);
+                }
+            };
             let notices = cx.se.take_notices();
             let catalog_changed = cx.stmt.catalog_changed;
             let new_env = if catalog_changed { Some(cx.se.env.clone()) } else { None };

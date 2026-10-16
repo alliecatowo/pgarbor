@@ -215,6 +215,48 @@ impl CatalogSnapshot {
     pub fn user_relations(&self) -> impl Iterator<Item = &Relation> {
         self.inner.data.relations.values()
     }
+    /// Direct inheritance children (including partitions) of `parent`, sorted by OID
+    /// (amendment pgarbor-catalog-09).
+    pub fn inheritance_children(&self, parent: Oid) -> Vec<Oid> {
+        self.inner.data.relations.values().filter(|r| r.inherits.contains(&parent)).map(|r| r.oid).collect()
+    }
+    /// `parent` followed by all its descendants, each once, in breadth-first order (PG
+    /// `find_all_inheritors`). Partitions of a partitioned table are listed in bound order.
+    pub fn inheritance_tree(&self, parent: Oid) -> Vec<Oid> {
+        let mut out = vec![parent];
+        let mut i = 0;
+        while i < out.len() {
+            let p = out[i];
+            for c in self.ordered_children(p) {
+                if !out.contains(&c) {
+                    out.push(c);
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+    /// Direct children in scan order: partitions by bound (list/range), others by OID.
+    pub fn ordered_children(&self, parent: Oid) -> Vec<Oid> {
+        let children = self.inheritance_children(parent);
+        match self.relation(parent) {
+            Some(r) if r.partition_key.is_some() => crate::partition::order_partitions(self, r, children),
+            _ => children,
+        }
+    }
+    /// Ancestors of `rel` (parent first), following the first parent of each level.
+    pub fn partition_ancestors(&self, rel: Oid) -> Vec<Oid> {
+        let mut out = Vec::new();
+        let mut cur = rel;
+        while let Some(p) = self.relation(cur).and_then(|r| r.partition_of.as_ref().map(|(p, _)| *p)) {
+            if out.contains(&p) {
+                break;
+            }
+            out.push(p);
+            cur = p;
+        }
+        out
+    }
 
     // ----------------------------------------------------------- constraints
 

@@ -23,12 +23,14 @@
 pub mod agg;
 pub mod build;
 pub mod build_dml;
+pub mod build_merge;
 pub mod context;
 pub mod cost;
 pub mod cte;
 pub mod explain;
 pub mod explain_fmt;
 pub mod index;
+pub mod inherit;
 pub mod join;
 pub mod logical;
 pub mod plan;

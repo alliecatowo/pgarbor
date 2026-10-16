@@ -367,6 +367,7 @@ impl PlanStream {
             PlanKind::Insert => format!("INSERT 0 {n}"),
             PlanKind::Update => format!("UPDATE {n}"),
             PlanKind::Delete => format!("DELETE {n}"),
+            PlanKind::Merge => format!("MERGE {n}"),
         }
     }
 

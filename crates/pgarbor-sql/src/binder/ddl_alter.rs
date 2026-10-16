@@ -1665,6 +1665,7 @@ pub fn bind_alter_table(b: &mut Binder, at: &AlterTable) -> Result<BoundStatemen
         relation: oid,
         keyword: AlterRelKeyword::Table,
         commands: cmds,
+        only: false,
     })))
 }
 
@@ -1868,6 +1869,7 @@ pub fn bind_alter_table_options(
         relation: oid,
         keyword: AlterRelKeyword::Table,
         commands: vec![AlterTableCmd::SetOptions { set, reset }],
+        only: false,
     })))
 }
 
@@ -1912,6 +1914,7 @@ pub fn bind_alter_table_cluster(
         relation: oid,
         keyword: AlterRelKeyword::Table,
         commands: vec![AlterTableCmd::ClusterOn { index: target }],
+        only: false,
     })))
 }
 
@@ -2004,6 +2007,7 @@ pub fn bind_alter_view_column_default(
         relation: oid,
         keyword: AlterRelKeyword::View,
         commands,
+        only: false,
     })))
 }
 

@@ -303,7 +303,8 @@ fn resolve_coerce(
     right: BoundArg,
     pos: Option<u32>,
 ) -> Result<(ResolvedOperator, Vec<BoundExpr>)> {
-    let cands = ops::builtin_operator_candidates(name)?;
+    let (name, cands) = operator_candidates(b, name, pos)?;
+    let name = name.as_str();
     let env: &dyn TypeEnv = b.env;
     let lt = left.as_ref().map(|l| l.ty().oid);
     let resolved = ops::resolve_operator(env, name, lt, right.ty().oid, &cands)
@@ -327,12 +328,33 @@ fn resolve_full(
     right: Oid,
     pos: Option<u32>,
 ) -> Result<(ResolvedOperator, OpRef)> {
-    let cands = ops::builtin_operator_candidates(name)?;
+    let (name, cands) = operator_candidates(b, name, pos)?;
+    let name = name.as_str();
     let env: &dyn TypeEnv = b.env;
     let resolved = ops::resolve_operator(env, name, left, right, &cands)
         .map_err(|e| diag::with_position(e, pos))?;
     let op = op_ref(b, resolved.oid)?;
     Ok((resolved, op))
+}
+
+/// Candidate operators for a possibly schema-qualified operator name (`schema.===` from
+/// `OPERATOR(schema.===)`): builtin and user operators along the search path (amendment
+/// pgarbor-sql-05). Returns the bare operator name and the candidates.
+pub fn operator_candidates(b: &Binder, name: &str, pos: Option<u32>) -> Result<(String, Vec<ops::OperCandidate>)> {
+    let op_start = name
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| "~!@#^&|`?+-*/%<>=".contains(*c))
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(name.len());
+    let (schema, op) = if op_start > 1 && name[..op_start].ends_with('.') {
+        (Some(&name[..op_start - 1]), &name[op_start..])
+    } else {
+        (None, name)
+    };
+    let cands = b.env.operator_candidates(schema, op).map_err(|e| diag::with_position(e, pos))?;
+    Ok((op.to_string(), cands))
 }
 
 /// Resolve and build one operator application (`left` is `None` for prefix operators). `name` is the
@@ -356,7 +378,24 @@ pub fn make_op(
 /// Build an [`OpRef`] for an operator OID found by resolution: name from `catalog_data`, strictness
 /// and volatility from the implementing proc. 42883 never (OID is valid by construction); XX000 if
 /// the OID is unknown.
-pub fn op_ref(_b: &Binder, op_oid: Oid) -> Result<OpRef> {
+pub fn op_ref(b: &Binder, op_oid: Oid) -> Result<OpRef> {
+    if catalog_data::builtin_operator(op_oid).is_none() {
+        // User operator (amendment pgarbor-sql-rewrite-rls-merge): strictness/volatility of its user or builtin proc.
+        let info = b
+            .env
+            .operator_info(op_oid)
+            .ok_or_else(|| PgError::internal(format!("cache lookup failed for operator {op_oid}")))?;
+        let (volatility, strict) = match catalog_data::builtin_proc(info.proc) {
+            Some(p) => (p.volatility, p.strict),
+            None => match b.env.snapshot().function(info.proc) {
+                Some(f) => (f.volatility.to_types(), f.strict),
+                None => {
+                    return Err(PgError::internal(format!("cache lookup failed for function {}", info.proc)));
+                }
+            },
+        };
+        return Ok(OpRef { op: op_oid, proc: info.proc, name: info.name, volatility, strict });
+    }
     let op = catalog_data::builtin_operator(op_oid)
         .ok_or_else(|| PgError::internal(format!("cache lookup failed for operator {op_oid}")))?;
     let proc = catalog_data::builtin_proc(op.proc).ok_or_else(|| {
@@ -853,7 +892,8 @@ fn bind_in_items(
         && common.oid != oids::RECORD
         && registry::array_type_of(env, common.oid).is_some()
     {
-        let cands = ops::builtin_operator_candidates(name)?;
+        let (name, cands) = operator_candidates(b, name, pos)?;
+        let name = name.as_str();
         let resolved = ops::resolve_operator(env, name, Some(x.ty().oid), common.oid, &cands)
             .map_err(|e| diag::with_position(e, pos))?;
         if let Some(arr) = registry::array_type_of(env, resolved.right) {
@@ -998,7 +1038,8 @@ pub fn bind_any_all_array(
         Some(e) => e,
         None => return Err(diag::any_all_needs_array(pos)),
     };
-    let cands = ops::builtin_operator_candidates(name)?;
+    let (name, cands) = operator_candidates(b, name, pos)?;
+    let name = name.as_str();
     let resolved = ops::resolve_operator(env, name, Some(l.ty().oid), elem, &cands)
         .map_err(|e| diag::with_position(e, pos))?;
     if resolved.result.oid != oids::BOOL {

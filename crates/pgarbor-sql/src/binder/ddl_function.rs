@@ -1883,12 +1883,33 @@ fn create_procedure(
 
 /// Number of declared parameters that are OUT-only, when the call lists one value per declared
 /// parameter (PG: CALL requires placeholders for OUT arguments).
-fn out_placeholders(env: &CatalogEnv, c: &FuncCandidate, nargs: usize) -> Option<Vec<bool>> {
+/// Which call arguments are OUT-parameter placeholders of candidate `c` (PG 14+: CALL passes every
+/// OUT argument). Positional arguments take the declared positions; a named argument is a
+/// placeholder when it names an OUT parameter. `None` when `c` has no OUT parameter or the call does
+/// not supply each of them exactly once.
+fn out_placeholders(env: &CatalogEnv, c: &FuncCandidate, names: &[Option<String>]) -> Option<Vec<bool>> {
     let f = env.snapshot().function(c.oid)?;
-    if f.args.len() != nargs || !f.args.iter().any(|a| a.mode == ArgMode::Out) {
+    let nout = f.args.iter().filter(|a| a.mode == ArgMode::Out).count();
+    if nout == 0 {
         return None;
     }
-    Some(f.args.iter().map(|a| a.mode == ArgMode::Out).collect())
+    let mut drop = Vec::with_capacity(names.len());
+    for (i, n) in names.iter().enumerate() {
+        let is_out = match n {
+            None => f.args.get(i).is_some_and(|a| a.mode == ArgMode::Out),
+            Some(n) => f.args.iter().any(|a| a.mode == ArgMode::Out && a.name == *n),
+        };
+        drop.push(is_out);
+    }
+    if drop.iter().filter(|d| **d).count() != nout {
+        return None;
+    }
+    Some(drop)
+}
+
+/// True when procedure candidate `c` has OUT parameters.
+fn has_out_params(env: &CatalogEnv, c: &FuncCandidate) -> bool {
+    env.snapshot().function(c.oid).is_some_and(|f| f.args.iter().any(|a| a.mode == ArgMode::Out))
 }
 
 fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Result<BoundStatement> {
@@ -1897,7 +1918,11 @@ fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Re
     let name_pos = b.pos(&func.name);
     let list: &[FunctionArg] = match &func.args {
         FunctionArguments::List(l) => l.args.as_slice(),
-        FunctionArguments::None => &[],
+        FunctionArguments::None => {
+            // `CALL p` without parentheses: the grammar needs the argument list.
+            let len = b.src.text().chars().count() as u32;
+            return Err(PgError::syntax("syntax error at end of input", Some(len + 1)));
+        }
         FunctionArguments::Subquery(_) => return Err(unsupported("CALL with a subquery argument")),
     };
 
@@ -1917,7 +1942,8 @@ fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Re
                 args.push(bind_arg(b, e, ctx)?);
                 names.push(None);
             }
-            FunctionArg::Named { name, arg: FunctionArgExpr::Expr(e), .. } => {
+            FunctionArg::Named { name, arg: FunctionArgExpr::Expr(e), .. }
+            | FunctionArg::ExprNamed { name: Expr::Identifier(name), arg: FunctionArgExpr::Expr(e), .. } => {
                 let n = b.ident(name);
                 args.push(bind_arg(b, e, ctx)?);
                 names.push(Some(n));
@@ -1928,7 +1954,23 @@ fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Re
     let named = names.iter().any(|n| n.is_some());
     let arg_oids: Vec<Oid> = args.iter().map(|a| a.ty().oid).collect();
     // PG `func_signature_string` keeps the written qualifier: `procedure s1.p(integer) does not exist`.
-    let sig = signature_string(env, &qn.display(), &arg_oids)?;
+    let sig = if named {
+        // PG `func_signature_string`: named arguments print as `name => type`.
+        let parts: Vec<String> = names
+            .iter()
+            .zip(arg_oids.iter())
+            .map(|(n, t)| {
+                let tn = pgarbor_types::names::display_name(env, *t);
+                match n {
+                    Some(n) => format!("{n} => {tn}"),
+                    None => tn,
+                }
+            })
+            .collect();
+        format!("{}({})", qn.display(), parts.join(", "))
+    } else {
+        signature_string(env, &qn.display(), &arg_oids)?
+    };
     let call = FuncCall {
         name: qn.name.clone(),
         arg_types: arg_oids.clone(),
@@ -1936,7 +1978,9 @@ fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Re
         variadic_keyword: false,
     };
     let all = env.function_candidates(qn.schema.as_deref(), &qn.name)?;
-    let procs: Vec<FuncCandidate> = all.iter().filter(|c| matches!(c.kind, ProcKind::Procedure)).cloned().collect();
+    let all_procs: Vec<FuncCandidate> = all.iter().filter(|c| matches!(c.kind, ProcKind::Procedure)).cloned().collect();
+    // Procedures with OUT parameters only match calls that pass their OUT arguments (second pass).
+    let procs: Vec<FuncCandidate> = all_procs.iter().filter(|c| !has_out_params(env, c)).cloned().collect();
 
     // Procedures first; then procedures with OUT placeholders dropped (positional calls only).
     let no_drop = vec![false; args.len()];
@@ -1946,17 +1990,19 @@ fn bind_call_function(b: &mut Binder<'_>, func: &sqlparser::ast::Function) -> Re
         Ok(r) => plan = Some((r, no_drop)),
         Err(e) => first_err = Some(e),
     }
-    if plan.is_none() && !named {
-        for c in procs.iter() {
-            let Some(drop) = out_placeholders(env, c, args.len()) else {
+    if plan.is_none() {
+        for c in all_procs.iter() {
+            let Some(drop) = out_placeholders(env, c, &names) else {
                 continue;
             };
             let kept_types: Vec<Oid> =
                 arg_oids.iter().zip(drop.iter()).filter(|(_, d)| !**d).map(|(t, _)| *t).collect();
+            let kept_names: Vec<Option<String>> =
+                names.iter().zip(drop.iter()).filter(|(_, d)| !**d).map(|(n, _)| n.clone()).collect();
             let sc = FuncCall {
                 name: qn.name.clone(),
                 arg_types: kept_types.clone(),
-                arg_names: vec![None; kept_types.len()],
+                arg_names: kept_names,
                 variadic_keyword: false,
             };
             if let Ok(r) = resolve_function(env, &sc, std::slice::from_ref(c)) {

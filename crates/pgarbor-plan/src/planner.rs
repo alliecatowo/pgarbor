@@ -65,7 +65,7 @@ use crate::{setop, setrefs, simplify, sort_limit, subplan, window};
 
 /// `ColumnRef::attnum` of the system column `ctid`; the planner uses it as the bind-time name of a
 /// scan's trailing rowid slot (the storage row id), which no user expression can otherwise reference.
-const CTID_ATTNUM: i16 = -1;
+pub(crate) const CTID_ATTNUM: i16 = -1;
 
 /// Plan one statement (module docs).
 pub fn plan_statement(stmt: &BoundStatement, ctx: &PlanContext) -> Result<Plan> {
@@ -78,6 +78,7 @@ pub fn plan_statement(stmt: &BoundStatement, ctx: &PlanContext) -> Result<Plan> 
         BoundStatement::Insert(_)
         | BoundStatement::Update(_)
         | BoundStatement::Delete(_)
+        | BoundStatement::Merge(_)
         | BoundStatement::CreateTableAs(_) => {
             let (root, kind) = build_dml::plan_dml_statement(&mut st, stmt)?;
             let output = dml_output(stmt);
@@ -200,6 +201,24 @@ fn dml_output(stmt: &BoundStatement) -> Vec<ColumnDesc> {
         BoundStatement::Insert(ins) => returning_columns(&ins.returning, ins.target.oid, 1),
         BoundStatement::Update(upd) => returning_columns(&upd.returning, upd.target.oid, upd.target_rt),
         BoundStatement::Delete(del) => returning_columns(&del.returning, del.target.oid, del.target_rt),
+        BoundStatement::Merge(m) => m
+            .returning
+            .iter()
+            .filter(|e| !e.junk)
+            .map(|e| {
+                let (table_oid, column_attnum) = match &e.expr.kind {
+                    ExprKind::Column(c)
+                        if c.levels_up == 0
+                            && (c.rt_index == m.target_rt || c.rt_index == m.old_rt || c.rt_index == m.new_rt)
+                            && c.attnum > 0 =>
+                    {
+                        (m.target.oid, c.attnum)
+                    }
+                    _ => (0, 0),
+                };
+                ColumnDesc { name: e.name.clone(), type_id: e.expr.ty, table_oid, column_attnum }
+            })
+            .collect(),
         BoundStatement::CreateTableAs(ctas) => ctas
             .table
             .columns
@@ -281,6 +300,9 @@ fn plan_logical_node(st: &mut PlannerState, lp: &LogicalPlan) -> Result<PlanNode
 fn plan_scan(st: &mut PlannerState, lp: &LogicalPlan, scan: &LogicalScan) -> Result<PlanNode> {
     match &scan.source {
         ScanSource::Table { table, is_virtual } => {
+            if !*is_virtual && st.is_inherit_scan(lp.level, scan.rt_index) {
+                return crate::inherit::plan_inherited_scan(st, lp, scan, table);
+            }
             if !*is_virtual {
                 st.note_relation(table.oid);
             }

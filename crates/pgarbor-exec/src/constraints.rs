@@ -88,10 +88,55 @@ pub fn check_constraints(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Re
     Ok(())
 }
 
-/// NOT NULL then CHECK, the order PG uses for INSERT and UPDATE (module docs).
+/// NOT NULL then CHECK, the order PG uses for INSERT and UPDATE (module docs). Row-security WITH
+/// CHECKs of the statement's target run first and view check options last (PG `ExecInsert`/`ExecUpdate`
+/// order: `WCO_RLS_*` before `ExecConstraints`, `WCO_VIEW_CHECK` after the row is stored).
 pub fn enforce(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Result<()> {
+    let wco = statement_wco(ex, td);
+    check_wco(ex, td, row, &wco, false)?;
     check_not_null(ex, td, row)?;
-    check_constraints(ex, td, row)
+    check_constraints(ex, td, row)?;
+    check_wco(ex, td, row, &wco, true)
+}
+
+fn statement_wco(ex: &Executor, td: &TableDesc) -> Vec<pgarbor_sql::ir::TargetWco> {
+    ex.cx.stmt.wco.iter().rev().find(|(oid, _)| *oid == td.oid).map(|(_, w)| w.clone()).unwrap_or_default()
+}
+
+/// Row-security WITH CHECKs of the statement's target for a proposed row: PG checks them before the
+/// speculative insertion of `INSERT ... ON CONFLICT`, so a conflicting row is still rejected.
+pub fn check_rls_wco(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Result<()> {
+    let wco = statement_wco(ex, td);
+    check_wco(ex, td, row, &wco, false)
+}
+
+/// Evaluate the WITH CHECK OPTIONs of one phase (`views`: view check options, else row security).
+fn check_wco(ex: &mut Executor, td: &TableDesc, row: &[Datum], wco: &[pgarbor_sql::ir::TargetWco], views: bool) -> Result<()> {
+    use pgarbor_sql::ir::WcoKind;
+    for w in wco {
+        let is_view = w.kind == WcoKind::ViewCheck;
+        if is_view != views {
+            continue;
+        }
+        // PG ExecWithCheckOptions: the qual must be TRUE (NULL fails).
+        if eval_bool3(ex, &w.expr, row)? == Some(true) {
+            continue;
+        }
+        if is_view {
+            let desc = row_description(&ex.cx.se.io_ctx(), &td.desc_cols(), row)?;
+            return Err(pgarbor_common::PgError::new(
+                pgarbor_common::SqlState(*b"44000"),
+                format!("new row violates check option for view \"{}\"", w.relname),
+            )
+            .with_detail(format!("Failing row contains {desc}.")));
+        }
+        let msg = match &w.polname {
+            Some(p) => format!("new row violates row-level security policy \"{p}\" for table \"{}\"", w.relname),
+            None => format!("new row violates row-level security policy for table \"{}\"", w.relname),
+        };
+        return Err(pgarbor_common::PgError::new(pgarbor_common::SqlState::INSUFFICIENT_PRIVILEGE, msg));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

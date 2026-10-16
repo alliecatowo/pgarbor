@@ -51,7 +51,7 @@ use sqlparser::ast::Statement;
 use super::context::{BindContext, BindOutput, Binder};
 use super::{
     copy, ddl_alter, ddl_alter_other, ddl_drop, ddl_function, ddl_grant, ddl_index, ddl_objects, ddl_table,
-    ddl_view, insert, params, select, update_delete, utility, utility_session,
+    ddl_view, insert, merge, params, select, update_delete, utility, utility_session,
 };
 use crate::classify::{self, StmtClass, StmtFamily};
 use crate::diag;
@@ -227,6 +227,10 @@ pub fn bind_inner_statement(b: &mut Binder, stmt: &Statement, top_level: bool) -
         Statement::Insert(ins) => insert::bind_insert(b, ins),
         Statement::Update(u) => update_delete::bind_update(b, u),
         Statement::Delete(d) => update_delete::bind_delete(b, d),
+        Statement::Merge(m) => merge::bind_merge(b, m),
+        Statement::CreatePolicy(p) => super::ddl_policy::bind_create_policy(b, p),
+        Statement::AlterPolicy(p) => super::ddl_policy::bind_alter_policy(b, p),
+        Statement::DropPolicy(p) => super::ddl_policy::bind_drop_policy(b, p),
         Statement::Copy { .. } => copy::bind_copy(b, stmt),
         Statement::Truncate(_) => ddl_drop::bind_truncate(b, stmt),
 
@@ -298,6 +302,7 @@ pub fn bind_inner_statement(b: &mut Binder, stmt: &Statement, top_level: bool) -
 /// Route an `ExtraStatement` (the PostgreSQL statements `sqlparser` cannot parse).
 pub fn bind_extra_statement(b: &mut Binder, stmt: &ExtraStatement) -> Result<BoundStatement> {
     match stmt {
+        ExtraStatement::Ext(s) => super::ddl_ext::bind_ext(b, s),
         ExtraStatement::RefreshMaterializedView { name, concurrently, with_data } => {
             ddl_view::bind_refresh_matview(b, name, *concurrently, *with_data)
         }

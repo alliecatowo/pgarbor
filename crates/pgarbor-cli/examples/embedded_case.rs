@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 fn error(e: &PgError) -> Value {
     json!({"severity":e.severity.as_str(),"sqlstate":e.sqlstate.code(),"message":e.message,
         "detail":e.detail,"hint":e.hint,"position":e.position.map(|p|p.to_string()),
-        "internal_position":null,"internal_query":null,"context":null,"schema_name":e.schema,
+        "internal_position":e.internal_position.map(|p|p.to_string()),"internal_query":e.internal_query,"context":e.context,"schema_name":e.schema,
         "table_name":e.table,"column_name":e.column,"datatype_name":e.datatype,"constraint_name":e.constraint})
 }
 fn result(s: &Session, r: &StatementResult) -> Result<Value> {

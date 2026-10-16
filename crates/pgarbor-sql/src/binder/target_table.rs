@@ -119,15 +119,12 @@ pub fn open_target_table(
     match rel.kind {
         RelKind::Table | RelKind::PartitionedTable => {}
         RelKind::View => {
-            // Auto-updatable view DML (including WITH [LOCAL|CASCADED] CHECK OPTION enforcement) is not
-            // implemented; the leased 0A000 keeps the same text and marks the gap for the harness.
-            let what = match kind {
-                DmlKind::Insert => "INSERT into a view",
-                DmlKind::Update => "UPDATE on a view",
-                DmlKind::Delete => "DELETE from a view",
-                DmlKind::Copy => "COPY into a view",
-            };
-            return Err(with_position(PgError::unimplemented("SQL-25", what), pos));
+            if kind == DmlKind::Copy {
+                return Err(with_position(PgError::unimplemented("SQL-25", "COPY into a view"), pos));
+            }
+            // Auto-updatable views (amendment pgarbor-sql-rewrite-rls-merge): the statement binds against the base
+            // table; `view_dml::rewrite_*` finishes the rewrite after the statement is bound.
+            return super::view_dml::open_view_target(b, rel, alias, kind, bind_defaults);
         }
         RelKind::MatView => {
             return Err(reject(
@@ -150,7 +147,12 @@ pub fn open_target_table(
     }
 
     let alias_name: Option<String> = alias.map(|id| b.ident(id));
-    let entry = target_range_entry(b, rel, alias_name.as_deref(), kind)?;
+    let mut entry = target_range_entry(b, rel, alias_name.as_deref(), kind)?;
+    if crate::names::is_only_marked(name) {
+        if let crate::ir::RangeKind::Relation { only, .. } = &mut entry.kind {
+            *only = true;
+        }
+    }
     let rt = add_range_entry(b, entry)?;
     add_namespace_for_range(b, rt, true, true)?;
     let target = build_target_table(b, rel, bind_defaults)?;
@@ -227,6 +229,7 @@ pub fn build_target_table(b: &mut Binder, rel: &Relation, bind_defaults: bool) -
         kind: rel.kind,
         columns,
         checks,
+        wco: Vec::new(),
     })
 }
 
@@ -369,6 +372,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_res, env2) = testing::run(&mut kv, &env, |t| {
             t.create_table(&spec)?;

@@ -256,6 +256,14 @@ pub struct StmtState {
     pub pending_fk: Vec<crate::fk::PendingFkCheck>,
     /// Rows modified by the statement so far (diagnostics).
     pub rows_modified: u64,
+    /// WITH CHECK OPTIONs (view check options, row-security WITH CHECKs) of the DML targets being
+    /// modified, by table OID (amendment pgarbor-exec-merge-wco-rls); consulted by `constraints::enforce`.
+    pub wco: Vec<(Oid, Vec<pgarbor_sql::ir::TargetWco>)>,
+    /// Partition routing descriptions (`crate::partition`, amendment pgarbor-exec-11).
+    pub partitions: RefCell<crate::partition::PartCache>,
+    /// The session runs this `CALL` / `DO` as a top-level, non-atomic statement: procedural code may
+    /// COMMIT / ROLLBACK (amendment pgarbor-exec-procedural). Taken by `utility::exec_call` / `exec_do`.
+    pub nonatomic: bool,
 }
 
 /// The execution context (module docs).
@@ -275,6 +283,7 @@ impl<'a> ExecContext<'a> {
     pub fn set_catalog_snapshot(&mut self, snapshot: pgarbor_catalog::CatalogSnapshot) {
         self.se.env = self.se.env.with_snapshot(snapshot);
         self.stmt.tables.borrow_mut().clear();
+        *self.stmt.partitions.borrow_mut() = crate::partition::PartCache::default();
         self.stmt.catalog_changed = true;
     }
 

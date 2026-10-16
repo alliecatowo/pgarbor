@@ -382,6 +382,7 @@ pub fn bind_alter_sequence(
             relation: oid,
             keyword: AlterRelKeyword::Sequence,
             commands: vec![AlterTableCmd::SetLogged(*logged)],
+            only: false,
         }))),
         AlterSequenceAction::RenameTo(id) => {
             let new_name = b.ident(id);
@@ -585,6 +586,7 @@ pub fn bind_alter_view_rename(
                 relation: rel,
                 keyword,
                 commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+                only: false,
             })))
         }
         AlterMatViewAction::SetSchema(id) => {
@@ -627,6 +629,7 @@ pub fn bind_alter_type_rename_attribute(
         relation: rel,
         keyword: AlterRelKeyword::Type,
         commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+        only: false,
     })))
 }
 
@@ -731,6 +734,7 @@ pub fn bind_alter_matview(
                 relation: rel,
                 keyword,
                 commands: vec![AlterTableCmd::RenameColumn { old: o, new: n }],
+                only: false,
             })))
         }
     }

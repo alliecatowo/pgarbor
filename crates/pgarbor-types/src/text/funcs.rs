@@ -48,7 +48,7 @@
 use crate::catalog_data::BuiltinProc;
 use crate::compare::{pg_hash_bytes, pg_hash_bytes_extended, pg_hash_uint32, pg_hash_uint32_extended};
 use crate::context::FuncCtx;
-use crate::datum::{type_mismatch, Datum};
+use crate::datum::{type_mismatch, Datum, TypeId};
 use crate::func::{FuncImpl, ScalarFn};
 use crate::io;
 use crate::text::io::{bpchar_trimmed, truncate_name};
@@ -1112,17 +1112,26 @@ fn unistr(a: &[Datum], _ctx: &FuncCtx) -> Result<Datum> {
     Ok(Datum::Text(unistr_impl(text_arg(a, 0)?)?))
 }
 
+/// `$n::text` as the SQL bodies of `textanycat`/`anytextcat` do: the output function, except that
+/// boolean has its own cast (`booltext`: `true` / `false`).
+fn cast_to_text(ctx: &FuncCtx, ty: TypeId, d: &Datum) -> Result<String> {
+    if let Datum::Bool(b) = d {
+        return Ok(if *b { "true" } else { "false" }.to_string());
+    }
+    io::output(&ctx.io_ctx(), ty, d)
+}
+
 /// SQL-language `textanycat` (oid 2003): `text || anynonarray`, the right side through its output
 /// function.
 fn textanycat(a: &[Datum], ctx: &FuncCtx) -> Result<Datum> {
     let head = text_arg(a, 0)?;
-    let tail = io::output(&ctx.io_ctx(), ctx.arg_type(1), datum_arg(a, 1)?)?;
+    let tail = cast_to_text(ctx, ctx.arg_type(1), datum_arg(a, 1)?)?;
     Ok(Datum::Text(format!("{head}{tail}")))
 }
 
 /// SQL-language `anytextcat` (oid 2004): `anynonarray || text`.
 fn anytextcat(a: &[Datum], ctx: &FuncCtx) -> Result<Datum> {
-    let head = io::output(&ctx.io_ctx(), ctx.arg_type(0), datum_arg(a, 0)?)?;
+    let head = cast_to_text(ctx, ctx.arg_type(0), datum_arg(a, 0)?)?;
     let tail = text_arg(a, 1)?;
     Ok(Datum::Text(format!("{head}{tail}")))
 }

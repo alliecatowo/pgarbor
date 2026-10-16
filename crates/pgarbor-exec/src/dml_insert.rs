@@ -39,6 +39,8 @@ use crate::tabledesc::TableDesc;
 // CONTRACT
 #[derive(Clone, Debug, PartialEq)]
 pub struct InsertedRow {
+    /// Relation that stored the row (the leaf partition for a routed insert; amendment pgarbor-exec-11).
+    pub table: pgarbor_common::Oid,
     pub rowid: u64,
     /// Full stored image (`ncols` slots): the RETURNING input.
     pub row: Vec<Datum>,
@@ -93,7 +95,14 @@ pub fn assemble_row(ex: &mut Executor, td: &TableDesc, spec: &InsertSpec, input:
 
 /// Shared insert pipeline over a borrowed row (see [`insert_row`]).
 fn insert_row_ref(ex: &mut Executor, td: &TableDesc, row: &[Datum]) -> Result<u64> {
+    if td.kind == pgarbor_catalog::model::RelKind::PartitionedTable {
+        // Callers route first (`insert_routed`); a partitioned table stores no rows itself.
+        let rtd = crate::tabledesc::table_desc(&*ex.cx, td.oid)?;
+        let (leaf, leaf_row) = crate::partition::route(ex, rtd, row.to_vec())?;
+        return insert_row_ref(ex, &leaf, &leaf_row);
+    }
     constraints::enforce(ex, td, row)?;
+    crate::partition::check_direct_insert(ex, td, row)?;
     let rowid = rowstore::insert_heap(ex, td, row)?;
     index_maint::insert_entries(ex, td, rowid, row)?;
     fk::after_insert(ex, td, row)?;
@@ -115,16 +124,38 @@ pub fn insert_input_row(
     conflict_state: &mut ConflictState,
 ) -> Result<Option<InsertedRow>> {
     let row = assemble_row(ex, td, spec, input)?;
+    // Tuple routing (partitioned target): store into the leaf, report the row in the target layout.
+    if td.kind == pgarbor_catalog::model::RelKind::PartitionedTable {
+        let rtd = crate::tabledesc::table_desc(&*ex.cx, td.oid)?;
+        let (leaf, leaf_row) = crate::partition::route(ex, rtd, row)?;
+        let back = |r: &[Datum]| crate::partition::convert_row(&leaf, td, r);
+        return match &spec.on_conflict {
+            Some(conflict) => match dml_conflict::insert_or_resolve(ex, &leaf, conflict, leaf_row, conflict_state)? {
+                ConflictOutcome::Inserted { rowid, row } | ConflictOutcome::Updated { rowid, row } => {
+                    Ok(Some(InsertedRow { table: leaf.oid, rowid, row: back(&row) }))
+                }
+                ConflictOutcome::Skipped => Ok(None),
+            },
+            None => {
+                let rowid = insert_row_ref(ex, &leaf, &leaf_row)?;
+                Ok(Some(InsertedRow { table: leaf.oid, rowid, row: back(&leaf_row) }))
+            }
+        };
+    }
+    if spec.on_conflict.is_some() {
+        // PG checks row-security WITH CHECKs before the speculative insertion.
+        crate::constraints::check_rls_wco(ex, td, &row)?;
+    }
     match &spec.on_conflict {
         Some(conflict) => match dml_conflict::insert_or_resolve(ex, td, conflict, row, conflict_state)? {
             ConflictOutcome::Inserted { rowid, row } | ConflictOutcome::Updated { rowid, row } => {
-                Ok(Some(InsertedRow { rowid, row }))
+                Ok(Some(InsertedRow { table: td.oid, rowid, row }))
             }
             ConflictOutcome::Skipped => Ok(None),
         },
         None => {
             let rowid = insert_row_ref(ex, td, &row)?;
-            Ok(Some(InsertedRow { rowid, row }))
+            Ok(Some(InsertedRow { table: td.oid, rowid, row }))
         }
     }
 }

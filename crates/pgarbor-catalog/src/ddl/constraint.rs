@@ -1169,6 +1169,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         }
     }
 

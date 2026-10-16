@@ -183,14 +183,10 @@ impl<'a> CatalogTxn<'a> {
     pub fn create_table(&mut self, spec: &CreateTableSpec) -> Result<Option<CreatedTable>> {
         // 1. pre-checks
         match spec.kind {
-            RelKind::Table => {}
-            RelKind::PartitionedTable => return Err(PgError::unimplemented("CAT-11", "partitioned tables")),
+            RelKind::Table | RelKind::PartitionedTable => {}
             _ => return Err(PgError::internal("CREATE TABLE with a non-table relation kind")),
         }
-        if !spec.inherits.is_empty() {
-            return Err(PgError::unimplemented("CAT-11", "table inheritance"));
-        }
-        if spec.persistence == Persistence::Temp {
+        if spec.persistence == Persistence::Temp && !self.temp_namespace_allowed(spec.namespace) {
             return Err(PgError::unimplemented("CAT-11", "temporary tables"));
         }
         self.check_creatable_namespace(spec.namespace, &spec.name)?;
@@ -198,6 +194,25 @@ impl<'a> CatalogTxn<'a> {
         if !self.check_new_relation_name(spec.namespace, &spec.name, spec.if_not_exists)? {
             return Ok(None);
         }
+        // Inheritance / PARTITION OF: merge the parents' columns (inherit.rs).
+        let merged = if Self::create_parents(spec).is_empty() { None } else { Some(self.merge_attributes(spec)?) };
+        let merged_spec;
+        let spec: &CreateTableSpec = match &merged {
+            Some(m) => {
+                let pmap = |p: i16| -> Option<i16> { m.position_map.get((p - 1) as usize).copied() };
+                let mut s = spec.clone();
+                s.columns = m.columns.clone();
+                for c in s.constraints.iter_mut() {
+                    if let ConstraintSpecKind::Check { expr, .. } = &mut c.kind {
+                        *expr = super::inherit::remap_expr(expr, SELF_REL, SELF_REL, &pmap);
+                    }
+                }
+                merged_spec = s;
+                &merged_spec
+            }
+            None => spec,
+        };
+        self.check_partition_key_spec(spec)?;
         let env = self.env()?;
         super::common::validate_column_specs(&env, &spec.name, &spec.columns)?;
         validate_constraint_list(&spec.name, &spec.columns, &spec.constraints)?;
@@ -303,7 +318,7 @@ impl<'a> CatalogTxn<'a> {
             oid: table_oid,
             name: spec.name.clone(),
             namespace: ns,
-            kind: RelKind::Table,
+            kind: spec.kind,
             owner: spec.owner,
             persistence: spec.persistence,
             columns,
@@ -315,6 +330,8 @@ impl<'a> CatalogTxn<'a> {
             replica_identity: ReplicaIdentity::Default,
             row_security: false,
             force_row_security: false,
+            policies: Vec::new(),
+            rules: Vec::new(),
             view: None,
             partition_key: None,
             partition_of: None,
@@ -425,6 +442,12 @@ impl<'a> CatalogTxn<'a> {
             })?;
         }
 
+        // Inheritance links, inherited constraints, partition key / bound (inherit.rs, partitioned.rs).
+        if let Some(m) = &merged {
+            self.finish_inheritance(table_oid, m, spec)?;
+        }
+        self.finish_partitioning(table_oid, spec)?;
+
         // 7. result
         let indexes: Vec<Oid> =
             self.data().indexes.values().filter(|ix| ix.table == table_oid).map(|ix| ix.oid).collect();
@@ -449,6 +472,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         }
     }
 

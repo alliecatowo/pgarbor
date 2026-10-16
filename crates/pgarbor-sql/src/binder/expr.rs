@@ -149,10 +149,14 @@ fn dispatch(b: &mut Binder, e: &Expr, ec: ExprCtx) -> Result<BoundExpr> {
         Expr::UnaryOp { op, expr } => match qualified_prefix_operator(b.src, expr) {
             // `OPERATOR(schema.op) x` (the parser stands a plain prefix token in for it).
             Some((name, kw_pos)) => expr_ops::bind_named_prefix_op(b, &name, expr, kw_pos, ec),
-            None => {
-                let op_pos = unary_op_pos(b.src, expr);
-                expr_ops::bind_unary_op(b, op, expr, op_pos, ec)
-            }
+            None => match custom_prefix_operator(b.src, op, expr) {
+                // A user prefix operator spelled by several tokens (`parser::spell_operator_runs`).
+                Some((name, op_pos)) => expr_ops::bind_named_prefix_op(b, &name, expr, op_pos, ec),
+                None => {
+                    let op_pos = unary_op_pos(b.src, expr);
+                    expr_ops::bind_unary_op(b, op, expr, op_pos, ec)
+                }
+            },
         },
         Expr::AtTimeZone { timestamp, time_zone } => expr_ops::bind_at_time_zone(b, timestamp, time_zone, ec),
         Expr::Extract { .. }
@@ -259,7 +263,18 @@ pub fn bind_column_ref(b: &mut Binder, parts: &[Ident], pos: Option<u32>, ec: Ex
 /// Resolve `qualifier.name` with the probe-then-final-error protocol described on
 /// [`bind_column_ref`].
 fn resolve_name(b: &mut Binder, qualifier: &[String], name: &str, pos: Option<u32>) -> Result<BoundExpr> {
-    if let Some(found) = scope::resolve_column(b, qualifier, name, pos, false)? {
+    if super::plhook::hook_active(b.src) {
+        let src = b.src;
+        let found = super::plhook::resolve_with_hook(src, qualifier, name, pos, || {
+            if b.scopes.is_empty() {
+                return Ok(None);
+            }
+            Ok(scope::resolve_column(b, qualifier, name, pos, false)?.map(|f| f.expr))
+        })?;
+        if let Some(e) = found {
+            return Ok(e);
+        }
+    } else if let Some(found) = scope::resolve_column(b, qualifier, name, pos, false)? {
         return Ok(found.expr);
     }
     match scope::resolve_column(b, qualifier, name, pos, true)? {
@@ -450,6 +465,52 @@ fn qualified_prefix_operator(src: &SourceMap, operand: &Expr) -> Option<(String,
         format!("{schema}.{op}")
     };
     Some((name, Some(src.pos_of_byte(kw_start))))
+}
+
+/// The name and position of a user prefix operator that the parser replaced by a plain `-` token
+/// (`parser::spell_operator_runs`): the operator characters right before the operand, when they are
+/// not a plain minus (amendment pgarbor-sql-05).
+fn custom_prefix_operator(src: &SourceMap, op: &sqlparser::ast::UnaryOperator, operand: &Expr) -> Option<(String, Option<u32>)> {
+    if !matches!(op, sqlparser::ast::UnaryOperator::Minus) {
+        return None;
+    }
+    let text = src.text();
+    let bytes = text.as_bytes();
+    let mut i = src.byte_offset(operand.span().start)?.min(bytes.len());
+    while i > 0 && is_blank(bytes[i - 1]) {
+        i -= 1;
+    }
+    let end = i;
+    while i > 0 && "+-*/<>=~!@#%^&|`?".contains(bytes[i - 1] as char) {
+        i -= 1;
+    }
+    let run = text.get(i..end)?;
+    if run.is_empty() || run.contains("*/") || run.contains("--") {
+        return None;
+    }
+    // PG scan.l splits the run into operators (trailing `+`/`-` trimmed from multi-character
+    // operators without any of `~!@#^&|`?%`); the last one applies to the operand.
+    let mut start = 0usize;
+    let mut last = (0usize, run.len());
+    while start < run.len() {
+        let rest = &run[start..];
+        let mut len = rest.len();
+        if len > 1 && !rest.chars().any(|c| "~!@#^&|`?%".contains(c)) {
+            while len > 1 && (rest.as_bytes()[len - 1] == b'+' || rest.as_bytes()[len - 1] == b'-') {
+                len -= 1;
+            }
+        }
+        last = (start, start + len);
+        start += len;
+    }
+    let name = &run[last.0..last.1];
+    if name.len() < 2 && matches!(name, "-" | "+" | "~" | "@" | "#" | "!") {
+        return None;
+    }
+    if matches!(name, "|/" | "||/" | "!!" | "@-@" | "?-" | "?|") {
+        return None;
+    }
+    Some((name.to_string(), Some(src.pos_of_byte(i + last.0))))
 }
 
 /// Position of the `COLLATE` keyword of `operand COLLATE name`: the first token after the operand's

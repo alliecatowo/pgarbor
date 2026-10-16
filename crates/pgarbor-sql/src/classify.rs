@@ -97,6 +97,10 @@ pub enum StmtFamily {
     Truncate,
     /// UPDATE
     Update,
+    /// MERGE
+    Merge,
+    /// CREATE / ALTER / DROP POLICY
+    Policy,
     /// Any `ExtraStatement` other than `Unsupported`.
     Extra,
 }
@@ -173,7 +177,7 @@ pub fn classify(stmt: &Statement) -> StmtClass {
         Statement::Load { .. } => StmtClass::Unsupported("LOAD"),
         Statement::Close { .. } => StmtClass::Unsupported("CLOSE (cursors)"),
         Statement::CreateServer { .. } => StmtClass::Unsupported("CREATE SERVER"),
-        Statement::CreatePolicy { .. } => StmtClass::Unsupported("CREATE POLICY"),
+        Statement::CreatePolicy { .. } => StmtClass::Handled(StmtFamily::Policy),
         Statement::CreateOperator { .. } => StmtClass::Unsupported("CREATE OPERATOR"),
         Statement::CreateOperatorFamily { .. } => StmtClass::Unsupported("CREATE OPERATOR FAMILY"),
         Statement::CreateOperatorClass { .. } => StmtClass::Unsupported("CREATE OPERATOR CLASS"),
@@ -183,8 +187,8 @@ pub fn classify(stmt: &Statement) -> StmtClass {
         Statement::AlterOperatorFamily { .. } => StmtClass::Unsupported("ALTER OPERATOR FAMILY"),
         Statement::AlterOperatorClass { .. } => StmtClass::Unsupported("ALTER OPERATOR CLASS"),
         Statement::AlterTextSearch { .. } => StmtClass::Unsupported("ALTER TEXT SEARCH"),
-        Statement::AlterPolicy { .. } => StmtClass::Unsupported("ALTER POLICY"),
-        Statement::DropPolicy { .. } => StmtClass::Unsupported("DROP POLICY"),
+        Statement::AlterPolicy { .. } => StmtClass::Handled(StmtFamily::Policy),
+        Statement::DropPolicy { .. } => StmtClass::Handled(StmtFamily::Policy),
         Statement::Declare { .. } => StmtClass::Unsupported("DECLARE (cursors)"),
         Statement::CreateExtension { .. } => StmtClass::Unsupported("CREATE EXTENSION"),
         Statement::CreateCollation { .. } => StmtClass::Unsupported("CREATE COLLATION"),
@@ -195,7 +199,7 @@ pub fn classify(stmt: &Statement) -> StmtClass {
         Statement::Fetch { .. } => StmtClass::Unsupported("FETCH (cursors)"),
         Statement::CreateTrigger { .. } => StmtClass::Unsupported("CREATE TRIGGER"),
         Statement::DropTrigger { .. } => StmtClass::Unsupported("DROP TRIGGER"),
-        Statement::Merge { .. } => StmtClass::Unsupported("MERGE"),
+        Statement::Merge { .. } => StmtClass::Handled(StmtFamily::Merge),
         // Syntax of other database systems: PostgreSQL itself reports 42601
         Statement::Msck { .. } => StmtClass::NotPostgres,
         Statement::Install { .. } => StmtClass::NotPostgres,

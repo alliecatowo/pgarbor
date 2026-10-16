@@ -944,6 +944,8 @@ impl<'a> CatalogTxn<'a> {
             replica_identity: ReplicaIdentity::Nothing,
             row_security: false,
             force_row_security: false,
+            policies: Vec::new(),
+            rules: Vec::new(),
             view: None,
             partition_key: None,
             partition_of: None,

@@ -213,6 +213,7 @@ fn command_name(stmt: &BoundStatement) -> &'static str {
         BoundStatement::Insert(_) => "INSERT",
         BoundStatement::Update(_) => "UPDATE",
         BoundStatement::Delete(_) => "DELETE",
+        BoundStatement::Merge(_) => "MERGE",
         BoundStatement::CreateTableAs(_) => "CREATE TABLE AS",
         _ => "EXECUTE",
     }

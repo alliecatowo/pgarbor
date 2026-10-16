@@ -90,6 +90,11 @@ pub fn plan_options(g: &GucTable) -> Result<PlanOptions> {
     })
 }
 
+/// `row_security` (amendment pgarbor-catalog-policies-rules).
+pub fn row_security(g: &GucTable) -> Result<bool> {
+    bool_setting(g, "row_security")
+}
+
 /// `idle_in_transaction_session_timeout` in milliseconds (0 = disabled).
 pub fn idle_in_transaction_timeout_ms(g: &GucTable) -> Result<u64> {
     Ok(non_negative_ms(int_setting(g, "idle_in_transaction_session_timeout")?))

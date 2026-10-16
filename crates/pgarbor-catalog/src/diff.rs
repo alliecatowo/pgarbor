@@ -999,6 +999,8 @@ mod tests {
             replica_identity: ReplicaIdentity::Default,
             row_security: false,
             force_row_security: false,
+            policies: Vec::new(),
+            rules: Vec::new(),
             view: None,
             partition_key: None,
             partition_of: None,

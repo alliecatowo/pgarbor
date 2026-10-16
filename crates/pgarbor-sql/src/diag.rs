@@ -42,12 +42,12 @@ pub fn missing_from_entry(table: &str, pos: Option<u32>) -> PgError {
     at(PgError::new(SqlState::UNDEFINED_TABLE, format!("missing FROM-clause entry for table \"{table}\"")), pos)
 }
 
-/// 42P01 `invalid reference to FROM-clause entry for table "t"` + HINT
+/// 42P01 `invalid reference to FROM-clause entry for table "t"` + DETAIL (PG `errorMissingRTE`)
 /// `There is an entry for table "t", but it cannot be referenced from this part of the query.`
 pub fn invalid_from_reference(table: &str, pos: Option<u32>) -> PgError {
     at(
         PgError::new(SqlState::UNDEFINED_TABLE, format!("invalid reference to FROM-clause entry for table \"{table}\""))
-            .with_hint(format!(
+            .with_detail(format!(
                 "There is an entry for table \"{table}\", but it cannot be referenced from this part of the query."
             )),
         pos,

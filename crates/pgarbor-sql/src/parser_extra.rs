@@ -20,6 +20,9 @@ use sqlparser::keywords::Keyword;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithSpan};
 
+#[path = "parser_ext.rs"]
+mod ext;
+
 use crate::diag;
 use crate::extra_stmt::{
     AlterDatabaseAction, AlterDomainAction, AlterMatViewAction, AlterSequenceAction, ExtraStatement, MaintenanceOption,
@@ -47,6 +50,9 @@ use crate::syntax_error::location_from_message;
 /// `CREATE EXTENSION`, `CREATE TRIGGER`, `CREATE POLICY`, `MERGE`, cursors are parsed by sqlparser
 /// and rejected by `classify`, not here.
 pub fn is_extra_statement(tokens: &[TokenWithSpan]) -> Result<bool> {
+    if ext::is_ext_statement(tokens) {
+        return Ok(true);
+    }
     Ok((route(&head_words(tokens)).is_some() && !ts_config_ungrammatical(tokens))
         || txn_deferrable_form(tokens).is_some()
         || route_alter_target(tokens).is_some()
@@ -68,6 +74,16 @@ pub fn is_extra_statement(tokens: &[TokenWithSpan]) -> Result<bool> {
 /// `Parser::parse_literal_string` accepts, incl. `$$..$$`), optional `LANGUAGE ident` before or after.
 /// Numbers in `SequenceOptionAst` keep sign and digits as text (`- 5` with the unary minus folded in).
 pub fn parse_extra(tokens: Vec<TokenWithSpan>, src: &SourceMap) -> Result<ExtraStatement> {
+    if ext::is_ext_statement(&tokens) {
+        // Extensibility statements (amendment pgarbor-sql-rewrite-rls-merge): `parser_ext`.
+        let dialect = PostgreSqlDialect {};
+        let mut cx = Cx {
+            p: Parser::new(&dialect).with_recursion_limit(RECURSION_LIMIT).with_tokens_with_locations(tokens.clone()),
+            tokens,
+            src,
+        };
+        return ext::parse(&mut cx).map(ExtraStatement::Ext);
+    }
     if merge_returning_with(&tokens) {
         return Ok(unsupported("MERGE ... RETURNING WITH (OLD/NEW aliases)"));
     }

@@ -182,6 +182,9 @@ fn run_one(ex: &mut Executor, fu: &FollowUp) -> Result<()> {
                 return Err(cannot_alter_type_column_uses_it(&type_name, &qualified));
             }
         }
+        FollowUp::ValidatePartitionRows { table, default_update } => {
+            validate_partition_rows(ex, *table, *default_update)?;
+        }
         FollowUp::PopulateMatView { .. } | FollowUp::RewriteTable { .. } => {
             return Err(PgError::internal("follow-up must run outside an executor"));
         }
@@ -398,4 +401,33 @@ mod tests {
         assert!(set_slot(&mut row, 0, Datum::Int4(1)).is_err());
         Ok(())
     }
+}
+
+/// `FollowUp::ValidatePartitionRows`: every row stored under `table` (itself or, when partitioned,
+/// its leaves) must satisfy `table`'s partition constraint as the catalog now describes it.
+fn validate_partition_rows(ex: &mut Executor, table: Oid, default_update: bool) -> Result<()> {
+    let snap = ex.se().env.snapshot().clone();
+    let ttd = tabledesc::table_desc(&*ex.cx, table)?;
+    for member in snap.inheritance_tree(table) {
+        let Some(rel) = snap.relation(member) else { continue };
+        if !rel.kind.has_storage() {
+            continue;
+        }
+        let mtd = tabledesc::table_desc(&*ex.cx, member)?;
+        let mut cursor = HeapCursor::new(member);
+        let mut counter: u32 = 0;
+        while let Some((_rowid, row)) = cursor.next(ex, &mtd, None)? {
+            ex.tick(&mut counter)?;
+            let row = crate::partition::convert_row(&mtd, &ttd, &row);
+            if !crate::partition::check_partition_constraint(ex, &ttd, &row)? {
+                let msg = if default_update {
+                    format!("updated partition constraint for default partition \"{}\" would be violated by some row", ttd.name)
+                } else {
+                    format!("partition constraint of relation \"{}\" is violated by some row", ttd.name)
+                };
+                return Err(PgError::new(pgarbor_common::SqlState::CHECK_VIOLATION, msg).with_table(&ttd.schema, &ttd.name));
+            }
+        }
+    }
+    Ok(())
 }

@@ -25,6 +25,7 @@ PRODUCERS = {
     "pg_proc": ["pg_proc", "pg_aggregate", "pg_operator", "pg_cast", "pg_language"],
     "pg_roles": ["pg_authid", "pg_auth_members", "pg_database", "pg_db_role_setting", "pg_tablespace",
                  "pg_roles", "pg_shadow", "pg_group", "pg_user"],
+    "pg_ext": ["pg_amop", "pg_amproc", "pg_conversion"],
     "pg_builtin": ["pg_collation", "pg_am", "pg_opclass", "pg_opfamily", "pg_extension",
                    "pg_available_extensions", "pg_available_extension_versions"],
     "pg_views": ["pg_tables", "pg_views", "pg_matviews", "pg_indexes", "pg_sequences"],
@@ -127,9 +128,6 @@ EMPTY = {
 
 # --- relations whose data exists in PG but PGArbor cannot serve yet: scan raises 0A000 (CAT-37)
 UNSUPPORTED = {
-    ("pg_catalog", "pg_amop"): "operator class membership is not materialized",
-    ("pg_catalog", "pg_amproc"): "operator class support functions are not materialized",
-    ("pg_catalog", "pg_conversion"): "encoding conversions are not materialized",
     ("pg_catalog", "pg_init_privs"): "initial privileges of builtin objects are not materialized",
     ("pg_catalog", "pg_ts_config"): "text search is unsupported",
     ("pg_catalog", "pg_ts_config_map"): "text search is unsupported",

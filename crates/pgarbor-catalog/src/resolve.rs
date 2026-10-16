@@ -265,14 +265,8 @@ impl CatalogEnv {
     /// Collation OID by possibly-qualified name (module docs).
     // CONTRACT
     pub fn collation_oid(&self, schema: Option<&str>, name: &str) -> Result<Oid> {
-        let find = |ns: Oid| -> Option<Oid> {
-            builtin::COLLATIONS
-                .iter()
-                .find(|c| {
-                    c.namespace == ns && c.name == name && (c.encoding == -1 || c.encoding == builtin::UTF8_ENCODING)
-                })
-                .map(|c| c.oid)
-        };
+        // Builtin pg_catalog collations and user collations (amendment pgarbor-catalog-09).
+        let find = |ns: Oid| -> Option<Oid> { self.collation_in_ns(ns, name) };
         match schema {
             Some(s) => {
                 let ns = self.explicit_namespace(s).ok_or_else(|| crate::errors::schema_does_not_exist(s))?;
@@ -388,7 +382,7 @@ impl CatalogEnv {
     // ------------------------------------------------------------------ private helpers
 
     /// Schema by name, with `pg_temp` meaning the session's temp schema when one exists.
-    fn explicit_namespace(&self, name: &str) -> Option<Oid> {
+    pub(crate) fn explicit_namespace(&self, name: &str) -> Option<Oid> {
         if name == "pg_temp" {
             if let Some(t) = self.path().temp_namespace {
                 return Some(t);
@@ -496,6 +490,7 @@ mod tests {
             options: vec![],
             if_not_exists: false,
             inherits: vec![],
+            extra: Default::default(),
         }
     }
 

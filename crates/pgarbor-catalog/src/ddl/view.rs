@@ -362,6 +362,8 @@ impl<'a> CatalogTxn<'a> {
             replica_identity: if spec.materialized { ReplicaIdentity::Default } else { ReplicaIdentity::Nothing },
             row_security: false,
             force_row_security: false,
+            policies: Vec::new(),
+            rules: Vec::new(),
             view: Some(ViewDef {
                 query: Self::bind_self_deps(&spec.query, oid),
                 check_option,
@@ -647,6 +649,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let (_, env) = testing::run(&mut kv, &env, |t| t.create_table(&table).map(|_| ()))?;
         let e = expect_err(testing::run(&mut kv, &env, |t| {

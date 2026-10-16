@@ -104,6 +104,21 @@ pub trait ExecTxn: KvWrite {
     fn seq_restart(&mut self, relid: RelId, value: i64) -> Result<()>;
     /// DROP SEQUENCE: delete the state.
     fn seq_drop(&mut self, relid: RelId) -> Result<()>;
+
+    // ---- internal subtransactions (amendment exec-10) ----------------------------------------
+    /// Start an internal subtransaction (PL/pgSQL exception block); legal in implicit transactions.
+    /// Returns the token for [`ExecTxn::subxact_release`] / [`ExecTxn::subxact_rollback`].
+    fn subxact_begin(&mut self) -> Result<usize> {
+        Err(PgError::unimplemented("EXE-06", "subtransactions in this transaction view"))
+    }
+    /// Keep the subtransaction's writes (they become part of the enclosing level).
+    fn subxact_release(&mut self, _token: usize) -> Result<()> {
+        Err(PgError::unimplemented("EXE-06", "subtransactions in this transaction view"))
+    }
+    /// Undo the subtransaction's writes and locks; the transaction stays usable.
+    fn subxact_rollback(&mut self, _token: usize) -> Result<()> {
+        Err(PgError::unimplemented("EXE-06", "subtransactions in this transaction view"))
+    }
 }
 
 /// Convenience used by scans: read the rows of `[start, end)` without holding the iterator across
@@ -230,6 +245,15 @@ impl ExecTxn for TxnKv<'_> {
     }
     fn seq_drop(&mut self, relid: RelId) -> Result<()> {
         seqstore::drop(self.txn_mut(), relid)
+    }
+    fn subxact_begin(&mut self) -> Result<usize> {
+        self.txn_mut().begin_subxact()
+    }
+    fn subxact_release(&mut self, token: usize) -> Result<()> {
+        self.txn_mut().release_subxact(token)
+    }
+    fn subxact_rollback(&mut self, token: usize) -> Result<()> {
+        self.txn_mut().rollback_subxact(token)
     }
 }
 

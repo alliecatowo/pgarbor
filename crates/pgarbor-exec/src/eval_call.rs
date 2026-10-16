@@ -163,6 +163,11 @@ pub fn call_function(
 
 /// Evaluate a `FuncCall` expression node over `row`.
 pub fn eval_func_call(ex: &mut Executor, f: &FuncCallExpr, result_type: TypeId, row: &[Datum]) -> Result<Datum> {
+    if f.func >= FIRST_USER_OID {
+        let (args, arg_types) = eval_args(ex, &f.args, row)?;
+        return crate::plfunc::call_user_function(&mut *ex.cx, f.func, args, arg_types, result_type, false)
+            .map(|o| o.into_scalar());
+    }
     let handle = resolve_handle(ex, f.func, &f.name)?;
     let (mut args, mut arg_types) = eval_args(ex, &f.args, row)?;
     if f.variadic && handle.proc.variadic == pgarbor_types::oids::ANY {
@@ -199,6 +204,14 @@ pub fn eval_func_call(ex: &mut Executor, f: &FuncCallExpr, result_type: TypeId, 
 
 /// Evaluate an `Op` expression node over `row`.
 pub fn eval_op(ex: &mut Executor, o: &OpExpr, result_type: TypeId, row: &[Datum]) -> Result<Datum> {
+    if o.op.proc >= FIRST_USER_OID {
+        let (args, arg_types) = eval_args(ex, &o.args, row)?;
+        if o.op.strict && args.iter().any(|a| a.is_null()) {
+            return Ok(Datum::Null);
+        }
+        return crate::plfunc::call_user_function(&mut *ex.cx, o.op.proc, args, arg_types, result_type, false)
+            .map(|o| o.into_scalar());
+    }
     let handle = resolve_handle(ex, o.op.proc, &o.op.name)?;
     let (args, arg_types) = eval_args(ex, &o.args, row)?;
     invoke(ex, &handle, o.op.strict, &args, &arg_types, result_type)
@@ -207,6 +220,13 @@ pub fn eval_op(ex: &mut Executor, o: &OpExpr, result_type: TypeId, row: &[Datum]
 /// Apply operator `op` to evaluated arguments (`arg_types` parallel to `args`); strict operators
 /// return NULL for any NULL argument.
 pub fn call_operator(ex: &mut Executor, op: &OpRef, args: &[Datum], arg_types: &[TypeId], result_type: TypeId) -> Result<Datum> {
+    if op.proc >= FIRST_USER_OID {
+        if op.strict && args.iter().any(|a| a.is_null()) {
+            return Ok(Datum::Null);
+        }
+        return crate::plfunc::call_user_function(&mut *ex.cx, op.proc, args.to_vec(), arg_types.to_vec(), result_type, false)
+            .map(|o| o.into_scalar());
+    }
     let handle = resolve_handle(ex, op.proc, &op.name)?;
     invoke(ex, &handle, op.strict, args, arg_types, result_type)
 }

@@ -469,6 +469,7 @@ impl<'a> Builder<'a> {
                     ModifyOp::Insert => "Insert",
                     ModifyOp::Update => "Update",
                     ModifyOp::Delete => "Delete",
+                    ModifyOp::Merge => "Merge",
                 };
                 let mut x = vec![("Operation", vstr(operation))];
                 x.extend(table_extra(&m.target.table, verbose));

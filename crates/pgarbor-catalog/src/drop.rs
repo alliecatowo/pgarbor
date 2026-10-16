@@ -521,6 +521,10 @@ impl<'a> CatalogTxn<'a> {
                 }
                 ObjClass::Proc => {
                     self.remove(ObjKind::Function, a.oid)?;
+                    // An aggregate's pg_aggregate row goes with its pg_proc row (amendment catalog-09).
+                    if self.data.ext.contains_key(&a.oid) {
+                        self.remove(ObjKind::Ext, a.oid)?;
+                    }
                     self.clear_descriptions(class_oid::PG_PROC, a.oid)?;
                     true
                 }
@@ -540,11 +544,13 @@ impl<'a> CatalogTxn<'a> {
                 ObjClass::Collation
                 | ObjClass::Operator
                 | ObjClass::Cast
-                | ObjClass::Language
-                | ObjClass::AccessMethod
                 | ObjClass::Extension
-                | ObjClass::Trigger
-                | ObjClass::Tablespace => {
+                | ObjClass::OpClass
+                | ObjClass::OpFamily
+                | ObjClass::AmOp
+                | ObjClass::AmProc
+                | ObjClass::Conversion => self.drop_ext_object(a)?,
+                ObjClass::Language | ObjClass::AccessMethod | ObjClass::Trigger | ObjClass::Tablespace => {
                     return Err(PgError::unimplemented("CAT-24", format!("DROP of {:?} objects", a.class)));
                 }
             };
@@ -694,6 +700,8 @@ mod tests {
             replica_identity: ReplicaIdentity::Default,
             row_security: false,
             force_row_security: false,
+            policies: Vec::new(),
+            rules: Vec::new(),
             view: None,
             partition_key: None,
             partition_of: None,

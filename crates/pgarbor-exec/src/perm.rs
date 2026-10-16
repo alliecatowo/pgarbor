@@ -167,6 +167,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let mut table: Oid = 0;
         let (_, env) = testing::run(&mut kv, &env, |t| {

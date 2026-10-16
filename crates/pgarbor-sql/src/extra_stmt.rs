@@ -184,6 +184,9 @@ pub enum AlterDatabaseAction {
 // CONTRACT
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExtraStatement {
+    /// Extensibility statements (operators, aggregates, operator classes/families, casts,
+    /// conversions, collations, extensions, COMMENT ON those): amendment pgarbor-sql-rewrite-rls-merge.
+    Ext(crate::ext_stmt::ExtStmt),
     /// `REFRESH MATERIALIZED VIEW [CONCURRENTLY] name [WITH [NO] DATA]`.
     RefreshMaterializedView { name: ObjectName, concurrently: bool, with_data: bool },
     /// `REINDEX [(options)] {INDEX|TABLE|SCHEMA|DATABASE|SYSTEM} [CONCURRENTLY] [name]`.

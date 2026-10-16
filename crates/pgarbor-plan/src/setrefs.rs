@@ -552,6 +552,28 @@ fn for_each_expr_mut(kind: &mut NodeKind, f: &mut ExprFn<'_>) -> Result<()> {
             for (_, _, e) in n.target.checks.iter_mut() {
                 f(e, Scope::NoRow)?;
             }
+            for w in n.target.wco.iter_mut() {
+                f(&mut w.expr, Scope::NoRow)?;
+            }
+            if let Some(mg) = n.merge.as_mut() {
+                for a in mg.actions.iter_mut() {
+                    each_opt(&mut a.condition, Scope::NoRow, f)?;
+                    match &mut a.kind {
+                        crate::plan::MergePlanActionKind::Update(u) => {
+                            for (_, e) in u.assignments.iter_mut().chain(u.generated.iter_mut()) {
+                                f(e, Scope::NoRow)?;
+                            }
+                        }
+                        crate::plan::MergePlanActionKind::Insert { values, spec } => {
+                            each_vec(values, Scope::NoRow, f)?;
+                            for (_, e) in spec.defaults.iter_mut().chain(spec.generated.iter_mut()) {
+                                f(e, Scope::NoRow)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             each_vec(&mut n.returning, Scope::NoRow, f)?;
         }
     }
@@ -690,6 +712,28 @@ fn collect_exprs<'a>(kind: &'a NodeKind, out: &mut Vec<&'a BoundExpr>) {
             }
             for (_, _, e) in &n.target.checks {
                 out.push(e);
+            }
+            for w in &n.target.wco {
+                out.push(&w.expr);
+            }
+            if let Some(mg) = &n.merge {
+                for a in &mg.actions {
+                    out.extend(a.condition.iter());
+                    match &a.kind {
+                        crate::plan::MergePlanActionKind::Update(u) => {
+                            for (_, e) in u.assignments.iter().chain(u.generated.iter()) {
+                                out.push(e);
+                            }
+                        }
+                        crate::plan::MergePlanActionKind::Insert { values, spec } => {
+                            out.extend(values.iter());
+                            for (_, e) in spec.defaults.iter().chain(spec.generated.iter()) {
+                                out.push(e);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             out.extend(n.returning.iter());
         }

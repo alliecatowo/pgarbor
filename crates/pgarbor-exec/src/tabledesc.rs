@@ -239,19 +239,19 @@ pub fn table_desc(cx: &ExecContext, oid: Oid) -> Result<Rc<TableDesc>> {
 pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
     let snap = se.env.snapshot();
     let rel = snap.relation(oid).ok_or_else(|| relation_vanished(oid))?;
-    if rel.row_security || rel.force_row_security {
-        return Err(PgError::unimplemented("EXE-01", "row security policy enforcement"));
-    }
     if snap.constraints_of(oid).iter().any(|c| c.deferrable || c.initially_deferred) {
         return Err(PgError::unimplemented("EXE-01", "deferred constraint enforcement"));
     }
     // Row storage is what DML and table-shaped DDL need; views, indexes, sequences, ... have none.
-    if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
+    // A partitioned table has no rows of its own: DML routes them to partitions (`crate::partition`),
+    // so its (partitioned) indexes and outgoing foreign keys are maintained on the partitions.
+    if !matches!(rel.kind, RelKind::Table | RelKind::MatView | RelKind::PartitionedTable) {
         return Err(relation_vanished(oid));
     }
+    let partitioned = rel.kind == RelKind::PartitionedTable;
     let schema = namespace_name(snap, rel.namespace)?;
     let cols = rel.columns.iter().map(|c| col_desc(se, c)).collect::<Result<Vec<ColDesc>>>()?;
-    let indexes = index_descs(se, snap, oid)?;
+    let indexes = if partitioned { Vec::new() } else { index_descs(se, snap, oid)? };
     let checks = check_descs(se, snap, oid)?;
     let mut virtual_not_null: Vec<(usize, BoundExpr)> = Vec::new();
     for (slot, c) in rel.columns.iter().enumerate() {
@@ -266,7 +266,7 @@ pub fn build_table_desc(se: &SessionEnv, oid: Oid) -> Result<TableDesc> {
     let fks_out = snap
         .constraints_of(oid)
         .into_iter()
-        .filter(|c| c.kind == ConstraintKind::ForeignKey && c.enforced)
+        .filter(|c| c.kind == ConstraintKind::ForeignKey && c.enforced && !partitioned)
         .map(|c| fk_desc(snap, c))
         .collect::<Result<Vec<FkDesc>>>()?;
     let fks_in = snap
@@ -575,6 +575,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists: false,
             inherits: Vec::new(),
+            extra: Default::default(),
         };
         let mut oid = 0;
         let (_, next) = testing::run(kv, env, |t| {

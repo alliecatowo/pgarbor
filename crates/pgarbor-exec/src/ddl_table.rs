@@ -253,9 +253,7 @@ fn apply_command(
             ddl.set_replica_identity(table, setting)?;
         }
         AlterTableCmd::RowSecurity { enable, force } => {
-            if *enable == Some(true) || *force == Some(true) {
-                return Err(PgError::unimplemented("EXE-33", "row security policy enforcement"));
-            }
+            // Policies are enforced by the binder (pgarbor_sql::binder::rls, amendment pgarbor-exec-merge-wco-rls).
             ddl.set_row_security(table, *enable, *force)?;
         }
         AlterTableCmd::ClusterOn { index } => {
@@ -310,6 +308,7 @@ mod tests {
             options: Vec::new(),
             if_not_exists,
             inherits: Vec::new(),
+            extra: Default::default(),
         }
     }
 
@@ -319,7 +318,7 @@ mod tests {
     }
 
     fn alter(table: Oid, commands: Vec<AlterTableCmd>) -> BoundAlterTable {
-        BoundAlterTable { relation: table, keyword: AlterRelKeyword::Table, commands }
+        BoundAlterTable { relation: table, keyword: AlterRelKeyword::Table, commands, only: false }
     }
 
     #[test]

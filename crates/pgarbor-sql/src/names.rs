@@ -80,6 +80,20 @@ impl QualName {
     }
 }
 
+/// The relation name was written `ONLY name` (`parser_hier` marker as first part).
+pub fn is_only_marked(name: &ObjectName) -> bool {
+    matches!(name.0.first(), Some(ObjectNamePart::Identifier(i)) if i.value == crate::parser_hier::ONLY_MARKER)
+}
+
+/// `name` without the `ONLY` marker part.
+pub fn without_only_marker(name: &ObjectName) -> ObjectName {
+    if is_only_marked(name) {
+        ObjectName(name.0[1..].to_vec())
+    } else {
+        name.clone()
+    }
+}
+
 /// Convert an `ObjectName` (1..3 parts) to a [`QualName`].
 ///
 /// Errors: 4+ parts -> `42601 improper qualified name (too many dotted names): a.b.c.d`;
@@ -90,6 +104,7 @@ pub fn qual_name(name: &ObjectName, src: &SourceMap, notices: &mut Vec<PgError>)
     let mut parts: Vec<&Ident> = Vec::with_capacity(name.0.len());
     for p in &name.0 {
         match p {
+            ObjectNamePart::Identifier(i) if parts.is_empty() && i.value == crate::parser_hier::ONLY_MARKER => {}
             ObjectNamePart::Identifier(i) => parts.push(i),
             ObjectNamePart::Function(f) => {
                 return Err(PgError::syntax("syntax error", src.pos_of_span(f.name.span)));

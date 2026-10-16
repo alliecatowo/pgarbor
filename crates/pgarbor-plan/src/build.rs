@@ -232,6 +232,13 @@ pub fn build_range_scan(st: &mut PlannerState, entries: &[RangeEntry], rt_index:
             let is_virtual = *oid < FIRST_NORMAL_OID;
             if !is_virtual {
                 st.note_relation(*oid);
+                let only = matches!(&entry.kind, RangeKind::Relation { only: true, .. });
+                if !only && !env.snapshot().inheritance_children(*oid).is_empty() {
+                    let key = (st.current_level(), rt_index);
+                    if !st.inherit_scans.contains(&key) {
+                        st.inherit_scans.push(key);
+                    }
+                }
             }
             let col_types: Vec<TypeId> = rel
                 .columns

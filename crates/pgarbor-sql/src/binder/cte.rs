@@ -477,10 +477,9 @@ fn analyze_one(b: &mut Binder, with: &With, top_level: bool, names: &[String], i
     let materialized = cte.materialized.as_ref().map(|m| matches!(m, CteAsMaterialized::Materialized));
     let recursive_with = with.recursive;
     match cte.query.body.as_ref() {
-        SetExpr::Insert(st) | SetExpr::Update(st) | SetExpr::Delete(st) => {
+        SetExpr::Insert(st) | SetExpr::Update(st) | SetExpr::Delete(st) | SetExpr::Merge(st) => {
             analyze_dml(b, cte, top_level, recursive_with, i, &name, def_pos, materialized, st)
         }
-        SetExpr::Merge(_) => Err(crate::diag::unsupported_construct("MERGE", def_pos)),
         _ => analyze_query(b, cte, recursive_with, i, &name, def_pos, materialized),
     }
 }
@@ -512,6 +511,7 @@ fn analyze_dml(
         BoundStatement::Insert(x) => output_columns(&x.returning),
         BoundStatement::Update(x) => output_columns(&x.returning),
         BoundStatement::Delete(x) => output_columns(&x.returning),
+        BoundStatement::Merge(x) => output_columns(&x.returning),
         _ => return Err(PgError::internal("cte: data-modifying WITH item did not bind to INSERT/UPDATE/DELETE")),
     };
     let no_returning = columns.is_empty();

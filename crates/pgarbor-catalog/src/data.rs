@@ -23,6 +23,9 @@ pub struct CatalogData {
     pub memberships: BTreeMap<Oid, RoleMembership>,
     pub databases: BTreeMap<Oid, Database>,
     pub descriptions: BTreeMap<DescriptionKey, String>,
+    /// Extensibility objects (operators, aggregate definitions, operator families/classes, casts,
+    /// conversions, collations, extensions), amendment pgarbor-catalog-09.
+    pub ext: BTreeMap<Oid, ExtObject>,
 }
 
 impl CatalogData {
@@ -59,6 +62,9 @@ impl CatalogData {
             CatalogObject::Database(o) => {
                 self.databases.insert(o.oid, o);
             }
+            CatalogObject::Ext(o) => {
+                self.ext.insert(o.oid(), o);
+            }
         }
     }
 
@@ -76,6 +82,7 @@ impl CatalogData {
             ObjKind::Role => self.roles.remove(&oid).is_some(),
             ObjKind::RoleMembership => self.memberships.remove(&oid).is_some(),
             ObjKind::Database => self.databases.remove(&oid).is_some(),
+            ObjKind::Ext => self.ext.remove(&oid).is_some(),
             ObjKind::Description => false,
         }
     }
@@ -93,6 +100,7 @@ impl CatalogData {
             ObjKind::Role => CatalogObject::Role(self.roles.get(&oid)?.clone()),
             ObjKind::RoleMembership => CatalogObject::RoleMembership(self.memberships.get(&oid)?.clone()),
             ObjKind::Database => CatalogObject::Database(self.databases.get(&oid)?.clone()),
+            ObjKind::Ext => CatalogObject::Ext(self.ext.get(&oid)?.clone()),
             ObjKind::Description => return None,
         })
     }
@@ -120,6 +128,8 @@ impl CatalogData {
             Some(ObjKind::RoleMembership)
         } else if self.databases.contains_key(&oid) {
             Some(ObjKind::Database)
+        } else if self.ext.contains_key(&oid) {
+            Some(ObjKind::Ext)
         } else {
             None
         }
@@ -144,6 +154,7 @@ impl CatalogData {
         self.roles.keys().for_each(|o| see(*o));
         self.memberships.keys().for_each(|o| see(*o));
         self.databases.keys().for_each(|o| see(*o));
+        self.ext.values().for_each(|e| e.allocated_oids().into_iter().for_each(&mut see));
         for r in self.relations.values() {
             see(r.oid);
             see(r.rowtype);
@@ -153,6 +164,8 @@ impl CatalogData {
                     see(d.oid);
                 }
             }
+            r.policies.iter().for_each(|p| see(p.oid));
+            r.rules.iter().for_each(|p| see(p.oid));
         }
         for t in self.types.values() {
             see(t.oid);
@@ -170,10 +183,15 @@ impl CatalogData {
         if self.kind_of(oid).is_some() {
             return true;
         }
+        if self.ext.values().any(|e| e.allocated_oids().contains(&oid)) {
+            return true;
+        }
         self.relations.values().any(|r| {
             r.rowtype == oid
                 || r.array_type == oid
                 || r.columns.iter().any(|c| c.default.as_ref().is_some_and(|d| d.oid == oid))
+                || r.policies.iter().any(|p| p.oid == oid)
+                || r.rules.iter().any(|p| p.oid == oid)
         }) || self.types.values().any(|t| {
             t.array_type == oid
                 || matches!(&t.def, TypeDef::Enum { labels } if labels.iter().any(|l| l.oid == oid))
@@ -192,6 +210,7 @@ impl CatalogData {
             + self.roles.len()
             + self.memberships.len()
             + self.databases.len()
+            + self.ext.len()
     }
 
     pub fn is_empty(&self) -> bool {

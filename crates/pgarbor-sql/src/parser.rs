@@ -218,7 +218,14 @@ pub fn parse(sql: &str) -> Result<Vec<RawStatement>> {
         } else {
             let (toks, ov) = extract_insert_overriding(toks, &src)?;
             overriding = ov;
+            policy_as_option(&toks, &src)?;
+            let (toks, merge_ov) = merge_insert_forms(toks);
+            if merge_ov.is_some() {
+                overriding = merge_ov;
+            }
             strict_check::check(&toks, &src)?;
+            let toks = crate::parser_hier::mark_only_relations(toks);
+            let toks = crate::parser_hier::partition_column_types(toks);
             let toks = strip_like_options(toks);
             let toks = strip_drop_index_concurrently(toks)?;
             let toks = comment_dollar_text(toks);
@@ -1395,16 +1402,49 @@ fn spell_operator_runs(toks: Vec<TokenWithSpan>, src: &SourceMap) -> Result<Vec<
     let mut in_operator_paren = false;
     let mut i = 0;
     while i < toks.len() {
-        if let Some((end, name)) = split_operator_run(&toks, i, src)? {
-            let token = if in_operator_paren {
-                Some(Token::make_word(&name, None))
-            } else if follows_operand(&out) {
-                Some(Token::CustomBinaryOperator(name))
-            } else {
-                None
+        if operator_symbol(&toks[i], src) {
+            // The run of adjacent operator-character tokens, re-lexed with PG's rules (amendment
+            // pgarbor-sql-05): every PG operator piece becomes one token.
+            let mut end = i + 1;
+            while end < toks.len() && operator_symbol(&toks[end], src) && toks[end].span.start == toks[end - 1].span.end {
+                end += 1;
+            }
+            let (start_byte, _) = token_bytes(src, &toks[i].span)?;
+            let (_, end_byte) = token_bytes(src, &toks[end - 1].span)?;
+            let full = src.slice(start_byte, end_byte).to_string();
+            // sqlparser may glue a trailing comment to an operator (`<>/**/1`): the comment ends the
+            // operator and is dropped like whitespace.
+            let comment_at = [full.find("--"), full.find("/*")].into_iter().flatten().min();
+            let run = match comment_at {
+                Some(c) if c > 0 && (full[c..].starts_with("--") || full.ends_with("*/")) => full[..c].to_string(),
+                _ => full.clone(),
             };
-            if let Some(token) = token {
-                out.push(TokenWithSpan::new(token, Span::new(toks[i].span.start, toks[end - 1].span.end)));
+            let pieces = pg_operator_pieces(&run);
+            let aligned = pieces.len() == end - i
+                && pieces.iter().zip(&toks[i..end]).all(|((a, b), t)| {
+                    token_bytes(src, &t.span).map(|(s, e)| s - start_byte == *a && e - start_byte == *b).unwrap_or(false)
+                });
+            if aligned && !matches!(toks[i].token, Token::CustomBinaryOperator(_)) && end - i == 1 {
+                // A plain single token: nothing to re-spell.
+            } else if run.is_empty() || run.contains("--") || run.contains("/*") {
+                // Comment starts are the tokenizer's business.
+            } else {
+                for (a, b) in &pieces {
+                    let piece = &run[*a..*b];
+                    let span = Span::new(shift(toks[i].span.start, *a), shift(toks[i].span.start, *b));
+                    let token = if in_operator_paren {
+                        Token::make_word(piece, None)
+                    } else if follows_operand(&out) {
+                        single_operator_token(piece).unwrap_or_else(|| Token::CustomBinaryOperator(piece.to_string()))
+                    } else if NATIVE_PREFIX_OPERATORS.contains(&piece) || operator_name_follows(&out) {
+                        single_operator_token(piece).unwrap_or_else(|| Token::CustomBinaryOperator(piece.to_string()))
+                    } else {
+                        // A user prefix operator: a plain `-` stands in for it; the binder reads the name
+                        // from the source text (`binder::expr::custom_prefix_operator`).
+                        Token::Minus
+                    };
+                    out.push(TokenWithSpan::new(token, span));
+                }
                 i = end;
                 continue;
             }
@@ -1420,6 +1460,41 @@ fn spell_operator_runs(toks: Vec<TokenWithSpan>, src: &SourceMap) -> Result<Vec<
         i += 1;
     }
     Ok(out)
+}
+
+/// PG scan.l `{operator}` applied repeatedly to a run of operator characters: byte ranges of the
+/// operators lexed from it (a multi-character operator without any of `~!@#^&|`?%` loses trailing
+/// `+`/`-` characters, which start the next operator).
+fn pg_operator_pieces(run: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    while start < run.len() {
+        let rest = &run[start..];
+        let mut len = rest.len();
+        if len > 1 && !rest.chars().any(|c| "~!@#^&|`?%".contains(c)) {
+            while len > 1 && (rest.as_bytes()[len - 1] == b'+' || rest.as_bytes()[len - 1] == b'-') {
+                len -= 1;
+            }
+        }
+        out.push((start, start + len));
+        start += len;
+    }
+    out
+}
+
+/// A location `bytes` ASCII characters to the right.
+fn shift(loc: sqlparser::tokenizer::Location, bytes: usize) -> sqlparser::tokenizer::Location {
+    sqlparser::tokenizer::Location { line: loc.line, column: loc.column + bytes as u64 }
+}
+
+/// The token sqlparser produces for an operator spelled alone, when it is a single token.
+fn single_operator_token(piece: &str) -> Option<Token> {
+    let dialect = PostgreSqlDialect {};
+    let toks = Tokenizer::new(&dialect, piece).tokenize().ok()?;
+    match toks.as_slice() {
+        [t] => Some(t.clone()),
+        _ => None,
+    }
 }
 
 /// `U&"..."` (scan.l `xui`): a delimited identifier with Unicode escapes (`\XXXX`, `\+XXXXXX`, the escape
@@ -1598,29 +1673,9 @@ fn prefix_operator_extent(toks: &[TokenWithSpan], at: usize, src: &SourceMap) ->
     Some((Span::new(toks[at].span.start, toks[close].span.end), close))
 }
 
-/// The run of adjacent operator tokens that starts at `toks[i]`, as its end index and its text. `None`
-/// unless the run is at least two tokens, starts with `=` or `!`, and holds only characters that PostgreSQL
-/// keeps in a multi-character operator.
-fn split_operator_run(toks: &[TokenWithSpan], i: usize, src: &SourceMap) -> Result<Option<(usize, String)>> {
-    if !operator_symbol(&toks[i], src) {
-        return Ok(None);
-    }
-    let mut end = i + 1;
-    while end < toks.len() && operator_symbol(&toks[end], src) && toks[end].span.start == toks[end - 1].span.end {
-        end += 1;
-    }
-    if end - i < 2 {
-        return Ok(None);
-    }
-    let (start_byte, _) = token_bytes(src, &toks[i].span)?;
-    let (_, end_byte) = token_bytes(src, &toks[end - 1].span)?;
-    let name = src.slice(start_byte, end_byte);
-    let plain = name.chars().all(|c| "=!<>~@#%^&|`?".contains(c));
-    if !plain || !(name.starts_with('=') || name.starts_with('!')) {
-        return Ok(None);
-    }
-    Ok(Some((end, name.to_string())))
-}
+
+/// Prefix operators sqlparser parses itself (kept as its own tokens).
+const NATIVE_PREFIX_OPERATORS: [&str; 12] = ["-", "+", "~", "|/", "||/", "@", "!!", "#", "@-@", "?-", "?|", "!"];
 
 /// Clause words that cannot end an operand, so an operator after one of them is not a binary operator.
 const OPERAND_BREAKING_WORDS: [&str; 20] = [
@@ -3949,6 +4004,136 @@ fn insert_column_list_open(toks: &[TokenWithSpan], head: usize) -> Option<usize>
         }
         k = next_significant(toks, k + 1)?;
     }
+}
+
+/// gram.y `RowSecurityDefaultPermissive`: `CREATE POLICY name ON table AS <ident>` accepts any identifier
+/// and rejects everything but PERMISSIVE / RESTRICTIVE with 42601 `unrecognized row security option`.
+fn policy_as_option(toks: &[TokenWithSpan], src: &SourceMap) -> Result<()> {
+    let sig: Vec<usize> = (0..toks.len()).filter(|&i| !matches!(toks[i].token, Token::Whitespace(_) | Token::EOF)).collect();
+    let word = |k: usize| sig.get(k).and_then(|&i| bare_word(&toks[i].token));
+    if word(0).as_deref() != Some("CREATE") || word(1).as_deref() != Some("POLICY") {
+        return Ok(());
+    }
+    // CREATE POLICY name ON qualified.name AS opt
+    let mut k = 3;
+    if word(k).as_deref() != Some("ON") {
+        return Ok(());
+    }
+    k += 2;
+    while sig.get(k).is_some_and(|&i| matches!(toks[i].token, Token::Period)) {
+        k += 2;
+    }
+    if word(k).as_deref() != Some("AS") {
+        return Ok(());
+    }
+    let Some(&opt_at) = sig.get(k + 1) else { return Ok(()) };
+    let Token::Word(w) = &toks[opt_at].token else { return Ok(()) };
+    let folded = if w.quote_style.is_none() { w.value.to_ascii_lowercase() } else { w.value.clone() };
+    if folded == "permissive" || folded == "restrictive" {
+        return Ok(());
+    }
+    let mut e = PgError::new(
+        pgarbor_common::SqlState::SYNTAX_ERROR,
+        format!("unrecognized row security option \"{folded}\""),
+    )
+    .with_hint("Only PERMISSIVE or RESTRICTIVE policies are supported currently.");
+    if let Some(pos) = src.char_pos(toks[opt_at].span.start) {
+        e = e.with_position(pos);
+    }
+    Err(e)
+}
+
+/// MERGE INSERT actions (gram.y `merge_insert`) that sqlparser 0.63 cannot parse: `THEN INSERT DEFAULT VALUES`
+/// becomes `THEN INSERT VALUES (DEFAULT)` (same effect with the implicit column list: the first column gets its
+/// default, every other column too), and `THEN INSERT [(cols)] OVERRIDING {SYSTEM|USER} VALUE` loses the clause,
+/// which is returned for the binder (one clause per statement; the last one wins).
+fn merge_insert_forms(toks: Vec<TokenWithSpan>) -> (Vec<TokenWithSpan>, Option<crate::ir::stmt::Overriding>) {
+    let has_merge = toks.iter().any(|t| bare_word(&t.token).as_deref() == Some("MERGE"));
+    if !has_merge {
+        return (toks, None);
+    }
+    let mut out: Vec<TokenWithSpan> = Vec::with_capacity(toks.len() + 2);
+    let mut overriding = None;
+    let mut i = 0usize;
+    while i < toks.len() {
+        let is_insert = bare_word(&toks[i].token).as_deref() == Some("INSERT")
+            && out
+                .iter()
+                .rev()
+                .find(|t| !matches!(t.token, Token::Whitespace(_)))
+                .is_some_and(|t| bare_word(&t.token).as_deref() == Some("THEN"));
+        if !is_insert {
+            out.push(toks[i].clone());
+            i += 1;
+            continue;
+        }
+        out.push(toks[i].clone());
+        let mut k = next_significant(&toks, i + 1);
+        // `DEFAULT VALUES`
+        if let Some(d) = k {
+            if bare_word(&toks[d].token).as_deref() == Some("DEFAULT") {
+                if let Some(v) = next_significant(&toks, d + 1) {
+                    if bare_word(&toks[v].token).as_deref() == Some("VALUES") {
+                        let span = toks[d].span;
+                        out.push(TokenWithSpan::new(Token::Whitespace(sqlparser::tokenizer::Whitespace::Space), span));
+                        out.push(TokenWithSpan::new(Token::make_keyword("VALUES"), toks[v].span));
+                        out.push(TokenWithSpan::new(Token::LParen, span));
+                        out.push(TokenWithSpan::new(Token::make_keyword("DEFAULT"), span));
+                        out.push(TokenWithSpan::new(Token::RParen, toks[v].span));
+                        i = v + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Optional column list, copied through.
+        let mut j = i + 1;
+        if let Some(lp) = k {
+            if matches!(toks[lp].token, Token::LParen) {
+                let mut depth = 0usize;
+                let mut close = None;
+                let mut q = lp;
+                while q < toks.len() {
+                    match toks[q].token {
+                        Token::LParen => depth += 1,
+                        Token::RParen => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                close = Some(q);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    q += 1;
+                }
+                if let Some(c) = close {
+                    out.extend(toks[j..=c].iter().cloned());
+                    j = c + 1;
+                    k = next_significant(&toks, j);
+                }
+            }
+        }
+        if let Some(ov) = k {
+            if bare_word(&toks[ov].token).as_deref() == Some("OVERRIDING") {
+                let kind_at = next_significant(&toks, ov + 1);
+                let kind = match kind_at.and_then(|x| bare_word(&toks[x].token)).as_deref() {
+                    Some("SYSTEM") => Some(crate::ir::stmt::Overriding::System),
+                    Some("USER") => Some(crate::ir::stmt::Overriding::User),
+                    _ => None,
+                };
+                let value_at = kind_at.and_then(|x| next_significant(&toks, x + 1));
+                if let (Some(kind), Some(v)) = (kind, value_at) {
+                    if bare_word(&toks[v].token).as_deref() == Some("VALUE") {
+                        overriding = Some(kind);
+                        j = v + 1;
+                    }
+                }
+            }
+        }
+        i = j;
+    }
+    (out, overriding)
 }
 
 /// gram.y `insert_rest`: `INSERT INTO t [AS a] [(cols)] OVERRIDING {SYSTEM|USER} VALUE <select>`. sqlparser 0.63
