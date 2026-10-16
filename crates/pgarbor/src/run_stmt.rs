@@ -176,7 +176,10 @@ impl Session {
         notices.extend(bind_notices);
 
         // Step 5: session-level statements never reach the executor.
-        if let Some(result) = self.exec_session_statement(&statement)? {
+        if let Some(mut result) = self.exec_session_statement(&statement)? {
+            if let (Some(tag), StatementResult::Command { tag: completion }) = (raw.session_completion_tag(), &mut result) {
+                *completion = tag.to_string();
+            }
             return Ok(result);
         }
 

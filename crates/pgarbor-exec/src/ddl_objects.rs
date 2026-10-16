@@ -78,7 +78,20 @@ pub fn exec_create_sequence(cx: &mut ExecContext, spec: &CreateSequenceSpec) -> 
 }
 
 pub fn exec_create_view(cx: &mut ExecContext, v: &BoundCreateView) -> Result<ExecResult> {
-    ddl_command(cx, view_tag(v.spec.materialized), |ddl| ddl.create_view(&v.spec))
+    let (_, outcome) = run_ddl(cx, |ddl| ddl.create_view(&v.spec))?;
+    let mut populated = None;
+    for follow_up in &outcome.follow_ups {
+        match follow_up {
+            pgarbor_catalog::FollowUp::PopulateMatView { relation } => {
+                populated = Some(crate::ctas::populate_matview(cx, *relation)?);
+            }
+            other => run_followups(cx, std::slice::from_ref(other), None, &[])?,
+        }
+    }
+    Ok(ExecResult::command(match populated {
+        Some(n) => format!("SELECT {n}"),
+        None => view_tag(v.spec.materialized).to_string(),
+    }))
 }
 
 pub fn exec_create_enum(cx: &mut ExecContext, spec: &CreateEnumSpec) -> Result<ExecResult> {
