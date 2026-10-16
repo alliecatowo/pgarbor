@@ -268,10 +268,41 @@ pub fn plan_cast(env: &dyn TypeEnv, from: TypeId, to: TypeId, ctx: CastContext) 
             _ => steps.push(CastStep::Typmod { to: dst, explicit }),
         }
     }
+    // Array of domains (`posint[]`): every element must pass the element domain's constraints (PG
+    // `ArrayCoerce` whose element expression is a `CoerceToDomain`). The check runs in pgarbor-exec.
+    // The element domain's base typmod (`varchar(4)` for `vc4[]`) is applied to each element first,
+    // as PG's element coercion to the base type does: assignment errors (22001), explicit truncates.
+    if from_base != to_base {
+        if let Some(de) = array_domain_element(env, to_base) {
+            let elem = TypeId::of(de);
+            let (de_base, de_typmod) = base_type_and_typmod(env, de, -1);
+            let mut elem_steps = Vec::new();
+            if de_typmod >= 0 && has_typmod_coercion(env, de_base, 0) {
+                elem_steps.push(CastStep::Typmod {
+                    to: TypeId::new(de_base, de_typmod),
+                    explicit: ctx == CastContext::Explicit,
+                });
+            }
+            elem_steps.push(CastStep::DomainCheck { domain: de });
+            steps.push(CastStep::ArrayCoerce {
+                elem_plan: Box::new(CastPlan { from: elem, to: elem, context: ctx, steps: elem_steps }),
+            });
+        }
+    }
     if to_is_domain {
         steps.push(CastStep::DomainCheck { domain: to.oid });
     }
     Ok(CastPlan { from, to, context: ctx, steps })
+}
+
+/// The element type of an array type when that element is a domain (`posint` for `posint[]`).
+fn array_domain_element(env: &dyn TypeEnv, oid: Oid) -> Option<Oid> {
+    let elem = element_type_of(env, oid)?;
+    if typtype_of(env, elem) == b'd' {
+        Some(elem)
+    } else {
+        None
+    }
 }
 
 /// PG `IsBinaryCoercible(source, target)`.
@@ -365,6 +396,30 @@ mod tests {
         let p = plan_cast(env, TypeId::INT4, TypeId::INT8, CastContext::Implicit).unwrap();
         assert_eq!(p.steps, vec![CastStep::Func { proc: 481, nargs: 1 }]);
         assert!(plan_cast(env, TypeId::VARCHAR, TypeId::TEXT, CastContext::Implicit).unwrap().is_noop());
+    }
+
+    #[test]
+    fn array_of_domain_element_typmod() {
+        // `yes_or_no` is a domain over varchar(7): elements get the typmod, then the domain check.
+        let env = builtin_env();
+        let to = TypeId::of(oids::YES_OR_NO_ARRAY);
+        let from = TypeId::of(oids::TEXT_ARRAY);
+        for (ctx, explicit) in [(CastContext::Assignment, false), (CastContext::Explicit, true)] {
+            let p = plan_cast(env, from, to, ctx).unwrap();
+            let elem = p
+                .steps
+                .iter()
+                .find_map(|s| match s {
+                    CastStep::ArrayCoerce { elem_plan } => Some(elem_plan),
+                    _ => None,
+                })
+                .expect("array element plan");
+            assert!(elem
+                .steps
+                .iter()
+                .any(|s| matches!(s, CastStep::Typmod { explicit: e, .. } if *e == explicit)));
+            assert!(elem.steps.iter().any(|s| matches!(s, CastStep::DomainCheck { .. })));
+        }
     }
 
     #[test]

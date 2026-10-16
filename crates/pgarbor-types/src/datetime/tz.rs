@@ -611,7 +611,7 @@ const IANA_ZONES: &[&str] = &[
     "Brazil/East", "Brazil/West", "Canada/Atlantic", "Canada/Central", "Canada/Eastern", "Canada/Mountain",
     "Canada/Newfoundland", "Canada/Pacific", "Canada/Saskatchewan", "Canada/Yukon", "CET", "Chile/Continental",
     "Chile/EasterIsland", "CST6CDT", "Cuba", "EET", "Egypt", "Eire",
-    "EST", "EST5EDT", "Etc/GMT", "Etc/GMT+0", "Etc/GMT+1", "Etc/GMT+10",
+    "EST5EDT", "Etc/GMT", "Etc/GMT+0", "Etc/GMT+1", "Etc/GMT+10",
     "Etc/GMT+11", "Etc/GMT+12", "Etc/GMT+2", "Etc/GMT+3", "Etc/GMT+4", "Etc/GMT+5",
     "Etc/GMT+6", "Etc/GMT+7", "Etc/GMT+8", "Etc/GMT+9", "Etc/GMT-0", "Etc/GMT-1",
     "Etc/GMT-10", "Etc/GMT-11", "Etc/GMT-12", "Etc/GMT-13", "Etc/GMT-14", "Etc/GMT-2",
@@ -629,11 +629,11 @@ const IANA_ZONES: &[&str] = &[
     "Europe/Ulyanovsk", "Europe/Uzhgorod", "Europe/Vaduz", "Europe/Vatican", "Europe/Vienna", "Europe/Vilnius",
     "Europe/Volgograd", "Europe/Warsaw", "Europe/Zagreb", "Europe/Zaporozhye", "Europe/Zurich", "Factory",
     "GB", "GB-Eire", "GMT", "GMT+0", "GMT-0", "GMT0",
-    "Greenwich", "Hongkong", "HST", "Iceland", "Indian/Antananarivo", "Indian/Chagos",
+    "Greenwich", "Hongkong", "Iceland", "Indian/Antananarivo", "Indian/Chagos",
     "Indian/Christmas", "Indian/Cocos", "Indian/Comoro", "Indian/Kerguelen", "Indian/Mahe", "Indian/Maldives",
     "Indian/Mauritius", "Indian/Mayotte", "Indian/Reunion", "Iran", "Israel", "Jamaica",
     "Japan", "Kwajalein", "Libya", "MET", "Mexico/BajaNorte", "Mexico/BajaSur",
-    "Mexico/General", "MST", "MST7MDT", "Navajo", "NZ", "NZ-CHAT",
+    "Mexico/General", "MST7MDT", "Navajo", "NZ", "NZ-CHAT",
     "Pacific/Apia", "Pacific/Auckland", "Pacific/Bougainville", "Pacific/Chatham", "Pacific/Chuuk", "Pacific/Easter",
     "Pacific/Efate", "Pacific/Enderbury", "Pacific/Fakaofo", "Pacific/Fiji", "Pacific/Funafuti", "Pacific/Galapagos",
     "Pacific/Gambier", "Pacific/Guadalcanal", "Pacific/Guam", "Pacific/Honolulu", "Pacific/Johnston", "Pacific/Kanton",
@@ -699,6 +699,24 @@ mod tests {
         assert_eq!(err.message, "invalid value for parameter \"TimeZone\": \"Mars/Base\"");
         let range = parse_timezone_setting("+16").expect_err("out of range");
         assert_eq!(range.sqlstate, SqlState::INVALID_PARAMETER_VALUE);
+    }
+
+    #[test]
+    fn abbreviations_rejected_as_session_zone() {
+        // Oracle (PG 18.6): SET TIME ZONE 'PST' / 'EST' -> 22023; abbreviations stay valid in input.
+        for name in ["PST", "EST", "MST", "HST"] {
+            let err = parse_timezone_setting(name).expect_err("abbreviation is not a session zone");
+            assert_eq!(err.sqlstate, SqlState::INVALID_PARAMETER_VALUE);
+            assert_eq!(err.message, format!("invalid value for parameter \"TimeZone\": \"{name}\""));
+        }
+        assert_eq!(
+            parse_timezone_setting("PST8PDT").expect("posix-style zone"),
+            TimeZoneSetting::Named("PST8PDT".to_string())
+        );
+        assert_eq!(
+            lookup_zone("est").expect("lookup"),
+            Ok(ZoneSpec::Fixed { secs_east: -18000, abbrev: Some("EST".to_string()) })
+        );
     }
 
     #[test]

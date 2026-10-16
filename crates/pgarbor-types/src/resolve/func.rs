@@ -333,10 +333,11 @@ pub fn resolve_function(env: &dyn TypeEnv, call: &FuncCall, candidates: &[FuncCa
     } else {
         (e.args.clone(), c.ret)
     };
-    // "any" parameters take the argument as is; unknown literals are resolved to text.
+    // "any" parameters take the argument as is, unknown literals included (PG `coerce_type` returns
+    // the node unchanged for `any`, so `pg_typeof('x')` reports `unknown`).
     for (j, t) in coerce_to.iter_mut().enumerate() {
         if *t == oids::ANY {
-            *t = if call.arg_types[j] == oids::UNKNOWN { oids::TEXT } else { call.arg_types[j] };
+            *t = call.arg_types[j];
         }
     }
     Ok(ResolvedFunc {
@@ -589,7 +590,14 @@ mod tests {
         let r = resolve("concat", &[oids::INT4, oids::UNKNOWN]).unwrap();
         assert_eq!(r.ret.oid, oids::TEXT);
         assert_eq!(r.nvariadic, 0);
-        assert_eq!(r.coerce_to, vec![oids::INT4, oids::TEXT]);
+        assert_eq!(r.coerce_to, vec![oids::INT4, oids::UNKNOWN]);
+    }
+
+    #[test]
+    fn any_parameter_keeps_unknown_argument() {
+        // `pg_typeof('x')` sees the literal as `unknown` (PG: the `any` argument is not coerced).
+        let r = resolve("pg_typeof", &[oids::UNKNOWN]).unwrap();
+        assert_eq!(r.coerce_to, vec![oids::UNKNOWN]);
     }
 
     #[test]

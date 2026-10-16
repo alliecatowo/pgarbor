@@ -71,6 +71,8 @@ impl SqlState {
     pub const RESERVED_NAME: SqlState = SqlState(*b"42939");
     pub const DATATYPE_MISMATCH: SqlState = SqlState(*b"42804");
     pub const INDETERMINATE_DATATYPE: SqlState = SqlState(*b"42P18");
+    pub const COLLATION_MISMATCH: SqlState = SqlState(*b"42P21");
+    pub const INDETERMINATE_COLLATION: SqlState = SqlState(*b"42P22");
     pub const WRONG_OBJECT_TYPE: SqlState = SqlState(*b"42809");
     pub const UNDEFINED_COLUMN: SqlState = SqlState(*b"42703");
     pub const UNDEFINED_FUNCTION: SqlState = SqlState(*b"42883");
