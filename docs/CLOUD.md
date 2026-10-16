@@ -1,18 +1,38 @@
 # PGArbor in Claude Code on the web
 
-## One-liner
+## Setup command
 
-Paste into the environment's **Setup script** field (claude.ai/code, environment settings), or run at session start:
+The setup script is tracked at [`scripts/cloud-setup.sh`](../scripts/cloud-setup.sh)
+on `main`. From the repository root, run:
 
 ```bash
 bash scripts/cloud-setup.sh
 ```
 
-Without a checkout yet, the same script can be fetched first:
+For the environment's **Setup script** field, use this bootstrap command, which
+also works when the shell starts outside a checkout:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alliecatowo/pgarbor/main/scripts/cloud-setup.sh | bash
+set -euo pipefail
+bootstrap="$(mktemp)"
+trap 'rm -f "$bootstrap"' EXIT
+curl -fsSL https://raw.githubusercontent.com/alliecatowo/pgarbor/main/scripts/cloud-bootstrap.sh -o "$bootstrap"
+bash "$bootstrap"
 ```
+
+The bootstrap selects `PGARBOR_REPO`, then `CLAUDE_PROJECT_DIR`, then the current
+Git checkout. If none is available, it uses `$HOME/pgarbor`. If the selected path
+does not exist, it clones `main` there. Existing checkouts keep their branch and
+local edits. Set `PGARBOR_REPO` to an absolute path to choose the checkout
+explicitly. A newly cloned fallback checkout is separate from any checkout the
+cloud service creates later; point the agent at the printed path or rerun setup
+in its checkout to populate that checkout's harness virtual environment.
+
+If startup says `bash: scripts/cloud-setup.sh: No such file or directory`, that
+relative command did not find the file in its working directory. Select the
+latest `main`, replace the environment's setup command with the bootstrap above,
+and start a new session. Downloading `cloud-setup.sh` alone and piping it to Bash
+does not provide the repository files it requires.
 
 Options: `BUILD=1` also builds the workspace (slow), `STRICT=1` fails the setup on required-step errors, `SKIP_PG_SOURCE=1` skips the PostgreSQL source clone.
 
