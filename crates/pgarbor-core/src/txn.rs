@@ -370,6 +370,7 @@ impl Txn {
     /// `release_all()`, mark finished, session activity `xact_start_ms = None`, `txn = None`,
     /// `backend_xid = None`. Sequence state is not touched (non-transactional).
     pub fn rollback(mut self) -> Result<()> {
+        crate::ssi::finish_txn(&self, false);
         let res = self.release_all();
         self.session.update_activity(|a| {
             a.xact_start_ms = None;
@@ -425,6 +426,7 @@ impl Drop for Txn {
     /// unwinding in the caller). Errors are ignored.
     fn drop(&mut self) {
         if !self.finished {
+            crate::ssi::finish_txn(&*self, false);
             let _ = self.release_all();
         }
     }

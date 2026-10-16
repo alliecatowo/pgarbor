@@ -3,10 +3,9 @@
 //! `Txn::commit(self)`:
 //! 1. State Failed → `release_all()`, session activity cleared → `Ok(CommitOutcome::RolledBack)`
 //!    (PG: COMMIT of an aborted block reports ROLLBACK).
-//! 2. Empty overlay (read-only work) → NO storage write at all (no `begin_write`, no fsync, no
-//!    CommitSeq bump): `release_all()` → `Committed{seq: None}`.
-//! 3. SSI: if `engine.ssi().is_active()` → `ssi.pre_commit(&self)` (may raise 40001). In v1
-//!    `is_active()` is false.
+//! 2. SSI: `ssi.pre_commit(&self)` (may raise 40001; ssi.rs). Runs for every commit, read-only too.
+//! 3. Empty overlay (read-only work) → NO storage write at all (no `begin_write`, no fsync, no
+//!    CommitSeq bump): `ssi` finish, `release_all()` → `Committed{seq: None}`.
 //! 4. `w = container.begin_write()` (the container's single writer; held briefly). Then
 //!    `apply_commit(&mut w, ..)`:
 //!    a. `rec = directory::load_record(&w.tree(dir) .. )` — read the CURRENT branch record inside
@@ -67,6 +66,7 @@ impl Txn {
 
     /// Roll back after a failed commit attempt: release everything, clear activity.
     fn abandon_commit(&mut self) {
+        crate::ssi::finish_txn(&*self, false);
         let _ = self.release_all();
         self.clear_activity();
     }
@@ -75,25 +75,28 @@ impl Txn {
     pub fn commit(mut self) -> Result<CommitOutcome> {
         // 1. COMMIT of an aborted block rolls back.
         if self.state == crate::types::TxnState::Failed {
+            crate::ssi::finish_txn(&self, false);
             let r = self.release_all();
             self.clear_activity();
             r?;
             return Ok(CommitOutcome::RolledBack);
         }
-        // 2. Nothing to write: no storage access at all.
-        if self.overlay.is_empty() {
-            let r = self.release_all();
-            self.clear_activity();
-            r?;
-            return Ok(CommitOutcome::Committed { seq: None });
-        }
-        // 3. SSI hook (inactive in v1).
+        // 2. SSI hook (ssi.rs). Runs before the read-only shortcut: a read-only SERIALIZABLE
+        //    transaction can still be the first committer that dooms a pivot.
         let engine = Arc::clone(&self.engine);
         if engine.ssi().is_active() {
             if let Err(e) = engine.ssi().pre_commit(&self) {
                 self.abandon_commit();
                 return Err(e);
             }
+        }
+        // 3. Nothing to write: no storage access at all.
+        if self.overlay.is_empty() {
+            crate::ssi::finish_txn(&self, true);
+            let r = self.release_all();
+            self.clear_activity();
+            r?;
+            return Ok(CommitOutcome::Committed { seq: None });
         }
         let seq_relids = sequence_relids(self.overlay.as_map().keys());
 
@@ -118,7 +121,8 @@ impl Txn {
             }
         };
 
-        // 5. Durable: invalidate cached sequence state, then release locks.
+        // 5. Durable: SSI commit record, invalidate cached sequence state, then release locks.
+        crate::ssi::finish_txn(&self, true);
         if !seq_relids.is_empty() {
             engine.sequences().invalidate_keys(&self.branch, self.database, &seq_relids);
         }

@@ -587,6 +587,12 @@ impl SsiTracker {
     }
 }
 
+/// Commit (`committed`, called after durability) or rollback hook of the transaction `txn`. A free
+/// function so `Txn` gains no methods; a no-op unless the transaction is SERIALIZABLE.
+pub(crate) fn finish_txn(txn: &Txn, committed: bool) {
+    let _ = txn.engine().ssi().on_finish(txn, committed);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

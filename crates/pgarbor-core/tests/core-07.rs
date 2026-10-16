@@ -306,3 +306,28 @@ fn reused_key_lock_preserves_own_writes_under_rc_and_rr() {
         a.rollback().unwrap();
     }
 }
+
+/// Write skew between two SERIALIZABLE transactions (PG doc mvcc applevel-consistency): both read
+/// both rows, each writes a different one; the first committer wins and the pivot fails 40001.
+#[test]
+fn serializable_write_skew_pivot_fails_at_second_commit() {
+    let (_v, e) = new_engine();
+    let (sseed, sa, sb) = (session(&e, "main"), session(&e, "main"), session(&e, "main"));
+    {
+        let mut seed = begin(&e, &sseed, IsolationLevel::ReadCommitted);
+        put(&mut seed, b"r1", b"100");
+        put(&mut seed, b"r2", b"200");
+        assert!(committed(seed.commit().unwrap()));
+    }
+    let mut a = begin(&e, &sa, IsolationLevel::Serializable);
+    let mut b = begin(&e, &sb, IsolationLevel::Serializable);
+    assert_eq!(get(&mut a, b"r1"), Some(b"100".to_vec()));
+    assert_eq!(get(&mut a, b"r2"), Some(b"200".to_vec()));
+    assert_eq!(get(&mut b, b"r1"), Some(b"100".to_vec()));
+    assert_eq!(get(&mut b, b"r2"), Some(b"200".to_vec()));
+    put(&mut a, b"r1", b"110");
+    put(&mut b, b"r2", b"220");
+    assert!(committed(a.commit().unwrap()));
+    let err = b.commit().err().expect("the pivot must be canceled at commit");
+    assert_eq!(err.sqlstate.code(), "40001");
+}
