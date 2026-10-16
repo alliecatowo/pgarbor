@@ -127,7 +127,22 @@ fn key_value(a: &FunctionArg) -> Option<(&sqlparser::ast::Expr, &sqlparser::ast:
 }
 
 fn unnamed(e: &sqlparser::ast::Expr) -> FunctionArg {
-    FunctionArg::Unnamed(FunctionArgExpr::Expr(e.clone()))
+    FunctionArg::Unnamed(FunctionArgExpr::Expr(unknown_as_text(e)))
+}
+
+/// SQL/JSON value expressions take `text` for an untyped literal (`NULL`, `'a'`), where a plain call of
+/// the polymorphic json_agg family would be 42804.
+fn unknown_as_text(e: &sqlparser::ast::Expr) -> sqlparser::ast::Expr {
+    use sqlparser::ast::{CastKind, Expr, Value};
+    match e {
+        Expr::Value(v) if matches!(v.value, Value::Null | Value::SingleQuotedString(_) | Value::DollarQuotedString(_)) => Expr::Cast {
+            kind: CastKind::DoubleColon,
+            expr: Box::new(e.clone()),
+            data_type: DataType::Text,
+            format: None,
+        },
+        _ => e.clone(),
+    }
 }
 
 /// If `f` is an SQL/JSON constructor call (module docs), bind it and return the result.
@@ -184,7 +199,11 @@ fn rewrite_arrayagg(f: &Function, pos: Option<u32>) -> Result<Option<Function>> 
     // PG: JSON_ARRAYAGG defaults to ABSENT ON NULL.
     let strict = absent.unwrap_or(true);
     let name = format!("{}_agg{}", if jsonb { "jsonb" } else { "json" }, if strict { "_strict" } else { "" });
-    Ok(Some(rewritten(f, &name, vec![arg.clone()], list, rest)))
+    let arg = match arg {
+        FunctionArg::Unnamed(FunctionArgExpr::Expr(e)) => unnamed(e),
+        other => other.clone(),
+    };
+    Ok(Some(rewritten(f, &name, vec![arg], list, rest)))
 }
 
 fn rewrite_objectagg(f: &Function, unique: bool, pos: Option<u32>) -> Result<Option<Function>> {
