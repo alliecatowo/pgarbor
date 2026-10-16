@@ -29,7 +29,8 @@ use pgarbor_catalog::model::{
 };
 use pgarbor_catalog::CatalogSnapshot;
 use pgarbor_common::{Oid, PgError, Result, SqlState};
-use pgarbor_sql::binder::context::{BindContext, BindSession, Binder, ExprCtx};
+use pgarbor_sql::binder::coerce::coerce_assignment;
+use pgarbor_sql::binder::context::{BindContext, BindSession, Binder, BoundArg, ExprCtx};
 use pgarbor_sql::binder::stored::bind_stored_expr;
 use pgarbor_sql::ir::{BoundExpr, ExprKind};
 use pgarbor_sql::source::SourceMap;
@@ -417,6 +418,29 @@ fn bound_row_expr(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr>
 /// [`columns_to_input_refs`] to make the result executable over a table row. Bind failure of stored
 /// text is an internal error XX000 `could not bind stored expression`.
 pub fn bind_stored_text(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<BoundExpr> {
+    bind_stored_text_as(se, sql, rel_oid, None)
+}
+
+/// Like [`bind_stored_text`] for a column DEFAULT: the bound text is assignment-coerced to the
+/// column type (PG `build_column_default` / `cookDefault` store the cast; the deparsed text drops
+/// the implicit cast, so `nextval()` (bigint) for an int4 column must be recast here or the value
+/// has the wrong datum variant).
+pub fn bind_column_default_text(
+    se: &SessionEnv,
+    sql: &str,
+    rel_oid: Oid,
+    col_name: &str,
+    col_type: TypeId,
+) -> Result<BoundExpr> {
+    bind_stored_text_as(se, sql, rel_oid, Some((col_name, col_type)))
+}
+
+fn bind_stored_text_as(
+    se: &SessionEnv,
+    sql: &str,
+    rel_oid: Oid,
+    target: Option<(&str, TypeId)>,
+) -> Result<BoundExpr> {
     let ctx = BindContext {
         env: &se.env,
         session: BindSession { database: se.services.database_name() },
@@ -426,11 +450,15 @@ pub fn bind_stored_text(se: &SessionEnv, sql: &str, rel_oid: Oid) -> Result<Boun
     };
     let src = SourceMap::new(sql);
     let mut binder = Binder::new(&ctx, &src);
-    match bind_stored_expr(&mut binder, sql, rel_oid, ExprCtx::check()) {
-        Ok(expr) => Ok(expr),
+    let bound = match bind_stored_expr(&mut binder, sql, rel_oid, ExprCtx::check()) {
+        Ok(expr) => expr,
         // Unimplemented features of a stored expression keep their 0A000 so they are not masked.
-        Err(e) if e.sqlstate == SqlState::FEATURE_NOT_SUPPORTED => Err(e),
-        Err(_) => Err(PgError::internal("could not bind stored expression")),
+        Err(e) if e.sqlstate == SqlState::FEATURE_NOT_SUPPORTED => return Err(e),
+        Err(_) => return Err(PgError::internal("could not bind stored expression")),
+    };
+    match target {
+        None => Ok(bound),
+        Some((name, ty)) => coerce_assignment(&mut binder, &BoundArg::new(bound, None), name, ty),
     }
 }
 

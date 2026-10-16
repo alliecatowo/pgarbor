@@ -36,7 +36,7 @@ use pgarbor_catalog::FollowUp;
 use pgarbor_common::{Oid, PgError, Result};
 use pgarbor_core::sequence::SequenceParams;
 use pgarbor_sql::ir::BoundExpr;
-use pgarbor_types::Datum;
+use pgarbor_types::{Datum, TypeEnv};
 
 use crate::constraints;
 use crate::context::{ExecContext, SessionEnv};
@@ -164,8 +164,8 @@ fn run_one(ex: &mut Executor, fu: &FollowUp) -> Result<()> {
                 let col = td.col(*attnum).ok_or_else(|| {
                     PgError::internal(format!("attnum {attnum} of relation {table} does not exist"))
                 })?;
-                let type_name = match ex.se().env.snapshot().type_obj(*type_oid) {
-                    Some(t) => t.name.clone(),
+                let type_name = match ex.se().env.type_info(*type_oid) {
+                    Some(t) => t.name.into_owned(),
                     None => return Err(PgError::internal(format!("cache lookup failed for type {type_oid}"))),
                 };
                 let qualified = format!("{}.{}", td.name, col.name);
@@ -180,8 +180,8 @@ fn run_one(ex: &mut Executor, fu: &FollowUp) -> Result<()> {
 }
 
 /// One rewrite action with its expression already bound.
-enum RewriteStep<'e> {
-    Using { attnum: i16, expr: &'e BoundExpr },
+enum RewriteStep {
+    Using { attnum: i16, expr: BoundExpr },
     /// `None` = the column has no default in the new catalog: NULL.
     Default { attnum: i16, expr: Option<BoundExpr> },
     Generated { attnum: i16, expr: BoundExpr },
@@ -189,10 +189,12 @@ enum RewriteStep<'e> {
 
 fn rewrite_table_in(ex: &mut Executor, table: Oid, rewrites: &[ColumnRewrite]) -> Result<()> {
     // Bind every default / generation expression of the NEW catalog once.
-    let mut steps: Vec<RewriteStep<'_>> = Vec::with_capacity(rewrites.len());
+    let mut steps: Vec<RewriteStep> = Vec::with_capacity(rewrites.len());
     for rw in rewrites {
         match rw {
             ColumnRewrite::Using { attnum, expr } => {
+                // The USING expression is bound over the table (rt_index 1): make it executable over the old row.
+                let expr = tabledesc::columns_to_input_refs(expr.clone())?;
                 steps.push(RewriteStep::Using { attnum: *attnum, expr });
             }
             ColumnRewrite::FromDefault { attnum } => {
@@ -272,7 +274,13 @@ fn column_expr(se: &SessionEnv, rel: Oid, attnum: i16) -> Result<Option<BoundExp
         Some(d) => d.expr.sql.clone(),
         None => return Ok(None),
     };
-    let bound = tabledesc::bind_stored_text(se, &sql, rel)?;
+    let (name, ty) = relation
+        .columns
+        .iter()
+        .find(|c| c.attnum == attnum)
+        .map(|c| (c.name.clone(), c.type_id))
+        .ok_or_else(|| PgError::internal(format!("attnum {attnum} of relation {rel} does not exist")))?;
+    let bound = tabledesc::bind_column_default_text(se, &sql, rel, &name, ty)?;
     Ok(Some(tabledesc::columns_to_input_refs(bound)?))
 }
 
