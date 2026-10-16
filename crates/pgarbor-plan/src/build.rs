@@ -32,7 +32,8 @@
 //!    `has_srf` from `sel.has_target_srfs`.
 //! 7. **DISTINCT / ORDER BY / LIMIT / locking**: `sort_limit::build_sort_limit_distinct` appends
 //!    `Distinct`/`Sort`/`Limit` and a final projection dropping junk entries (`n_visible`), `LockRows`
-//!    for `q.locking`.
+//!    for `q.locking` (applied above step 3, see `wrap_lock_rows`; LIMIT without ORDER BY then locks
+//!    only the rows pulled, but ORDER BY + LIMIT locks every filtered row before sorting).
 //! `QueryBody::Values` -> a `Values` scan wrapped by sort/limit; `QueryBody::SetOp` ->
 //! `setop::build_setop` then sort/limit. CTEs of the query are registered first with
 //! `cte::register_ctes` (they must be available to every reference, including from sub-queries).
@@ -57,7 +58,7 @@ use crate::agg;
 use crate::context::PlannerState;
 use crate::cte;
 use crate::join;
-use crate::logical::{LogicalJoin, LogicalNode, LogicalPlan, LogicalProject, LogicalScan, ScanSource};
+use crate::logical::{LogicalJoin, LogicalLockRows, LogicalNode, LogicalPlan, LogicalProject, LogicalScan, ScanSource};
 use crate::plan::{FunctionItem, JoinType, OutCol, TableRef};
 use crate::pushdown;
 use crate::setop;
@@ -104,6 +105,9 @@ pub fn build_select(st: &mut PlannerState, sel: &BoundSelect, q: &BoundQuery) ->
             plan = pushdown::push_down_quals(st, plan, quals)?;
         }
     }
+    // Locking clauses sit above the FROM/WHERE tree. The binder rejects them together with
+    // aggregation, windows, DISTINCT and set operations, so the target list is the only thing above.
+    plan = wrap_lock_rows(plan, sel, q)?;
     let grouped = sel.has_aggs || sel.having.is_some() || !sel.group_by.exprs.is_empty() || sel.group_by.sets.is_some();
     if grouped || !sel.windows.is_empty() {
         // Aggregate and window calls are collected from the target list and matched structurally
@@ -519,6 +523,48 @@ fn rowid_range_indexes(sel: &BoundSelect, q: &BoundQuery) -> Vec<u32> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+/// One `LogicalLockRows` per locking clause (PG `create_lockrows_path`), each locking the tables the
+/// clause names (`of` empty = every base table of the block). Only base tables carry a row identity;
+/// a subquery or function in a locking clause is not supported yet.
+fn wrap_lock_rows(mut plan: LogicalPlan, sel: &BoundSelect, q: &BoundQuery) -> Result<LogicalPlan> {
+    for clause in &q.locking {
+        let mut tables: Vec<(Oid, u32)> = Vec::new();
+        let indexes: Vec<u32> = if clause.of.is_empty() {
+            (1..=sel.range_table.len() as u32).collect()
+        } else {
+            clause.of.clone()
+        };
+        for rt_index in indexes {
+            let entry = entry_at(&sel.range_table, rt_index)?;
+            match &entry.kind {
+                RangeKind::Relation { oid, .. } => tables.push((*oid, rt_index)),
+                _ if clause.of.is_empty() => {}
+                _ => return Err(PgError::unimplemented("PLN-01", "FOR UPDATE/SHARE on a subquery or function in FROM")),
+            }
+        }
+        if tables.is_empty() {
+            continue;
+        }
+        let vars = plan.vars.clone();
+        let out = plan.out.clone();
+        let rels = plan.rels.clone();
+        let level = plan.level;
+        plan = LogicalPlan {
+            node: LogicalNode::LockRows(Box::new(LogicalLockRows {
+                input: plan,
+                strength: clause.strength,
+                wait: clause.wait,
+                tables,
+            })),
+            vars,
+            out,
+            rels,
+            level,
+        };
+    }
+    Ok(plan)
 }
 
 /// The range entry for a 1-based range-table index.

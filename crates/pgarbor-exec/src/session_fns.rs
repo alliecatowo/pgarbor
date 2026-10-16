@@ -11,7 +11,7 @@
 //! | `setval(regclass, bigint)` / `(regclass, bigint, boolean)` | `seq_setval(relid, params, value, is_called)` (default `is_called = true`); out of range 22003 `setval: value 11 is out of bounds for sequence "s" (1..10)`; returns the value. |
 //! | `set_config(name, value, is_local)` | `guc.set(name, value, is_local)`; NULL value = reset to default; returns the new value text. |
 //! | `current_setting(name)` / `(name, missing_ok)` | `guc.get`; unknown -> 42704 `unrecognized configuration parameter "x"` unless `missing_ok` (then NULL). |
-//! | `pg_advisory_lock[_shared]`, `pg_advisory_xact_lock[_shared]`, `pg_try_advisory_*`, `pg_advisory_unlock[_shared]`, `pg_advisory_unlock_all` | `ExecTxn::advisory_*`: `(bigint)` -> `AdvisoryKey::Single`, `(int4, int4)` -> `AdvisoryKey::Pair`; `lock` forms return void (`Datum::Null`), `try` forms boolean, unlock forms boolean plus the WARNING from `UnlockResult::warning` pushed to `cx.se.notice`. Scope: session for `pg_advisory_lock*`/`pg_try_advisory_lock*`, transaction for `*_xact_*`. |
+//! | `pg_advisory_lock[_shared]`, `pg_advisory_xact_lock[_shared]`, `pg_try_advisory_*`, `pg_advisory_unlock[_shared]`, `pg_advisory_unlock_all` | `ExecTxn::advisory_*`: `(bigint)` -> `AdvisoryKey::Single`, `(int4, int4)` -> `AdvisoryKey::Pair`; `lock` forms and `unlock_all` return void (`void_result()`, a non-NULL empty text, rendered as `""`), `try` forms boolean, unlock forms boolean plus the WARNING from `UnlockResult::warning` pushed to `cx.se.notice`. Scope: session for `pg_advisory_lock*`/`pg_try_advisory_lock*`, transaction for `*_xact_*`. |
 //! | `pg_sleep(float8)`, `pg_sleep_for(interval)`, `pg_sleep_until(timestamptz)` | sleep in slices of <= 10 ms calling `ex.check_interrupts()` between slices (cancel/statement_timeout must interrupt); returns void (`Null`). |
 //! | `txid_current()`, `pg_current_xact_id()` | `Int8(txn_id)` (xid8 maps to `Datum::Int8`); the `_if_assigned` forms return NULL until the transaction has written (use `ExecTxn::txn_id` and a "has written" hint: always return the id once any write happened, else NULL; v1 may return the id). |
 //! | `txid_status(bigint)`, `pg_xact_status(xid8)` | `committed` for ids below the current one, `in progress` for the current id, NULL otherwise (v1 approximation). |
@@ -167,6 +167,12 @@ fn advisory_key(args: &[Datum]) -> Result<AdvisoryKey> {
     }
 }
 
+/// Result of a void-returning advisory function. PG's `void` is never SQL NULL: its text output is
+/// the empty string, so the value must be non-NULL for the void type's output routine to render `""`.
+fn void_result() -> Datum {
+    Datum::Text(String::new())
+}
+
 /// Mode and scope encoded in an advisory function name (`_shared` suffix, `_xact_` infix).
 fn advisory_flags(name: &str) -> (AdvisoryMode, AdvisoryScope) {
     let mode = if name.ends_with("_shared") { AdvisoryMode::Shared } else { AdvisoryMode::Exclusive };
@@ -292,7 +298,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
             let key = advisory_key(args)?;
             let (mode, scope) = advisory_flags(name);
             ex.txn().advisory_lock(key, mode, scope, true)?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_try_advisory_lock"
         | "pg_try_advisory_lock_shared"
@@ -314,7 +320,7 @@ fn call_named(ex: &mut Executor, name: &str, args: &[Datum]) -> Result<Datum> {
         }
         "pg_advisory_unlock_all" => {
             ex.txn().advisory_unlock_all()?;
-            Ok(Datum::Null)
+            Ok(void_result())
         }
         "pg_sleep" => {
             let secs = float_arg(args, 0)?;
@@ -579,8 +585,23 @@ mod tests {
             Ok((l, u))
         })
         .unwrap();
-        assert!(locked.is_null());
+        assert_eq!(locked, Datum::Text(String::new()));
         assert_eq!(unlocked.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn advisory_void_results_are_empty_not_null() {
+        let mut txn = MemTxn::new();
+        let (kv, env) = testing::bootstrapped().unwrap();
+        txn.kv = kv;
+        let (all, shared) = run_ex(&mut txn, env, |ex| {
+            let a = call_named(ex, "pg_advisory_unlock_all", &[])?;
+            let s = call_named(ex, "pg_advisory_lock_shared", &[Datum::Int8(7)])?;
+            Ok((a, s))
+        })
+        .unwrap();
+        assert_eq!(all, Datum::Text(String::new()));
+        assert_eq!(shared, Datum::Text(String::new()));
     }
 
     #[test]

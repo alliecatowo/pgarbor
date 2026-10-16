@@ -24,8 +24,11 @@ use pgarbor_plan::plan::{LockRowsNode, LockStrength, LockWait, PlanNode};
 use pgarbor_types::Datum;
 use std::rc::Rc;
 
+use pgarbor_catalog::model::common::acl_mode;
+
 use crate::build::BuildCtx;
 use crate::error::row_lock_not_available;
+use crate::perm;
 use crate::rowstore::{self, RowLock};
 use crate::runtime::{Executor, Row, RowSource};
 use crate::tabledesc::TableDesc;
@@ -52,6 +55,11 @@ struct LockRowsOp {
 pub fn build_lock_rows(node: &PlanNode, n: &LockRowsNode, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
     let _ = node;
     let input = b.child(&n.input)?;
+    // PG `markQueryForLocking` sets ACL_SELECT_FOR_UPDATE (= ACL_UPDATE) on every locked relation,
+    // whatever the strength, so each locked table needs UPDATE (table-level, 42501 otherwise).
+    for t in &n.targets {
+        perm::require_relation_privilege(&b.cx.se, t.table_oid, acl_mode::UPDATE, &[])?;
+    }
     let mut targets = Vec::with_capacity(n.targets.len());
     for t in &n.targets {
         let td = b.table_desc(t.table_oid)?;

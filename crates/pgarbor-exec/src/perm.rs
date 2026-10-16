@@ -88,10 +88,8 @@ pub fn require_relation_privilege(se: &SessionEnv, rel: Oid, mode: u32, columns:
             })?;
             let col_acl = effective_acl(AclObject::Column, owner, col.acl.as_ref())?;
             if privilege_mask(&graph, user, owner, &col_acl, col_mask, false)? == 0 {
-                return Err(PgError::new(
-                    SqlState::INSUFFICIENT_PRIVILEGE,
-                    format!("permission denied for column \"{}\" of relation \"{}\"", col.name, r.name),
-                ));
+                // PG `ExecCheckOneRelPerms`: a column-level miss is still reported as the table-level 42501.
+                return Err(permission_denied_for(relation_word(r.kind), &r.name));
             }
         }
         return Ok(());
@@ -259,7 +257,7 @@ mod tests {
         check_rel(&alice_env, t, acl_mode::SELECT, &[1])?;
         let e = check_rel(&alice_env, t, acl_mode::SELECT, &[2]).expect_err("column b must be denied");
         assert_eq!(e.sqlstate, SqlState::INSUFFICIENT_PRIVILEGE);
-        assert_eq!(e.message, "permission denied for column \"b\" of relation \"t\"");
+        assert_eq!(e.message, "permission denied for table t");
         // Whole-table access needs the table-level privilege.
         assert!(check_rel(&alice_env, t, acl_mode::SELECT, &[]).is_err());
         Ok(())

@@ -330,6 +330,7 @@ mod tests {
                 unique: true,
                 primary: false,
                 nulls_not_distinct: false,
+                include: Vec::new(),
                 keys: vec![IdxKeyDesc {
                     column: Some(1),
                     expr: None,

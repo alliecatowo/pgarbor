@@ -31,7 +31,8 @@
 //! * `SET NULL` / `SET DEFAULT`: update the FK columns (`delete_set_columns` if non-empty for ON
 //!   DELETE) of each referencing row to NULL / the column default (`TableDesc` default exprs via
 //!   the `tabledesc::bind_stored_text` of the column default, evaluated with `eval`); a NOT NULL FK
-//!   column then fails with 23502 as usual.
+//!   column then fails with 23502 as usual. `SET DEFAULT` then queues a `ParentGone` recheck for the
+//!   old key (PG `ri_set` -> NO ACTION): if the default still equals the vanished key, 23503 fires.
 //! * Recursion depth is bounded by 1000 nested cascade levels (54001 `stack depth limit exceeded`).
 //! Row locks: every referencing row is changed through `rowstore::lock_row` first (EvalPlanQual not
 //! needed: a concurrently deleted row is simply skipped).
@@ -570,7 +571,13 @@ fn apply_parent_action(ex: &mut Executor, fk: &FkDesc, old_key: &[Datum], new_ke
         }
         FkAction::Cascade | FkAction::SetNull | FkAction::SetDefault => {
             let _depth = DepthGuard::enter()?;
-            cascade_parent_action(ex, fk, action, old_key, new_key)
+            cascade_parent_action(ex, fk, action, old_key, new_key)?;
+            if action == FkAction::SetDefault {
+                // PostgreSQL (ri_set) re-runs the NO ACTION check after SET DEFAULT: the default may
+                // still be the vanished key, in which case the referencing rows point at it again.
+                ex.cx.stmt.pending_fk.push(PendingFkCheck::ParentGone { fk: fk.oid, old_key: old_key.to_vec() });
+            }
+            Ok(())
         }
     }
 }
@@ -698,6 +705,7 @@ mod tests {
             primary: true,
             nulls_not_distinct: false,
             keys: vec![key(2), key(1)],
+            include: Vec::new(),
             key_cols: Vec::new(),
             predicate: None,
             constraint: None,

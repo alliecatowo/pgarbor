@@ -51,7 +51,7 @@ use std::rc::Rc;
 
 use pgarbor_catalog::model::common::acl_mode;
 use pgarbor_catalog::vrel::{scan as vrel_scan, ScanContext, ScanRequest};
-use pgarbor_common::{KvRead, Oid, PgError, Result};
+use pgarbor_common::{KvRead, Oid, PgError, Result, SqlState};
 use pgarbor_core::locks::LockMode;
 use pgarbor_core::WaitPolicy;
 use pgarbor_plan::plan::{IndexScan, KeyEq, PlanNode, RangeEnd, ResultNode, ScanDirection, SeqScan, ValuesScan, VirtualScan};
@@ -104,6 +104,23 @@ fn lock_scan_relation(ex: &mut Executor, relid: Oid, table_name: &str) -> Result
         Ok(())
     } else {
         Err(error::relation_lock_not_available(table_name))
+    }
+}
+
+/// PG `ExecOpenScanRelation`: a materialized view created or last refreshed `WITH NO DATA` is not
+/// scannable (55000, hint) until a plain `REFRESH MATERIALIZED VIEW` populates it. Checked when the
+/// scan node is opened, so plain EXPLAIN (which never opens the plan) is unaffected.
+fn require_scannable(b: &BuildCtx, relid: Oid, table_name: &str) -> Result<()> {
+    let snap = b.cx.se.env.snapshot();
+    let populated = snap.relation(relid).and_then(|r| r.view.as_ref()).map_or(true, |v| v.populated);
+    if populated {
+        Ok(())
+    } else {
+        Err(PgError::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("materialized view \"{table_name}\" has not been populated"),
+        )
+        .with_hint("Use the REFRESH MATERIALIZED VIEW command."))
     }
 }
 
@@ -321,6 +338,7 @@ impl RowSource for SeqScanSource {
 
 pub fn build_seq_scan(_node: &PlanNode, n: &SeqScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
     perm::require_relation_privilege(&b.cx.se, n.table.oid, acl_mode::SELECT, &needed_attnums(&n.needed))?;
+    require_scannable(b, n.table.oid, &n.table.name)?;
     let td = b.table_desc(n.table.oid)?;
     Ok(Box::new(SeqScanSource {
         relid: n.table.oid,
@@ -562,6 +580,7 @@ impl RowSource for IndexScanSource {
 
 pub fn build_index_scan(_node: &PlanNode, n: &IndexScan, b: &mut BuildCtx) -> Result<Box<dyn RowSource>> {
     perm::require_relation_privilege(&b.cx.se, n.table.oid, acl_mode::SELECT, &needed_attnums(&n.needed))?;
+    require_scannable(b, n.table.oid, &n.table.name)?;
     let td = b.table_desc(n.table.oid)?;
     let nkeys = n.index.keys.len();
     let nrange = usize::from(n.bounds.lower.is_some() || n.bounds.upper.is_some());

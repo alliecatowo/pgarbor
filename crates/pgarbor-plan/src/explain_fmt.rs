@@ -169,8 +169,8 @@ fn build_and_emit(plan: &Plan, options: &ExplainOptions, actual: Option<&ActualS
             if let Some(a) = actual {
                 if options.summary {
                     lines.push(format!("Planning Time: {:.3} ms", a.planning_ms));
+                    lines.push(format!("Execution Time: {:.3} ms", a.execution_ms));
                 }
-                lines.push(format!("Execution Time: {:.3} ms", a.execution_ms));
             }
             Ok(lines)
         }
@@ -196,7 +196,10 @@ fn top_entries(root: &TNode, options: &ExplainOptions, actual: Option<&ActualSta
         if options.summary {
             top.push(("Planning Time".to_string(), vnum(a.planning_ms, 3)));
         }
-        top.push(("Execution Time".to_string(), vnum(a.execution_ms, 3)));
+        // PG: `Execution Time` is printed only with SUMMARY on (`es->summary && es->analyze`).
+        if options.summary {
+            top.push(("Execution Time".to_string(), vnum(a.execution_ms, 3)));
+        }
     }
     top
 }
@@ -680,11 +683,11 @@ fn text_node(out: &mut Vec<String>, t: &TNode, arrow: Option<usize>, opts: &Expl
             line.push_str(" (never executed)");
         } else if opts.timing {
             line.push_str(&format!(
-                " (actual time={:.3}..{:.3} rows={:.0} loops={})",
+                " (actual time={:.3}..{:.3} rows={:.2} loops={})",
                 a.startup_ms, a.total_ms, a.rows, a.loops
             ));
         } else {
-            line.push_str(&format!(" (actual rows={:.0} loops={})", a.rows, a.loops));
+            line.push_str(&format!(" (actual rows={:.2} loops={})", a.rows, a.loops));
         }
     }
     out.push(line);
@@ -754,7 +757,9 @@ fn node_val(t: &TNode, opts: &ExplainOptions) -> Val {
             o.push(("Actual Startup Time".to_string(), vnum(a.startup_ms, 3)));
             o.push(("Actual Total Time".to_string(), vnum(a.total_ms, 3)));
         }
-        o.push(("Actual Rows".to_string(), vnum(a.rows, 0)));
+        // PG: `Actual Rows` has two decimals when the node ran, and none for a node that never did.
+        let row_digits = if a.loops == 0 { 0 } else { 2 };
+        o.push(("Actual Rows".to_string(), vnum(a.rows, row_digits)));
         o.push(("Actual Loops".to_string(), Val::Num(a.loops.to_string())));
     }
     o.push(("Disabled".to_string(), Val::Bool(false)));
@@ -1054,9 +1059,25 @@ mod tests {
         let mut root = tn("Seq Scan on t", &[], vec![]);
         root.actual = Some(NodeActual { rows: 5.0, loops: 1, startup_ms: 0.01, total_ms: 0.02 });
         let o = ExplainOptions { timing: true, ..opts(false) };
-        assert_eq!(text_of(&root, &o), "Seq Scan on t (actual time=0.010..0.020 rows=5 loops=1)");
+        assert_eq!(text_of(&root, &o), "Seq Scan on t (actual time=0.010..0.020 rows=5.00 loops=1)");
         root.actual = Some(NodeActual { rows: 0.0, loops: 0, startup_ms: 0.0, total_ms: 0.0 });
         assert_eq!(text_of(&root, &opts(false)), "Seq Scan on t (never executed)");
+    }
+
+    #[test]
+    fn analyze_footer_times_need_summary() {
+        let actual = ActualStats {
+            nodes: vec![NodeActual { rows: 2.0, loops: 1, startup_ms: 0.0, total_ms: 0.0 }],
+            planning_ms: 0.1,
+            execution_ms: 0.2,
+        };
+        let off = ExplainOptions { analyze: true, summary: false, timing: false, ..opts(false) };
+        let lines = render_analyze(&seq_scan_plan(), &off, &actual).expect("render");
+        assert!(lines.iter().all(|l| !l.starts_with("Execution Time") && !l.starts_with("Planning Time")));
+        assert!(lines[0].ends_with("(actual rows=2.00 loops=1)"), "got {:?}", lines[0]);
+        let on = ExplainOptions { analyze: true, summary: true, timing: false, ..opts(false) };
+        let lines = render_analyze(&seq_scan_plan(), &on, &actual).expect("render");
+        assert_eq!(lines.last().map(String::as_str), Some("Execution Time: 0.200 ms"));
     }
 
     #[test]

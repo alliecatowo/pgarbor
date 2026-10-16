@@ -81,6 +81,9 @@ pub struct IndexDesc {
     pub nulls_not_distinct: bool,
     /// Key columns only (INCLUDE columns are not part of the key and not stored).
     pub keys: Vec<IdxKeyDesc>,
+    /// INCLUDE columns (plain table columns). Not stored in the entry, but PG counts their values
+    /// toward the index tuple size limit (`index_key::check_tuple_size`).
+    pub include: Vec<IdxKeyDesc>,
     /// `keycodec` description parallel to `keys` (`ty`, `desc`, `nulls_first`).
     pub key_cols: Vec<KeyColumn>,
     /// Partial index predicate over the full table row; rows for which it is not TRUE have no entry.
@@ -332,6 +335,10 @@ fn index_desc(se: &SessionEnv, snap: &CatalogSnapshot, table: Oid, i: &Index) ->
         keys.push(index_key_desc(se, table, k)?);
         key_cols.push(KeyColumn { ty: k.type_id, desc: k.descending, nulls_first: k.nulls_first });
     }
+    let mut include = Vec::with_capacity(i.include_columns().len());
+    for k in i.include_columns() {
+        include.push(index_key_desc(se, table, k)?);
+    }
     let predicate = i.predicate.as_ref().map(|p| bound_row_expr(se, &p.sql, table)).transpose()?;
     let constraint = i.constraint.and_then(|co| snap.constraint(co).map(|c| (co, c.name.clone())));
     Ok(IndexDesc {
@@ -341,6 +348,7 @@ fn index_desc(se: &SessionEnv, snap: &CatalogSnapshot, table: Oid, i: &Index) ->
         primary: i.primary,
         nulls_not_distinct: i.nulls_not_distinct,
         keys,
+        include,
         key_cols,
         predicate,
         constraint,

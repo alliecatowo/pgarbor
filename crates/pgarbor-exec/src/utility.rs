@@ -14,15 +14,18 @@
 //!   - `Reindex`: for each target table (or the table of each target index) delete the entry data of
 //!     its btree indexes (`rowstore::delete_relation_data(index)`) and rebuild them
 //!     (`index_maint::build_index`); tag `REINDEX`;
-//!   - `Vacuum`, `Analyze`, `Cluster`, `Checkpoint`: accepted no-ops (no dead tuples exist, no
-//!     statistics are kept, durability is per commit); tags `VACUUM`, `ANALYZE`, `CLUSTER`, `CHECKPOINT`.
+//!   - `Cluster`: `[table]` or `[table, index]`; records the chosen index as `indisclustered`
+//!     (clearing its siblings) via [`run_ddl`]; the reorder itself is a no-op; tag `CLUSTER`;
+//!   - `Vacuum`, `Analyze`, `Checkpoint`: accepted no-ops (no dead tuples exist, no
+//!     statistics are kept, durability is per commit); tags `VACUUM`, `ANALYZE`, `CHECKPOINT`.
 use pgarbor_catalog::model::{acl_mode, IndexMethod, RelKind};
 use pgarbor_catalog::snapshot::{CatalogSnapshot, ClassRef};
-use pgarbor_common::{Oid, PgError, Result, SqlState};
+use pgarbor_common::{Oid, PgError, Result, Severity, SqlState};
 use pgarbor_core::{LockMode as CoreLockMode, WaitPolicy};
 use pgarbor_sql::ir::{BoundCall, BoundDo, BoundLock, LockMode, MaintenanceKind};
 
 use crate::context::ExecContext;
+use crate::ddl_driver::run_ddl;
 use crate::error;
 use crate::index_maint;
 use crate::perm;
@@ -73,14 +76,63 @@ pub fn exec_call(cx: &mut ExecContext, c: &BoundCall) -> Result<ExecResult> {
 pub fn exec_maintenance(cx: &mut ExecContext, kind: MaintenanceKind, targets: &[Oid]) -> Result<ExecResult> {
     match kind {
         MaintenanceKind::Vacuum => Ok(ExecResult::command("VACUUM")),
-        MaintenanceKind::Analyze => Ok(ExecResult::command("ANALYZE")),
-        MaintenanceKind::Cluster => Ok(ExecResult::command("CLUSTER")),
+        MaintenanceKind::Analyze => analyze(cx, targets),
+        MaintenanceKind::Cluster => cluster(cx, targets),
         MaintenanceKind::Checkpoint => {
             require_checkpoint_privilege(cx)?;
             Ok(ExecResult::command("CHECKPOINT"))
         }
         MaintenanceKind::Reindex => reindex(cx, targets),
     }
+}
+
+/// ANALYZE (PG `vacuum_is_permitted_for_relation`): a table the role may not MAINTAIN is skipped with a
+/// WARNING (SQLSTATE 01000), not an error. Other errors propagate.
+fn analyze(cx: &mut ExecContext, targets: &[Oid]) -> Result<ExecResult> {
+    for &oid in targets {
+        match perm::require_relation_privilege(&cx.se, oid, acl_mode::MAINTAIN, &[]) {
+            Ok(()) => {}
+            Err(e) if e.sqlstate == SqlState::INSUFFICIENT_PRIVILEGE => {
+                let name = cx.se.env.snapshot().relation(oid).map(|r| r.name.clone()).unwrap_or_default();
+                cx.notice(
+                    PgError::new(SqlState::WARNING, format!("permission denied to analyze \"{name}\", skipping it"))
+                        .with_severity(Severity::Warning),
+                );
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(ExecResult::command("ANALYZE"))
+}
+
+/// CLUSTER: `targets` is `[table]` (plain) or `[table, index]` (`USING index`). The chosen index
+/// becomes the table's `indisclustered` index and clears the flag on its siblings (cluster.c
+/// `mark_index_clustered`), which is what a later plain `CLUSTER table` looks up. The physical
+/// reorder itself stays a no-op.
+fn cluster(cx: &mut ExecContext, targets: &[Oid]) -> Result<ExecResult> {
+    if let &[table, index] = targets {
+        let changes: Vec<(Oid, bool)> = cx
+            .se
+            .env
+            .snapshot()
+            .indexes_of(table)
+            .into_iter()
+            .filter(|i| i.clustered != (i.oid == index))
+            .map(|i| (i.oid, i.oid == index))
+            .collect();
+        if !changes.is_empty() {
+            run_ddl(cx, move |d| {
+                for (oid, flag) in changes {
+                    d.update_index(oid, |i| {
+                        i.clustered = flag;
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            })?;
+        }
+    }
+    Ok(ExecResult::command("CLUSTER"))
 }
 
 /// `pg_checkpoint` predefined role (builtin oid 4544, catalog `builtin::objects`).

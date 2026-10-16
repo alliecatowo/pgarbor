@@ -653,6 +653,12 @@ fn values_input(st: &mut PlannerState, ins: &BoundInsert, rows: &[Vec<BoundExpr>
         let col = column_of(target, ins.columns[p])?;
         out.push(OutCol { name: col.name.clone(), ty: col.ty });
     }
+    // PG: a single-row INSERT ... VALUES has no VALUES range table entry; it plans as a Result over the
+    // row's expressions (EXPLAIN shows `Result`, not `Values Scan`).
+    if out_rows.len() == 1 {
+        let exprs = out_rows.remove(0);
+        return Ok(st.new_node(NodeKind::Result(ResultNode { exprs, one_time_filter: None }), out));
+    }
     Ok(st.new_node(NodeKind::ValuesScan(ValuesScan { rows: out_rows, filter: None }), out))
 }
 

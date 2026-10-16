@@ -93,7 +93,7 @@ pub fn exec_alter(cx: &mut ExecContext, action: &AlterAction) -> Result<ExecResu
             let ty = *ty;
             run_plain(cx, |d| d.rename_type(ty, new_name, &rw))?;
         }
-        AlterAction::SetTypeSchema { ty, new_schema } => {
+        AlterAction::SetTypeSchema { ty, new_schema } | AlterAction::SetDomainSchema { ty, new_schema } => {
             let (ty, new_schema) = (*ty, *new_schema);
             run_plain(cx, |d| d.set_type_schema(ty, new_schema, &rw))?;
         }

@@ -324,6 +324,18 @@ impl ColumnNamer for PropNamer {
     }
 }
 
+/// Whether `e` contains a window function call.
+fn has_window_func(e: &BoundExpr) -> bool {
+    let mut found = false;
+    e.walk(&mut |x: &BoundExpr| -> bool {
+        if matches!(x.kind, ExprKind::WindowFunc(_)) {
+            found = true;
+        }
+        !found
+    });
+    found
+}
+
 /// Deparse one bind-time expression for a property.
 fn render_one(st: &PlannerState<'_>, e: &BoundExpr, sc: Scope<'_>) -> Result<String> {
     let ranges = st.range_names.get(sc.level as usize).cloned().unwrap_or_default();
@@ -801,7 +813,17 @@ fn ann(
         node.props.clear();
         let mut inner = pend;
         if inner.output.is_none() {
-            inner.output = Some((p.exprs.clone(), p.input.level));
+            // `plan_project` turns an expression the child already computes into `InputRef(slot)`;
+            // show the child's bind-time term for it, as PG shows the Var of the child target list.
+            let exprs: Vec<BoundExpr> = p
+                .exprs
+                .iter()
+                .map(|e| match &e.kind {
+                    ExprKind::InputRef(i) => p.input.vars.get(*i as usize).cloned().unwrap_or_else(|| e.clone()),
+                    _ => e.clone(),
+                })
+                .collect();
+            inner.output = Some((exprs, p.input.level));
         }
         return ann(st, &mut p.input, inner, outer, visited);
     }
@@ -859,7 +881,13 @@ fn node_props(st: &PlannerState<'_>, node: &PlanNode, pend: &Pending, outer: &[V
             },
         };
         if let Some((exprs, lvl)) = src {
-            let items = render_all(st, exprs, Scope { level: lvl, qualify: true, outer })?;
+            // PG prints window calls as `f(..) OVER w` (and parenthesized above their WindowAgg);
+            // the window-name table that needs is not wired into the namer yet.
+            if matches!(node.kind, NodeKind::WindowAgg(_)) || exprs.iter().any(has_window_func) {
+                return Err(PgError::unimplemented("PLN-15", "EXPLAIN VERBOSE output of window functions"));
+            }
+            // PG `show_plan_tlist`: Vars are prefixed only when the range table has several entries.
+            let items = render_all(st, exprs, Scope { level: lvl, qualify: multi_relation(st), outer })?;
             if !items.is_empty() {
                 props.push(prop_list("Output", items));
             }

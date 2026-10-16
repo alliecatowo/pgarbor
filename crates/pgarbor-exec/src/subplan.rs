@@ -208,7 +208,12 @@ fn eval_array(ex: &mut Executor, idx: usize, args: Vec<Datum>, cacheable: bool) 
         items.push(first_column(&r)?);
         Ok(true)
     })?;
-    let v = Datum::array(Array::from_vec(elem, items));
+    // PG get_promoted_array_type: when the subquery column is itself an array, the rows are sub-arrays and
+    // the result is one multidimensional array of their element type (`ARRAY(SELECT ARRAY[i, i*2] ..)`).
+    let v = match pgarbor_types::registry::element_type_of(&ex.se().env, elem) {
+        Some(inner) => Datum::array(pgarbor_types::array::subscript::construct(inner, items, true)?),
+        None => Datum::array(Array::from_vec(elem, items)),
+    };
     if cacheable {
         set_cache(ex, idx, SubPlanCache::Value(v.clone()));
     }
