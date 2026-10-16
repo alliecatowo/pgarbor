@@ -174,7 +174,7 @@ fn parse_prepared_text(text: &str) -> Result<Option<RawStatement>> {
 /// Plan choice (module docs): `plan_cache_mode` `force_*` override; in auto mode a statement without
 /// parameters always gets the generic plan (PG `choose_custom_plan`), otherwise custom plans are built
 /// until `CUSTOM_PLAN_LIMIT` of them exist.
-fn wants_generic(mode: &str, custom_plans: i64, param_count: usize) -> bool {
+pub(crate) fn wants_generic(mode: &str, custom_plans: i64, param_count: usize) -> bool {
     match mode {
         "force_generic_plan" => true,
         "force_custom_plan" => false,
@@ -282,17 +282,23 @@ impl Session {
             let version_changed = ps.catalog_version != new_version;
             match ps.raw.as_ref() {
                 Some(raw) if version_changed && needs_rebind(ps, snap) => {
-                    let out = {
+                    let mut out = {
                         let ctx = self.bind_context(&env, ps.declared.clone())?;
                         pgarbor_sql::bind(raw, &ctx)?
                     };
+                    // SQL PREPARE keeps the whole `PREPARE ... AS` text as `raw`: unwrap the inner statement.
+                    if ps.from_sql {
+                        if let BoundStatement::Prepare(p) = out.statement {
+                            out.param_types = p.param_types;
+                            out.statement = *p.statement;
+                        }
+                    }
                     let columns = self.describe_columns(&env, &out.statement)?;
-                    if !ps.from_sql
-                        && row_type_changed(
-                            ps.columns.as_deref().unwrap_or(&[]),
-                            columns.as_deref().unwrap_or(&[]),
-                        )
-                    {
+                    // PG: both PREPARE and protocol Parse create plan sources with fixed_result = true.
+                    if row_type_changed(
+                        ps.columns.as_deref().unwrap_or(&[]),
+                        columns.as_deref().unwrap_or(&[]),
+                    ) {
                         return Err(PgError::new(
                             SqlState::FEATURE_NOT_SUPPORTED,
                             "cached plan must not change result type",
@@ -450,7 +456,16 @@ impl Session {
         };
         let (values, effects) = self.with_exec("EXECUTE", &env, Vec::new(), ps.param_types.clone(), |cx| {
             args.iter()
-                .map(|arg| pgarbor_exec::eval::eval_standalone(cx, arg, &[]))
+                .enumerate()
+                .map(|(i, arg)| {
+                    pgarbor_exec::eval::eval_standalone(cx, arg, &[]).map_err(|mut err| {
+                        // A failing argument (e.g. 22P02 on `'abc'` -> int) points at its source text.
+                        if err.position.is_none() {
+                            err.position = e.arg_positions.get(i).copied().flatten();
+                        }
+                        err
+                    })
+                })
                 .collect::<Result<Vec<Datum>>>()
         })?;
         self.pending_notices.extend(effects.notices);

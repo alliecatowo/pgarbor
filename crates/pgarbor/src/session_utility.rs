@@ -508,7 +508,15 @@ impl Session {
                 Ok(rows_result(columns, rows, "SHOW"))
             }
             Some(n) => {
-                let def = guc_def::find_def(&n.to_ascii_lowercase()).ok_or_else(|| unrecognized(n))?;
+                let def = match guc_def::find_def(&n.to_ascii_lowercase()) {
+                    Some(def) => def,
+                    None => {
+                        // Custom (placeholder) parameters become known after their first SET.
+                        let value = self.guc.show(&n.to_ascii_lowercase()).map_err(|_| unrecognized(n))?;
+                        let col = n.to_ascii_lowercase();
+                        return Ok(rows_result(vec![text_column(&col)], vec![vec![Datum::Text(value)]], "SHOW"));
+                    }
+                };
                 let value = self.current_setting(def.name)?;
                 Ok(rows_result(vec![text_column(def.name)], vec![vec![Datum::Text(value)]], "SHOW"))
             }

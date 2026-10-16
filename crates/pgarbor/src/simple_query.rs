@@ -177,6 +177,7 @@ impl Session {
         let StepFailure { error, mut notices } = failure;
         self.abort_for_error(&error);
         notices.extend(self.take_notices());
+        self.filter_client_notices(&mut notices);
         out.error_param_status = self.guc.take_reported_changes();
         out.error_notices = notices;
         out.error = Some(error);
